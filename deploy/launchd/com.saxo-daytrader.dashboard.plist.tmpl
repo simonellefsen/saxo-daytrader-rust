@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.saxo-daytrader.dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{PYTHON_BIN}}</string>
+    <string>{{PROJECT_DIR}}/main.py</string>
+    <string>--no-scheduler</string>
+    <string>--api-port</string>
+    <string>{{API_PORT}}</string>
+    <string>--frontend-port</string>
+    <string>{{FRONTEND_PORT}}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{PROJECT_DIR}}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{{PROJECT_DIR}}/logs/web-ui.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{PROJECT_DIR}}/logs/web-ui.stderr.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>

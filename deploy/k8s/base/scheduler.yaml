@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytrader-scheduler
+  labels:
+    app: daytrader-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: daytrader-scheduler
+  template:
+    metadata:
+      labels:
+        app: daytrader-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: daytrader-api:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - /app/saxo-rust
+            - --scheduler
+          env:
+            - name: DAYTRADER_CONFIG
+              value: /app/config/config.yaml
+            - name: SAXO_SESSION_PATH
+              value: /tmp/daytrader/saxo_session.json
+            - name: SCHEDULER_INTERVAL_MINUTES
+              value: "10"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: daytrader-postgres-app
+                  key: database-url
+          envFrom:
+            - secretRef:
+                name: daytrader-env
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: daytrader-config
+        - name: tmp
+          emptyDir:
+            medium: Memory

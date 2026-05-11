@@ -1,0 +1,351 @@
+# saxo-rust Project Guide
+
+This repository is being converted from a Python/FastAPI + Next.js Saxo day-trading dashboard into a Rust Axum + Dioxus application.
+
+Follow the global instruction in `/Users/lindau/.codex/RTK.md`: prefix shell commands with `rtk`.
+
+## Current Architecture
+
+The active runtime is a single Rust binary named `saxo-rust`.
+
+- HTTP/API server: Axum
+- Server-rendered UI: Dioxus SSR
+- Database access: `sqlx::AnyPool` so local SQLite and Kubernetes PostgreSQL can both be used
+- Local database fallback: `ledger.db`
+- Kubernetes database: existing CloudNativePG cluster in namespace `saxo`
+- Kubernetes app namespace: `saxo-rust`
+- Public endpoint: ngrok operator `AgentEndpoint` targeting the Rust frontend service
+
+Trading-critical mutation paths are intentionally not fully ported yet. Saxo OAuth/session endpoints are implemented in Rust, but order mutation, broker sync, queue processing, and scheduler trading cycles currently return `501 not_ported` until the Saxo execution/audit/reconciliation logic is ported safely.
+
+## Rust File Structure
+
+Target these files for future Rust work:
+
+- `src/main.rs`
+  - Process startup only.
+  - Initializes tracing, SQLx drivers, app state, and Axum server.
+  - Dispatches `--scheduler` to the scheduler entry point.
+
+- `src/api.rs`
+  - Axum router and HTTP handlers.
+  - Add or change API routes here.
+  - Keep handler logic thin; move data construction into `state.rs` and broker/session mechanics into `auth.rs`.
+
+- `src/auth.rs`
+  - SSO header parsing for ngrok OAuth, Saxo OAuth start/callback, session cache inspection, refresh, and logout.
+  - Target this file for Saxo authorization/session work.
+  - Do not expose access or refresh tokens in JSON responses.
+  - The token safety margin is intentionally proactive so page loads and scheduler heartbeats renew before expiry.
+  - The pod-local `/tmp/daytrader/saxo_session.json` file is only an ephemeral working copy. Database durability is coordinated from `src/state.rs`.
+
+- `src/localization.rs`
+  - Locale, time zone, week-start, 12/24-hour clock, and number/date formatting helpers.
+  - Target this file for regional display preferences before editing UI components.
+
+- `src/state.rs`
+  - Application state, config loading, database pool, and API payload builders.
+  - Target this file when porting Python backend read models.
+  - It currently builds compatibility JSON for overview, positions, execution, scheduler, decisions, and settings.
+  - It also owns the `saxo_sessions` runtime table used to persist the refreshable Saxo session into CNPG/PostgreSQL so a Kubernetes rollout can restore the session into the next pod.
+
+- `src/ui.rs`
+  - Dioxus SSR components and formatting helpers.
+  - Target this file for dashboard layout, display text, tables, and UI-only formatting.
+  - UI formatting should call `localization.rs` helpers rather than formatting numbers and timestamps inline.
+  - Dashboard tabs are selected by the `view` query parameter.
+
+- `src/config.rs`
+  - YAML/env config helpers.
+  - Target this file for config resolution behavior.
+
+- `src/db.rs`
+  - Generic SQL row to JSON conversion and small DB/query helpers.
+  - Target this file for shared database utilities.
+
+- `src/models.rs`
+  - Shared Rust structs for view models and request query/body types.
+  - Add typed request/response structs here when replacing generic JSON.
+
+- `src/scheduler.rs`
+  - Rust scheduler entry point.
+  - Currently a heartbeat placeholder.
+  - Maintains the Saxo session cache on each heartbeat; successful refreshes are persisted back to the database by `AppState`.
+  - Port scheduler trading behavior here only after Saxo mutation safety rules are implemented.
+
+- `assets/app.css`
+  - Dashboard styling.
+
+## Legacy Python/Next.js Structure
+
+The legacy implementation is still present for reference and staged porting.
+
+- `src/saxo_daytrader_xai/api/app.py`
+  - Old FastAPI routes. Use this as the reference for API behavior.
+
+- `src/saxo_daytrader_xai/saxo_openapi.py`
+  - Old Saxo OpenAPI integration.
+  - Preserve sim/live separation, token handling, `AccountKey`/`ClientKey` distinctions, precheck-before-place behavior, tick-size normalization, and order auditability when porting.
+
+- `src/saxo_daytrader_xai/execution_engine.py`
+  - Old execution queue, broker sync, order management, and reconciliation.
+
+- `src/saxo_daytrader_xai/portfolio.py`
+  - Old portfolio summary and position read models.
+
+- `scripts/run_scheduler.py`
+  - Old scheduler behavior.
+
+- `frontend/`
+  - Old Next.js frontend. Not part of the active Kubernetes base deployment.
+
+## Local Development
+
+Use a workspace-local Cargo cache so builds do not need to write to the global Cargo cache:
+
+```bash
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo check
+```
+
+Common commands:
+
+```bash
+rtk make install
+rtk make run
+rtk make scheduler
+rtk make fmt
+rtk make test
+rtk make check
+rtk make validate
+```
+
+Local server defaults:
+
+- App: `http://127.0.0.1:8000`
+- Health: `http://127.0.0.1:8000/api/health`
+
+For a smoke test on another port:
+
+```bash
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home BIND_ADDR=127.0.0.1:18001 cargo run --bin saxo-rust
+rtk curl -sS http://127.0.0.1:18001/api/health
+rtk curl -sS http://127.0.0.1:18001/api/overview
+```
+
+Stop any smoke-test server you start before ending work.
+
+## Testing
+
+Rust unit tests use the standard Rust pattern:
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn behavior_is_verified() {}
+}
+```
+
+Existing tests live beside the code they verify:
+
+- `src/config.rs`
+- `src/db.rs`
+- `src/ui.rs`
+
+Run:
+
+```bash
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo test
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo check
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo fmt --check
+```
+
+Kubernetes manifest validation:
+
+```bash
+rtk kubectl kustomize deploy/k8s/base
+rtk bash -n scripts/deploy_k8s_docker_desktop.sh
+```
+
+## Kubernetes Deployment
+
+App resources run in namespace `saxo-rust`.
+
+Database resources remain in namespace `saxo`.
+
+Important files:
+
+- `deploy/k8s/base/namespace.yaml`
+  - Creates namespace `saxo-rust`.
+
+- `deploy/k8s/base/kustomization.yaml`
+  - Base app kustomization.
+  - Namespace is `saxo-rust`.
+  - Includes app deployments, app services, PVCs, and config map.
+
+- `deploy/k8s/base/api.yaml`
+  - Rust app deployment `daytrader-api`.
+  - Rust app service `daytrader-api`.
+  - Frontend-compatible service `daytrader-frontend` pointing at `daytrader-api`.
+  - Both services expose port `8000`.
+
+- `deploy/k8s/base/scheduler.yaml`
+  - Rust scheduler deployment `daytrader-scheduler`.
+  - Runs `/app/saxo-rust --scheduler`.
+
+- `deploy/k8s/base/config.k8s.yaml`
+  - Kubernetes runtime config.
+  - Uses `portfolio.database_url: ENV:DATABASE_URL`.
+  - Saxo session path is `/tmp/daytrader/saxo_session.json`.
+  - The durable session is stored in the `saxo_sessions` database table at runtime.
+
+- `deploy/k8s/ngrok/ingress.template.yaml`
+  - ngrok traffic policy and `AgentEndpoint`.
+  - Namespace: `saxo-rust`.
+  - Target: `http://daytrader-frontend.saxo-rust:8000`.
+
+- `deploy/k8s/postgres/postgres-stack.template.yaml`
+  - CloudNativePG cluster resources.
+  - Namespace: `saxo`.
+  - Keep this in `saxo` unless explicitly migrating the database.
+
+- `deploy/k8s/postgres/sqlite-migration-job.template.yaml`
+  - Legacy SQLite-to-Postgres migration job.
+  - Namespace: `saxo`.
+
+- `scripts/deploy_k8s_docker_desktop.sh`
+  - Main Docker Desktop deployment script.
+  - Builds the Rust image.
+  - Applies/keeps CNPG resources in `DB_NAMESPACE`, default `saxo`.
+  - Applies app resources in `NAMESPACE`, default `saxo-rust`.
+  - Creates a `daytrader-postgres-app` secret in `saxo-rust` containing a cross-namespace `DATABASE_URL`.
+  - Renders ngrok endpoint to `saxo-rust/daytrader-frontend`.
+
+## Namespace And DNS Rules
+
+Kubernetes secrets cannot be referenced across namespaces. Because the database is in `saxo` and the app is in `saxo-rust`, the deploy script creates an app-local secret:
+
+- Secret in app namespace: `saxo-rust/daytrader-postgres-app`
+- Key: `database-url`
+- Value points at cross-namespace service DNS:
+  - `daytrader-postgres-rw.saxo.svc.cluster.local:5432`
+
+Do not change app pods to reference the CNPG-generated secret directly in `saxo`; that will not work across namespaces.
+
+## Saxo Session Persistence
+
+The Rust runtime stores the rollout-safe Saxo OAuth cache in `saxo_sessions` in the CNPG-backed `daytrader` database in namespace `saxo`. Pods use `/tmp/daytrader/saxo_session.json` only as an ephemeral working file for the OAuth helper code. On startup, API requests, scheduler heartbeats, OAuth callback, and refresh, `AppState` restores from or writes to the database row. User/SSO logout must not clear this service-level Saxo session because the scheduler renews it without a browser user; only the explicit `/api/saxo/session/disconnect` endpoint removes the durable row. The table contains tokens, so treat database access as credential access.
+
+## ngrok
+
+The ngrok operator resources live in `saxo-rust`:
+
+- `NgrokTrafficPolicy/daytrader-oauth`
+- `AgentEndpoint/daytrader-frontend`
+
+The endpoint target is the app service:
+
+```text
+http://daytrader-frontend.saxo-rust:8000
+```
+
+Required `.env` values for deployment:
+
+```bash
+NGROK_API_KEY=
+NGROK_AUTHTOKEN=
+NGROK_DOMAIN=
+NGROK_ALLOWED_EMAILS=
+```
+
+`NGROK_OAUTH_PROVIDER` defaults to `google`.
+
+## CloudNativePG
+
+CNPG is intentionally kept in namespace `saxo`.
+
+Primary cluster:
+
+- `saxo/daytrader-postgres`
+- writable service: `daytrader-postgres-rw.saxo.svc.cluster.local`
+- app database: `daytrader`
+
+The app receives `DATABASE_URL` from `saxo-rust/daytrader-postgres-app`, not directly from the CNPG secret.
+
+Useful checks:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo get cluster,svc,pvc
+rtk kubectl --context docker-desktop -n saxo get pods -l cnpg.io/cluster=daytrader-postgres
+rtk kubectl --context docker-desktop -n saxo-rust get pods,svc,agentendpoint,ngroktrafficpolicy,pvc
+```
+
+## Docker
+
+The active Docker image is built by `Dockerfile.api`.
+
+```bash
+rtk make docker-build
+```
+
+The image contains:
+
+- `/app/saxo-rust`
+- `/app/config/config.yaml`
+
+Default runtime env:
+
+```bash
+DAYTRADER_CONFIG=/app/config/config.yaml
+BIND_ADDR=0.0.0.0:8000
+```
+
+## Deployment
+
+Deploy to Docker Desktop Kubernetes:
+
+```bash
+rtk make k8s-deploy
+```
+
+Status:
+
+```bash
+rtk make k8s-status
+rtk make k8s-db-status
+```
+
+Stop app resources:
+
+```bash
+rtk make k8s-stop
+```
+
+`k8s-stop` removes app resources from `saxo-rust`. It should not delete the CNPG database in `saxo`.
+
+## Saxo Safety Notes
+
+When porting Saxo trading features from Python:
+
+- Keep SIM and LIVE config/session paths separate.
+- Never hard-code tokens, Saxo client secrets, `ClientKey`, or `AccountKey`.
+- Use `AccountKey` for account-scoped trading and portfolio calls.
+- Use `ClientKey` for Saxo endpoints that require client scope.
+- Precheck orders before placement where Saxo supports it.
+- Preserve `x-request-id` or equivalent idempotency-style headers for order mutations.
+- Preserve local audit records for every precheck, placement, replace, cancel, fill, and reconciliation event.
+- Normalize prices to valid Saxo tick increments before precheck/place.
+- Keep live order mutation disabled until the Rust path is fully audited and tested.
+
+## Future Porting Order
+
+Recommended order for future development:
+
+1. Replace generic JSON payloads in `state.rs` with typed structs in `models.rs`.
+2. Port portfolio summary/read models from `portfolio.py`.
+3. Extend the Rust Saxo session layer only through `src/auth.rs`; status, OAuth start/callback, refresh, logout, and sanitized session JSON are already implemented.
+4. Port market status/watchlist read models.
+5. Port execution read models.
+6. Port scheduler heartbeat persistence.
+7. Port Saxo precheck/order placement only after tick-size handling and audit tables have focused tests.
+8. Re-enable mutation endpoints one at a time.

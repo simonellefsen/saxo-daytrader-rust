@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daytrader-postgres-backup-schedule
+spec:
+  schedule: "15 9-23 * * 1-5"
+  timeZone: Europe/Copenhagen
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: daytrader-backup-retention
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: daytrader-api:local
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - scripts/create_postgres_backup.py
+              env:
+                - name: CLUSTER_NAME
+                  value: daytrader-postgres

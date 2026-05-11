@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: daytrader-backup-retention
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: daytrader-backup-retention
+rules:
+  - apiGroups:
+      - postgresql.cnpg.io
+    resources:
+      - backups
+    verbs:
+      - create
+      - get
+      - list
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: daytrader-backup-retention
+subjects:
+  - kind: ServiceAccount
+    name: daytrader-backup-retention
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: daytrader-backup-retention
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daytrader-postgres-backup-retention
+spec:
+  schedule: "30 9-23 * * 1-5"
+  timeZone: Europe/Copenhagen
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: daytrader-backup-retention
+          restartPolicy: Never
+          containers:
+            - name: retention
+              image: daytrader-api:local
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - scripts/prune_postgres_backups.py
+              env:
+                - name: CLUSTER_NAME
+                  value: daytrader-postgres
+                - name: BACKUP_BUCKET
+                  value: daytrader-cnpg
+                - name: S3_ENDPOINT_URL
+                  value: http://host.docker.internal:9000
+                - name: BACKUP_KEEP_HOURLY
+                  value: "24"
+                - name: BACKUP_KEEP_DAILY
+                  value: "7"
+                - name: BACKUP_KEEP_WEEKLY
+                  value: "4"
+                - name: BACKUP_KEEP_MONTHLY
+                  value: "12"
+                - name: BACKUP_KEEP_YEARLY
+                  value: "10"
+                - name: BACKUP_LOCAL_TIMEZONE
+                  value: Europe/Copenhagen
+                - name: BACKUP_PURGE_WEEKENDS
+                  value: "true"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: daytrader-minio-backup
+                      key: ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: daytrader-minio-backup
+                      key: ACCESS_SECRET_KEY

@@ -1,0 +1,322 @@
+app:
+  project_name: saxo-daytrader-xai
+  environment: local
+  dry_run: false
+  simulation_mode: true
+  launch_scheduler_with_ui: true
+  scheduler_restart_on_failure: true
+  scheduler_max_restarts: 3
+  scheduler_restart_delay_seconds: 2.0
+
+localization:
+  locale: da-DK
+  time_zone: Europe/Copenhagen
+  hour_cycle: 24h
+  week_start: monday
+
+portfolio:
+  base_currency: DKK
+  source_csv: ""
+  database_path: ledger.db
+  initial_cash_dkk: 9770.17
+  virtual_cap_dkk: 250000.0
+
+market_data:
+  refresh_interval_seconds: 300
+  request_timeout_seconds: 10
+  watchlists:
+    nordic_limit: 100
+    uk_limit: 25
+    us_limit: 100
+    eu_limit: 75
+    global_limit: 100
+  rss:
+    market_feeds:
+      - name: Yahoo Finance
+        url: https://finance.yahoo.com/news/rssindex
+      - name: CNBC Markets
+        url: https://www.cnbc.com/id/10001147/device/rss/rss.html
+      - name: Reuters Business
+        url: https://feeds.reuters.com/reuters/businessNews
+    macro_feeds:
+      - name: ECB Press
+        url: https://www.ecb.europa.eu/rss/press.html
+      - name: Federal Reserve Press
+        url: https://www.federalreserve.gov/feeds/press_all.xml
+    crypto_feeds:
+      - name: CoinDesk
+        url: https://www.coindesk.com/arc/outboundfeeds/rss/
+      - name: Cointelegraph
+        url: https://cointelegraph.com/rss
+
+price_monitor:
+  enabled: true
+  poll_interval_minutes: 1
+  post_close_grace_minutes: 15
+  reset_hour_local: 6
+  timezone: Europe/Copenhagen
+  history_max_rows: 0
+  history_retention_days: 0
+
+analysis_windows:
+  offset_minutes_after_open: 30
+  duration_minutes: 0
+  pre_sync_minutes_before_analysis: 5
+  end_buffer_minutes_before_close: 15
+  calendar_refresh_interval_minutes: 360
+  calendar_lookback_days: 7
+  calendar_lookahead_days: 45
+
+scheduler:
+  enabled: true
+  poll_interval_minutes: 10
+  startup_run: true
+  history_max_rows: 250
+  history_retention_days: 30
+
+strategy:
+  enabled: true
+  mode: swing
+  max_candidates: 20
+  min_selected_assets: 3
+  max_selected_assets: 8
+  max_assets_per_sector: 2
+  estimated_slippage_bps: 8
+  cost_guard_multiple: 1.5
+  capital:
+    max_deployment_pct: 0.90
+    min_cash_buffer_pct: 0.10
+  swing:
+    min_holdings: 10
+    max_holdings: 25
+    min_holding_weight_pct: 0.05
+    max_holding_weight_pct: 0.25
+    cash_buffer_pct: 0.10
+    risk_per_trade_pct: 0.01
+    never_trade_symbols:
+      - NOVOb:xcse
+      - TSLA:xnas
+    daily_indicators:
+      enabled: true
+      max_symbols: 20
+      horizon_minutes: 1440
+      sample_count: 260
+      min_confluences: 3
+      min_reward_risk: 2.0
+    trading_manager:
+      enabled: true
+      use_ai: true
+      due_window_minutes: 20
+      max_symbols: 30
+    journal:
+      enabled: true
+      timezone: Europe/Copenhagen
+      daily_time: "22:30"
+      weekly_weekday: 6
+      weekly_time: "20:00"
+      monthly_time: "22:45"
+      benchmark_indices:
+        UK:
+          FTSE 100: "^FTSE"
+        EU:
+          Euro Stoxx 50: "^STOXX50E"
+          DAX: "^GDAXI"
+        Nordics:
+          OMX Copenhagen 25: "^OMXC25"
+          OMX Stockholm 30: "^OMX"
+          Oslo OBX: "OBX.OL"
+        US:
+          S&P 500: "^GSPC"
+          Nasdaq Composite: "^IXIC"
+          Dow Jones: "^DJI"
+    analysis_pulses:
+      timezone: Europe/Copenhagen
+      due_window_minutes: 20
+      europe_open_followup:
+        enabled: true
+        minutes_after_open: 75
+        exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
+      us_open_followup:
+        enabled: true
+        minutes_after_open: 75
+        exchange_codes: [XNAS, XNYS]
+  ladder:
+    rung_count: 5
+    min_rung_value_dkk: 5000
+    submit_bracket_with_entry: false
+    submit_stop_loss_after_fill: false
+    submit_take_profit_after_fill: false
+    atr_spacing_min: 0.15
+    atr_spacing_factor: 0.25
+    atr_spacing_max: 0.4
+    stop_loss_atr_multiple: 2.0
+    take_profit_rung_multiple: 2.0
+    max_take_profit_atr_multiple: 8.0
+    min_position_weight: 0.02
+    max_position_weight: 0.04
+    session_flatten_enabled: false
+    flatten_minutes_before_tradable_close: 15
+    trail_stop_atr_multiple: 1.25
+
+execution:
+  #mode: simulation
+  mode: live
+  adapter: saxo
+  auto_execute_simulation: true
+  #require_approval_live: true
+  require_approval_live: false
+  min_trade_value_dkk: 500
+  max_daily_orders: 50
+  delayed_price_limit_orders:
+    enabled: true
+    assumed_delay_minutes: 15
+    buy_limit_offset_bps: 20
+    sell_limit_offset_bps: 20
+    replace_threshold_bps: 10
+    max_replacements_per_cycle: 25
+  price_tick_overrides:
+    MATAS:xcse: 0.5
+    NKT:xcse: 0.5
+
+risk:
+  excluded_symbols:
+    - NOVOb:xcse
+    - TSLA:xnas
+  excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS
+  max_position_weight: 0.25
+  allow_shorting: false
+
+taxation:
+  share_income:
+    currency: DKK
+    brackets:
+      - up_to_dkk: 79000
+        rate: 0.27
+      - up_to_dkk:
+        rate: 0.42
+
+commissions:
+  default_rate: 0.0008
+  fx_conversion_rate: 0.0025
+  minimums:
+    XCSE:
+      currency: DKK
+      amount: 14.0
+    XNAS:
+      currency: USD
+      amount: 3.0
+    XNYS:
+      currency: USD
+      amount: 3.0
+    XLON:
+      currency: GBP
+      amount: 3.0
+    XMIL:
+      currency: EUR
+      amount: 3.0
+
+xai:
+  api_key: ENV:XAI_API_KEY
+  base_url: https://api.x.ai/v1
+  model: grok-4.3
+  reasoning_effort: medium
+  max_output_tokens: 8192
+  http_timeout_seconds: 30
+  performance_goals:
+    currency: DKK
+    week_start_weekday: 0
+    week_end_weekday: 4
+    weekly_target_dkk: 5000
+    monthly_target_dkk: 20000
+    stretch_weekly_target_dkk: 7500
+  goal: >
+    Target DKK 5,000 per Monday-Friday trading week and DKK 20,000 per
+    calendar month before tax. Maximise portfolio value while keeping risk
+    reasonable for a disciplined swing/day-trading horizon.
+  timeout_seconds: 600
+  retry_initial_backoff_seconds: 60
+  retry_max_backoff_seconds: 600
+  auto_run_interval_minutes: 240
+  include_encrypted_reasoning: false
+
+saxo:
+  environment: SIM
+  client_id: ENV:SAXO_CLIENT_ID
+  client_secret: ENV:SAXO_CLIENT_SECRET
+  client_key: ENV:SAXO_CLIENT_KEY
+  account_key: ENV:SAXO_ACCOUNT_KEY
+  session_path: /tmp/daytrader/saxo_session.json
+
+tradingview:
+  username: ENV:TRADINGVIEW_USERNAME
+  encrypted_password: ENV:TRADINGVIEW_PASSWORD
+  totp_secret: ENV:TRADINGVIEW_TOTP_SECRET
+
+openfigi:
+  enabled: true
+  api_key: ENV:OPENFIGI_API_KEY
+  base_url: https://api.openfigi.com/v3
+  timeout_seconds: 10
+
+notifications:
+  daily_summary_enabled: false
+  weekly_summary_enabled: false
+  monthly_summary_enabled: false
+  quarterly_summary_enabled: false
+  ytd_summary_enabled: false
+  timezone: Europe/Copenhagen
+  dispatch_hour_local: 18
+  dispatch_minute_local: 15
+  weekly_dispatch_weekday_local: 0
+  monthly_dispatch_day_local: 1
+  quarterly_dispatch_day_local: 1
+  ytd_dispatch_day_local: 1
+  retry_backoff_minutes: 30
+  max_attempts_per_day: 3
+  channel_cooldown_minutes: 240
+  summary_style: structured
+  slack:
+    enabled: true
+    webhook_url: ENV:SLACK_WEBHOOK_URL
+  email:
+    enabled: false
+    smtp_host: ENV:SMTP_HOST
+    smtp_port: ENV:SMTP_PORT
+    use_starttls: true
+    username: ENV:SMTP_USERNAME
+    password: ENV:SMTP_PASSWORD
+    from_address: ENV:SMTP_FROM_ADDRESS
+    to_addresses_csv: ENV:SMTP_TO_ADDRESSES
+  alerts:
+    execution_success_enabled: true
+    execution_warning_enabled: true
+    broker_fill_enabled: false
+    broker_reject_enabled: false
+    broker_cancel_enabled: false
+    execution_failure_enabled: true
+    broker_management_failure_enabled: true
+    saxo_session_failure_enabled: true
+  alert_suppression:
+    enabled: true
+    low_cooldown_minutes: 240
+    medium_cooldown_minutes: 60
+    high_cooldown_minutes: 0
+  alert_grouping:
+    enabled: true
+    max_items_per_group: 5
+  route_profiles: {}
+  routes:
+    daily: {}
+    weekly: {}
+    monthly: {}
+    quarterly: {}
+    ytd: {}
+    alert_execution_success: {}
+    alert_execution_warning: {}
+    alert_broker_fill: {}
+    alert_broker_reject: {}
+    alert_broker_cancel: {}
+    alert_broker_grouped: {}
+    alert_execution_failed: {}
+    alert_broker_management_failed: {}
+    alert_saxo_session_failed: {}

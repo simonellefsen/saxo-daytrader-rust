@@ -1,0 +1,102 @@
+CARGO := cargo
+CARGO_HOME ?= $(CURDIR)/.cargo-home
+API_PORT ?= 8000
+BIND_ADDR ?= 127.0.0.1:$(API_PORT)
+KUBE_CONTEXT ?= docker-desktop
+APP_NAMESPACE ?= saxo-rust
+DB_NAMESPACE ?= saxo
+IMAGE ?= daytrader-api:local
+PYTHON := .venv/bin/python
+
+.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward legacy-sync legacy-scheduler-once legacy-render-services
+
+help:
+	@printf "%s\n" \
+		"Rust runtime:" \
+		"  make install              Fetch Rust dependencies into $(CARGO_HOME)" \
+		"  make fmt                  Format Rust code" \
+		"  make fmt-check            Check Rust formatting" \
+		"  make test                 Run Rust unit tests" \
+		"  make check                Type-check the Rust app" \
+		"  make validate             Run fmt-check, test, and check" \
+		"  make run                  Run Axum/Dioxus on $(BIND_ADDR)" \
+		"  make scheduler            Run the Rust scheduler process" \
+		"" \
+		"Docker/Kubernetes:" \
+		"  make docker-build         Build $(IMAGE)" \
+		"  make k8s-deploy           Deploy app to $(APP_NAMESPACE), DB remains in $(DB_NAMESPACE)" \
+		"  make k8s-status           Show app pods/services/ngrok endpoint" \
+		"  make k8s-db-status        Show CNPG database resources" \
+		"  make k8s-logs             Tail API and scheduler logs" \
+		"  make k8s-port-forward     Forward daytrader-frontend to localhost:$(API_PORT)" \
+		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)" \
+		"" \
+		"Legacy Python helpers:" \
+		"  make legacy-sync          Run old CSV-to-ledger sync" \
+		"  make legacy-scheduler-once Run one old scheduler cycle" \
+		"  make legacy-render-services Render old systemd/launchd templates"
+
+install:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) fetch
+
+fmt:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) fmt
+
+fmt-check:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) fmt --check
+
+test:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) test
+
+check:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) check
+
+validate: fmt-check test check
+
+run:
+	BIND_ADDR=$(BIND_ADDR) CARGO_HOME=$(CARGO_HOME) $(CARGO) run --bin saxo-rust
+
+api: run
+
+scheduler:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) run --bin saxo-rust -- --scheduler
+
+docker-build:
+	docker build -f Dockerfile.api -t $(IMAGE) .
+
+k8s-deploy:
+	KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
+
+k8s-status:
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) get pods,svc,agentendpoint,ngroktrafficpolicy
+	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get cluster,svc,pvc
+
+k8s-db-status:
+	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get cluster,scheduledbackup,backup,pvc
+	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get pods -l cnpg.io/cluster=daytrader-postgres
+	docker ps --filter name=daytrader-minio --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+k8s-logs:
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) logs deployment/daytrader-api --tail=120
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) logs deployment/daytrader-scheduler --tail=120
+
+k8s-port-forward:
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) port-forward svc/daytrader-frontend $(API_PORT):8000
+
+k8s-stop:
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete ingress daytrader-frontend --ignore-not-found
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete agentendpoint daytrader-rust daytrader-frontend --ignore-not-found --wait=false
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) patch domain --all --type merge -p '{"metadata":{"finalizers":[]}}'
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete domain --all --ignore-not-found --wait=false
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete ngroktrafficpolicy daytrader-oauth --ignore-not-found
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete deployment daytrader-api daytrader-scheduler daytrader-frontend --ignore-not-found
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete service daytrader-api daytrader-frontend --ignore-not-found
+
+legacy-sync:
+	$(PYTHON) main.py --sync-only
+
+legacy-scheduler-once:
+	$(PYTHON) scripts/run_scheduler.py --once --mock-decisions --force-decision
+
+legacy-render-services:
+	$(PYTHON) scripts/render_services.py

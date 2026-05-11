@@ -1,0 +1,86 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+
+use crate::localization::LocalizationPrefs;
+
+// Rust structs play the same role as typed objects/interfaces in TypeScript.
+// `derive` asks the compiler to generate standard behavior, like cloning and
+// JSON serialization, instead of hand-writing boilerplate methods.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DashboardView {
+    pub app_name: String,
+    pub environment: String,
+    pub db_label: String,
+    pub total_value_dkk: f64,
+    pub invested_value_dkk: f64,
+    pub cash_dkk: f64,
+    pub initial_cash_dkk: f64,
+    pub cash_from_trades_dkk: f64,
+    pub unrealised_pnl_dkk: f64,
+    pub unrealised_after_tax_dkk: f64,
+    pub daily_pnl_dkk: f64,
+    pub position_count: i64,
+    pub execution_mode: String,
+    pub execution_adapter: String,
+    pub saxo_status: String,
+    pub saxo_auth: JsonValue,
+    pub sso_session: JsonValue,
+    pub localization: LocalizationPrefs,
+    pub active_view: String,
+    pub performance_range: String,
+    pub selected_report_id: Option<i64>,
+    pub positions: Vec<JsonValue>,
+    pub orders: Vec<JsonValue>,
+    pub execution_fills: Vec<JsonValue>,
+    pub execution_events: Vec<JsonValue>,
+    pub reports: Vec<JsonValue>,
+    pub journal_entries: Vec<JsonValue>,
+    pub scheduler_cycles: Vec<JsonValue>,
+    pub performance_history: Vec<JsonValue>,
+    pub performance_summary: JsonValue,
+    pub market_status: JsonValue,
+    pub watchlists: JsonValue,
+    pub latest_decision: JsonValue,
+    pub selected_decision: JsonValue,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LimitParams {
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PerformanceParams {
+    pub range_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ViewParams {
+    pub view: Option<String>,
+    pub range_key: Option<String>,
+    pub report_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CashBufferRequest {
+    pub min_cash_buffer_pct: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LocalizationSettingsRequest {
+    pub locale: Option<String>,
+    pub time_zone: Option<String>,
+    pub hour_cycle: Option<String>,
+    pub week_start: Option<String>,
+    pub group_separator: Option<String>,
+    pub decimal_separator: Option<String>,
+    pub measurement_system: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaxoCallbackParams {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+}

@@ -1,0 +1,18 @@
+[Unit]
+Description=Saxo Daytrader Web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+WorkingDirectory={{PROJECT_DIR}}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{PYTHON_BIN}} {{PROJECT_DIR}}/main.py --no-scheduler --api-port {{API_PORT}} --frontend-port {{FRONTEND_PORT}}
+Restart=always
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
