@@ -6,6 +6,7 @@ mod localization;
 mod models;
 mod scheduler;
 mod state;
+mod strategy_journal;
 mod trading_manager;
 mod ui;
 mod xai_decision;

@@ -315,7 +315,7 @@ impl AppState {
             "analysis_summary": self.market_status_payload().await.unwrap_or_else(|_| json!({"summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []})),
             "latest_decision": self.latest_decision_summary().await.unwrap_or_else(|_| json!({"id": null, "created_at": null, "status": null})),
             "scheduler_status": self.scheduler_status_value().await.unwrap_or(JsonValue::Null),
-            "scheduler_health": {"status": "ok", "message": "Rust scheduler maintains Saxo sessions, submits/polls deferred xAI decision reports, and runs the Trading Manager for fresh completed scheduled reports."},
+            "scheduler_health": {"status": "ok", "message": "Rust scheduler maintains Saxo sessions, submits/polls deferred xAI decision reports, runs the Trading Manager for fresh completed scheduled reports, and creates due end-of-day journals."},
             "trading_manager": {
                 "status": "available",
                 "latest_run": self.latest_trading_manager_run().await.unwrap_or(JsonValue::Null)

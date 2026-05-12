@@ -319,11 +319,13 @@ fn completed_report_json(
         .get("analysis_pulse")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let scope_enforcement = enforce_completed_report_scope(&mut parsed, &pulse);
     if let Some(obj) = parsed.as_object_mut() {
         obj.insert("status".to_string(), JsonValue::from("completed"));
         obj.entry("created_at".to_string())
             .or_insert_with(|| JsonValue::from(created_at));
         obj.entry("analysis_pulse".to_string()).or_insert(pulse);
+        obj.insert("market_scope_enforcement".to_string(), scope_enforcement);
         obj.insert(
             "xai_deferred".to_string(),
             json!({
@@ -351,6 +353,60 @@ fn completed_report_json(
     Ok(parsed)
 }
 
+fn enforce_completed_report_scope(report: &mut JsonValue, pulse: &JsonValue) -> JsonValue {
+    let kind = pulse.get("kind").and_then(JsonValue::as_str).unwrap_or("");
+    if kind != "europe_open_followup" {
+        return json!({"status": "not_required"});
+    }
+    let allowed = pulse
+        .get("exchange_codes")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(|value| value.to_uppercase()))
+        .collect::<HashSet<_>>();
+    if allowed.is_empty() {
+        return json!({"status": "no_allowed_exchange_codes"});
+    }
+    let mut filtered = Vec::new();
+    filter_report_array(report, "suggested_trades", &allowed, &mut filtered);
+    filter_report_array(report, "selected_assets", &allowed, &mut filtered);
+    filter_report_array(report, "candidate_assets", &allowed, &mut filtered);
+    filter_report_array(report, "symbol_sentiment", &allowed, &mut filtered);
+    if let Some(plan) = report.get_mut("strategy_plan") {
+        filter_report_array(plan, "swing_orders", &allowed, &mut filtered);
+        filter_report_array(plan, "suggested_trades", &allowed, &mut filtered);
+    }
+    filtered.sort();
+    filtered.dedup();
+    json!({
+        "status": "enforced",
+        "allowed_exchange_codes": allowed.into_iter().collect::<Vec<_>>(),
+        "filtered_out_symbols": filtered,
+    })
+}
+
+fn filter_report_array(
+    object: &mut JsonValue,
+    key: &str,
+    allowed: &HashSet<String>,
+    filtered: &mut Vec<String>,
+) {
+    let Some(array) = object.get_mut(key).and_then(JsonValue::as_array_mut) else {
+        return;
+    };
+    array.retain(|row| {
+        let symbol = text(row, "symbol");
+        let code = symbol_exchange_code(&symbol);
+        let keep = code.is_empty() || allowed.contains(&code);
+        if !keep {
+            filtered.push(symbol);
+        }
+        keep
+    });
+}
+
 fn parse_json_content(content: &str) -> Result<JsonValue> {
     let trimmed = content.trim();
     if let Ok(value) = serde_json::from_str::<JsonValue>(trimmed) {
@@ -370,26 +426,48 @@ async fn build_decision_prompt(
     pulse: &DecisionPulse,
     manual: bool,
 ) -> Result<JsonValue> {
-    let positions = state.position_items(250).await.unwrap_or_default();
+    let market = state
+        .market_status_payload()
+        .await
+        .unwrap_or_else(|_| json!({}));
+    let market_items = market
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let scope = market_scope_for_pulse(pulse, &market_items, manual);
+    let allowed_codes = scope
+        .get("allowed_trade_exchange_codes")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(|value| value.to_uppercase()))
+        .collect::<HashSet<_>>();
+    let positions = filter_rows_by_exchange(
+        state.position_items(250).await.unwrap_or_default(),
+        &allowed_codes,
+    );
     let watchlists = state
         .watchlists_payload()
         .await
         .unwrap_or_else(|_| json!({}));
     let overview = state.overview_payload().await.unwrap_or_else(|_| json!({}));
-    let market = state
-        .market_status_payload()
-        .await
-        .unwrap_or_else(|_| json!({}));
     let system = [
         "You are the portfolio decision engine for a Danish SaxoInvestor swing/day-trading system.",
         "Return strict JSON only. No markdown, no prose outside JSON.",
         "Use the sentiment scale SELL, UNDERWEIGHT, HOLD, OVERWEIGHT, BUY.",
         "Never short. Treat all pnl, commissions, and taxes in DKK where possible.",
         "Suggested trades must be conservative and include strategy_metadata.technical when available.",
+        "Only put a symbol in suggested_trades when its exchange is currently tradable under the supplied market_scope.",
+        "For BUY trades, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
+        "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
+        "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
     ]
     .join("\n");
     let user_payload = json!({
         "task": if manual { "Generate an operator-triggered decision report." } else { "Generate a scheduled decision report for the active market pulse." },
+        "market_scope": scope,
         "required_json_shape": {
             "report_title": "string",
             "market_view": {"bias": "string", "summary": "string"},
@@ -406,9 +484,77 @@ async fn build_decision_prompt(
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
         "market_summary": market.get("summary").cloned().unwrap_or(JsonValue::Null),
         "positions": positions.into_iter().take(80).collect::<Vec<_>>(),
-        "watchlists": compact_watchlists(&watchlists),
+        "watchlists": compact_watchlists(&watchlists, &allowed_codes),
     });
     Ok(json!({"system": system, "user": user_payload}))
+}
+
+fn market_scope_for_pulse(
+    pulse: &DecisionPulse,
+    market_items: &[JsonValue],
+    manual: bool,
+) -> JsonValue {
+    let open_codes = market_items
+        .iter()
+        .filter(|row| {
+            row.get("is_tradable")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|row| row.get("code").and_then(JsonValue::as_str))
+        .map(|code| code.to_uppercase())
+        .collect::<HashSet<_>>();
+    let pulse_codes = pulse
+        .exchange_codes
+        .iter()
+        .map(|code| code.to_uppercase())
+        .collect::<HashSet<_>>();
+    let allowed_codes = if manual || pulse.kind == "us_open_followup" {
+        open_codes.clone()
+    } else {
+        open_codes
+            .intersection(&pulse_codes)
+            .cloned()
+            .collect::<HashSet<_>>()
+    };
+    let mut allowed_list = allowed_codes.into_iter().collect::<Vec<_>>();
+    allowed_list.sort();
+    let mut primary_list = pulse_codes.into_iter().collect::<Vec<_>>();
+    primary_list.sort();
+    let policy = match pulse.kind.as_str() {
+        "europe_open_followup" => {
+            "This is the Nordic/EU/UK open follow-up. Suggest trades only for allowed_trade_exchange_codes; do not suggest US symbols before the US session opens."
+        }
+        "us_open_followup" => {
+            "This is the US open follow-up. Prioritize XNAS/XNYS symbols, but rebalancing may include any currently tradable allowed_trade_exchange_codes."
+        }
+        _ => {
+            "Use only currently tradable exchanges unless the operator explicitly requests a broader manual review."
+        }
+    };
+    json!({
+        "policy": policy,
+        "pulse_exchange_codes": primary_list,
+        "allowed_trade_exchange_codes": allowed_list,
+        "source_markets": pulse.source_markets,
+        "target_at_utc": pulse.target_at_utc,
+    })
+}
+
+fn filter_rows_by_exchange(
+    rows: Vec<JsonValue>,
+    allowed_codes: &HashSet<String>,
+) -> Vec<JsonValue> {
+    if allowed_codes.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| {
+            let symbol = text(row, "symbol");
+            let code = symbol_exchange_code(&symbol);
+            code.is_empty() || allowed_codes.contains(&code)
+        })
+        .collect()
 }
 
 fn build_chat_request(state: &AppState, prompt: &JsonValue) -> Result<JsonValue> {
@@ -776,7 +922,7 @@ async fn latest_batch_id(state: &AppState) -> Result<Option<String>> {
     Ok(row.and_then(|row| row.try_get::<String, _>("batch_id").ok()))
 }
 
-fn compact_watchlists(watchlists: &JsonValue) -> JsonValue {
+fn compact_watchlists(watchlists: &JsonValue, allowed_codes: &HashSet<String>) -> JsonValue {
     let categories = watchlists
         .get("categories")
         .and_then(JsonValue::as_array)
@@ -792,6 +938,14 @@ fn compact_watchlists(watchlists: &JsonValue) -> JsonValue {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
+                    .filter(|row| {
+                        if allowed_codes.is_empty() {
+                            return true;
+                        }
+                        let symbol = text(row, "symbol");
+                        let code = symbol_exchange_code(&symbol);
+                        code.is_empty() || allowed_codes.contains(&code)
+                    })
                     .take(80)
                     .collect::<Vec<_>>();
                 json!({
@@ -862,6 +1016,13 @@ fn text(value: &JsonValue, key: &str) -> String {
         .to_string()
 }
 
+fn symbol_exchange_code(symbol: &str) -> String {
+    symbol
+        .split_once(':')
+        .map(|(_, exchange)| exchange.to_uppercase())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,5 +1053,39 @@ mod tests {
         let report = completed_report_json(&pending, &response).unwrap();
         assert_eq!(report["status"], "completed");
         assert_eq!(report["strategy_plan"]["status"], "completed");
+    }
+
+    #[test]
+    fn enforces_europe_pulse_scope_on_completed_report() {
+        let pulse = json!({
+            "kind": "europe_open_followup",
+            "exchange_codes": ["XCSE", "XLON"]
+        });
+        let mut report = json!({
+            "suggested_trades": [
+                {"symbol": "MSTR:xnas", "action": "SELL"},
+                {"symbol": "ORSTED:xcse", "action": "BUY"}
+            ],
+            "strategy_plan": {
+                "swing_orders": [
+                    {"symbol": "NVDA:xnas", "action": "BUY"},
+                    {"symbol": "AZN:xlon", "action": "BUY"}
+                ]
+            }
+        });
+        let enforcement = enforce_completed_report_scope(&mut report, &pulse);
+        assert_eq!(report["suggested_trades"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            report["suggested_trades"][0]["symbol"],
+            JsonValue::from("ORSTED:xcse")
+        );
+        assert_eq!(
+            report["strategy_plan"]["swing_orders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(enforcement["status"], "enforced");
     }
 }

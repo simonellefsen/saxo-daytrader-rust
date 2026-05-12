@@ -7,8 +7,8 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    state::AppState, trading_manager::run_trading_manager_cycle,
-    xai_decision::run_xai_decision_cycle,
+    state::AppState, strategy_journal::run_strategy_journal_cycle,
+    trading_manager::run_trading_manager_cycle, xai_decision::run_xai_decision_cycle,
 };
 
 pub async fn run_scheduler() -> Result<()> {
@@ -53,8 +53,17 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    let journal = match run_strategy_journal_cycle(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("strategy journal cycle failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     let completed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let status = if trading_manager.get("status").and_then(JsonValue::as_str) == Some("error") {
+    let status = if trading_manager.get("status").and_then(JsonValue::as_str) == Some("error")
+        || journal.get("status").and_then(JsonValue::as_str) == Some("error")
+    {
         "error"
     } else {
         "ok"
@@ -64,6 +73,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "saxo_session": saxo,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
+        "journal": journal,
         "market": state.market_status_payload().await.unwrap_or_else(|err| {
             warn!("scheduler market status snapshot failed: {err:#}");
             json!({"summary": {"analysis_window_active": false}})

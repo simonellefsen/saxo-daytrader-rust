@@ -97,16 +97,8 @@ async fn run_for_report(
     report: &DecisionReport,
     open_codes: &[String],
 ) -> Result<JsonValue> {
-    let mut candidates = candidate_orders_from_report(&report.report_json)
-        .into_iter()
-        .filter(|order| {
-            open_codes
-                .iter()
-                .any(|code| code == &exchange_code(&order.symbol).to_uppercase())
-        })
-        .collect::<Vec<_>>();
+    let candidates = candidate_orders_from_report(&report.report_json);
     let excluded = excluded_symbols(state);
-    candidates.retain(|order| !excluded.iter().any(|symbol| symbol == &order.symbol));
 
     let min_trade_value_dkk =
         yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0);
@@ -119,6 +111,24 @@ async fn run_for_report(
     let mut approved = Vec::new();
     let mut skipped = Vec::new();
     for mut order in candidates {
+        let exchange = exchange_code(&order.symbol);
+        if !open_codes.iter().any(|code| code == &exchange) {
+            skipped.push(skip_order(
+                &order,
+                &format!(
+                    "Exchange {exchange} is not currently tradable for this scheduler cycle. Open exchanges: {}.",
+                    open_codes.join(", ")
+                ),
+            ));
+            continue;
+        }
+        if excluded.iter().any(|symbol| symbol == &order.symbol) {
+            skipped.push(skip_order(
+                &order,
+                "Symbol is excluded by risk configuration.",
+            ));
+            continue;
+        }
         if order.quantity <= 0.0 {
             skipped.push(skip_order(&order, "Order quantity is zero or negative."));
             continue;
@@ -318,6 +328,7 @@ impl CandidateOrder {
                 action
             ),
         );
+        let strategy_key = unique_strategy_key(strategy_key, &symbol, &action);
         Ok(Self {
             symbol,
             action,
@@ -637,6 +648,14 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
     })
 }
 
+fn unique_strategy_key(strategy_key: String, symbol: &str, action: &str) -> String {
+    if strategy_key.contains(symbol) {
+        strategy_key
+    } else {
+        format!("{strategy_key}:{symbol}:{action}")
+    }
+}
+
 fn excluded_symbols(state: &AppState) -> Vec<String> {
     let mut values = Vec::new();
     if let Some(items) = state
@@ -770,7 +789,19 @@ mod tests {
         });
         let orders = candidate_orders_from_report(&report);
         assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].strategy_key, "swing:test");
+        assert_eq!(orders[0].strategy_key, "swing:test:NVDA:xnas:BUY");
+    }
+
+    #[test]
+    fn makes_model_strategy_keys_symbol_specific() {
+        assert_eq!(
+            unique_strategy_key("rebalance_overweight".to_string(), "MSTR:xnas", "SELL"),
+            "rebalance_overweight:MSTR:xnas:SELL"
+        );
+        assert_eq!(
+            unique_strategy_key("pulse:MSTR:xnas:SELL".to_string(), "MSTR:xnas", "SELL"),
+            "pulse:MSTR:xnas:SELL"
+        );
     }
 
     #[test]
