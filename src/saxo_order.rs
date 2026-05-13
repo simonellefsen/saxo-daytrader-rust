@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use reqwest::{StatusCode, header};
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
@@ -30,6 +30,15 @@ const ACTIVE_SELL_STATUSES: &[&str] = &[
     "waiting_for_cash_settlement",
     "waiting_for_virtual_cash_budget",
 ];
+const BROKER_SYNC_STATUSES: &[&str] = &[
+    "submitted_to_broker",
+    "broker_working",
+    "broker_amended",
+    "broker_partially_filled",
+    "broker_replace_requested",
+    "broker_cancel_requested",
+    "broker_fill_unreconciled",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 struct SymbolParts {
@@ -43,6 +52,15 @@ struct SaxoInstrument {
     asset_type: String,
     exchange_id: String,
     description: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PositionCostBasis {
+    quantity: f64,
+    cost_basis_dkk: f64,
+    cost_basis_local: f64,
+    isin: Option<String>,
+    instrument_name: Option<String>,
 }
 
 pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
@@ -136,6 +154,83 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
     }))
 }
 
+pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
+    let execution_mode =
+        yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
+    let adapter = yaml_string(&state.config, &["execution", "adapter"])
+        .unwrap_or_else(|| "simulation".into());
+    if !execution_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
+        return Ok(json!({
+            "status": "disabled",
+            "reason": "Saxo broker order sync only runs when execution.mode=live and execution.adapter=saxo.",
+            "execution_mode": execution_mode,
+            "adapter": adapter
+        }));
+    }
+
+    let rows = broker_sync_orders(state).await?;
+    if rows.is_empty() {
+        return Ok(
+            json!({"status": "ok", "checked": 0, "updated": 0, "fills": 0, "processed": []}),
+        );
+    }
+
+    state
+        .refresh_saxo_session()
+        .await
+        .context("refreshing Saxo session before broker order sync")?;
+    let session = auth::ensure_session_json(&state.config, &state.config_path).await?;
+    let client_key = client_key(state, &session)?;
+    let mut processed = Vec::new();
+    let mut updated = 0;
+    let mut fills = 0;
+    for order in rows {
+        match sync_one_broker_order(state, &session, &client_key, &order).await {
+            Ok(result) => {
+                if result
+                    .get("updated")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                {
+                    updated += 1;
+                }
+                fills += result.get("fills").and_then(JsonValue::as_i64).unwrap_or(0);
+                processed.push(result);
+            }
+            Err(err) => {
+                let order_id = value_i64(&order, "id");
+                let symbol = order_text(&order, "symbol");
+                warn!(order_id, symbol, "Saxo broker order sync failed: {err:#}");
+                processed.push(json!({
+                    "status": "error",
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "error": err.to_string()
+                }));
+            }
+        }
+    }
+    let broker_read_model = if updated > 0 {
+        match refresh_broker_snapshots(state).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("Saxo broker read model refresh after broker order sync failed: {err:#}");
+                json!({"status": "error", "error": err.to_string()})
+            }
+        }
+    } else {
+        json!({"status": "skipped", "reason": "no broker order state changes"})
+    };
+    Ok(json!({
+        "status": "ok",
+        "checked": processed.len(),
+        "updated": updated,
+        "fills": fills,
+        "processed": processed,
+        "broker_read_model": broker_read_model
+    }))
+}
+
 async fn refresh_after_execution(state: &AppState) -> JsonValue {
     // Market orders can fill at the broker before the next scheduler tick.
     // Refreshing the broker read model here keeps the Rust UI aligned with Saxo
@@ -164,6 +259,194 @@ async fn pending_live_saxo_orders(state: &AppState) -> Result<Vec<JsonValue>> {
     .await
     .context("fetching pending Saxo execution orders")?;
     Ok(rows.iter().map(row_to_json).collect())
+}
+
+async fn broker_sync_orders(state: &AppState) -> Result<Vec<JsonValue>> {
+    let statuses = BROKER_SYNC_STATUSES
+        .iter()
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = sqlx::query(&format!(
+        "SELECT *
+         FROM execution_orders
+         WHERE mode = 'live'
+           AND adapter = 'saxo'
+           AND status IN ({})
+           AND broker_order_id IS NOT NULL
+           AND broker_order_id <> ''
+         ORDER BY created_at ASC, id ASC
+         LIMIT 50",
+        statuses
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("fetching Saxo broker orders pending sync")?;
+    Ok(rows.iter().map(row_to_json).collect())
+}
+
+async fn sync_one_broker_order(
+    state: &AppState,
+    session: &JsonValue,
+    client_key: &str,
+    order: &JsonValue,
+) -> Result<JsonValue> {
+    let order_id = value_i64(order, "id");
+    let symbol = order_text(order, "symbol");
+    let broker_order_id = resolve_broker_order_id(order)
+        .ok_or_else(|| anyhow!("execution order {order_id} has no Saxo broker_order_id"))?;
+    let Some(broker_state) =
+        fetch_broker_order_state(state, session, client_key, &broker_order_id).await?
+    else {
+        return Ok(json!({
+            "status": "not_found",
+            "updated": false,
+            "fills": 0,
+            "order_id": order_id,
+            "symbol": symbol,
+            "broker_order_id": broker_order_id
+        }));
+    };
+    let broker_payload = broker_payload(&broker_state);
+    let broker_status = broker_status_text(broker_payload);
+    let broker_substatus = json_text(broker_payload, "SubStatus");
+    let broker_quantity = extract_broker_quantity(broker_payload).unwrap_or_else(|| {
+        if is_final_fill_status(&broker_status, broker_substatus.as_deref()) {
+            value_f64(order, "quantity")
+        } else {
+            0.0
+        }
+    });
+    let broker_price = extract_broker_price(broker_payload)
+        .or_else(|| optional_f64(order, "price_local"))
+        .unwrap_or(0.0);
+    record_broker_order_event(
+        state,
+        order,
+        &broker_order_id,
+        if is_final_fill_status(&broker_status, broker_substatus.as_deref()) {
+            "broker_final_fill"
+        } else {
+            "broker_status_sync"
+        },
+        broker_status.as_deref(),
+        broker_substatus.as_deref(),
+        Some(broker_quantity),
+        Some(broker_price),
+        &broker_state,
+    )
+    .await?;
+
+    if is_final_fill_status(&broker_status, broker_substatus.as_deref()) {
+        return sync_final_fill(
+            state,
+            order,
+            &broker_order_id,
+            broker_quantity,
+            broker_price,
+            &broker_state,
+        )
+        .await;
+    }
+
+    if is_terminal_failure_status(&broker_status) {
+        let status = if broker_status
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("Cancelled"))
+        {
+            "broker_cancelled"
+        } else {
+            "execution_failed"
+        };
+        update_order_broker_status(state, order, status, &broker_state, None).await?;
+        return Ok(json!({
+            "status": status,
+            "updated": true,
+            "fills": 0,
+            "order_id": order_id,
+            "symbol": symbol,
+            "broker_order_id": broker_order_id,
+            "broker_status": broker_status,
+            "broker_substatus": broker_substatus
+        }));
+    }
+
+    let local_status = if broker_status
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("fill"))
+    {
+        "broker_partially_filled"
+    } else {
+        "broker_working"
+    };
+    update_order_broker_status(state, order, local_status, &broker_state, None).await?;
+    Ok(json!({
+        "status": local_status,
+        "updated": true,
+        "fills": 0,
+        "order_id": order_id,
+        "symbol": symbol,
+        "broker_order_id": broker_order_id,
+        "broker_status": broker_status,
+        "broker_substatus": broker_substatus
+    }))
+}
+
+async fn fetch_broker_order_state(
+    state: &AppState,
+    session: &JsonValue,
+    client_key: &str,
+    broker_order_id: &str,
+) -> Result<Option<JsonValue>> {
+    let order_path = format!(
+        "/port/v1/orders/{}/{}",
+        percent_encode_path_segment(client_key),
+        percent_encode_path_segment(broker_order_id)
+    );
+    if let Some(open_order) = saxo_get_json_optional(
+        state,
+        session,
+        &order_path,
+        &[("FieldGroups", "DisplayAndFormat".to_string())],
+        "Saxo open order lookup",
+    )
+    .await?
+    .and_then(|payload| meaningful_order_payload(&payload))
+    {
+        return Ok(Some(json!({
+            "source": "port/v1/orders",
+            "broker_payload": open_order,
+            "last_sync_at": now_iso()
+        })));
+    }
+
+    let activity = saxo_get_json_optional(
+        state,
+        session,
+        "/cs/v1/audit/orderactivities",
+        &[
+            ("AccountKey", account_key(state, session)?),
+            ("ClientKey", client_key.to_string()),
+            ("EntryType", "Last".to_string()),
+            ("OrderId", broker_order_id.to_string()),
+        ],
+        "Saxo order activity lookup",
+    )
+    .await?
+    .and_then(|payload| {
+        payload
+            .get("Data")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .cloned()
+    });
+    Ok(activity.map(|broker_payload| {
+        json!({
+            "source": "cs/v1/audit/orderactivities",
+            "broker_payload": broker_payload,
+            "last_sync_at": now_iso()
+        })
+    }))
 }
 
 async fn claim_order_for_submission(state: &AppState, order_id: i64) -> Result<bool> {
@@ -533,6 +816,48 @@ async fn saxo_get_json(
     saxo_response_json(response, "Saxo GET").await
 }
 
+async fn saxo_get_json_optional(
+    state: &AppState,
+    session: &JsonValue,
+    path: &str,
+    query: &[(&str, String)],
+    action: &str,
+) -> Result<Option<JsonValue>> {
+    let access_token = session_text(session, "access_token")
+        .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let response = client
+        .get(format!("{}{}", openapi_base_url(state, session)?, path))
+        .bearer_auth(access_token)
+        .header(header::ACCEPT, "application/json")
+        .query(query)
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
+    if status == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        if let Some(error_text) = extract_saxo_error(&payload) {
+            bail!("{action} failed: {error_text}");
+        }
+        let snippet: String = body.chars().take(300).collect();
+        bail!("{action} failed: HTTP {}: {}", status.as_u16(), snippet);
+    }
+    if let Some(error_text) = extract_saxo_error(&payload) {
+        let lower = error_text.to_ascii_lowercase();
+        if lower.contains("not found") || lower.contains("does not exist") {
+            return Ok(None);
+        }
+        bail!("{action} failed: {error_text}");
+    }
+    Ok(Some(payload))
+}
+
 async fn saxo_post_json(
     state: &AppState,
     session: &JsonValue,
@@ -774,6 +1099,366 @@ async fn insert_order_event(
     Ok(())
 }
 
+async fn sync_final_fill(
+    state: &AppState,
+    order: &JsonValue,
+    broker_order_id: &str,
+    cumulative_quantity: f64,
+    average_price_local: f64,
+    broker_state: &JsonValue,
+) -> Result<JsonValue> {
+    let order_id = value_i64(order, "id");
+    let symbol = order_text(order, "symbol");
+    let side = order_text(order, "action").to_uppercase();
+    let synced_quantity = synced_fill_quantity(state, order_id).await?;
+    let delta_quantity = (cumulative_quantity - synced_quantity).max(0.0);
+    let mut ledger_id = latest_fill_ledger_id(state, order_id).await?;
+    let mut inserted_fill = 0;
+    if delta_quantity > 1e-9 {
+        let currency = resolve_order_currency(state, order, broker_payload(broker_state)).await?;
+        let new_ledger_id = insert_trade_ledger_for_fill(
+            state,
+            order,
+            &side,
+            delta_quantity,
+            average_price_local,
+            &currency,
+            broker_state,
+        )
+        .await?;
+        insert_execution_fill(
+            state,
+            order,
+            broker_order_id,
+            "FinalFill",
+            cumulative_quantity,
+            delta_quantity,
+            average_price_local,
+            &currency,
+            Some(new_ledger_id),
+            broker_state,
+        )
+        .await?;
+        ledger_id = Some(new_ledger_id);
+        inserted_fill = 1;
+    }
+    update_order_broker_status(state, order, "executed", broker_state, ledger_id).await?;
+    Ok(json!({
+        "status": "executed",
+        "updated": true,
+        "fills": inserted_fill,
+        "order_id": order_id,
+        "symbol": symbol,
+        "broker_order_id": broker_order_id,
+        "cumulative_quantity": cumulative_quantity,
+        "synced_before": synced_quantity,
+        "delta_quantity": delta_quantity,
+        "average_price_local": average_price_local,
+        "ledger_id": ledger_id
+    }))
+}
+
+async fn synced_fill_quantity(state: &AppState, order_id: i64) -> Result<f64> {
+    let row = sqlx::query(&format!(
+        "SELECT COALESCE(SUM(delta_quantity), 0) AS synced_quantity
+         FROM execution_fills
+         WHERE execution_order_id = {}",
+        order_id
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row
+        .and_then(|row| row.try_get::<f64, _>("synced_quantity").ok())
+        .unwrap_or(0.0))
+}
+
+async fn latest_fill_ledger_id(state: &AppState, order_id: i64) -> Result<Option<i64>> {
+    let row = sqlx::query(&format!(
+        "SELECT ledger_id
+         FROM execution_fills
+         WHERE execution_order_id = {} AND ledger_id IS NOT NULL
+         ORDER BY id DESC
+         LIMIT 1",
+        order_id
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.and_then(|row| row.try_get::<i64, _>("ledger_id").ok()))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_execution_fill(
+    state: &AppState,
+    order: &JsonValue,
+    broker_order_id: &str,
+    fill_status: &str,
+    cumulative_quantity: f64,
+    delta_quantity: f64,
+    average_price_local: f64,
+    currency: &str,
+    ledger_id: Option<i64>,
+    payload: &JsonValue,
+) -> Result<()> {
+    let now = now_iso();
+    let payload_text = serde_json::to_string(payload)?;
+    let ledger_sql = ledger_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
+    let sql = format!(
+        "INSERT INTO execution_fills (
+            created_at, execution_order_id, broker_order_id, symbol, side, fill_status,
+            cumulative_quantity, delta_quantity, average_price_local, currency, ledger_id,
+            raw_payload_json
+        ) VALUES (
+            '{}', {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', {}, '{}'
+        )",
+        sql_escape(&now),
+        value_i64(order, "id"),
+        sql_escape(broker_order_id),
+        sql_escape(&order_text(order, "symbol")),
+        sql_escape(&order_text(order, "action").to_uppercase()),
+        sql_escape(fill_status),
+        cumulative_quantity,
+        delta_quantity,
+        average_price_local,
+        sql_escape(currency),
+        ledger_sql,
+        sql_escape(&payload_text)
+    );
+    sqlx::query(&sql)
+        .execute(&state.pool)
+        .await
+        .context("recording Saxo execution fill")?;
+    Ok(())
+}
+
+async fn insert_trade_ledger_for_fill(
+    state: &AppState,
+    order: &JsonValue,
+    side: &str,
+    quantity: f64,
+    price_local: f64,
+    currency: &str,
+    broker_state: &JsonValue,
+) -> Result<i64> {
+    let now = now_iso();
+    let symbol = order_text(order, "symbol");
+    let fx_rate = fx_rate_to_dkk(currency);
+    let gross_local = price_local * quantity;
+    let gross_amount_dkk = gross_local * fx_rate;
+    let commission_dkk = commission_dkk_for_fill(order, gross_amount_dkk, currency);
+    let commission_local = if fx_rate.abs() > f64::EPSILON {
+        commission_dkk / fx_rate
+    } else {
+        0.0
+    };
+    let cost_basis = if side == "SELL" {
+        latest_position_cost_basis(state, &symbol).await?
+    } else {
+        PositionCostBasis::default()
+    };
+    let cost_basis_sold_dkk = prorated(cost_basis.cost_basis_dkk, quantity, cost_basis.quantity);
+    let cost_basis_sold_local =
+        prorated(cost_basis.cost_basis_local, quantity, cost_basis.quantity);
+    let tax_dkk = 0.0;
+    let net_amount_dkk = if side == "BUY" {
+        -(gross_amount_dkk + commission_dkk + tax_dkk)
+    } else {
+        gross_amount_dkk - commission_dkk - tax_dkk
+    };
+    let realised_gain_dkk = if side == "SELL" {
+        net_amount_dkk - cost_basis_sold_dkk
+    } else {
+        0.0
+    };
+    let realised_gain_local = if side == "SELL" && fx_rate.abs() > f64::EPSILON {
+        realised_gain_dkk / fx_rate
+    } else {
+        0.0
+    };
+    let notes = format!(
+        "Saxo broker fill sync from execution_order:{}",
+        value_i64(order, "id")
+    );
+    let decision_context = json!({
+        "execution_order": order,
+        "broker_sync": broker_state
+    });
+    let decision_context_text = serde_json::to_string(&decision_context)?;
+    let portfolio_placeholder = serde_json::to_string(&json!({}))?;
+    let instrument_name = cost_basis.instrument_name.unwrap_or_else(|| symbol.clone());
+    let isin_sql = sql_opt_text(cost_basis.isin.as_deref());
+    let tax_year = Utc::now().year();
+    let batch_id_sql = latest_batch_id(state)
+        .await?
+        .as_deref()
+        .map(|value| sql_opt_text(Some(value)))
+        .unwrap_or_else(|| "NULL".to_string());
+    let sql = format!(
+        "INSERT INTO trade_ledger (
+            created_at, symbol, isin, figi, instrument_name, side, quantity, price_local,
+            currency, gross_amount_dkk, commission_dkk, commission_local, fx_conversion_dkk,
+            tax_dkk, realised_gain_dkk, cost_basis_sold_dkk, cost_basis_sold_local,
+            realised_gain_local, fx_gain_dkk, price_gain_dkk, sale_fx_rate_to_dkk,
+            cost_basis_fx_rate_to_dkk, net_amount_dkk, mode, status, notes,
+            portfolio_before_json, portfolio_after_json, decision_context_json, tax_year, batch_id
+        ) VALUES (
+            '{}', '{}', {}, NULL, '{}', '{}', {}, {}, '{}', {}, {}, {}, 0, {}, {}, {}, {},
+            {}, 0, {}, {}, {}, {}, '{}', 'executed', '{}', '{}', '{}', '{}', {}, {}
+        )",
+        sql_escape(&now),
+        sql_escape(&symbol),
+        isin_sql,
+        sql_escape(&instrument_name),
+        sql_escape(side),
+        quantity,
+        price_local,
+        sql_escape(currency),
+        gross_amount_dkk,
+        commission_dkk,
+        commission_local,
+        tax_dkk,
+        realised_gain_dkk,
+        cost_basis_sold_dkk,
+        cost_basis_sold_local,
+        realised_gain_local,
+        realised_gain_dkk,
+        fx_rate,
+        if cost_basis_sold_local.abs() > f64::EPSILON {
+            cost_basis_sold_dkk / cost_basis_sold_local
+        } else {
+            fx_rate
+        },
+        net_amount_dkk,
+        sql_escape(&order_text(order, "mode")),
+        sql_escape(&notes),
+        sql_escape(&portfolio_placeholder),
+        sql_escape(&portfolio_placeholder),
+        sql_escape(&decision_context_text),
+        tax_year,
+        batch_id_sql
+    );
+    sqlx::query(&sql)
+        .execute(&state.pool)
+        .await
+        .context("recording Saxo broker fill in trade ledger")?;
+    let row = sqlx::query(&format!(
+        "SELECT id
+         FROM trade_ledger
+         WHERE notes = '{}' AND symbol = '{}' AND side = '{}'
+         ORDER BY id DESC
+         LIMIT 1",
+        sql_escape(&notes),
+        sql_escape(&symbol),
+        sql_escape(side)
+    ))
+    .fetch_one(&state.pool)
+    .await
+    .context("reading inserted trade ledger id")?;
+    Ok(row.try_get::<i64, _>("id").unwrap_or(0))
+}
+
+async fn update_order_broker_status(
+    state: &AppState,
+    order: &JsonValue,
+    status: &str,
+    broker_state: &JsonValue,
+    ledger_id: Option<i64>,
+) -> Result<()> {
+    let order_id = value_i64(order, "id");
+    let mut result = order
+        .get("execution_result_json")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !result.is_object() {
+        result = json!({});
+    }
+    result["broker_sync"] = broker_state.clone();
+    let payload_text = serde_json::to_string(&result)?;
+    let ledger_sql = ledger_id
+        .map(|value| format!(", ledger_id = {value}"))
+        .unwrap_or_default();
+    let error_sql = if status == "execution_failed" || status == "broker_cancelled" {
+        let broker_payload = broker_payload(broker_state);
+        let status_text = broker_status_text(broker_payload).unwrap_or_else(|| status.to_string());
+        format!(", error_text = '{}'", sql_escape(&status_text))
+    } else {
+        ", error_text = NULL".to_string()
+    };
+    let sql = format!(
+        "UPDATE execution_orders
+         SET status = '{}',
+             execution_result_json = '{}'
+             {}{}
+         WHERE id = {}",
+        sql_escape(status),
+        sql_escape(&payload_text),
+        ledger_sql,
+        error_sql,
+        order_id
+    );
+    sqlx::query(&sql)
+        .execute(&state.pool)
+        .await
+        .context("updating Saxo execution order broker status")?;
+    Ok(())
+}
+
+async fn record_broker_order_event(
+    state: &AppState,
+    order: &JsonValue,
+    broker_order_id: &str,
+    event_type: &str,
+    broker_status: Option<&str>,
+    broker_substatus: Option<&str>,
+    broker_quantity: Option<f64>,
+    broker_price_local: Option<f64>,
+    payload: &JsonValue,
+) -> Result<()> {
+    let now = now_iso();
+    let payload_text = serde_json::to_string(payload)?;
+    let quantity_sql = broker_quantity
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
+    let price_sql = broker_price_local
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NULL".to_string());
+    let signature = broker_event_signature(
+        value_i64(order, "id"),
+        event_type,
+        broker_order_id,
+        broker_status,
+        broker_substatus,
+        broker_quantity,
+        broker_price_local,
+    );
+    let sql = format!(
+        "INSERT INTO execution_order_events (
+            created_at, execution_order_id, broker_order_id, event_type,
+            broker_status, broker_substatus, broker_quantity, broker_price_local,
+            event_signature, raw_payload_json
+        ) VALUES (
+            '{}', {}, '{}', '{}', {}, {}, {}, {}, '{}', '{}'
+        )
+        ON CONFLICT(event_signature) DO NOTHING",
+        sql_escape(&now),
+        value_i64(order, "id"),
+        sql_escape(broker_order_id),
+        sql_escape(event_type),
+        sql_opt_text(broker_status),
+        sql_opt_text(broker_substatus),
+        quantity_sql,
+        price_sql,
+        sql_escape(&signature),
+        sql_escape(&payload_text)
+    );
+    sqlx::query(&sql)
+        .execute(&state.pool)
+        .await
+        .context("recording Saxo broker order event")?;
+    Ok(())
+}
+
 async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64> {
     let latest_batch = sqlx::query(
         "SELECT batch_id FROM import_batches ORDER BY imported_at DESC, batch_id DESC LIMIT 1",
@@ -821,6 +1506,68 @@ async fn latest_position_isin(state: &AppState, symbol: &str) -> Result<Option<S
         .filter(|value| !value.is_empty()))
 }
 
+async fn latest_position_cost_basis(state: &AppState, symbol: &str) -> Result<PositionCostBasis> {
+    let row = sqlx::query(&format!(
+        "SELECT quantity, cost_basis_dkk, cost_basis_local, isin, instrument_name
+         FROM position_snapshots
+         WHERE symbol = '{}' AND excluded = 0
+         ORDER BY imported_at DESC, id DESC
+         LIMIT 1",
+        sql_escape(symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row
+        .as_ref()
+        .map(row_to_json)
+        .map(|row| PositionCostBasis {
+            quantity: value_f64(&row, "quantity"),
+            cost_basis_dkk: value_f64(&row, "cost_basis_dkk"),
+            cost_basis_local: value_f64(&row, "cost_basis_local"),
+            isin: json_text(&row, "isin"),
+            instrument_name: json_text(&row, "instrument_name"),
+        })
+        .unwrap_or_default())
+}
+
+async fn latest_batch_id(state: &AppState) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT batch_id FROM import_batches ORDER BY imported_at DESC, batch_id DESC LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.and_then(|row| row.try_get::<String, _>("batch_id").ok()))
+}
+
+async fn resolve_order_currency(
+    state: &AppState,
+    order: &JsonValue,
+    broker_payload: &JsonValue,
+) -> Result<String> {
+    if let Some(currency) = json_text(order, "currency")
+        .or_else(|| json_text(broker_payload, "Currency"))
+        .or_else(|| nested_json_text(broker_payload, &["DisplayAndFormat", "Currency"]))
+    {
+        return Ok(currency);
+    }
+    let symbol = order_text(order, "symbol");
+    let row = sqlx::query(&format!(
+        "SELECT currency
+         FROM position_snapshots
+         WHERE symbol = '{}' AND excluded = 0
+         ORDER BY imported_at DESC, id DESC
+         LIMIT 1",
+        sql_escape(&symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row
+        .as_ref()
+        .map(row_to_json)
+        .and_then(|row| json_text(&row, "currency"))
+        .unwrap_or_else(|| "DKK".to_string()))
+}
+
 async fn active_sell_reservations(
     state: &AppState,
     symbol: &str,
@@ -866,6 +1613,97 @@ fn account_key(state: &AppState, session: &JsonValue) -> Result<String> {
         .or_else(|| session_text(session, "account_key"))
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("Saxo AccountKey is missing"))
+}
+
+fn client_key(state: &AppState, session: &JsonValue) -> Result<String> {
+    yaml_string(&state.config, &["saxo", "client_key"])
+        .or_else(|| session_text(session, "client_key"))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("Saxo ClientKey is missing"))
+}
+
+fn meaningful_order_payload(payload: &JsonValue) -> Option<JsonValue> {
+    if payload
+        .get("Data")
+        .and_then(JsonValue::as_array)
+        .and_then(|items| items.first())
+        .is_some()
+    {
+        return payload
+            .get("Data")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .cloned();
+    }
+    if payload.as_object().is_some_and(|object| !object.is_empty())
+        && (payload.get("OrderId").is_some()
+            || payload.get("Status").is_some()
+            || payload.get("Amount").is_some())
+    {
+        return Some(payload.clone());
+    }
+    None
+}
+
+fn broker_payload(value: &JsonValue) -> &JsonValue {
+    value.get("broker_payload").unwrap_or(value)
+}
+
+fn broker_status_text(value: &JsonValue) -> Option<String> {
+    json_text(value, "Status").or_else(|| json_text(value, "OrderStatus"))
+}
+
+fn is_final_fill_status(status: &Option<String>, substatus: Option<&str>) -> bool {
+    status.as_deref().is_some_and(|value| {
+        value.eq_ignore_ascii_case("FinalFill")
+            && substatus
+                .map(|substatus| {
+                    substatus.is_empty() || substatus.eq_ignore_ascii_case("Confirmed")
+                })
+                .unwrap_or(true)
+    })
+}
+
+fn is_terminal_failure_status(status: &Option<String>) -> bool {
+    status.as_deref().is_some_and(|value| {
+        ["Rejected", "Cancelled", "Expired", "DoneForDay"]
+            .iter()
+            .any(|candidate| value.eq_ignore_ascii_case(candidate))
+    })
+}
+
+fn extract_broker_quantity(payload: &JsonValue) -> Option<f64> {
+    [
+        "FilledAmount",
+        "Amount",
+        "CurrentAmount",
+        "OrderAmount",
+        "LeavesAmount",
+        "OriginalAmount",
+    ]
+    .iter()
+    .find_map(|key| json_number(payload, key))
+}
+
+fn extract_broker_price(payload: &JsonValue) -> Option<f64> {
+    [
+        "ExecutionPrice",
+        "AveragePrice",
+        "OrderPrice",
+        "Price",
+        "OrderPriceDisplay",
+    ]
+    .iter()
+    .find_map(|key| json_number(payload, key))
+}
+
+fn resolve_broker_order_id(order: &JsonValue) -> Option<String> {
+    json_text(order, "broker_order_id").or_else(|| {
+        order
+            .get("execution_result_json")
+            .and_then(|value| value.get("broker_result"))
+            .and_then(broker_order_id)
+    })
 }
 
 fn market_for_symbol(symbol: &str, rows: &[JsonValue]) -> Option<JsonValue> {
@@ -1082,6 +1920,122 @@ fn json_text(value: &JsonValue, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn nested_json_text(value: &JsonValue, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn json_number(value: &JsonValue, key: &str) -> Option<f64> {
+    value.get(key).and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_i64().map(|value| value as f64))
+            .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+    })
+}
+
+fn sql_opt_text(value: Option<&str>) -> String {
+    value
+        .map(|value| format!("'{}'", sql_escape(value)))
+        .unwrap_or_else(|| "NULL".to_string())
+}
+
+fn broker_event_signature(
+    order_id: i64,
+    event_type: &str,
+    broker_order_id: &str,
+    broker_status: Option<&str>,
+    broker_substatus: Option<&str>,
+    broker_quantity: Option<f64>,
+    broker_price_local: Option<f64>,
+) -> String {
+    format!(
+        "{}:{}:{}:{}:{}:{:.8}:{:.8}",
+        event_type,
+        order_id,
+        broker_order_id,
+        broker_status.unwrap_or(""),
+        broker_substatus.unwrap_or(""),
+        broker_quantity.unwrap_or(0.0),
+        broker_price_local.unwrap_or(0.0)
+    )
+}
+
+fn commission_dkk_for_fill(order: &JsonValue, gross_amount_dkk: f64, currency: &str) -> f64 {
+    if let Some(commission) = order
+        .get("execution_result_json")
+        .and_then(|value| value.get("precheck"))
+        .and_then(|value| value.get("Cost"))
+        .and_then(|value| value.get("Commission"))
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|value| value as f64))
+        })
+        .filter(|value| *value >= 0.0)
+    {
+        if currency.eq_ignore_ascii_case("DKK") {
+            return commission;
+        }
+    }
+    let rate_commission = gross_amount_dkk.abs() * 0.0008;
+    rate_commission.max(default_min_commission_dkk(&order_text(order, "symbol")))
+}
+
+fn default_min_commission_dkk(symbol: &str) -> f64 {
+    match symbol_parts(symbol).exchange.as_str() {
+        "xnas" | "xnys" => 3.0 * fx_rate_to_dkk("USD"),
+        "xlon" => 8.0 * fx_rate_to_dkk("GBP"),
+        "xsto" => 69.0 * fx_rate_to_dkk("SEK"),
+        "xosl" => 39.0 * fx_rate_to_dkk("NOK"),
+        "xhel" | "xetr" | "xfra" | "xmil" | "xpar" | "xams" | "xbru" | "xlse" => {
+            3.0 * fx_rate_to_dkk("EUR")
+        }
+        _ => 14.0,
+    }
+}
+
+fn fx_rate_to_dkk(currency: &str) -> f64 {
+    match currency.trim().to_uppercase().as_str() {
+        "DKK" => 1.0,
+        "EUR" => 7.4604,
+        "USD" => 7.0215,
+        "GBP" => 8.70,
+        "NOK" => 0.64,
+        "SEK" => 0.67,
+        "PLN" => 1.75,
+        _ => 1.0,
+    }
+}
+
+fn prorated(total: f64, quantity: f64, total_quantity: f64) -> f64 {
+    if total_quantity.abs() < f64::EPSILON {
+        0.0
+    } else {
+        total * (quantity / total_quantity)
+    }
+}
+
+fn percent_encode_path_segment(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (*byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 fn compact_number(value: f64) -> String {
     let rounded = value.round();
     if (value - rounded).abs() < 1e-9 {
@@ -1195,5 +2149,53 @@ mod tests {
         assert_eq!(quantities.get("AJG:xnys"), Some(&2.0));
         assert_eq!(quantities.get("MSTR:xnas"), Some(&48.0));
         assert_eq!(quantities.len(), 2);
+    }
+
+    #[test]
+    fn detects_confirmed_final_fill_from_saxo_activity() {
+        let activity = json!({
+            "Status": "FinalFill",
+            "SubStatus": "Confirmed",
+            "FilledAmount": 100,
+            "ExecutionPrice": 40.335
+        });
+        let status = broker_status_text(&activity);
+        let substatus = json_text(&activity, "SubStatus");
+
+        assert!(is_final_fill_status(&status, substatus.as_deref()));
+        assert_eq!(extract_broker_quantity(&activity), Some(100.0));
+        assert_eq!(extract_broker_price(&activity), Some(40.335));
+    }
+
+    #[test]
+    fn broker_event_signature_is_stable_for_duplicate_status_payloads() {
+        let first = broker_event_signature(
+            44,
+            "broker_final_fill",
+            "5038240033",
+            Some("FinalFill"),
+            Some("Confirmed"),
+            Some(100.0),
+            Some(40.335),
+        );
+        let duplicate = broker_event_signature(
+            44,
+            "broker_final_fill",
+            "5038240033",
+            Some("FinalFill"),
+            Some("Confirmed"),
+            Some(100.0),
+            Some(40.335),
+        );
+
+        assert_eq!(first, duplicate);
+    }
+
+    #[test]
+    fn percent_encodes_saxo_client_key_for_path_segments() {
+        assert_eq!(
+            percent_encode_path_segment("ldJR0mfLg0buaAtllBotfQ=="),
+            "ldJR0mfLg0buaAtllBotfQ%3D%3D"
+        );
     }
 }

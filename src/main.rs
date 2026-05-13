@@ -20,7 +20,9 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use crate::{api::router, scheduler::run_scheduler, state::AppState};
+use crate::{
+    api::router, saxo_order::sync_saxo_broker_orders, scheduler::run_scheduler, state::AppState,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -39,6 +41,13 @@ async fn main() -> Result<()> {
     if args.iter().any(|arg| arg == "--scheduler") {
         info!("starting process in scheduler mode");
         return run_scheduler().await;
+    }
+    if args.iter().any(|arg| arg == "--sync-saxo-broker-orders") {
+        info!("starting one-shot Saxo broker order sync");
+        let state = AppState::load().await?;
+        let result = sync_saxo_broker_orders(&state).await?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
     }
 
     // `Arc` is Rust's thread-safe shared pointer. Axum clones this cheap pointer
