@@ -258,14 +258,24 @@ impl AppState {
             .await?
             .unwrap_or_else(|| json!({}));
         let latest_batch = self.latest_batch_id().await?;
-        let aggregate = if latest_history.as_object().is_some_and(|o| !o.is_empty()) {
+        let broker_positions_available = self.broker_positions_available().await.unwrap_or(false);
+        let aggregate = if broker_positions_available {
+            self.position_aggregate(latest_batch.as_deref()).await?
+        } else if latest_history.as_object().is_some_and(|o| !o.is_empty()) {
             latest_history.clone()
         } else {
             self.position_aggregate(latest_batch.as_deref()).await?
         };
         let total_value = value_f64(&aggregate, "total_market_value_dkk");
-        let initial_cash =
-            yaml_f64(&self.config, &["portfolio", "initial_cash_dkk"]).unwrap_or(0.0);
+        let cash_summary = self.cash_summary_from_ledger().await?;
+        let initial_cash = aggregate
+            .get("initial_cash_dkk")
+            .map(|_| value_f64(&aggregate, "initial_cash_dkk"))
+            .unwrap_or_else(|| value_f64(&cash_summary, "initial_cash_dkk"));
+        let cash_from_trades = aggregate
+            .get("cash_from_trades_dkk")
+            .map(|_| value_f64(&aggregate, "cash_from_trades_dkk"))
+            .unwrap_or_else(|| value_f64(&cash_summary, "cash_from_trades_dkk"));
         let max_daily_orders =
             yaml_i64(&self.config, &["execution", "max_daily_orders"]).unwrap_or(0);
         let executed_today = self.executed_orders_today().await.unwrap_or(0);
@@ -300,7 +310,7 @@ impl AppState {
                 "invested_market_value_dkk": value_f64(&aggregate, "invested_market_value_dkk"),
                 "cash_balance_dkk": value_f64(&aggregate, "cash_balance_dkk"),
                 "initial_cash_dkk": initial_cash,
-                "cash_from_trades_dkk": value_f64(&aggregate, "cash_balance_dkk") - initial_cash,
+                "cash_from_trades_dkk": cash_from_trades,
                 "total_cost_basis_dkk": value_f64(&aggregate, "total_cost_basis_dkk"),
                 "total_unrealised_pnl_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
                 "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
@@ -624,35 +634,16 @@ impl AppState {
         Ok(row.and_then(|row| row.try_get::<String, _>("batch_id").ok()))
     }
 
-    async fn position_aggregate(&self, batch_id: Option<&str>) -> Result<JsonValue> {
-        let where_clause = match batch_id {
-            Some(batch_id) => format!(
-                "WHERE batch_id = '{}' AND excluded = 0",
-                sql_escape(batch_id)
-            ),
-            None => "WHERE excluded = 0".to_string(),
-        };
-        let sql = format!(
-            "SELECT COALESCE(SUM(market_value_dkk), 0) AS invested_market_value_dkk, COALESCE(SUM(cost_basis_dkk), 0) AS total_cost_basis_dkk, COALESCE(SUM(unrealised_pnl_dkk), 0) AS total_unrealised_pnl_dkk, COALESCE(SUM(daily_pnl_dkk), 0) AS total_daily_pnl_dkk, COUNT(*) AS position_count FROM position_snapshots {where_clause}"
-        );
-        let row = self.first_json(&sql).await?.unwrap_or_else(|| json!({}));
-        let invested = value_f64(&row, "invested_market_value_dkk");
-        let initial_cash =
-            yaml_f64(&self.config, &["portfolio", "initial_cash_dkk"]).unwrap_or(0.0);
-        Ok(json!({
-            "total_market_value_dkk": invested + initial_cash,
-            "invested_market_value_dkk": invested,
-            "cash_balance_dkk": initial_cash,
-            "total_cost_basis_dkk": value_f64(&row, "total_cost_basis_dkk"),
-            "total_unrealised_pnl_dkk": value_f64(&row, "total_unrealised_pnl_dkk"),
-            "total_daily_pnl_dkk": value_f64(&row, "total_daily_pnl_dkk"),
-            "position_count": value_i64(&row, "position_count")
-        }))
+    async fn broker_positions_available(&self) -> Result<bool> {
+        let row = self
+            .first_json("SELECT COUNT(*) AS count FROM broker_position_snapshots")
+            .await?
+            .unwrap_or_else(|| json!({}));
+        Ok(value_i64(&row, "count") > 0)
     }
 
-    pub async fn position_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
+    async fn effective_position_rows(&self, limit: Option<i64>) -> Result<Vec<JsonValue>> {
         let latest_batch = self.latest_batch_id().await?;
-        let decisions = self.latest_symbol_decisions().await.unwrap_or_default();
         let where_clause = match latest_batch {
             Some(batch_id) => format!(
                 "WHERE batch_id = '{}' AND excluded = 0",
@@ -660,11 +651,262 @@ impl AppState {
             ),
             None => "WHERE excluded = 0".to_string(),
         };
-        let sql = format!(
-            "SELECT instrument_name, symbol, isin, quantity, currency, open_price_local AS paid_price_local, current_price_local, cost_basis_dkk, market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk, allocation_pct, asset_class, market_status, value_date FROM position_snapshots {where_clause} ORDER BY market_value_dkk DESC, symbol ASC LIMIT {}",
-            clamp_limit(limit, 1, 250)
-        );
-        let mut rows = self.select_json(&sql).await.unwrap_or_default();
+        let base_rows = self
+            .select_json(&format!(
+                "SELECT instrument_name, symbol, isin, quantity, currency, open_price_local, open_price_local AS paid_price_local, current_price_local, cost_basis_local, cost_basis_dkk, market_value_local, market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk, allocation_pct, asset_class, market_status, value_date FROM position_snapshots {where_clause}"
+            ))
+            .await
+            .unwrap_or_default();
+        let broker_rows = self
+            .select_json(
+                "SELECT symbol, updated_at, instrument_name, isin, uic, asset_type, quantity, currency, open_price_local, open_price_including_costs_local, execution_time_open, value_date, market_state, can_be_closed FROM broker_position_snapshots ORDER BY symbol ASC",
+            )
+            .await
+            .unwrap_or_default();
+        if broker_rows.is_empty() {
+            let mut rows = base_rows;
+            rows.sort_by(|left, right| {
+                value_f64(right, "market_value_dkk")
+                    .partial_cmp(&value_f64(left, "market_value_dkk"))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| text_value(left, "symbol").cmp(&text_value(right, "symbol")))
+            });
+            if let Some(limit) = limit {
+                rows.truncate(clamp_limit(limit, 1, 250) as usize);
+            }
+            return Ok(rows);
+        }
+
+        let base_by_symbol = base_rows
+            .into_iter()
+            .map(|row| (text_value(&row, "symbol"), row))
+            .collect::<HashMap<_, _>>();
+        let price_by_symbol = self
+            .select_json(
+                "SELECT symbol, updated_at, current_price_local, current_fx_rate_to_dkk, baseline_price_local, baseline_fx_rate_to_dkk, change_pct, currency, status FROM portfolio_price_snapshots ORDER BY symbol ASC",
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (text_value(&row, "symbol"), row))
+            .collect::<HashMap<_, _>>();
+        let exposure_by_symbol = self
+            .select_json(
+                "SELECT symbol, quantity, average_open_price, profit_loss_on_trade, instrument_price_day_percent_change, currency, calculation_reliability FROM broker_instrument_exposures ORDER BY symbol ASC",
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (text_value(&row, "symbol"), row))
+            .collect::<HashMap<_, _>>();
+        let account_currency = self
+            .first_json("SELECT account_currency FROM broker_account_snapshots WHERE singleton_key = 'main' LIMIT 1")
+            .await?
+            .and_then(|row| row.get("account_currency").cloned())
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "DKK".to_string());
+        let account_fx_rate = fx_rate_to_dkk(&account_currency);
+        let cash_summary = self.cash_summary_from_ledger().await?;
+        let cash_balance = value_f64(&cash_summary, "cash_balance_dkk");
+
+        let mut rows = Vec::new();
+        for broker in broker_rows {
+            let symbol = text_value(&broker, "symbol");
+            let quantity = value_f64(&broker, "quantity");
+            if symbol.is_empty() || quantity <= 1e-9 {
+                continue;
+            }
+            let base = base_by_symbol.get(&symbol);
+            let price = price_by_symbol.get(&symbol);
+            let exposure = exposure_by_symbol.get(&symbol);
+            let currency = text_value(&broker, "currency")
+                .trim()
+                .to_string()
+                .if_empty_then(|| {
+                    price
+                        .map(|row| text_value(row, "currency"))
+                        .filter(|value| !value.is_empty())
+                })
+                .or_else(|| base.map(|row| text_value(row, "currency")))
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "DKK".to_string());
+            let broker_open_price = value_f64(&broker, "open_price_including_costs_local")
+                .max(value_f64(&broker, "open_price_local"));
+            let base_quantity = base.map(|row| value_f64(row, "quantity")).unwrap_or(0.0);
+            let base_market_local = base
+                .map(|row| value_f64(row, "market_value_local"))
+                .unwrap_or(0.0);
+            let base_market_dkk = base
+                .map(|row| value_f64(row, "market_value_dkk"))
+                .unwrap_or(0.0);
+            let inferred_fx_rate = if base_market_local.abs() > 1e-9 {
+                base_market_dkk / base_market_local
+            } else {
+                fx_rate_to_dkk(&currency)
+            };
+            let current_price_local = price
+                .map(|row| value_f64(row, "current_price_local"))
+                .filter(|value| *value > 0.0)
+                .or_else(|| {
+                    base.map(|row| value_f64(row, "current_price_local"))
+                        .filter(|value| *value > 0.0)
+                })
+                .unwrap_or(broker_open_price);
+            let current_fx_rate = price
+                .map(|row| value_f64(row, "current_fx_rate_to_dkk"))
+                .filter(|value| *value > 0.0)
+                .unwrap_or(inferred_fx_rate);
+            let unit_cost_dkk = if base_quantity > 0.0 {
+                value_f64(base.unwrap(), "cost_basis_dkk") / base_quantity
+            } else {
+                broker_open_price * current_fx_rate
+            };
+            let cost_basis_dkk = unit_cost_dkk * quantity;
+            let cost_basis_local_total = if base_quantity > 0.0 {
+                let base_cost_local_total =
+                    value_f64(base.unwrap(), "cost_basis_local") * base_quantity;
+                if base_cost_local_total > 0.0 {
+                    base_cost_local_total / base_quantity * quantity
+                } else {
+                    broker_open_price * quantity
+                }
+            } else {
+                broker_open_price * quantity
+            };
+            let market_value_dkk = quantity * current_price_local * current_fx_rate;
+            let daily_pnl_dkk = match price {
+                Some(price) if value_f64(price, "baseline_price_local") > 0.0 => {
+                    quantity
+                        * (current_price_local * current_fx_rate
+                            - value_f64(price, "baseline_price_local")
+                                * value_f64(price, "baseline_fx_rate_to_dkk"))
+                }
+                _ if base_quantity > 0.0 => {
+                    value_f64(base.unwrap(), "daily_pnl_dkk") * quantity / base_quantity
+                }
+                _ => 0.0,
+            };
+            let unrealised_pnl_dkk = exposure
+                .map(|row| value_f64(row, "profit_loss_on_trade"))
+                .filter(|value| value.abs() > 1e-9)
+                .map(|value| value * account_fx_rate)
+                .unwrap_or(market_value_dkk - cost_basis_dkk);
+            rows.push(json!({
+                "instrument_name": text_value(&broker, "instrument_name")
+                    .if_empty_then(|| base.map(|row| text_value(row, "instrument_name")))
+                    .unwrap_or_else(|| instrument_name_for_symbol(&symbol)),
+                "symbol": symbol,
+                "isin": broker.get("isin").cloned().unwrap_or(JsonValue::Null),
+                "quantity": quantity,
+                "currency": currency,
+                "paid_price_local": if quantity > 0.0 { cost_basis_local_total / quantity } else { broker_open_price },
+                "open_price_local": broker_open_price,
+                "current_price_local": current_price_local,
+                "cost_basis_dkk": cost_basis_dkk,
+                "market_value_dkk": market_value_dkk,
+                "unrealised_pnl_dkk": unrealised_pnl_dkk,
+                "daily_pnl_dkk": daily_pnl_dkk,
+                "allocation_pct": 0.0,
+                "asset_class": text_value(&broker, "asset_type")
+                    .if_empty_then(|| base.map(|row| text_value(row, "asset_class")))
+                    .unwrap_or_else(|| "Equity".to_string()),
+                "market_status": "Saxo broker snapshot",
+                "value_date": broker.get("value_date").cloned().unwrap_or(JsonValue::Null),
+                "latest_quote_updated_at": price.and_then(|row| row.get("updated_at")).cloned().unwrap_or(JsonValue::Null),
+                "quote_status": price.and_then(|row| row.get("status")).cloned().unwrap_or_else(|| JsonValue::from("broker_snapshot")),
+                "broker_profit_loss_on_trade": exposure.map(|row| value_f64(row, "profit_loss_on_trade")).unwrap_or(0.0),
+                "broker_calculation_reliability": exposure.and_then(|row| row.get("calculation_reliability")).cloned().unwrap_or(JsonValue::Null),
+            }));
+        }
+        let invested = rows
+            .iter()
+            .map(|row| value_f64(row, "market_value_dkk"))
+            .sum::<f64>();
+        let total_value = invested + cash_balance;
+        for row in &mut rows {
+            let market_value_dkk = value_f64(row, "market_value_dkk");
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert(
+                    "allocation_pct".to_string(),
+                    JsonValue::from(if total_value > 0.0 {
+                        market_value_dkk / total_value
+                    } else {
+                        0.0
+                    }),
+                );
+            }
+        }
+        rows.sort_by(|left, right| {
+            value_f64(right, "market_value_dkk")
+                .partial_cmp(&value_f64(left, "market_value_dkk"))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| text_value(left, "symbol").cmp(&text_value(right, "symbol")))
+        });
+        if let Some(limit) = limit {
+            rows.truncate(clamp_limit(limit, 1, 250) as usize);
+        }
+        Ok(rows)
+    }
+
+    async fn position_aggregate(&self, batch_id: Option<&str>) -> Result<JsonValue> {
+        let rows = if self.broker_positions_available().await? {
+            self.effective_position_rows(None).await?
+        } else {
+            let where_clause = match batch_id {
+                Some(batch_id) => format!(
+                    "WHERE batch_id = '{}' AND excluded = 0",
+                    sql_escape(batch_id)
+                ),
+                None => "WHERE excluded = 0".to_string(),
+            };
+            self.select_json(&format!(
+                "SELECT market_value_dkk, cost_basis_dkk, unrealised_pnl_dkk, daily_pnl_dkk FROM position_snapshots {where_clause}"
+            ))
+            .await
+            .unwrap_or_default()
+        };
+        let invested = rows
+            .iter()
+            .map(|row| value_f64(row, "market_value_dkk"))
+            .sum::<f64>();
+        let cash_summary = self.cash_summary_from_ledger().await?;
+        let cash_balance = value_f64(&cash_summary, "cash_balance_dkk");
+        let initial_cash = value_f64(&cash_summary, "initial_cash_dkk");
+        let cash_from_trades = value_f64(&cash_summary, "cash_from_trades_dkk");
+        Ok(json!({
+            "total_market_value_dkk": invested + cash_balance,
+            "invested_market_value_dkk": invested,
+            "cash_balance_dkk": cash_balance,
+            "initial_cash_dkk": initial_cash,
+            "cash_from_trades_dkk": cash_from_trades,
+            "total_cost_basis_dkk": rows.iter().map(|row| value_f64(row, "cost_basis_dkk")).sum::<f64>(),
+            "total_unrealised_pnl_dkk": rows.iter().map(|row| value_f64(row, "unrealised_pnl_dkk")).sum::<f64>(),
+            "total_daily_pnl_dkk": rows.iter().map(|row| value_f64(row, "daily_pnl_dkk")).sum::<f64>(),
+            "position_count": rows.len() as i64,
+            "source": if self.broker_positions_available().await? { "saxo_broker_snapshot" } else { "position_snapshots" }
+        }))
+    }
+
+    async fn cash_summary_from_ledger(&self) -> Result<JsonValue> {
+        let initial_cash =
+            yaml_f64(&self.config, &["portfolio", "initial_cash_dkk"]).unwrap_or(0.0);
+        let row = self
+            .first_json(
+                "SELECT COALESCE(SUM(net_amount_dkk), 0) AS cash_from_trades_dkk FROM trade_ledger WHERE status IN ('executed', 'approved')",
+            )
+            .await?
+            .unwrap_or_else(|| json!({}));
+        let cash_from_trades = value_f64(&row, "cash_from_trades_dkk");
+        Ok(json!({
+            "initial_cash_dkk": initial_cash,
+            "cash_from_trades_dkk": cash_from_trades,
+            "cash_balance_dkk": initial_cash + cash_from_trades,
+        }))
+    }
+
+    pub async fn position_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let decisions = self.latest_symbol_decisions().await.unwrap_or_default();
+        let mut rows = self.effective_position_rows(Some(limit)).await?;
         for row in &mut rows {
             let symbol = text_value(row, "symbol");
             if let Some(obj) = row.as_object_mut() {
@@ -676,7 +918,8 @@ impl AppState {
                     "decision".to_string(),
                     decisions.get(&symbol).cloned().unwrap_or(JsonValue::Null),
                 );
-                obj.insert("latest_quote_updated_at".to_string(), JsonValue::Null);
+                obj.entry("latest_quote_updated_at".to_string())
+                    .or_insert(JsonValue::Null);
             }
         }
         Ok(rows)
@@ -1101,6 +1344,7 @@ impl AppState {
                 | "waiting_for_virtual_cash_budget" => queued += count,
                 "pending_approval" => pending_approval += count,
                 "submitted_to_broker"
+                | "submitting_to_broker"
                 | "broker_working"
                 | "broker_amended"
                 | "broker_partially_filled"
@@ -1260,6 +1504,83 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating runtime settings table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS broker_position_snapshots (
+                symbol TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                instrument_name TEXT,
+                isin TEXT,
+                uic INTEGER,
+                asset_type TEXT,
+                quantity REAL NOT NULL,
+                currency TEXT,
+                open_price_local REAL,
+                open_price_including_costs_local REAL,
+                execution_time_open TEXT,
+                value_date TEXT,
+                market_state TEXT,
+                can_be_closed INTEGER,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating broker position snapshots table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS broker_instrument_exposures (
+                symbol TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                uic INTEGER,
+                asset_type TEXT,
+                quantity REAL,
+                average_open_price REAL,
+                profit_loss_on_trade REAL,
+                instrument_price_day_percent_change REAL,
+                currency TEXT,
+                calculation_reliability TEXT,
+                can_be_closed INTEGER,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating broker instrument exposures table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS broker_balance_snapshots (
+                singleton_key TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                currency TEXT,
+                cash_available_for_trading REAL,
+                margin_available_for_trading REAL,
+                cash_balance REAL,
+                transactions_not_booked REAL,
+                settlement_value REAL,
+                total_value REAL,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating broker balance snapshots table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS broker_account_snapshots (
+                singleton_key TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                account_key TEXT,
+                account_id TEXT,
+                account_currency TEXT,
+                is_trial_account INTEGER,
+                fractional_order_enabled INTEGER,
+                fractional_order_enabled_asset_types_json TEXT,
+                can_use_cash_positions_as_margin_collateral INTEGER,
+                use_cash_positions_as_margin_collateral INTEGER,
+                legal_asset_types_json TEXT,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating broker account snapshots table")?;
         Ok(())
     }
 
@@ -1641,6 +1962,40 @@ fn text_value(value: &JsonValue, key: &str) -> String {
         Some(JsonValue::Number(number)) => number.to_string(),
         Some(JsonValue::Bool(flag)) => flag.to_string(),
         _ => String::new(),
+    }
+}
+
+trait BlankStringExt {
+    fn if_empty_then<F>(self, fallback: F) -> Option<String>
+    where
+        F: FnOnce() -> Option<String>;
+}
+
+impl BlankStringExt for String {
+    fn if_empty_then<F>(self, fallback: F) -> Option<String>
+    where
+        F: FnOnce() -> Option<String>,
+    {
+        if self.trim().is_empty() {
+            fallback()
+        } else {
+            Some(self)
+        }
+    }
+}
+
+fn fx_rate_to_dkk(currency: &str) -> f64 {
+    // Static fallback rates mirror the old Python service fallback. Price snapshots
+    // carry fresher per-symbol FX rates when the market data job has populated them.
+    match currency.trim().to_uppercase().as_str() {
+        "DKK" => 1.0,
+        "EUR" => 7.4604,
+        "USD" => 7.0215,
+        "GBP" => 8.70,
+        "NOK" => 0.64,
+        "SEK" => 0.67,
+        "PLN" => 1.75,
+        _ => 1.0,
     }
 }
 

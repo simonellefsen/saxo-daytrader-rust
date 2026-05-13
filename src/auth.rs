@@ -292,6 +292,14 @@ pub fn import_session_json(
     save_session(&session_path(config, config_path), &session)
 }
 
+pub async fn ensure_session_json(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
+    // Broker code should not need access to the private session struct. Returning JSON
+    // is like returning a Python dict: callers can read only the fields they need while
+    // this module keeps ownership of token refresh and file persistence.
+    let session = ensure_access_token(config, config_path).await?;
+    Ok(serde_json::to_value(session)?)
+}
+
 async fn ensure_access_token(
     config: &YamlValue,
     config_path: &PathBuf,

@@ -7,6 +7,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
+    saxo_order::run_saxo_execution_queue, saxo_portfolio::refresh_broker_snapshots,
     state::AppState, strategy_journal::run_strategy_journal_cycle,
     trading_manager::run_trading_manager_cycle, xai_decision::run_xai_decision_cycle,
 };
@@ -39,6 +40,13 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         warn!("scheduler heartbeat persistence failed: {err:#}");
     }
     let saxo = maintain_saxo_session(state).await;
+    let broker_read_model = match refresh_broker_snapshots(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("Saxo broker read model refresh failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     let decision_reports = match run_xai_decision_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -53,6 +61,13 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    let execution_queue = match run_saxo_execution_queue(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("Saxo execution queue failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     let journal = match run_strategy_journal_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -62,6 +77,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     };
     let completed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let status = if trading_manager.get("status").and_then(JsonValue::as_str) == Some("error")
+        || execution_queue.get("status").and_then(JsonValue::as_str) == Some("error")
         || journal.get("status").and_then(JsonValue::as_str) == Some("error")
     {
         "error"
@@ -71,8 +87,10 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     let cycle_json = json!({
         "runtime": "rust",
         "saxo_session": saxo,
+        "broker_read_model": broker_read_model,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
+        "execution_queue": execution_queue,
         "journal": journal,
         "market": state.market_status_payload().await.unwrap_or_else(|err| {
             warn!("scheduler market status snapshot failed: {err:#}");

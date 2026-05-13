@@ -4,6 +4,8 @@ mod config;
 mod db;
 mod localization;
 mod models;
+mod saxo_order;
+mod saxo_portfolio;
 mod scheduler;
 mod state;
 mod strategy_journal;

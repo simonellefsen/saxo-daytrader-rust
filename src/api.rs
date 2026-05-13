@@ -20,6 +20,7 @@ use crate::{
         CashBufferRequest, LimitParams, LocalizationSettingsRequest, PerformanceParams,
         SaxoCallbackParams, ViewParams,
     },
+    saxo_order::run_saxo_execution_queue,
     state::AppState,
     ui::render_index,
     xai_decision,
@@ -81,7 +82,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/actions/decision-report",
             post(action_generate_decision_report),
         )
-        .route("/api/actions/queue-process", post(action_not_ported))
+        .route("/api/actions/queue-process", post(action_process_queue))
         .route("/api/actions/sync-broker", post(action_not_ported))
         .route("/api/actions/retry-failed", post(action_not_ported))
         .route("/api/actions/reconcile-broker", post(action_not_ported))
@@ -583,6 +584,29 @@ async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> 
         }
         Err(err) => {
             error!("manual decision report generation failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn action_process_queue(State(state): State<Arc<AppState>>) -> Response {
+    match run_saxo_execution_queue(&state).await {
+        Ok(result) => {
+            info!(
+                submitted = result
+                    .get("submitted")
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0),
+                failed = result
+                    .get("failed")
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0),
+                "manual Saxo execution queue processor completed"
+            );
+            Json(result).into_response()
+        }
+        Err(err) => {
+            error!("manual Saxo execution queue processor failed: {err:#}");
             json_result(Err(err))
         }
     }

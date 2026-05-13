@@ -16,7 +16,7 @@ The active runtime is a single Rust binary named `saxo-rust`.
 - Kubernetes app namespace: `saxo-rust`
 - Public endpoint: ngrok operator `AgentEndpoint` targeting the Rust frontend service
 
-Trading-critical mutation paths are intentionally not fully ported yet. Saxo OAuth/session endpoints are implemented in Rust, but order mutation, broker sync, queue processing, and scheduler trading cycles currently return `501 not_ported` until the Saxo execution/audit/reconciliation logic is ported safely.
+Trading-critical mutation paths are being ported incrementally. Saxo OAuth/session handling, scheduled decision reports, Trading Manager queue creation, and Saxo order precheck/placement now run in Rust. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption still use the legacy Python code as the behavior reference and should remain gated until each path has Rust audit/status tests.
 
 ## Rust File Structure
 
@@ -69,9 +69,18 @@ Target these files for future Rust work:
 
 - `src/scheduler.rs`
   - Rust scheduler entry point.
-  - Currently a heartbeat placeholder.
   - Maintains the Saxo session cache on each heartbeat; successful refreshes are persisted back to the database by `AppState`.
-  - Port scheduler trading behavior here only after Saxo mutation safety rules are implemented.
+  - Runs scheduled xAI decision reports, the Rust Trading Manager, Saxo execution queue processing, and the EOD journal cycle.
+
+- `src/trading_manager.rs`
+  - Turns fresh scheduled decision reports into local `execution_orders`.
+  - Applies market-open filters, risk exclusions, minimum trade value, SELL holding caps, and technical gates before queueing.
+  - It does not talk to Saxo directly; broker mutation belongs in `src/saxo_order.rs`.
+
+- `src/saxo_order.rs`
+  - Rust Saxo order placement path.
+  - Restores/refreshes the service-level Saxo session, filters approved live Saxo orders, validates market tradability, guards SELL quantities against current holdings and active sell reservations, looks up instruments, builds Saxo order payloads, runs `/trade/v2/orders/precheck`, places via `/trade/v2/orders`, and writes `execution_orders` plus `execution_order_events`.
+  - Target this file for order-placement bugs, Saxo payload shape changes, tick-size behavior, and queued-order processing tests.
 
 - `assets/app.css`
   - Dashboard styling.
@@ -192,6 +201,7 @@ Important files:
 - `deploy/k8s/base/scheduler.yaml`
   - Rust scheduler deployment `daytrader-scheduler`.
   - Runs `/app/saxo-rust --scheduler`.
+  - Uses `strategy.type: Recreate` because the scheduler is a singleton that can submit broker orders; do not switch it back to rolling updates without a stronger cross-pod lock.
 
 - `deploy/k8s/base/config.k8s.yaml`
   - Kubernetes runtime config.
@@ -335,7 +345,7 @@ When porting Saxo trading features from Python:
 - Preserve `x-request-id` or equivalent idempotency-style headers for order mutations.
 - Preserve local audit records for every precheck, placement, replace, cancel, fill, and reconciliation event.
 - Normalize prices to valid Saxo tick increments before precheck/place.
-- Keep live order mutation disabled until the Rust path is fully audited and tested.
+- Keep broker status sync, replace/cancel, fills, and reconciliation gated until their Rust paths are fully audited and tested.
 
 ## Future Porting Order
 
@@ -345,7 +355,7 @@ Recommended order for future development:
 2. Port portfolio summary/read models from `portfolio.py`.
 3. Extend the Rust Saxo session layer only through `src/auth.rs`; status, OAuth start/callback, refresh, logout, and sanitized session JSON are already implemented.
 4. Port market status/watchlist read models.
-5. Port execution read models.
-6. Port scheduler heartbeat persistence.
-7. Port Saxo precheck/order placement only after tick-size handling and audit tables have focused tests.
-8. Re-enable mutation endpoints one at a time.
+5. Replace generic JSON payloads in `saxo_order.rs` with typed request/response structs.
+6. Port broker status sync and fill reconciliation.
+7. Port order replace/cancel management.
+8. Re-enable remaining mutation endpoints one at a time.
