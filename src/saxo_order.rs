@@ -102,7 +102,7 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         .context("refreshing Saxo session before executing queued orders")?;
     let session = auth::ensure_session_json(&state.config, &state.config_path).await?;
 
-    let market_rows = state.market_exchange_rows();
+    let market_rows = state.market_exchange_rows().await?;
     let broker_positions = broker_position_quantities(state, &session)
         .await
         .context("fetching live Saxo positions before executing queued orders")?;
@@ -304,7 +304,9 @@ async fn sync_one_broker_order(
             "fills": 0,
             "order_id": order_id,
             "symbol": symbol,
-            "broker_order_id": broker_order_id
+            "broker_order_id": broker_order_id,
+            "quantity_changed": false,
+            "price_changed": false,
         }));
     };
     let broker_payload = broker_payload(&broker_state);
@@ -320,6 +322,32 @@ async fn sync_one_broker_order(
     let broker_price = extract_broker_price(broker_payload)
         .or_else(|| optional_f64(order, "price_local"))
         .unwrap_or(0.0);
+
+    // Amendment detection (matches Python execution_engine.py behavior)
+    // We compare the broker-reported values against the last known local values.
+    let order_quantity = value_f64(order, "quantity");
+    let order_price_local = optional_f64(order, "price_local");
+    let quantity_changed = (broker_quantity - order_quantity).abs() > 1e-9;
+    let price_changed = order_price_local
+        .map(|old_price| (broker_price - old_price).abs() > 1e-9)
+        .unwrap_or(false);
+    let previous_was_amended = order_text(order, "status") == "broker_amended";
+
+    // Enrich the broker state we persist so the UI and audit trail contain the same
+    // metadata the legacy Python path produced (quantity_changed, price_changed, last_sync_at).
+    let mut enriched_state = broker_state.clone();
+    if let Some(obj) = enriched_state.as_object_mut() {
+        obj.insert("quantity_changed".to_string(), json!(quantity_changed));
+        obj.insert("price_changed".to_string(), json!(price_changed));
+        obj.insert("last_sync_at".to_string(), json!(now_iso()));
+        if quantity_changed {
+            obj.insert("broker_quantity".to_string(), json!(broker_quantity));
+        }
+        if price_changed {
+            obj.insert("broker_price_local".to_string(), json!(broker_price));
+        }
+    }
+
     record_broker_order_event(
         state,
         order,
@@ -333,7 +361,7 @@ async fn sync_one_broker_order(
         broker_substatus.as_deref(),
         Some(broker_quantity),
         Some(broker_price),
-        &broker_state,
+        &enriched_state,
     )
     .await?;
 
@@ -344,7 +372,7 @@ async fn sync_one_broker_order(
             &broker_order_id,
             broker_quantity,
             broker_price,
-            &broker_state,
+            &enriched_state,
         )
         .await;
     }
@@ -358,7 +386,7 @@ async fn sync_one_broker_order(
         } else {
             "execution_failed"
         };
-        update_order_broker_status(state, order, status, &broker_state, None).await?;
+        update_order_broker_status(state, order, status, &enriched_state, None).await?;
         return Ok(json!({
             "status": status,
             "updated": true,
@@ -367,7 +395,9 @@ async fn sync_one_broker_order(
             "symbol": symbol,
             "broker_order_id": broker_order_id,
             "broker_status": broker_status,
-            "broker_substatus": broker_substatus
+            "broker_substatus": broker_substatus,
+            "quantity_changed": quantity_changed,
+            "price_changed": price_changed,
         }));
     }
 
@@ -376,10 +406,14 @@ async fn sync_one_broker_order(
         .is_some_and(|value| value.to_ascii_lowercase().contains("fill"))
     {
         "broker_partially_filled"
+    } else if quantity_changed || price_changed || previous_was_amended {
+        // Explicitly surface amendments (quantity or price changed since last known local state).
+        // This mirrors the legacy Python logic in execution_engine.py:2424-2429.
+        "broker_amended"
     } else {
         "broker_working"
     };
-    update_order_broker_status(state, order, local_status, &broker_state, None).await?;
+    update_order_broker_status(state, order, local_status, &enriched_state, None).await?;
     Ok(json!({
         "status": local_status,
         "updated": true,
@@ -388,7 +422,9 @@ async fn sync_one_broker_order(
         "symbol": symbol,
         "broker_order_id": broker_order_id,
         "broker_status": broker_status,
-        "broker_substatus": broker_substatus
+        "broker_substatus": broker_substatus,
+        "quantity_changed": quantity_changed,
+        "price_changed": price_changed,
     }))
 }
 
@@ -589,7 +625,11 @@ async fn build_order_payload(
     let symbol = order_text(order, "symbol");
     let action = order_text(order, "action").to_uppercase();
     let order_type = normalize_order_type(&order_text(order, "order_type"));
-    let instrument = lookup_instrument(state, session, &symbol).await?;
+    let instrument = if let Some(instrument) = instrument_from_reviewed_order(order) {
+        instrument
+    } else {
+        lookup_instrument(state, session, &symbol).await?
+    };
     let mut payload = json!({
         "AccountKey": account_key(state, session)?,
         "Amount": quantity as i64,
@@ -717,6 +757,24 @@ async fn lookup_instrument(
     Err(anyhow!(
         "No tradable Saxo instrument match found for {symbol}"
     ))
+}
+
+fn instrument_from_reviewed_order(order: &JsonValue) -> Option<SaxoInstrument> {
+    let validation = order.get("request_json")?.get("validation")?;
+    if validation.get("status").and_then(JsonValue::as_str) != Some("valid") {
+        return None;
+    }
+    let uic = validation
+        .get("uic")
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))?;
+    let asset_type = json_text(validation, "asset_type")?;
+    Some(SaxoInstrument {
+        uic,
+        asset_type,
+        exchange_id: json_text(validation, "exchange_id").unwrap_or_default(),
+        description: json_text(validation, "description")
+            .unwrap_or_else(|| order_text(order, "symbol")),
+    })
 }
 
 async fn broker_position_quantities(
@@ -2105,6 +2163,28 @@ mod tests {
             &requested
         ));
         assert!(candidate_matches_requested(&exact, "PLTR:xnas", &requested));
+    }
+
+    #[test]
+    fn uses_reviewed_reconciliation_instrument_when_present() {
+        let order = json!({
+            "symbol": "PLTR:xnas",
+            "request_json": {
+                "validation": {
+                    "status": "valid",
+                    "uic": 46019839,
+                    "asset_type": "CfdOnStock",
+                    "exchange_id": "NASDAQ",
+                    "description": "Palantir Technologies Inc."
+                }
+            }
+        });
+
+        let instrument = instrument_from_reviewed_order(&order).expect("reviewed instrument");
+
+        assert_eq!(instrument.uic, 46019839);
+        assert_eq!(instrument.asset_type, "CfdOnStock");
+        assert_eq!(instrument.description, "Palantir Technologies Inc.");
     }
 
     #[test]
