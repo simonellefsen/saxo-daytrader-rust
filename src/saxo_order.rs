@@ -102,7 +102,7 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         .context("refreshing Saxo session before executing queued orders")?;
     let session = auth::ensure_session_json(&state.config, &state.config_path).await?;
 
-    let market_rows = state.market_exchange_rows().await?;
+    let market_rows = state.market_exchange_rows();
     let broker_positions = broker_position_quantities(state, &session)
         .await
         .context("fetching live Saxo positions before executing queued orders")?;
