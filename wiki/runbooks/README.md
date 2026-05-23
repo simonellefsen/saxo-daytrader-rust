@@ -21,5 +21,5 @@ Examples:
 
 ## Current Runbooks
 
-- [[build-test-deploy]] - Build, unit/integration/smoke testing, Saxo SIM testing, Kubernetes deployment, Hermes smoke checks, and wiki maintenance.
-- [[k8s-diagnostics]] - Docker Desktop Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.
+- [build-test-deploy](build-test-deploy.md) - Build, unit/integration/smoke testing, Saxo SIM testing, Kubernetes deployment, Hermes smoke checks, and wiki maintenance.
+- [k8s-diagnostics](k8s-diagnostics.md) - Docker Desktop Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.

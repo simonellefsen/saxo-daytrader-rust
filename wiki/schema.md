@@ -45,7 +45,7 @@ Recommended `type` values:
 
 ## Link Rules
 
-- Use Obsidian wikilinks for wiki-to-wiki links, for example `[[concepts/hermes-self-improvement]]`.
+- Use relative Markdown links for wiki-to-wiki links, for example `[Hermes self-improvement](concepts/hermes-self-improvement.md)`. These work in GitHub previews and remain readable in Obsidian.
 - Use Markdown links with absolute local paths for repository files outside `wiki/`.
 - Prefer linking source files and code paths over copying long excerpts.
 - Avoid unresolved wikilinks unless the missing page is intentionally listed as an open task.

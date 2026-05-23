@@ -55,6 +55,6 @@ The wiki must not store secrets or become an unreviewed control plane. It should
 
 ## Related
 
-- [[schema]]
-- [[sources/llm-wiki]]
-- [[hermes-self-improvement]]
+- [schema](../schema.md)
+- [sources/llm-wiki](../sources/llm-wiki.md)
+- [hermes-self-improvement](hermes-self-improvement.md)

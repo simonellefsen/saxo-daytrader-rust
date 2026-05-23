@@ -280,4 +280,4 @@ rtk qmd search "Saxo SIM testing"
 rtk qmd query "Hermes reflection experiment promotion"
 ```
 
-The wiki is plain Markdown with Obsidian-style `[[links]]`, so it can be opened as a vault even without committing `.obsidian` settings.
+The wiki is plain Markdown with relative `.md` links, so links work in GitHub previews and remain readable when opened as an Obsidian vault without committing `.obsidian` settings.

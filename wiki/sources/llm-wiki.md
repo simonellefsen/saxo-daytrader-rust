@@ -52,5 +52,5 @@ The wiki should work alongside [docs/hermes-agent.md](/Users/lindau/codex/rust_d
 
 ## Links
 
-- [[concepts/llm-maintained-project-wiki]]
-- [[concepts/hermes-self-improvement]]
+- [concepts/llm-maintained-project-wiki](../concepts/llm-maintained-project-wiki.md)
+- [concepts/hermes-self-improvement](../concepts/hermes-self-improvement.md)

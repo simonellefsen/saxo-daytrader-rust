@@ -60,5 +60,5 @@ sequenceDiagram
 
 ## Related
 
-- [[concepts/llm-maintained-project-wiki]]
-- [[sources/llm-wiki]]
+- [concepts/llm-maintained-project-wiki](llm-maintained-project-wiki.md)
+- [sources/llm-wiki](../sources/llm-wiki.md)

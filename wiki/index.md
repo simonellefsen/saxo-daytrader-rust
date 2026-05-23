@@ -12,33 +12,33 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 ## Start Here
 
-- [[schema]] - Maintenance rules, page conventions, and workflows.
-- [[log]] - Append-only timeline of wiki operations.
-- [[concepts/llm-maintained-project-wiki]] - How the LLM wiki pattern applies to this repository.
-- [[concepts/hermes-self-improvement]] - How Hermes learning and strategy experiments connect to the wiki.
+- [schema](schema.md) - Maintenance rules, page conventions, and workflows.
+- [log](log.md) - Append-only timeline of wiki operations.
+- [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
+- [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning and strategy experiments connect to the wiki.
 
 ## Source Notes
 
-- [[sources/llm-wiki]] - Source-note summary for the LLM Wiki pattern.
+- [sources/llm-wiki](sources/llm-wiki.md) - Source-note summary for the LLM Wiki pattern.
 
 ## Concepts
 
-- [[concepts/llm-maintained-project-wiki]] - Persistent, compounding project knowledge layer maintained by agents.
-- [[concepts/hermes-self-improvement]] - Safe loop for Hermes reflections, experiments, and strategy learning.
+- [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - Persistent, compounding project knowledge layer maintained by agents.
+- [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - Safe loop for Hermes reflections, experiments, and strategy learning.
 
 ## Runbooks
 
-- [[runbooks/README]] - Landing page for operational procedures.
-- [[runbooks/build-test-deploy]] - Build, testing, Saxo SIM, deployment, Hermes smoke, and wiki maintenance checklist.
-- [[runbooks/k8s-diagnostics]] - Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.
+- [runbooks/README](runbooks/README.md) - Landing page for operational procedures.
+- [runbooks/build-test-deploy](runbooks/build-test-deploy.md) - Build, testing, Saxo SIM, deployment, Hermes smoke, and wiki maintenance checklist.
+- [runbooks/k8s-diagnostics](runbooks/k8s-diagnostics.md) - Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.
 
 ## Decisions
 
-- [[decisions/README]] - Landing page for architecture and workflow decision records.
+- [decisions/README](decisions/README.md) - Landing page for architecture and workflow decision records.
 
 ## Experiments
 
-- [[experiments/README]] - Landing page for Hermes and strategy experiment notes.
+- [experiments/README](experiments/README.md) - Landing page for Hermes and strategy experiment notes.
 
 ## Open Questions
 
