@@ -16,3 +16,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Created the initial project wiki structure under [wiki/](/Users/lindau/codex/rust_daytrader/wiki).
 - Added schema, index, source note, and concept pages.
 - Added [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md) for repo-level workflow documentation.
+
+## [2026-05-23] attribution | LLM Wiki source credit
+
+- Credited Andrej Karpathy as the author of the copied LLM Wiki idea file.
+- Added the original gist URL: [karpathy/442a6bf555914893e9891c11519de94f](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).

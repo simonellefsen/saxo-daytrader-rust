@@ -6,11 +6,12 @@ tags:
 updated: 2026-05-23
 sources:
   - /Users/lindau/codex/rust_daytrader/llm-wiki.md
+  - https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 ---
 
 # LLM-Maintained Project Wiki
 
-The daytrader project should use an LLM-maintained wiki as a persistent synthesis layer. The goal is to make architecture knowledge, trading lessons, operational runbooks, and strategy experiments compound across sessions.
+The daytrader project should use an LLM-maintained wiki as a persistent synthesis layer. The goal is to make architecture knowledge, trading lessons, operational runbooks, and strategy experiments compound across sessions. This pattern is adapted from Andrej Karpathy's LLM Wiki idea file.
 
 ## Why It Matters Here
 

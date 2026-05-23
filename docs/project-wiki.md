@@ -2,7 +2,7 @@
 
 This repository uses an LLM-maintained wiki pattern for project knowledge that should compound over time instead of being rediscovered from raw files on every question.
 
-The source idea is [llm-wiki.md](/Users/lindau/codex/rust_daytrader/llm-wiki.md). The concrete project wiki lives under [wiki/](/Users/lindau/codex/rust_daytrader/wiki).
+The source idea is [llm-wiki.md](/Users/lindau/codex/rust_daytrader/llm-wiki.md), by Andrej Karpathy. Original gist: [karpathy/442a6bf555914893e9891c11519de94f](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). The concrete project wiki lives under [wiki/](/Users/lindau/codex/rust_daytrader/wiki).
 
 ## Purpose
 
