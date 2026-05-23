@@ -161,6 +161,8 @@ HERMES_API_SERVER_ENABLED=false
 HERMES_API_SERVER_HOST=0.0.0.0
 HERMES_API_SERVER_KEY=
 HERMES_API_SERVER_CORS_ORIGINS=http://127.0.0.1:8000
+HERMES_INFERENCE_PROVIDER=xai
+HERMES_MODEL=grok-4
 HERMES_DASHBOARD=false
 HERMES_DASHBOARD_TUI=false
 HERMES_DAYTRADER_API_KEY=
@@ -196,7 +198,7 @@ CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza a
 
 The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, decision reports, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become an active baseline.
 
-The Kubernetes base now includes `Deployment/hermes-agent`, `PVC/hermes-data`, `Service/hermes-gateway`, `ConfigMap/hermes-daytrader-context`, and a suspended `CronJob/hermes-weekly-reflection`. The service is internal-only and exposes Hermes gateway port `8642` plus dashboard port `9119` if enabled. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal Hermes API should be reachable. Set `HERMES_DAYTRADER_API_KEY` so Hermes can call the app's protected `/api/hermes/*` adapter endpoints with `x-hermes-api-key`.
+The Kubernetes base now includes `Deployment/hermes-agent`, `PVC/hermes-data`, `Service/hermes-gateway`, `ConfigMap/hermes-daytrader-context`, and a suspended `CronJob/hermes-weekly-reflection`. The service is internal-only and exposes Hermes gateway port `8642` plus dashboard port `9119` if enabled. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal Hermes API should be reachable. Set `HERMES_INFERENCE_PROVIDER` and `HERMES_MODEL` to a model/provider the configured Hermes account can access, and set `HERMES_DAYTRADER_API_KEY` so Hermes can call the app's protected `/api/hermes/*` adapter endpoints with `x-hermes-api-key`.
 
 To enable the weekly Hermes reflection after deployment:
 

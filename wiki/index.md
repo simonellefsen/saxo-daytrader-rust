@@ -29,6 +29,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 ## Runbooks
 
 - [[runbooks/README]] - Landing page for operational procedures.
+- [[runbooks/build-test-deploy]] - Build, testing, Saxo SIM, deployment, Hermes smoke, and wiki maintenance checklist.
 
 ## Decisions
 

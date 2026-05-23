@@ -18,3 +18,7 @@ Examples:
 - qmd index maintenance.
 - Obsidian vault checks.
 - Saxo session recovery procedures that do not expose secrets.
+
+## Current Runbooks
+
+- [[build-test-deploy]] - Build, unit/integration/smoke testing, Saxo SIM testing, Kubernetes deployment, Hermes smoke checks, and wiki maintenance.

@@ -42,3 +42,18 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The CronJob submits a run to Hermes' `/v1/runs` API instead of writing reflections directly.
 - The prompt instructs Hermes to fetch the protected daytrader context, create one reflection, and optionally create one one-variable experiment proposal.
 - The job requires `HERMES_API_SERVER_KEY` and `HERMES_DAYTRADER_API_KEY`, and remains suspended until explicitly enabled.
+
+## [2026-05-23] runbook | Build, test, deploy, and Saxo SIM checks
+
+- Added `wiki/runbooks/build-test-deploy.md`.
+- Documented Rust build, formatting, unit tests, integration/regression tests, local smoke tests, Kubernetes deployment and smoke tests, Hermes smoke tests, Saxo SIM testing order, live trading safety gates, and qmd/Obsidian-compatible wiki maintenance.
+
+## [2026-05-23] smoke | Hermes in-cluster reflection
+
+- Deployed Hermes Agent to Docker Desktop Kubernetes in namespace `saxo-rust`.
+- Used `BACKUP_OBJECT_STORE=rustfs` because the local `daytrader_rustfs` container already owns ports `9000-9001`.
+- Verified `daytrader-api` health from inside the cluster.
+- Enabled Hermes API server with cluster-only generated keys and verified `/health`, `/v1/capabilities`, and the protected daytrader `/api/hermes/capabilities` endpoint.
+- First Hermes run failed because the persisted Hermes default model was inaccessible; switching `/opt/data/config.yaml` to provider `xai` and model `grok-4` fixed model execution.
+- Manual reflection run `run_d56aacdb4f0e45b0abfda8dfd2145957` completed after approving internal HTTP adapter calls for the session.
+- The run wrote reflection `hermes-reflection-1779537409085596` and created no experiment because closed-trade evidence was insufficient.

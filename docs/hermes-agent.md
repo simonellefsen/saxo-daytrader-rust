@@ -198,6 +198,8 @@ Enable it only after setting:
 HERMES_API_SERVER_ENABLED=true
 HERMES_API_SERVER_HOST=0.0.0.0
 HERMES_API_SERVER_KEY=<strong Hermes API key>
+HERMES_INFERENCE_PROVIDER=xai
+HERMES_MODEL=grok-4
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 ```
 
@@ -216,6 +218,10 @@ The CronJob calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt t
 - Create at most one experiment via `/api/hermes/experiments`.
 - Change exactly one variable when proposing an experiment.
 - Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
+
+Smoke-test finding: Hermes' API server starts only when `API_SERVER_ENABLED=true` and `API_SERVER_HOST=0.0.0.0` are present inside `hermes-env`. The deploy script maps the committed `.env` names `HERMES_API_SERVER_ENABLED` and `HERMES_API_SERVER_HOST` to those runtime names. Hermes model selection is persisted in `/opt/data/config.yaml`; keep `.env` model/provider values aligned with that config so a recreated PVC does not fall back to an inaccessible default model.
+
+Unattended-run caveat: the current HTTP adapter works, but Hermes may pause for approval before terminal-based internal HTTP calls. A manual smoke run completed after approving the internal `daytrader-api` context/reflection calls for the session. Fully unattended weekly runs should wait for a native MCP adapter or a narrowly reviewed Hermes approval policy for the protected daytrader adapter.
 
 Read-only tools:
 
