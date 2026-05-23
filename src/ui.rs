@@ -101,7 +101,7 @@ fn Dashboard(props: DashboardProps) -> Element {
             header { class: "topbar",
                 div { class: "brand-copy",
                     h1 { "{data.app_name}" }
-                    p { class: "muted", "Modern web frontend over the existing Python trading runtime. Targeted polling keeps the active view fresh without re-running the whole page." }
+                    p { class: "muted", "Rust Axum/Dioxus trading runtime. Targeted polling keeps the active view fresh without re-running the whole page." }
                     p { class: "muted", "Last updated just now · Shortcut: R runs one scheduler cycle" }
                 }
                 div { class: "top-actions",

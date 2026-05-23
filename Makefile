@@ -6,9 +6,8 @@ KUBE_CONTEXT ?= docker-desktop
 APP_NAMESPACE ?= saxo-rust
 DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
-PYTHON := .venv/bin/python
 
-.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward legacy-sync legacy-scheduler-once legacy-render-services
+.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward
 
 help:
 	@printf "%s\n" \
@@ -29,12 +28,7 @@ help:
 		"  make k8s-db-status        Show CNPG database resources" \
 		"  make k8s-logs             Tail API and scheduler logs" \
 		"  make k8s-port-forward     Forward daytrader-frontend to localhost:$(API_PORT)" \
-		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)" \
-		"" \
-		"Legacy Python helpers:" \
-		"  make legacy-sync          Run old CSV-to-ledger sync" \
-		"  make legacy-scheduler-once Run one old scheduler cycle" \
-		"  make legacy-render-services Render old systemd/launchd templates"
+		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)"
 
 install:
 	CARGO_HOME=$(CARGO_HOME) $(CARGO) fetch
@@ -90,14 +84,5 @@ k8s-stop:
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) patch domain --all --type merge -p '{"metadata":{"finalizers":[]}}'
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete domain --all --ignore-not-found --wait=false
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete ngroktrafficpolicy daytrader-oauth --ignore-not-found
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete deployment daytrader-api daytrader-scheduler daytrader-frontend --ignore-not-found
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete service daytrader-api daytrader-frontend --ignore-not-found
-
-legacy-sync:
-	$(PYTHON) main.py --sync-only
-
-legacy-scheduler-once:
-	$(PYTHON) scripts/run_scheduler.py --once --mock-decisions --force-decision
-
-legacy-render-services:
-	$(PYTHON) scripts/render_services.py
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete deployment daytrader-api daytrader-scheduler daytrader-mcp daytrader-frontend --ignore-not-found
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete service daytrader-api daytrader-frontend daytrader-mcp --ignore-not-found

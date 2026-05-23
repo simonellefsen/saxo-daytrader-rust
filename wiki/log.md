@@ -115,3 +115,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Verified in-cluster MCP health and Hermes persisted MCP config without printing the bearer token.
 - Ran manual Hermes reflection `run_86428fcd12354288a2ffbb3d4ff9f629`; it created reflection `hermes-reflection-1779549919849580` and no experiment because evidence was insufficient.
 - Added an init wait and deployment ordering so Hermes starts after `daytrader-mcp` is healthy.
+
+## [2026-05-23] maintenance | Legacy Python Makefile cleanup
+
+- Removed old Python convenience targets from the active Makefile surface.
+- Kept legacy Python source, migration helpers, Saxo OAuth helper, and regression scripts as reference/support material while remaining broker paths are ported.
+- Updated stale runtime wording in the dashboard and README.

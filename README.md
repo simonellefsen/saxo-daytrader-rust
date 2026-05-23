@@ -2,7 +2,7 @@
 
 Rust/Dioxus conversion of the Saxo day-trading dashboard. The active runtime is now a single Rust binary, `saxo-rust`, built with Axum for HTTP/API routes and Dioxus SSR for the dashboard UI.
 
-The previous Python/FastAPI and Next.js implementation is still present as legacy source while the deeper trading engines are ported. Live trading mutations intentionally return `501 not_ported` from the Rust runtime until Saxo order placement, replace/cancel, and reconciliation logic are reimplemented with the same audit guarantees as the Python version.
+The previous Python/FastAPI and Next.js implementation is still present as legacy source while the remaining broker-management paths are ported. Rust owns the active dashboard, scheduler, Saxo session handling, decision reports, Trading Manager queue creation, and Saxo order placement. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption remain gated until their Rust paths have matching audit and status tests.
 
 ## Current Rust Runtime
 
@@ -534,52 +534,7 @@ would be much easier to miss if the scheduler happens to poll just before the wi
 
 ## Deployment
 
-Legacy Python `systemd` and `launchd` service examples can still be rendered explicitly:
-
-```bash
-.venv/bin/python scripts/render_service_templates.py
-```
-
-Or:
-
-```bash
-make legacy-render-services
-```
-
-This writes rendered files into `deploy/rendered/` using the current repo path and `.venv/bin/python`.
-
-Rendered files:
-
-- `deploy/rendered/systemd/saxo-daytrader-scheduler.service`
-- `deploy/rendered/systemd/saxo-daytrader-dashboard.service`
-- `deploy/rendered/launchd/com.saxo-daytrader.scheduler.plist`
-- `deploy/rendered/launchd/com.saxo-daytrader.dashboard.plist`
-
-The active deployment path is now the Rust/Kubernetes flow in the Makefile. The rendered service templates are retained only for legacy local operation.
-
-Typical install flow:
-
-1. Render the templates.
-2. Review the generated paths, user, and port.
-3. Copy the chosen service file into your OS service directory.
-4. Enable the scheduler service first.
-5. Optionally enable the dashboard service if you want the web UI always running.
-
-Example `systemd` commands:
-
-```bash
-sudo cp deploy/rendered/systemd/saxo-daytrader-scheduler.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now saxo-daytrader-scheduler.service
-```
-
-Example `launchd` commands:
-
-```bash
-cp deploy/rendered/launchd/com.saxo-daytrader.scheduler.plist ~/Library/LaunchAgents/
-launchctl unload ~/Library/LaunchAgents/com.saxo-daytrader.scheduler.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.saxo-daytrader.scheduler.plist
-```
+The active deployment path is the Rust/Kubernetes flow in the Makefile. The old Python `systemd` and `launchd` templates remain in `deploy/` only as historical local-operation examples; they are no longer exposed as Makefile targets.
 
 ## Saxo OAuth helper
 
