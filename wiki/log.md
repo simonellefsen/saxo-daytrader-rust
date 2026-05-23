@@ -12,7 +12,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 ## [2026-05-23] ingest | LLM Wiki pattern
 
-- Read [llm-wiki.md](/Users/lindau/codex/rust_daytrader/llm-wiki.md).
+- Read the LLM Wiki source now archived at [wiki/sources/llm-wiki.md](/Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md).
 - Created the initial project wiki structure under [wiki/](/Users/lindau/codex/rust_daytrader/wiki).
 - Added schema, index, source note, and concept pages.
 - Added [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md) for repo-level workflow documentation.
@@ -79,3 +79,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Limited overlays to cash buffer, minimum trade value, and daily technical minimum confluence variables.
 - Recorded the applied overlay in Trading Manager run JSON and queued order request JSON for auditability.
 - Kept overlays disabled for `execution.mode=live` with `saxo.environment=LIVE`.
+
+## [2026-05-23] maintenance | Remove duplicate root LLM Wiki source
+
+- Kept the project copy of the LLM Wiki source note under [wiki/sources/llm-wiki.md](/Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md).
+- Removed the duplicate root-level `llm-wiki.md`.
+- Updated wiki metadata and docs to point at the wiki source note and original Andrej Karpathy gist.

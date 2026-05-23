@@ -5,7 +5,7 @@ tags:
   - project-knowledge
 updated: 2026-05-23
 sources:
-  - /Users/lindau/codex/rust_daytrader/llm-wiki.md
+  - /Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md
   - https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 ---
 

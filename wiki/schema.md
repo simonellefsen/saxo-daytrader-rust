@@ -27,7 +27,7 @@ tags:
   - daytrader/wiki
 updated: 2026-05-23
 sources:
-  - llm-wiki.md
+  - wiki/sources/llm-wiki.md
 ---
 ```
 

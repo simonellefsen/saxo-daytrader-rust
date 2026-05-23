@@ -4,14 +4,14 @@ tags:
   - daytrader/wiki
   - llm-wiki
 updated: 2026-05-23
-source: /Users/lindau/codex/rust_daytrader/llm-wiki.md
+source: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 author: Andrej Karpathy
 source_url: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 ---
 
 # Source Note: LLM Wiki
 
-Source: [llm-wiki.md](/Users/lindau/codex/rust_daytrader/llm-wiki.md)
+Source: [karpathy/442a6bf555914893e9891c11519de94f](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 
 Credit: the original LLM Wiki idea file is by Andrej Karpathy. Original gist: [karpathy/442a6bf555914893e9891c11519de94f](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
 

@@ -7,7 +7,7 @@ tags:
 updated: 2026-05-23
 sources:
   - /Users/lindau/codex/rust_daytrader/docs/hermes-agent.md
-  - /Users/lindau/codex/rust_daytrader/llm-wiki.md
+  - /Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md
 ---
 
 # Hermes Self-Improvement Knowledge Loop
