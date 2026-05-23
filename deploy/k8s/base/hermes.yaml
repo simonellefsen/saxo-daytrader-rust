@@ -211,6 +211,27 @@ spec:
         fsGroup: 10000
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: wait-for-daytrader-mcp
+          image: curlimages/curl:8.17.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              for attempt in $(seq 1 60); do
+                if curl -fsS http://daytrader-mcp.saxo-rust:8610/health >/dev/null; then
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "daytrader-mcp did not become ready before Hermes startup" >&2
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: hermes
           image: nousresearch/hermes-agent:latest

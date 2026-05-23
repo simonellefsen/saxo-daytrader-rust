@@ -251,6 +251,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" delete job daytrader-sqlite-to-post
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-api
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-scheduler
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-mcp
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-mcp --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-agent
 
 printf "Applying ngrok OAuth endpoint for %s...\n" "$NGROK_DOMAIN"
@@ -287,7 +288,6 @@ PY
 printf "Waiting for deployments...\n"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-api --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-scheduler --timeout=180s
-kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-mcp --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
 
 printf "Deployment complete.\n"

@@ -107,3 +107,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Configured the Hermes pod startup hook to persist a filtered `daytrader` HTTP MCP server in `/opt/data/config.yaml`.
 - Updated the weekly reflection job prompt to prefer MCP tools for context, reflection writes, and one-variable experiment proposals.
 - Kept the MCP surface free of Saxo session reads, broker mutation tools, Kubernetes secret tools, and live order approval.
+
+## [2026-05-23] smoke | Daytrader MCP in-cluster
+
+- Deployed the Daytrader MCP adapter to Docker Desktop Kubernetes.
+- Verified `daytrader-api`, `daytrader-scheduler`, `daytrader-mcp`, and `hermes-agent` rollouts.
+- Verified in-cluster MCP health and Hermes persisted MCP config without printing the bearer token.
+- Ran manual Hermes reflection `run_86428fcd12354288a2ffbb3d4ff9f629`; it created reflection `hermes-reflection-1779549919849580` and no experiment because evidence was insufficient.
+- Added an init wait and deployment ordering so Hermes starts after `daytrader-mcp` is healthy.

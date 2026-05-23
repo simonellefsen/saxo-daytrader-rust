@@ -154,6 +154,7 @@ Implemented initial Kubernetes support:
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
 - `saxo-rust --mcp-http` runs the internal `daytrader-mcp` adapter at `http://daytrader-mcp.saxo-rust:8610/mcp`.
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints. The MCP adapter uses the same bearer key.
+- The Hermes pod waits for `daytrader-mcp` health before starting so MCP discovery does not race the adapter rollout.
 - The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
 - `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
