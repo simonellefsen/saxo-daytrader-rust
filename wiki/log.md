@@ -28,3 +28,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added `hermes-agent`, `hermes-data`, `hermes-gateway`, and `hermes-daytrader-context`.
 - Updated deployment scripting to create a separate `hermes-env` secret from a whitelist so Saxo credentials are not passed to Hermes.
 - Documented that Hermes is internal-only and not yet connected to a daytrader MCP adapter or strategy promotion flow.
+
+## [2026-05-23] implementation | Hermes HTTP adapter
+
+- Added protected `/api/hermes/*` endpoints in `saxo-rust`.
+- Added sanitized context, capabilities, reflection writes, and strategy experiment proposal writes.
+- Added runtime tables for `hermes_reflections`, `strategy_experiments`, and `strategy_baselines`.
+- Required `HERMES_DAYTRADER_API_KEY` for the adapter so these endpoints are not exposed as normal dashboard API routes.

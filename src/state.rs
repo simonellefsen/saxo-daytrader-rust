@@ -18,7 +18,7 @@ use crate::{
     config::{database_url, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     localization::LocalizationPrefs,
-    models::DashboardView,
+    models::{DashboardView, HermesExperimentRequest, HermesReflectionRequest},
 };
 
 #[derive(Clone)]
@@ -39,6 +39,17 @@ fn redacted_database_url(value: &str) -> String {
         let _ = url.set_password(Some("***"));
     }
     url.to_string()
+}
+
+fn runtime_id(prefix: &str) -> String {
+    format!("{prefix}-{}", Utc::now().timestamp_micros())
+}
+
+fn sql_optional_text(value: Option<&str>) -> String {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => format!("'{}'", sql_escape(value)),
+        None => "NULL".to_string(),
+    }
 }
 
 fn performance_range_limit(range_key: &str) -> i64 {
@@ -1195,6 +1206,294 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    pub fn hermes_goal_contract_value(&self) -> JsonValue {
+        json!({
+            "enabled": false,
+            "mode": "recommend_only",
+            "goal_version": 1,
+            "objective": {
+                "target_return_30d": 0.47,
+                "target_return_note": "Approximately 10x in 6 months if compounded monthly: 1.47^6 ~= 10.1",
+                "max_drawdown": 0.20,
+                "min_sharpe": 1.0,
+                "failure_below_30d_return": -0.04,
+                "reflection_every": "7d",
+                "one_variable_only": true
+            },
+            "constraints": {
+                "max_positions": yaml_i64(&self.config, &["strategy", "swing", "max_holdings"]).unwrap_or(25),
+                "slippage_tolerance": 0.02,
+                "gas_reserve": 0.05,
+                "min_cash_buffer_pct": yaml_f64(&self.config, &["strategy", "capital", "min_cash_buffer_pct"]).unwrap_or(0.10),
+                "allow_shorting": yaml_bool(&self.config, &["risk", "allow_shorting"]).unwrap_or(false),
+                "require_human_approval": true,
+                "require_backtest_before_activation": true,
+                "require_paper_or_sim_observation": true
+            },
+            "experiment_policy": {
+                "min_observation_days": 7,
+                "min_closed_trades": 5,
+                "promote_only_if": {
+                    "return_30d_gte": 0.47,
+                    "drawdown_lte": 0.20,
+                    "sharpe_gte": 1.0
+                },
+                "rollback_if": {
+                    "return_30d_lte": -0.04,
+                    "drawdown_gt": 0.20,
+                    "safety_violation": true
+                }
+            }
+        })
+    }
+
+    pub fn hermes_capabilities_value(&self) -> JsonValue {
+        json!({
+            "status": "ok",
+            "runtime": "saxo-rust",
+            "namespace": "saxo-rust",
+            "database_namespace": "saxo",
+            "safe_endpoints": [
+                "/api/hermes/capabilities",
+                "/api/hermes/context",
+                "/api/hermes/reflections",
+                "/api/hermes/experiments",
+                "/api/health",
+                "/api/overview",
+                "/api/scheduler",
+                "/api/execution",
+                "/api/strategy-journal"
+            ],
+            "read_models": [
+                "overview",
+                "scheduler_status",
+                "scheduler_cycle_history",
+                "decision_reports.report_json",
+                "strategy_journal_entries",
+                "execution_orders",
+                "execution_order_events",
+                "execution_fills",
+                "portfolio_value_history"
+            ],
+            "restricted_writes": [
+                "hermes_reflections",
+                "strategy_experiments"
+            ],
+            "forbidden": [
+                "saxo_sessions",
+                "Saxo OAuth token/session reads",
+                "order precheck/place/replace/cancel",
+                "live order approval",
+                "Kubernetes secret mutation",
+                "active baseline activation"
+            ],
+            "notes": [
+                "Hermes proposals are recommend-only until reviewed by the daytrader UI/operator flow.",
+                "Strategy experiments must change exactly one variable while one_variable_only is true.",
+                "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
+            ],
+            "goal_contract": self.hermes_goal_contract_value()
+        })
+    }
+
+    pub async fn hermes_context(&self, limit: i64) -> Result<JsonValue> {
+        let limit = clamp_limit(limit, 1, 50);
+        let overview = self.overview_payload().await.unwrap_or_else(|err| {
+            warn!("Hermes overview context degraded: {err:#}");
+            json!({"status": "degraded", "detail": err.to_string()})
+        });
+        let scheduler_status = self.scheduler_status_value().await.unwrap_or_else(|err| {
+            warn!("Hermes scheduler status degraded: {err:#}");
+            json!({"status": "degraded", "detail": err.to_string()})
+        });
+        let scheduler_cycles = self.scheduler_cycles(limit).await.unwrap_or_default();
+        let decision_reports = self.hermes_decision_report_items(limit).await?;
+        let journals = self.strategy_journal_items(limit).await.unwrap_or_default();
+        let execution_orders = self.execution_orders(limit).await.unwrap_or_default();
+        let execution_failures = self.hermes_execution_failures(limit).await?;
+        let execution_events = self.execution_events(limit).await.unwrap_or_default();
+        let execution_fills = self.execution_fills(limit).await.unwrap_or_default();
+        let performance = self
+            .performance_history_with_current("1M", 500)
+            .await
+            .unwrap_or_default();
+        let active_experiments = self.hermes_experiments(10).await.unwrap_or_default();
+
+        Ok(json!({
+            "status": "ok",
+            "generated_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "capabilities": self.hermes_capabilities_value(),
+            "goal_contract": self.hermes_goal_contract_value(),
+            "overview": overview,
+            "scheduler": {
+                "status": scheduler_status,
+                "cycles": scheduler_cycles
+            },
+            "decisions": {
+                "reports": decision_reports
+            },
+            "strategy_journal": {
+                "items": journals
+            },
+            "execution": {
+                "orders": execution_orders,
+                "failures": execution_failures,
+                "events": execution_events,
+                "fills": execution_fills
+            },
+            "performance": {
+                "range": "1M",
+                "history": performance
+            },
+            "hermes": {
+                "experiments": active_experiments
+            },
+            "safety": {
+                "saxo_sessions_excluded": true,
+                "broker_mutations_excluded": true,
+                "raw_oauth_payloads_excluded": true
+            }
+        }))
+    }
+
+    pub async fn hermes_decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label
+             FROM decision_reports
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn hermes_execution_failures(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, currency, estimated_value_dkk, approval_required, strategy_type, strategy_session, strategy_key, strategy_role, error_text
+             FROM execution_orders
+             WHERE error_text IS NOT NULL OR lower(status) LIKE '%failed%' OR lower(status) LIKE '%error%' OR lower(status) LIKE '%rejected%'
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn hermes_reflections(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, period_start, period_end, goal_version, summary, findings_json, proposed_actions_json, source_session_id, raw_payload_json
+             FROM hermes_reflections
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn record_hermes_reflection(
+        &self,
+        request: &HermesReflectionRequest,
+    ) -> Result<JsonValue> {
+        let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let id = runtime_id("hermes-reflection");
+        let period_start = request.period_start.as_deref().unwrap_or("");
+        let period_end = request.period_end.as_deref().unwrap_or("");
+        let findings = request.findings.clone().unwrap_or_else(|| json!([]));
+        let proposed_actions = request
+            .proposed_actions
+            .clone()
+            .unwrap_or_else(|| json!([]));
+        let raw_payload = request.raw_payload.clone().unwrap_or(JsonValue::Null);
+        let sql = format!(
+            "INSERT INTO hermes_reflections (
+                id, created_at, period_start, period_end, goal_version, summary,
+                findings_json, proposed_actions_json, source_session_id, raw_payload_json
+            ) VALUES (
+                '{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', {}, '{}'
+            )",
+            sql_escape(&id),
+            sql_escape(&created_at),
+            sql_escape(period_start),
+            sql_escape(period_end),
+            request.goal_version.unwrap_or(1),
+            sql_escape(request.summary.trim()),
+            sql_escape(&serde_json::to_string(&findings)?),
+            sql_escape(&serde_json::to_string(&proposed_actions)?),
+            sql_optional_text(request.source_session_id.as_deref()),
+            sql_escape(&serde_json::to_string(&raw_payload)?)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .context("recording Hermes reflection")?;
+        Ok(self
+            .first_json(&format!(
+                "SELECT id, created_at, period_start, period_end, goal_version, summary, findings_json, proposed_actions_json, source_session_id, raw_payload_json
+                 FROM hermes_reflections WHERE id = '{}' LIMIT 1",
+                sql_escape(&id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null))
+    }
+
+    pub async fn hermes_experiments(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
+             FROM strategy_experiments
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn record_hermes_experiment(
+        &self,
+        request: &HermesExperimentRequest,
+    ) -> Result<JsonValue> {
+        let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let id = runtime_id("strategy-experiment");
+        let evidence = request.evidence.clone().unwrap_or_else(|| json!({}));
+        let raw_payload = request.raw_payload.clone().unwrap_or(JsonValue::Null);
+        let sql = format!(
+            "INSERT INTO strategy_experiments (
+                id, created_at, status, baseline_id, goal_version, hypothesis,
+                changed_variable_path, old_value_json, new_value_json, expected_effect,
+                risk_notes, evidence_json, approval_json, metrics_json, source_session_id,
+                raw_payload_json
+            ) VALUES (
+                '{}', '{}', 'pending_review', {}, {}, '{}',
+                '{}', '{}', '{}', '{}',
+                '{}', '{}', NULL, NULL, {}, '{}'
+            )",
+            sql_escape(&id),
+            sql_escape(&created_at),
+            sql_optional_text(request.baseline_id.as_deref()),
+            request.goal_version.unwrap_or(1),
+            sql_escape(request.hypothesis.trim()),
+            sql_escape(request.changed_variable_path.trim()),
+            sql_escape(&serde_json::to_string(&request.old_value)?),
+            sql_escape(&serde_json::to_string(&request.new_value)?),
+            sql_escape(request.expected_effect.trim()),
+            sql_escape(request.risk_notes.as_deref().unwrap_or("")),
+            sql_escape(&serde_json::to_string(&evidence)?),
+            sql_optional_text(request.source_session_id.as_deref()),
+            sql_escape(&serde_json::to_string(&raw_payload)?)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .context("recording Hermes strategy experiment")?;
+        Ok(self
+            .first_json(&format!(
+                "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
+                 FROM strategy_experiments WHERE id = '{}' LIMIT 1",
+                sql_escape(&id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null))
+    }
+
     pub async fn latest_trading_manager_run(&self) -> Result<JsonValue> {
         Ok(self
             .first_json(
@@ -1648,6 +1947,75 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating broker account snapshots table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS strategy_baselines (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                activated_at TEXT,
+                status TEXT NOT NULL,
+                goal_version INTEGER NOT NULL,
+                config_json TEXT NOT NULL,
+                prompt_json TEXT NOT NULL,
+                source TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating strategy baselines table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS hermes_reflections (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                goal_version INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                findings_json TEXT NOT NULL,
+                proposed_actions_json TEXT NOT NULL,
+                source_session_id TEXT,
+                raw_payload_json TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes reflections table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS strategy_experiments (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                baseline_id TEXT,
+                goal_version INTEGER NOT NULL,
+                hypothesis TEXT NOT NULL,
+                changed_variable_path TEXT NOT NULL,
+                old_value_json TEXT NOT NULL,
+                new_value_json TEXT NOT NULL,
+                expected_effect TEXT NOT NULL,
+                risk_notes TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                approval_json TEXT,
+                metrics_json TEXT,
+                source_session_id TEXT,
+                raw_payload_json TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating strategy experiments table")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_reflections_created
+             ON hermes_reflections(created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes reflections created index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_strategy_experiments_status
+             ON strategy_experiments(status, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating strategy experiments status index")?;
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use anyhow::Result;
 use axum::{
@@ -18,8 +18,8 @@ use crate::{
     config::yaml_string,
     localization::LocalizationPrefs,
     models::{
-        CashBufferRequest, LimitParams, LocalizationSettingsRequest, PerformanceParams,
-        SaxoCallbackParams, ViewParams,
+        CashBufferRequest, HermesExperimentRequest, HermesReflectionRequest, LimitParams,
+        LocalizationSettingsRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
@@ -79,6 +79,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/strategy-journal", get(strategy_journal))
         .route("/api/execution", get(execution))
         .route("/api/scheduler", get(scheduler))
+        .route("/api/hermes/capabilities", get(hermes_capabilities))
+        .route("/api/hermes/context", get(hermes_context))
+        .route(
+            "/api/hermes/reflections",
+            get(hermes_reflections).post(create_hermes_reflection),
+        )
+        .route(
+            "/api/hermes/experiments",
+            get(hermes_experiments).post(create_hermes_experiment),
+        )
         .route(
             "/api/actions/decision-report",
             post(action_generate_decision_report),
@@ -566,6 +576,113 @@ async fn scheduler(
     Json(json!({"status": status, "cycles": cycles})).into_response()
 }
 
+async fn hermes_capabilities(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    Json(state.hermes_capabilities_value()).into_response()
+}
+
+async fn hermes_context(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    let limit = params.limit.unwrap_or(20);
+    json_result(state.hermes_context(limit).await)
+}
+
+async fn hermes_reflections(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    let limit = params.limit.unwrap_or(20);
+    json_result(
+        state
+            .hermes_reflections(limit)
+            .await
+            .map(|items| json!({"items": items})),
+    )
+}
+
+async fn create_hermes_reflection(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<HermesReflectionRequest>,
+) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    if request.summary.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "detail": "summary is required"})),
+        )
+            .into_response();
+    }
+    match state.record_hermes_reflection(&request).await {
+        Ok(value) => {
+            info!("Hermes reflection recorded");
+            (StatusCode::CREATED, Json(value)).into_response()
+        }
+        Err(err) => json_result(Err(err)),
+    }
+}
+
+async fn hermes_experiments(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    let limit = params.limit.unwrap_or(20);
+    json_result(
+        state
+            .hermes_experiments(limit)
+            .await
+            .map(|items| json!({"items": items})),
+    )
+}
+
+async fn create_hermes_experiment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<HermesExperimentRequest>,
+) -> Response {
+    if let Err(response) = require_hermes_api_key(&headers) {
+        return response;
+    }
+    if request.hypothesis.trim().is_empty() || request.changed_variable_path.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "error",
+                "detail": "hypothesis and changed_variable_path are required"
+            })),
+        )
+            .into_response();
+    }
+    match state.record_hermes_experiment(&request).await {
+        Ok(value) => {
+            info!(
+                changed_variable_path = %request.changed_variable_path,
+                "Hermes experiment proposal recorded"
+            );
+            (StatusCode::CREATED, Json(value)).into_response()
+        }
+        Err(err) => json_result(Err(err)),
+    }
+}
+
 async fn action_not_ported() -> Response {
     warn!("blocked not-ported trading mutation endpoint");
     safe_not_ported(
@@ -710,6 +827,41 @@ async fn reset_sim_from_live_csv(
             )
                 .into_response()
         }
+    }
+}
+
+fn require_hermes_api_key(headers: &HeaderMap) -> std::result::Result<(), Response> {
+    let expected = env::var("HERMES_DAYTRADER_API_KEY")
+        .or_else(|_| env::var("DAYTRADER_HERMES_API_KEY"))
+        .unwrap_or_default();
+    if expected.trim().is_empty() {
+        warn!("Hermes API blocked because HERMES_DAYTRADER_API_KEY is not configured");
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "disabled",
+                "detail": "Hermes API key is not configured."
+            })),
+        )
+            .into_response());
+    }
+
+    let header_key = headers
+        .get("x-hermes-api-key")
+        .and_then(|value| value.to_str().ok());
+    let bearer_key = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+
+    if header_key == Some(expected.as_str()) || bearer_key == Some(expected.as_str()) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"status": "unauthorized", "detail": "Invalid Hermes API key."})),
+        )
+            .into_response())
     }
 }
 

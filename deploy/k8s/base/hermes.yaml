@@ -44,9 +44,16 @@ data:
 
     - `http://daytrader-api.saxo-rust:8000/api/health`
     - `http://daytrader-api.saxo-rust:8000/api/overview`
+    - `http://daytrader-api.saxo-rust:8000/api/hermes/capabilities`
+    - `http://daytrader-api.saxo-rust:8000/api/hermes/context`
+    - `http://daytrader-api.saxo-rust:8000/api/hermes/reflections`
+    - `http://daytrader-api.saxo-rust:8000/api/hermes/experiments`
     - `http://daytrader-api.saxo-rust:8000/api/scheduler`
     - `http://daytrader-api.saxo-rust:8000/api/execution`
     - `http://daytrader-api.saxo-rust:8000/api/strategy-journal`
+
+    The `/api/hermes/*` endpoints require `x-hermes-api-key` or
+    `Authorization: Bearer ...` using `HERMES_DAYTRADER_API_KEY`.
 
     Read the repository wiki for maintained project knowledge:
 

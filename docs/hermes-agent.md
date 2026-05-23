@@ -151,10 +151,12 @@ Implemented initial Kubernetes support:
 - `deploy/k8s/base/kustomization.yaml` includes the Hermes resources in the base deployment.
 - `scripts/deploy_k8s_docker_desktop.sh` creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables.
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
+- `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
+- Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints.
 
 Current limitations:
 
-- Hermes is not yet connected to a daytrader MCP adapter.
+- Hermes is not yet connected to a native MCP adapter; the first adapter surface is HTTP.
 - No Hermes cron jobs are installed yet.
 - No strategy experiment tables or UI promotion flow are implemented yet.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
@@ -169,6 +171,17 @@ Hermes Docker runtime notes from the upstream documentation:
 ## Safe Integration Surface
 
 Prefer a small `daytrader-mcp` adapter over broad database access.
+
+Initial HTTP adapter endpoints are implemented in `saxo-rust`:
+
+- `GET /api/hermes/capabilities`
+- `GET /api/hermes/context?limit=20`
+- `GET /api/hermes/reflections?limit=20`
+- `POST /api/hermes/reflections`
+- `GET /api/hermes/experiments?limit=20`
+- `POST /api/hermes/experiments`
+
+These endpoints require `HERMES_DAYTRADER_API_KEY`. They intentionally expose sanitized decision reports and execution context, not Saxo sessions or broker mutation tools.
 
 Read-only tools:
 

@@ -50,6 +50,33 @@ pub struct LimitParams {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HermesReflectionRequest {
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub goal_version: Option<i64>,
+    pub summary: String,
+    pub findings: Option<JsonValue>,
+    pub proposed_actions: Option<JsonValue>,
+    pub source_session_id: Option<String>,
+    pub raw_payload: Option<JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HermesExperimentRequest {
+    pub baseline_id: Option<String>,
+    pub goal_version: Option<i64>,
+    pub hypothesis: String,
+    pub changed_variable_path: String,
+    pub old_value: JsonValue,
+    pub new_value: JsonValue,
+    pub expected_effect: String,
+    pub risk_notes: Option<String>,
+    pub evidence: Option<JsonValue>,
+    pub source_session_id: Option<String>,
+    pub raw_payload: Option<JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PerformanceParams {
     pub range_key: Option<String>,
 }
