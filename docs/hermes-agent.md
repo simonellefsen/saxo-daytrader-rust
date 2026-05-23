@@ -198,6 +198,27 @@ The tab shows:
 
 This is intentionally read-only. It does not approve, activate, promote, or write strategy state.
 
+## SIM/Paper Experiment Overlays
+
+The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.
+
+Overlay loading rules:
+
+- Applies only when `execution.mode` is not `live`, or when `saxo.environment=SIM`.
+- Never applies when `execution.mode=live` and `saxo.environment=LIVE`.
+- Reads only experiments with status `approved_sim`, `active_sim`, `approved_paper`, or `active_paper`.
+- Picks the most recent supported experiment from the latest 10 approved rows.
+- Adds the applied overlay into `trading_manager_runs.manager_json` and queued order `request_json` for auditability.
+
+Supported one-variable overlay paths:
+
+- `execution.min_trade_value_dkk`
+- `strategy.capital.min_cash_buffer_pct`
+- `strategy.swing.cash_buffer_pct`
+- `strategy.swing.daily_indicators.min_confluences`
+
+Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or promote baselines.
+
 ## Weekly Reflection Job
 
 The Kubernetes base includes a suspended weekly reflection job:
@@ -366,7 +387,7 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
    - risk notes
    - exact prompt/config diff
 3. Operator approves the experiment for SIM/paper mode.
-4. Scheduler loads approved experiment as an overlay, not as a config rewrite.
+4. Scheduler/Trading Manager loads approved experiment as an overlay, not as a config rewrite.
 5. Results are measured against the goal contract.
 6. Operator promotes a winning experiment to a new baseline.
 7. App records the baseline and all future decisions reference the baseline id.
@@ -375,11 +396,13 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 stateDiagram-v2
   [*] --> pending_review
   pending_review --> rejected
-  pending_review --> approved_for_backtest
-  approved_for_backtest --> backtest_failed
-  approved_for_backtest --> approved_for_sim
-  approved_for_sim --> sim_failed
-  approved_for_sim --> ready_for_promotion
+  pending_review --> approved_paper
+  approved_paper --> active_paper
+  active_paper --> paper_failed
+  active_paper --> approved_sim
+  approved_sim --> active_sim
+  active_sim --> sim_failed
+  active_sim --> ready_for_promotion
   ready_for_promotion --> promoted
   promoted --> active_baseline
   active_baseline --> superseded
@@ -477,7 +500,7 @@ If evidence is insufficient, create a reflection with no experiment.
 3. Add `hermes_reflections` and `strategy_experiments`. Implemented.
 4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
 5. Add weekly reflection cron. Implemented as suspended by default.
-6. Add SIM/paper experiment overlays.
+6. Add SIM/paper experiment overlays. Implemented for Trading Manager cash buffer, min trade value, and technical confluence gates.
 7. Add promotion flow from approved experiment to active baseline.
 8. Only then consider live-mode overlays, still behind human approval and rollback gates.
 

@@ -1289,6 +1289,16 @@ impl AppState {
                 "hermes_reflections",
                 "strategy_experiments"
             ],
+            "supported_experiment_overlays": {
+                "scope": "paper_or_saxo_sim_only",
+                "statuses": ["approved_sim", "active_sim", "approved_paper", "active_paper"],
+                "variables": [
+                    "execution.min_trade_value_dkk",
+                    "strategy.capital.min_cash_buffer_pct",
+                    "strategy.swing.cash_buffer_pct",
+                    "strategy.swing.daily_indicators.min_confluences"
+                ]
+            },
             "forbidden": [
                 "saxo_sessions",
                 "Saxo OAuth token/session reads",

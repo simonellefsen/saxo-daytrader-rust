@@ -71,3 +71,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Loaded recent `hermes_reflections` and `strategy_experiments` into the server-rendered dashboard model.
 - Displayed the latest reflection summary, proposed actions, reflection history, experiment proposal status, one-variable path, and evidence preview.
 - Kept the UI review-only; it does not approve, activate, promote, or mutate strategy baselines.
+
+## [2026-05-23] implementation | Hermes SIM/paper overlays
+
+- Added Trading Manager support for one approved Hermes experiment overlay in paper/simulation or Saxo SIM.
+- Allowed only `approved_sim`, `active_sim`, `approved_paper`, and `active_paper` experiment statuses.
+- Limited overlays to cash buffer, minimum trade value, and daily technical minimum confluence variables.
+- Recorded the applied overlay in Trading Manager run JSON and queued order request JSON for auditability.
+- Kept overlays disabled for `execution.mode=live` with `saxo.environment=LIVE`.

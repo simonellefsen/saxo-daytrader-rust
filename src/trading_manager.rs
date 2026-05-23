@@ -11,6 +11,18 @@ use crate::{
 };
 
 const DEFAULT_MAX_REPORT_AGE_HOURS: i64 = 6;
+const EXPERIMENT_STATUS_ALLOWLIST: &[&str] = &[
+    "approved_sim",
+    "active_sim",
+    "approved_paper",
+    "active_paper",
+];
+const EXPERIMENT_VARIABLE_ALLOWLIST: &[&str] = &[
+    "execution.min_trade_value_dkk",
+    "strategy.capital.min_cash_buffer_pct",
+    "strategy.swing.cash_buffer_pct",
+    "strategy.swing.daily_indicators.min_confluences",
+];
 
 #[derive(Clone, Debug)]
 struct DecisionReport {
@@ -57,6 +69,17 @@ struct CapitalBudget {
     required_cash_buffer_dkk: f64,
     available_buy_budget_dkk: f64,
     remaining_deployment_capacity_dkk: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct StrategyExperimentOverlay {
+    id: String,
+    status: String,
+    goal_version: i64,
+    changed_variable_path: String,
+    old_value: JsonValue,
+    new_value: JsonValue,
+    hypothesis: String,
 }
 
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
@@ -115,11 +138,34 @@ async fn run_for_report(
         warn!("Trading Manager capital context degraded: {err:#}");
         json!({})
     });
-    let initial_capital_budget = capital_budget_from_overview(&overview);
+    let overlay = approved_strategy_experiment_overlay(state)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("Trading Manager experiment overlay disabled: {err:#}");
+            None
+        });
+    let overlay_json = overlay
+        .as_ref()
+        .map(StrategyExperimentOverlay::to_json)
+        .unwrap_or(JsonValue::Null);
+    let overlay_min_cash_buffer_pct = overlay.as_ref().and_then(|overlay| {
+        overlay
+            .f64_value("strategy.capital.min_cash_buffer_pct")
+            .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
+    });
+    let initial_capital_budget =
+        capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
     let mut capital_budget = initial_capital_budget;
 
-    let min_trade_value_dkk =
-        yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0);
+    let min_trade_value_dkk = overlay
+        .as_ref()
+        .and_then(|overlay| overlay.f64_value("execution.min_trade_value_dkk"))
+        .unwrap_or_else(|| {
+            yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0)
+        });
+    let overlay_min_confluences = overlay
+        .as_ref()
+        .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
     let require_approval = yaml_bool(&state.config, &["execution", "require_approval_live"])
         .unwrap_or(true)
         && yaml_string(&state.config, &["execution", "mode"])
@@ -184,7 +230,7 @@ async fn run_for_report(
             }
             order.quantity = order.quantity.min(available);
         }
-        let gate = technical_gate(&order);
+        let gate = technical_gate(&order, overlay_min_confluences);
         if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
@@ -198,7 +244,15 @@ async fn run_for_report(
     let mut queued_orders = Vec::new();
     for (order, approval_reason) in &approved {
         queued_orders.push(
-            insert_execution_order(state, report, order, approval_reason, require_approval).await?,
+            insert_execution_order(
+                state,
+                report,
+                order,
+                approval_reason,
+                require_approval,
+                &overlay_json,
+            )
+            .await?,
         );
     }
 
@@ -219,7 +273,9 @@ async fn run_for_report(
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
+        "strategy_experiment_overlay": overlay_json,
         "execution_notes": [
+            "Approved Hermes experiment overlays are loaded only in paper/simulation mode or Saxo SIM.",
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "SELL quantities are capped to the latest local holding quantity."
@@ -386,7 +442,7 @@ impl CandidateOrder {
     }
 }
 
-fn technical_gate(order: &CandidateOrder) -> GateDecision {
+fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) -> GateDecision {
     let technical = order
         .raw
         .get("strategy_metadata")
@@ -406,7 +462,9 @@ fn technical_gate(order: &CandidateOrder) -> GateDecision {
     let sentiment = fallback_text(technical, "sentiment", "HOLD").to_uppercase();
     let trend_bias = fallback_text(technical, "trend_bias", "neutral").to_lowercase();
     let confluences = value_f64(technical, "confluence_count") as i64;
-    let minimum = value_f64(technical, "min_confluences").max(3.0) as i64;
+    let minimum = overlay_min_confluences
+        .unwrap_or_else(|| value_f64(technical, "min_confluences").max(3.0) as i64)
+        .max(1);
     let strategy_role = order
         .strategy_role
         .as_deref()
@@ -470,6 +528,7 @@ async fn insert_execution_order(
     order: &CandidateOrder,
     approval_reason: &str,
     require_approval: bool,
+    overlay_json: &JsonValue,
 ) -> Result<JsonValue> {
     if let Some(existing) = existing_order_by_strategy_key(state, &order.strategy_key).await? {
         return Ok(json!({
@@ -495,6 +554,7 @@ async fn insert_execution_order(
         "approval_reason": approval_reason,
         "decision_report_id": report.id,
         "decision_pulse_key": report.pulse_key,
+        "strategy_experiment_overlay": overlay_json,
         "order": order.raw,
     });
     let sql = format!(
@@ -693,7 +753,121 @@ fn unique_strategy_key(strategy_key: String, symbol: &str, action: &str) -> Stri
     }
 }
 
-fn capital_budget_from_overview(overview: &JsonValue) -> CapitalBudget {
+async fn approved_strategy_experiment_overlay(
+    state: &AppState,
+) -> Result<Option<StrategyExperimentOverlay>> {
+    let execution_mode =
+        yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
+    let saxo_environment =
+        yaml_string(&state.config, &["saxo", "environment"]).unwrap_or_else(|| "SIM".into());
+    if !experiment_overlays_allowed(&execution_mode, &saxo_environment) {
+        return Ok(None);
+    }
+
+    let statuses = EXPERIMENT_STATUS_ALLOWLIST
+        .iter()
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = sqlx::query(&format!(
+        "SELECT id, created_at, status, baseline_id, goal_version, hypothesis,
+            changed_variable_path, old_value_json, new_value_json, expected_effect,
+            risk_notes, evidence_json, approval_json, metrics_json, source_session_id,
+            raw_payload_json
+         FROM strategy_experiments
+         WHERE status IN ({statuses})
+         ORDER BY created_at DESC, id DESC
+         LIMIT 10"
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading approved Hermes strategy experiment overlay")?;
+
+    for row in rows.iter().map(row_to_json) {
+        if let Some(overlay) = StrategyExperimentOverlay::from_row(&row) {
+            return Ok(Some(overlay));
+        }
+        warn!(
+            experiment_id = text(&row, "id"),
+            variable = text(&row, "changed_variable_path"),
+            "Ignoring unsupported Hermes strategy experiment overlay"
+        );
+    }
+    Ok(None)
+}
+
+fn experiment_overlays_allowed(execution_mode: &str, saxo_environment: &str) -> bool {
+    !execution_mode.eq_ignore_ascii_case("live") || saxo_environment.eq_ignore_ascii_case("SIM")
+}
+
+impl StrategyExperimentOverlay {
+    fn from_row(row: &JsonValue) -> Option<Self> {
+        let changed_variable_path = text(row, "changed_variable_path");
+        if !EXPERIMENT_VARIABLE_ALLOWLIST
+            .iter()
+            .any(|path| *path == changed_variable_path)
+        {
+            return None;
+        }
+        let new_value = row
+            .get("new_value_json")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        json_f64_value(&new_value)?;
+        Some(Self {
+            id: text(row, "id"),
+            status: text(row, "status"),
+            goal_version: row
+                .get("goal_version")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(1),
+            changed_variable_path,
+            old_value: row
+                .get("old_value_json")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+            new_value,
+            hypothesis: text(row, "hypothesis"),
+        })
+    }
+
+    fn f64_value(&self, variable_path: &str) -> Option<f64> {
+        (self.changed_variable_path == variable_path)
+            .then(|| json_f64_value(&self.new_value))
+            .flatten()
+    }
+
+    fn i64_value(&self, variable_path: &str) -> Option<i64> {
+        self.f64_value(variable_path)
+            .map(|value| value.round() as i64)
+    }
+
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "id": self.id,
+            "status": self.status,
+            "goal_version": self.goal_version,
+            "changed_variable_path": self.changed_variable_path,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
+            "hypothesis": self.hypothesis,
+            "scope": "paper_or_saxo_sim_only"
+        })
+    }
+}
+
+fn json_f64_value(value: &JsonValue) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|value| value as f64))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+        .filter(|value| value.is_finite())
+}
+
+fn capital_budget_from_overview(
+    overview: &JsonValue,
+    overlay_min_cash_buffer_pct: Option<f64>,
+) -> CapitalBudget {
     let summary = overview
         .get("portfolio_summary")
         .cloned()
@@ -706,7 +880,9 @@ fn capital_budget_from_overview(overview: &JsonValue) -> CapitalBudget {
     let total_market_value_dkk = value_f64(&summary, "total_market_value_dkk");
     let invested_market_value_dkk = value_f64(&summary, "invested_market_value_dkk");
     let cash_balance_dkk = value_f64(&summary, "cash_balance_dkk");
-    let min_cash_buffer_pct = value_f64(&cash_policy, "min_cash_buffer_pct").max(0.0);
+    let min_cash_buffer_pct = overlay_min_cash_buffer_pct
+        .unwrap_or_else(|| value_f64(&cash_policy, "min_cash_buffer_pct"))
+        .clamp(0.0, 1.0);
     let max_deployment_pct = value_f64(&cash_policy, "max_deployment_pct").clamp(0.0, 1.0);
     let required_cash_buffer_dkk = (total_market_value_dkk * min_cash_buffer_pct).max(0.0);
     let deployment_cap_dkk = if max_deployment_pct > 0.0 {
@@ -901,17 +1077,57 @@ mod tests {
 
     #[test]
     fn approves_only_bullish_buy_setups() {
-        assert!(technical_gate(&order("BUY", "BUY", "bullish", 3)).approved);
-        assert!(!technical_gate(&order("BUY", "HOLD", "bullish", 3)).approved);
-        assert!(!technical_gate(&order("BUY", "BUY", "neutral", 3)).approved);
-        assert!(!technical_gate(&order("BUY", "BUY", "bullish", 2)).approved);
+        assert!(technical_gate(&order("BUY", "BUY", "bullish", 3), None).approved);
+        assert!(!technical_gate(&order("BUY", "HOLD", "bullish", 3), None).approved);
+        assert!(!technical_gate(&order("BUY", "BUY", "neutral", 3), None).approved);
+        assert!(!technical_gate(&order("BUY", "BUY", "bullish", 2), None).approved);
     }
 
     #[test]
     fn approves_risk_reducing_sell_setups() {
-        assert!(technical_gate(&order("SELL", "SELL", "neutral", 1)).approved);
-        assert!(technical_gate(&order("SELL", "HOLD", "bearish", 1)).approved);
-        assert!(!technical_gate(&order("SELL", "HOLD", "bullish", 3)).approved);
+        assert!(technical_gate(&order("SELL", "SELL", "neutral", 1), None).approved);
+        assert!(technical_gate(&order("SELL", "HOLD", "bearish", 1), None).approved);
+        assert!(!technical_gate(&order("SELL", "HOLD", "bullish", 3), None).approved);
+    }
+
+    #[test]
+    fn experiment_overlay_can_adjust_min_confluences() {
+        assert!(!technical_gate(&order("BUY", "BUY", "bullish", 2), None).approved);
+        assert!(technical_gate(&order("BUY", "BUY", "bullish", 2), Some(2)).approved);
+    }
+
+    #[test]
+    fn experiment_overlays_are_not_allowed_for_live_saxo_live() {
+        assert!(experiment_overlays_allowed("simulation", "LIVE"));
+        assert!(experiment_overlays_allowed("live", "SIM"));
+        assert!(!experiment_overlays_allowed("live", "LIVE"));
+    }
+
+    #[test]
+    fn parses_supported_strategy_experiment_overlay() {
+        let row = json!({
+            "id": "strategy-experiment-test",
+            "status": "approved_sim",
+            "goal_version": 1,
+            "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+            "old_value_json": 0.10,
+            "new_value_json": "0.15",
+            "hypothesis": "More cash buffer reduces drawdown."
+        });
+        let overlay = StrategyExperimentOverlay::from_row(&row).unwrap();
+        assert_eq!(
+            overlay.f64_value("strategy.capital.min_cash_buffer_pct"),
+            Some(0.15)
+        );
+        assert!(
+            StrategyExperimentOverlay::from_row(&json!({
+                "id": "unsupported",
+                "status": "approved_sim",
+                "changed_variable_path": "execution.adapter",
+                "new_value_json": "saxo"
+            }))
+            .is_none()
+        );
     }
 
     #[test]
@@ -929,10 +1145,30 @@ mod tests {
                 }
             }
         });
-        let mut budget = capital_budget_from_overview(&overview);
+        let mut budget = capital_budget_from_overview(&overview, None);
         assert_eq!(budget.required_cash_buffer_dkk, 30000.0);
         assert_eq!(budget.available_buy_budget_dkk, 20000.0);
         budget.reserve_buy(7500.0);
         assert_eq!(budget.available_buy_budget_dkk, 12500.0);
+    }
+
+    #[test]
+    fn experiment_overlay_can_adjust_cash_buffer() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 250000.0,
+                "cash_balance_dkk": 50000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90
+                }
+            }
+        });
+        let budget = capital_budget_from_overview(&overview, Some(0.15));
+        assert_eq!(budget.required_cash_buffer_dkk, 45000.0);
+        assert_eq!(budget.available_buy_budget_dkk, 5000.0);
     }
 }

@@ -56,6 +56,7 @@ sequenceDiagram
 - Every active strategy lesson should distinguish hypothesis, evidence, metric result, and promotion status.
 - Wiki notes are explanatory; the app applies strategy changes only through approved artifacts and scheduler overlays.
 - The dashboard `Hermes` tab is a review surface only. It can show reflections and proposals, but it must not approve or activate strategies.
+- Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
 
 ## Related
 

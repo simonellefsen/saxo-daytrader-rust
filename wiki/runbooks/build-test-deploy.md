@@ -233,6 +233,28 @@ Safe SIM verification order:
 
 Every SIM broker mutation should leave local audit records in `execution_orders`, `execution_order_events`, and, when filled, `execution_fills`.
 
+## Hermes SIM/Paper Overlays
+
+Hermes experiment proposals start as `pending_review` and do not affect trading.
+
+For an operator-approved paper or SIM test, use one of these statuses:
+
+- `approved_paper`
+- `active_paper`
+- `approved_sim`
+- `active_sim`
+
+The Rust Trading Manager only loads these overlays when `execution.mode` is not `live`, or when `saxo.environment=SIM`. It will not load overlays for `execution.mode=live` with `saxo.environment=LIVE`.
+
+Current allowlist:
+
+- `execution.min_trade_value_dkk`
+- `strategy.capital.min_cash_buffer_pct`
+- `strategy.swing.cash_buffer_pct`
+- `strategy.swing.daily_indicators.min_confluences`
+
+After a scheduler cycle, verify the applied overlay in `trading_manager_runs.manager_json` and queued order `request_json` before any SIM broker submission.
+
 ## Live Trading Safety Gate
 
 Do not run LIVE broker mutation tests as part of routine validation.
