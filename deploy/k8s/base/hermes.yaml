@@ -143,6 +143,19 @@ spec:
             capabilities:
               drop:
                 - ALL
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -lc
+                  - |
+                    if [ -n "${HERMES_MODEL:-}" ]; then
+                      /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
+                    fi
+                    if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
+                      /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
+                    fi
           volumeMounts:
             - name: data
               mountPath: /opt/data
