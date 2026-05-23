@@ -288,7 +288,7 @@ def prune(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Apply tiered retention to CNPG base backups in MinIO.")
+    parser = argparse.ArgumentParser(description="Apply tiered retention to CNPG base backups in S3-compatible storage.")
     parser.add_argument("--namespace", default=os.getenv("NAMESPACE") or _service_account_namespace())
     parser.add_argument("--cluster", default=os.getenv("CLUSTER_NAME", "daytrader-postgres"))
     parser.add_argument("--bucket", default=os.getenv("BACKUP_BUCKET", "daytrader-cnpg"))

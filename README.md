@@ -23,7 +23,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - Local SQLite support at `ledger.db`
 - PostgreSQL support for Kubernetes deployments through `portfolio.database_url`
 - CloudNativePG deployment with one primary and one standby instance for Docker Desktop Kubernetes
-- S3-compatible CloudNativePG backups for local development with MinIO or rustFS
+- S3-compatible CloudNativePG backups for local development with RustFS
 - SQLite-to-PostgreSQL migration job for existing `ledger.db` data
 - SIM/LIVE trading-environment metadata, account metadata, app-user metadata, and account-access tables prepared for future multi-account access control
 - Configurable `config.yaml` with placeholders for API keys, Saxo credentials, exclusions, tax brackets, and commission settings
@@ -131,7 +131,7 @@ The API and scheduler use the existing `saxo/daytrader-postgres` CloudNativePG c
 The deployment also creates:
 
 - `daytrader-postgres`: a two-instance CloudNativePG cluster with one primary and one standby in namespace `saxo`.
-- S3-compatible CloudNativePG backup target: either a Docker-managed local MinIO container or an existing rustFS container.
+- S3-compatible CloudNativePG backup target: RustFS running in the Docker context so it can persist objects to the local filesystem.
 - `saxo/daytrader-postgres-app`: CNPG app-user secret; deploy also mirrors a `DATABASE_URL`-only `daytrader-postgres-app` secret into `saxo-rust` because Kubernetes secret references cannot cross namespaces.
 
 The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list.
@@ -144,13 +144,7 @@ NGROK_AUTHTOKEN=
 NGROK_DOMAIN=your-domain.ngrok.app
 NGROK_OAUTH_PROVIDER=google
 NGROK_ALLOWED_EMAILS=you@example.com,another@example.com
-MINIO_HOST_PATH=
-MINIO_ROOT_USER=daytrader
-MINIO_ROOT_PASSWORD=change-me
-MINIO_API_PORT=9000
-MINIO_CONSOLE_PORT=9001
-MINIO_ENDPOINT_URL=http://host.docker.internal:9000
-BACKUP_OBJECT_STORE=minio
+BACKUP_OBJECT_STORE=rustfs
 BACKUP_BUCKET=daytrader-cnpg
 RUSTFS_ENDPOINT_URL=http://host.docker.internal:9000
 RUSTFS_ACCESS_KEY=rustfsadmin
@@ -169,7 +163,7 @@ HERMES_DAYTRADER_API_KEY=
 HERMES_DAYTRADER_API_BASE_URL=http://daytrader-api.saxo-rust:8000
 ```
 
-`NGROK_DOMAIN` must be a domain available in your ngrok account. `NGROK_OAUTH_PROVIDER` defaults to `google` when omitted. `BACKUP_OBJECT_STORE` defaults to `minio`; set it to `rustfs` to use an existing rustFS container instead of starting the deploy-managed MinIO container. `MINIO_HOST_PATH` defaults to `./minio-data` from the repository root when omitted. `MINIO_ENDPOINT_URL` and `RUSTFS_ENDPOINT_URL` default to `http://host.docker.internal:9000`, which is the Docker Desktop route from Kubernetes pods back to host-exposed Docker services. Keep the existing Saxo, xAI, Slack, and OpenFIGI values in `.env`; the deploy script creates the Kubernetes secret from that file.
+`NGROK_DOMAIN` must be a domain available in your ngrok account. `NGROK_OAUTH_PROVIDER` defaults to `google` when omitted. `BACKUP_OBJECT_STORE` should be `rustfs`; RustFS runs in the Docker context and exposes the S3-compatible endpoint at `RUSTFS_ENDPOINT_URL`, defaulting to `http://host.docker.internal:9000` for Kubernetes pods. Keep the existing Saxo, xAI, Slack, and OpenFIGI values in `.env`; the deploy script creates the Kubernetes secret from that file.
 
 Deploy to Docker Desktop:
 
@@ -186,11 +180,11 @@ make k8s-db-status
 make k8s-stop
 ```
 
-`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades the CloudNativePG and ngrok operators via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo-rust`, and renders the ngrok OAuth endpoint to `saxo-rust/daytrader-frontend`. With `BACKUP_OBJECT_STORE=minio`, the deploy script starts or replaces the Docker MinIO container with `MINIO_HOST_PATH` bind-mounted to `/data`. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external rustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
+`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades the CloudNativePG and ngrok operators via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo-rust`, and renders the ngrok OAuth endpoint to `saxo-rust/daytrader-frontend`. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
 
 The Kubernetes manifests use `imagePullPolicy: IfNotPresent`. This is intentional for Docker Desktop: the deploy script builds local images into the Docker Desktop image store and then updates deployments to those concrete image tags.
 
-The S3-compatible backup target is intentionally run outside Kubernetes because Docker Desktop Kubernetes `hostPath` volumes are node-local and did not reliably mirror object files into the macOS project folder. The deploy-managed MinIO container uses a normal Docker bind mount, so backup objects should be visible under `./minio-data/daytrader-cnpg`. For rustFS, run the container separately on the host port in `RUSTFS_ENDPOINT_URL`.
+The S3-compatible backup target intentionally runs outside Kubernetes because Docker Desktop Kubernetes `hostPath` volumes are node-local and did not reliably mirror object files into the macOS project folder. RustFS runs separately in the Docker context on the host port in `RUSTFS_ENDPOINT_URL`, using a normal Docker bind mount for local filesystem persistence.
 
 CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza as deprecated for a future CNPG release. It works for this local deployment, but the longer-term replacement is CNPG's Barman Cloud Plugin.
 

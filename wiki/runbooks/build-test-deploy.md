@@ -180,7 +180,7 @@ HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 
 Do not place Saxo credentials in `hermes-env`.
 
-If a local rustFS container already owns ports `9000-9001`, deploy with:
+RustFS is the normal S3-compatible backup backend. It runs in the Docker context so backup objects can persist to a local filesystem bind mount. Deploy with:
 
 ```bash
 rtk env BACKUP_OBJECT_STORE=rustfs make k8s-deploy

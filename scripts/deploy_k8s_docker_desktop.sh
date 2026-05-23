@@ -8,7 +8,6 @@ DB_NAMESPACE="${DB_NAMESPACE:-saxo}"
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 API_IMAGE="${API_IMAGE:-daytrader-api:$IMAGE_TAG}"
-MINIO_CONTAINER_NAME="${MINIO_CONTAINER_NAME:-daytrader-minio}"
 SANITIZED_ENV_FILE=""
 HERMES_ENV_FILE=""
 
@@ -117,23 +116,9 @@ require_env NGROK_AUTHTOKEN
 require_env NGROK_DOMAIN
 require_env NGROK_ALLOWED_EMAILS
 NGROK_OAUTH_PROVIDER="${NGROK_OAUTH_PROVIDER:-google}"
-MINIO_HOST_PATH="${MINIO_HOST_PATH:-$ROOT/minio-data}"
-MINIO_ROOT_USER="${MINIO_ROOT_USER:-daytrader}"
-MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-daytrader-minio-password}"
-MINIO_API_PORT="${MINIO_API_PORT:-9000}"
-MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
-MINIO_ENDPOINT_URL="${MINIO_ENDPOINT_URL:-http://host.docker.internal:$MINIO_API_PORT}"
-BACKUP_OBJECT_STORE="${BACKUP_OBJECT_STORE:-minio}"
+BACKUP_OBJECT_STORE="${BACKUP_OBJECT_STORE:-rustfs}"
 BACKUP_BUCKET="${BACKUP_BUCKET:-daytrader-cnpg}"
 case "$BACKUP_OBJECT_STORE" in
-  minio)
-    BACKUP_S3_ENDPOINT_URL="${BACKUP_S3_ENDPOINT_URL:-$MINIO_ENDPOINT_URL}"
-    BACKUP_S3_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY_ID:-$MINIO_ROOT_USER}"
-    BACKUP_S3_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_ACCESS_KEY:-$MINIO_ROOT_PASSWORD}"
-    MINIO_ENDPOINT_URL="$BACKUP_S3_ENDPOINT_URL"
-    MINIO_ROOT_USER="$BACKUP_S3_ACCESS_KEY_ID"
-    MINIO_ROOT_PASSWORD="$BACKUP_S3_SECRET_ACCESS_KEY"
-    ;;
   rustfs)
     RUSTFS_ENDPOINT_URL="${RUSTFS_ENDPOINT_URL:-http://host.docker.internal:9000}"
     RUSTFS_ACCESS_KEY="${RUSTFS_ACCESS_KEY:-rustfsadmin}"
@@ -144,13 +129,13 @@ case "$BACKUP_OBJECT_STORE" in
     ;;
   *)
     printf "Unsupported BACKUP_OBJECT_STORE: %s\n" "$BACKUP_OBJECT_STORE" >&2
-    printf "Expected one of: minio, rustfs\n" >&2
+    printf "Expected: rustfs\n" >&2
     exit 1
     ;;
 esac
 POSTGRES_APP_USER="${POSTGRES_APP_USER:-daytrader}"
 POSTGRES_APP_PASSWORD="${POSTGRES_APP_PASSWORD:-daytrader-postgres-password}"
-export MINIO_HOST_PATH MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_ENDPOINT_URL BACKUP_BUCKET BACKUP_S3_ENDPOINT_URL BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE DB_NAMESPACE
+export BACKUP_BUCKET BACKUP_S3_ENDPOINT_URL BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE DB_NAMESPACE
 DATABASE_URL="$(python3 - <<'PY'
 import os
 from urllib.parse import quote
@@ -162,25 +147,6 @@ print(f"postgresql://{user}:{password}@daytrader-postgres-rw.{db_namespace}.svc.
 PY
 )"
 export DATABASE_URL
-
-start_minio_container() {
-  printf "Starting Docker MinIO backup target at %s...\n" "$MINIO_HOST_PATH"
-  mkdir -p "$MINIO_HOST_PATH"
-
-  if docker ps -a --format '{{.Names}}' | grep -qx "$MINIO_CONTAINER_NAME"; then
-    docker rm -f "$MINIO_CONTAINER_NAME" >/dev/null
-  fi
-
-  docker run -d \
-    --name "$MINIO_CONTAINER_NAME" \
-    -p "$MINIO_API_PORT:9000" \
-    -p "$MINIO_CONSOLE_PORT:9001" \
-    -e "MINIO_ROOT_USER=$MINIO_ROOT_USER" \
-    -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" \
-    -v "$MINIO_HOST_PATH:/data" \
-    quay.io/minio/minio:latest \
-    server /data --console-address :9001 >/dev/null
-}
 
 ensure_backup_bucket() {
   printf "Ensuring backup bucket %s at %s...\n" "$BACKUP_BUCKET" "$BACKUP_S3_ENDPOINT_URL"
@@ -222,11 +188,7 @@ helm upgrade --install ngrok-operator ngrok/ngrok-operator \
   --set "credentials.apiKey=$NGROK_API_KEY" \
   --set "credentials.authtoken=$NGROK_AUTHTOKEN"
 
-if [ "$BACKUP_OBJECT_STORE" = "minio" ]; then
-  start_minio_container
-else
-  printf "Using external %s backup target at %s.\n" "$BACKUP_OBJECT_STORE" "$BACKUP_S3_ENDPOINT_URL"
-fi
+printf "Using external RustFS backup target at %s.\n" "$BACKUP_S3_ENDPOINT_URL"
 ensure_backup_bucket
 
 printf "Applying app namespace and CloudNativePG resources in %s...\n" "$DB_NAMESPACE"
