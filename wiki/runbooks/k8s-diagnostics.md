@@ -82,6 +82,12 @@ Hermes logs:
 rtk kubectl --context docker-desktop -n saxo-rust logs deployment/hermes-agent --tail=160
 ```
 
+Daytrader MCP logs:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust logs deployment/daytrader-mcp --tail=160
+```
+
 Follow logs:
 
 ```bash
@@ -95,13 +101,14 @@ Check rollout status:
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust rollout status deployment/daytrader-api --timeout=180s
 rtk kubectl --context docker-desktop -n saxo-rust rollout status deployment/daytrader-scheduler --timeout=180s
+rtk kubectl --context docker-desktop -n saxo-rust rollout status deployment/daytrader-mcp --timeout=180s
 rtk kubectl --context docker-desktop -n saxo-rust rollout status deployment/hermes-agent --timeout=180s
 ```
 
 Restart app workloads:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust rollout restart deployment/daytrader-api deployment/daytrader-scheduler
+rtk kubectl --context docker-desktop -n saxo-rust rollout restart deployment/daytrader-api deployment/daytrader-scheduler deployment/daytrader-mcp
 ```
 
 Restart Hermes only:
@@ -113,7 +120,7 @@ rtk kubectl --context docker-desktop -n saxo-rust rollout restart deployment/her
 See current image tags:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get deploy daytrader-api daytrader-scheduler hermes-agent -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.template.spec.containers[*]}{.name}={.image}{" "}{end}{"\n"}{end}'
+rtk kubectl --context docker-desktop -n saxo-rust get deploy daytrader-api daytrader-scheduler daytrader-mcp hermes-agent -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.template.spec.containers[*]}{.name}={.image}{" "}{end}{"\n"}{end}'
 ```
 
 ## Network Smoke Tests
@@ -130,10 +137,16 @@ Hermes health from inside the cluster:
 rtk kubectl --context docker-desktop -n saxo-rust run hermes-health-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- curl -fsS http://hermes-gateway.saxo-rust:8642/health
 ```
 
+Daytrader MCP health from inside the cluster:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust run daytrader-mcp-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- curl -fsS http://daytrader-mcp.saxo-rust:8610/health
+```
+
 Service endpoints:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api daytrader-frontend hermes-gateway
+rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api daytrader-frontend daytrader-mcp hermes-gateway
 ```
 
 Port-forward the app:
@@ -146,6 +159,12 @@ Port-forward Hermes:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust port-forward svc/hermes-gateway 18642:8642
+```
+
+Port-forward Daytrader MCP:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust port-forward svc/daytrader-mcp 18610:8610
 ```
 
 ## CloudNativePG
@@ -252,6 +271,19 @@ Verify Hermes persisted model config:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust exec deployment/hermes-agent -- sh -lc 'grep -nE "^model:|^  default:|^  provider:" /opt/data/config.yaml | sed -n "1,20p"'
+```
+
+Verify Hermes persisted MCP config:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust exec deployment/hermes-agent -- sh -lc '/opt/hermes/.venv/bin/python - <<'"'"'PY'"'"'
+import yaml
+data = yaml.safe_load(open("/opt/data/config.yaml")) or {}
+server = (data.get("mcp_servers") or {}).get("daytrader") or {}
+print("url=" + str(server.get("url")))
+print("tools=" + ",".join((server.get("tools") or {}).get("include") or []))
+print("has_authorization_header=" + str("Authorization" in (server.get("headers") or {})))
+PY'
 ```
 
 ## Cleanup

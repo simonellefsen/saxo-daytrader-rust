@@ -101,6 +101,7 @@ mappings = {
     "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
     "HERMES_DAYTRADER_API_KEY": "HERMES_DAYTRADER_API_KEY",
     "HERMES_DAYTRADER_API_BASE_URL": "DAYTRADER_API_BASE_URL",
+    "HERMES_DAYTRADER_MCP_URL": "DAYTRADER_MCP_URL",
 }
 
 with open(target_path, "w", encoding="utf-8") as handle:
@@ -242,12 +243,14 @@ fi
 kubectl --context "$CONTEXT" apply -k "$ROOT/deploy/k8s/base"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-api "api=$API_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-scheduler "scheduler=$API_IMAGE"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-mcp "mcp=$API_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete deployment daytrader-frontend --ignore-not-found
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete cronjob daytrader-postgres-backup-schedule daytrader-postgres-backup-retention --ignore-not-found
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete job daytrader-sqlite-to-postgres-migration --ignore-not-found
 
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-api
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-scheduler
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-mcp
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-agent
 
 printf "Applying ngrok OAuth endpoint for %s...\n" "$NGROK_DOMAIN"
@@ -284,6 +287,7 @@ PY
 printf "Waiting for deployments...\n"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-api --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-scheduler --timeout=180s
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-mcp --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
 
 printf "Deployment complete.\n"

@@ -99,3 +99,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Included the active `strategy_baselines` audit record in the protected Hermes context adapter.
 - Included the active baseline payload in xAI decision prompts and required decision reports to return `strategy_baseline_id`.
 - Kept baseline context advisory only; it does not approve orders, mutate Saxo sessions, or enable live overlays.
+
+## [2026-05-23] implementation | Daytrader MCP adapter
+
+- Added `saxo-rust --mcp-http`, an internal MCP endpoint for Hermes-safe daytrader tools.
+- Added `Deployment/daytrader-mcp` and `Service/daytrader-mcp` in the `saxo-rust` namespace.
+- Configured the Hermes pod startup hook to persist a filtered `daytrader` HTTP MCP server in `/opt/data/config.yaml`.
+- Updated the weekly reflection job prompt to prefer MCP tools for context, reflection writes, and one-variable experiment proposals.
+- Kept the MCP surface free of Saxo session reads, broker mutation tools, Kubernetes secret tools, and live order approval.

@@ -147,18 +147,19 @@ Hermes state under `/opt/data` contains memories, skills, sessions, cron jobs, l
 
 Implemented initial Kubernetes support:
 
-- `deploy/k8s/base/hermes.yaml` defines `hermes-agent`, `hermes-data`, `hermes-gateway`, and `hermes-daytrader-context`.
+- `deploy/k8s/base/hermes.yaml` defines `Deployment/hermes-agent`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `Service/hermes-gateway`, `Service/daytrader-mcp`, and `ConfigMap/hermes-daytrader-context`.
 - `deploy/k8s/base/kustomization.yaml` includes the Hermes resources in the base deployment.
 - `scripts/deploy_k8s_docker_desktop.sh` creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables.
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
-- Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints.
+- `saxo-rust --mcp-http` runs the internal `daytrader-mcp` adapter at `http://daytrader-mcp.saxo-rust:8610/mcp`.
+- Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints. The MCP adapter uses the same bearer key.
 - The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
 - `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
 
-- Hermes is not yet connected to a native MCP adapter; the first adapter surface is HTTP.
+- The MCP adapter is intentionally small; broader database or broker tools are still excluded.
 - The weekly reflection CronJob is installed but suspended by default.
 - Promotion creates an active baseline audit record, but there is still no automatic live strategy activation path.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
@@ -186,6 +187,18 @@ Initial HTTP adapter endpoints are implemented in `saxo-rust`:
 These endpoints require `HERMES_DAYTRADER_API_KEY`. They intentionally expose sanitized decision reports and execution context, not Saxo sessions or broker mutation tools.
 
 `GET /api/hermes/context` also includes the active strategy baseline audit record when one has been promoted. That record contains the promoted experiment id, goal version, changed variable, prompt/config payload, and source metadata, but it does not grant Hermes any extra write authority.
+
+The internal MCP adapter is implemented by the same Rust binary in `--mcp-http` mode. Hermes is configured on pod startup with an HTTP MCP server named `daytrader`, a bearer header from `HERMES_DAYTRADER_API_KEY`, and a strict tool allowlist:
+
+- `get_app_capabilities`
+- `get_goal_contract`
+- `get_context`
+- `list_reflections`
+- `create_reflection`
+- `list_experiments`
+- `create_experiment_proposal`
+
+The MCP adapter has no Saxo tools, no Kubernetes tools, no secret reads, and no live-order tools.
 
 ## Dashboard Review Tab
 
@@ -247,6 +260,7 @@ HERMES_API_SERVER_KEY=<strong Hermes API key>
 HERMES_INFERENCE_PROVIDER=xai
 HERMES_MODEL=grok-4
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
+HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo-rust:8610/mcp
 ```
 
 Then redeploy and unsuspend:
@@ -258,36 +272,29 @@ rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-re
 
 The CronJob calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
 
-- Fetch `/api/hermes/context?limit=40` using `HERMES_DAYTRADER_API_KEY`.
+- Prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals.
 - Analyze the last week against the goal contract.
-- Write exactly one reflection via `/api/hermes/reflections`.
-- Create at most one experiment via `/api/hermes/experiments`.
+- Write exactly one reflection.
+- Create at most one experiment proposal.
 - Change exactly one variable when proposing an experiment.
 - Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
 
 Smoke-test finding: Hermes' API server starts only when `API_SERVER_ENABLED=true` and `API_SERVER_HOST=0.0.0.0` are present inside `hermes-env`. The deploy script maps the committed `.env` names `HERMES_API_SERVER_ENABLED` and `HERMES_API_SERVER_HOST` to those runtime names. Hermes model selection is persisted in `/opt/data/config.yaml`; the Kubernetes deployment applies `HERMES_MODEL` and `HERMES_INFERENCE_PROVIDER` to that config on pod startup so a recreated PVC does not fall back to an inaccessible default model.
 
-Unattended-run caveat: the current HTTP adapter works, but Hermes may pause for approval before terminal-based internal HTTP calls. A manual smoke run completed after approving the internal `daytrader-api` context/reflection calls for the session. Fully unattended weekly runs should wait for a native MCP adapter or a narrowly reviewed Hermes approval policy for the protected daytrader adapter.
+Unattended-run note: the protected HTTP adapter remains available for manual inspection and fallback. Weekly runs should prefer the MCP adapter because Hermes can discover and call its narrow, preconfigured tool surface instead of shelling out to ad hoc internal HTTP commands.
 
 Read-only tools:
 
 - `get_app_capabilities`
 - `get_goal_contract`
-- `list_recent_scheduler_cycles`
-- `list_recent_decision_reports`
-- `list_strategy_journal_entries`
-- `list_execution_orders`
-- `list_execution_failures`
-- `list_execution_events`
-- `summarize_symbol_history`
-- `summarize_strategy_metrics`
+- `get_context`
+- `list_reflections`
+- `list_experiments`
 
 Restricted write tools:
 
-- `create_hermes_reflection`
-- `create_strategy_experiment_proposal`
-- `create_prompt_change_proposal`
-- `create_config_change_proposal`
+- `create_reflection`
+- `create_experiment_proposal`
 
 Forbidden tools:
 
@@ -508,7 +515,7 @@ If evidence is insufficient, create a reflection with no experiment.
 ## Rollout Plan
 
 1. Deploy Hermes in `saxo-rust` with ClusterIP-only access. Initial manifests are implemented in `deploy/k8s/base/hermes.yaml`.
-2. Add a read-only `daytrader-mcp` adapter. The current first adapter is protected HTTP; native MCP is still pending.
+2. Add a read-mostly `daytrader-mcp` adapter. Implemented as internal HTTP MCP at `Service/daytrader-mcp`.
 3. Add `hermes_reflections` and `strategy_experiments`. Implemented.
 4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
 5. Add weekly reflection cron. Implemented as suspended by default.

@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod localization;
+mod mcp;
 mod models;
 mod notifications;
 mod portfolio_reset;
@@ -23,7 +24,8 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    api::router, saxo_order::sync_saxo_broker_orders, scheduler::run_scheduler, state::AppState,
+    api::router, mcp::run_mcp_http, saxo_order::sync_saxo_broker_orders, scheduler::run_scheduler,
+    state::AppState,
 };
 
 #[tokio::main]
@@ -43,6 +45,10 @@ async fn main() -> Result<()> {
     if args.iter().any(|arg| arg == "--scheduler") {
         info!("starting process in scheduler mode");
         return run_scheduler().await;
+    }
+    if args.iter().any(|arg| arg == "--mcp-http") {
+        info!("starting process in daytrader MCP HTTP mode");
+        return run_mcp_http().await;
     }
     if args.iter().any(|arg| arg == "--sync-saxo-broker-orders") {
         info!("starting one-shot Saxo broker order sync");

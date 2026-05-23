@@ -137,6 +137,7 @@ Inspect recent logs:
 
 ```bash
 rtk make k8s-logs
+rtk kubectl --context docker-desktop -n saxo-rust logs deployment/daytrader-mcp --tail=120
 rtk kubectl --context docker-desktop -n saxo-rust logs deployment/hermes-agent --tail=120
 ```
 
@@ -160,7 +161,7 @@ rtk kubectl --context docker-desktop -n saxo-rust run daytrader-smoke --rm -i --
 If the pod cannot resolve the service, inspect:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api daytrader-frontend hermes-gateway
+rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api daytrader-frontend daytrader-mcp hermes-gateway
 ```
 
 ## Hermes Smoke Test
@@ -176,6 +177,7 @@ HERMES_API_SERVER_KEY=<strong Hermes API key>
 HERMES_INFERENCE_PROVIDER=xai
 HERMES_MODEL=grok-4
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
+HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo-rust:8610/mcp
 ```
 
 Do not place Saxo credentials in `hermes-env`.
@@ -190,7 +192,16 @@ After redeploying, check Hermes:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust get deployment hermes-agent
+rtk kubectl --context docker-desktop -n saxo-rust get deployment daytrader-mcp
 rtk kubectl --context docker-desktop -n saxo-rust logs deployment/hermes-agent --tail=120
+rtk kubectl --context docker-desktop -n saxo-rust logs deployment/daytrader-mcp --tail=120
+```
+
+Check the MCP adapter health:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust run daytrader-mcp-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \
+  curl -fsS http://daytrader-mcp.saxo-rust:8610/health
 ```
 
 Trigger one manual reflection run while keeping the CronJob suspended:
@@ -206,7 +217,7 @@ Only unsuspend the recurring schedule after the manual job writes one reflection
 rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-The current HTTP adapter can trigger Hermes terminal approval prompts for internal HTTP calls. For a fully unattended weekly schedule, either add a native MCP adapter or explicitly review and configure a narrow approval policy for the protected `daytrader-api` adapter calls.
+The weekly job should prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals. The protected HTTP adapter remains available for manual inspection and fallback.
 
 ## Saxo SIM Testing
 

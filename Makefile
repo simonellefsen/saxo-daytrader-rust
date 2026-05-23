@@ -74,11 +74,12 @@ k8s-status:
 k8s-db-status:
 	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get cluster,scheduledbackup,backup,pvc
 	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get pods -l cnpg.io/cluster=daytrader-postgres
-	docker ps --filter name=daytrader-minio --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+	docker ps --filter name=daytrader_rustfs --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
 k8s-logs:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) logs deployment/daytrader-api --tail=120
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) logs deployment/daytrader-scheduler --tail=120
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) logs deployment/daytrader-mcp --tail=120
 
 k8s-port-forward:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) port-forward svc/daytrader-frontend $(API_PORT):8000
