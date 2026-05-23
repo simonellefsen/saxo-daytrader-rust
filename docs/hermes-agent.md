@@ -145,6 +145,27 @@ Recommended first deployment:
 
 Hermes state under `/opt/data` contains memories, skills, sessions, cron jobs, logs, and secrets. Do not run two Hermes gateway pods against the same PVC.
 
+Implemented initial Kubernetes support:
+
+- `deploy/k8s/base/hermes.yaml` defines `hermes-agent`, `hermes-data`, `hermes-gateway`, and `hermes-daytrader-context`.
+- `deploy/k8s/base/kustomization.yaml` includes the Hermes resources in the base deployment.
+- `scripts/deploy_k8s_docker_desktop.sh` creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables.
+- `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
+
+Current limitations:
+
+- Hermes is not yet connected to a daytrader MCP adapter.
+- No Hermes cron jobs are installed yet.
+- No strategy experiment tables or UI promotion flow are implemented yet.
+- The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
+
+Hermes Docker runtime notes from the upstream documentation:
+
+- The official image keeps all user data under `/opt/data`.
+- Gateway mode listens on port `8642` when the API server is enabled.
+- The dashboard uses port `9119` when `HERMES_DASHBOARD=1`.
+- The image entrypoint should not be bypassed because it initializes the data directory before running the requested command.
+
 ## Safe Integration Surface
 
 Prefer a small `daytrader-mcp` adapter over broad database access.
@@ -384,7 +405,7 @@ If evidence is insufficient, create a reflection with no experiment.
 
 ## Rollout Plan
 
-1. Deploy Hermes in `saxo-rust` with ClusterIP-only access.
+1. Deploy Hermes in `saxo-rust` with ClusterIP-only access. Initial manifests are implemented in `deploy/k8s/base/hermes.yaml`.
 2. Add a read-only `daytrader-mcp` adapter.
 3. Add `hermes_reflections` and `strategy_experiments`.
 4. Add a Hermes dashboard tab to the Rust UI.

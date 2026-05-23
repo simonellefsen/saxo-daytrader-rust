@@ -6,6 +6,7 @@ resources:
   - namespace.yaml
   - api.yaml
   - scheduler.yaml
+  - hermes.yaml
 
 configMapGenerator:
   - name: daytrader-config

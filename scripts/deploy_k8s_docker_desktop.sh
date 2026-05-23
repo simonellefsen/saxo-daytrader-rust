@@ -10,6 +10,7 @@ IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 API_IMAGE="${API_IMAGE:-daytrader-api:$IMAGE_TAG}"
 MINIO_CONTAINER_NAME="${MINIO_CONTAINER_NAME:-daytrader-minio}"
 SANITIZED_ENV_FILE=""
+HERMES_ENV_FILE=""
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -39,6 +40,9 @@ cleanup() {
   if [ -n "$SANITIZED_ENV_FILE" ] && [ -f "$SANITIZED_ENV_FILE" ]; then
     rm -f "$SANITIZED_ENV_FILE"
   fi
+  if [ -n "$HERMES_ENV_FILE" ] && [ -f "$HERMES_ENV_FILE" ]; then
+    rm -f "$HERMES_ENV_FILE"
+  fi
 }
 trap cleanup EXIT
 
@@ -48,6 +52,7 @@ source "$ENV_FILE"
 set +a
 
 SANITIZED_ENV_FILE="$(mktemp)"
+HERMES_ENV_FILE="$(mktemp)"
 python3 - "$ENV_FILE" "$SANITIZED_ENV_FILE" <<'PY'
 import os
 import re
@@ -70,6 +75,37 @@ with open(target_path, "w", encoding="utf-8") as handle:
         if key in os.environ:
             value = os.environ[key].replace("\n", "\\n")
             handle.write(f"{key}={value}\n")
+PY
+python3 - "$HERMES_ENV_FILE" <<'PY'
+import os
+import sys
+
+target_path = sys.argv[1]
+
+mappings = {
+    "HERMES_API_SERVER_ENABLED": "API_SERVER_ENABLED",
+    "HERMES_API_SERVER_HOST": "API_SERVER_HOST",
+    "HERMES_API_SERVER_KEY": "API_SERVER_KEY",
+    "HERMES_API_SERVER_CORS_ORIGINS": "API_SERVER_CORS_ORIGINS",
+    "HERMES_DASHBOARD": "HERMES_DASHBOARD",
+    "HERMES_DASHBOARD_TUI": "HERMES_DASHBOARD_TUI",
+    "HERMES_DASHBOARD_HOST": "HERMES_DASHBOARD_HOST",
+    "HERMES_DASHBOARD_PORT": "HERMES_DASHBOARD_PORT",
+    "OPENAI_API_KEY": "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY": "OPENROUTER_API_KEY",
+    "XAI_API_KEY": "XAI_API_KEY",
+    "TELEGRAM_BOT_TOKEN": "TELEGRAM_BOT_TOKEN",
+    "DISCORD_BOT_TOKEN": "DISCORD_BOT_TOKEN",
+    "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
+}
+
+with open(target_path, "w", encoding="utf-8") as handle:
+    for source, target in mappings.items():
+        value = os.environ.get(source)
+        if value:
+            sanitized = value.replace("\n", "\\n")
+            handle.write(f"{target}={sanitized}\n")
 PY
 
 require_env NGROK_API_KEY
@@ -229,6 +265,14 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic daytrader-env
   --from-env-file="$SANITIZED_ENV_FILE" \
   --dry-run=client \
   -o yaml | kubectl --context "$CONTEXT" apply -f -
+if [ -s "$HERMES_ENV_FILE" ]; then
+  kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic hermes-env \
+    --from-env-file="$HERMES_ENV_FILE" \
+    --dry-run=client \
+    -o yaml | kubectl --context "$CONTEXT" apply -f -
+else
+  printf "No Hermes-specific env values found; hermes-env secret was not changed.\n"
+fi
 kubectl --context "$CONTEXT" apply -k "$ROOT/deploy/k8s/base"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-api "api=$API_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-scheduler "scheduler=$API_IMAGE"
@@ -238,6 +282,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" delete job daytrader-sqlite-to-post
 
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-api
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-scheduler
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-agent
 
 printf "Applying ngrok OAuth endpoint for %s...\n" "$NGROK_DOMAIN"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete ingress daytrader-frontend --ignore-not-found
@@ -273,6 +318,7 @@ PY
 printf "Waiting for deployments...\n"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-api --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-scheduler --timeout=180s
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
 
 printf "Deployment complete.\n"
 printf "Rust app: https://%s\n" "$NGROK_DOMAIN"

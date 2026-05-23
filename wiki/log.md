@@ -21,3 +21,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Credited Andrej Karpathy as the author of the copied LLM Wiki idea file.
 - Added the original gist URL: [karpathy/442a6bf555914893e9891c11519de94f](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
+## [2026-05-23] implementation | Hermes Kubernetes base
+
+- Added initial Kubernetes support for Hermes Agent in `saxo-rust`.
+- Added `hermes-agent`, `hermes-data`, `hermes-gateway`, and `hermes-daytrader-context`.
+- Updated deployment scripting to create a separate `hermes-env` secret from a whitelist so Saxo credentials are not passed to Hermes.
+- Documented that Hermes is internal-only and not yet connected to a daytrader MCP adapter or strategy promotion flow.

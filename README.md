@@ -157,6 +157,12 @@ RUSTFS_ACCESS_KEY=rustfsadmin
 RUSTFS_SECRET_KEY=rustfsadmin
 POSTGRES_APP_USER=daytrader
 POSTGRES_APP_PASSWORD=change-me
+HERMES_API_SERVER_ENABLED=false
+HERMES_API_SERVER_HOST=0.0.0.0
+HERMES_API_SERVER_KEY=
+HERMES_API_SERVER_CORS_ORIGINS=http://127.0.0.1:8000
+HERMES_DASHBOARD=false
+HERMES_DASHBOARD_TUI=false
 ```
 
 `NGROK_DOMAIN` must be a domain available in your ngrok account. `NGROK_OAUTH_PROVIDER` defaults to `google` when omitted. `BACKUP_OBJECT_STORE` defaults to `minio`; set it to `rustfs` to use an existing rustFS container instead of starting the deploy-managed MinIO container. `MINIO_HOST_PATH` defaults to `./minio-data` from the repository root when omitted. `MINIO_ENDPOINT_URL` and `RUSTFS_ENDPOINT_URL` default to `http://host.docker.internal:9000`, which is the Docker Desktop route from Kubernetes pods back to host-exposed Docker services. Keep the existing Saxo, xAI, Slack, and OpenFIGI values in `.env`; the deploy script creates the Kubernetes secret from that file.
@@ -187,6 +193,8 @@ CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza a
 ## Hermes Agent Research Loop
 
 The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, decision reports, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become an active baseline.
+
+The Kubernetes base now includes `Deployment/hermes-agent`, `PVC/hermes-data`, `Service/hermes-gateway`, and `ConfigMap/hermes-daytrader-context`. The service is internal-only and exposes Hermes gateway port `8642` plus dashboard port `9119` if enabled. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal API should be reachable.
 
 See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the full architecture and rollout plan.
 

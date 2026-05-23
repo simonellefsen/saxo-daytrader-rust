@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-data
+  labels:
+    app: hermes-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-daytrader-context
+  labels:
+    app: hermes-agent
+data:
+  DAYTRADER_CAPABILITIES.md: |
+    # Daytrader Capabilities
+
+    Hermes is running beside the `saxo-rust` day/swing trading app in the
+    `saxo-rust` Kubernetes namespace.
+
+    Hermes may observe, reflect, summarize, and propose changes. It must not
+    directly place Saxo orders, approve live orders, read Saxo session tokens,
+    mutate Kubernetes secrets, or activate strategies without the app's approval
+    flow.
+
+    Current app capabilities:
+
+    - Rust Axum HTTP/API server and Dioxus SSR dashboard.
+    - Rust scheduler heartbeat and xAI decision report polling.
+    - Trading Manager queue creation from completed decision reports.
+    - Saxo order precheck and placement for approved queued orders.
+    - Strategy journal entries, scheduler cycles, execution orders, events, and
+      fills persisted in the daytrader database.
+    - Durable Saxo OAuth session storage in `saxo_sessions`, which Hermes must
+      not read or expose.
+
+    Useful internal endpoints:
+
+    - `http://daytrader-api.saxo-rust:8000/api/health`
+    - `http://daytrader-api.saxo-rust:8000/api/overview`
+    - `http://daytrader-api.saxo-rust:8000/api/scheduler`
+    - `http://daytrader-api.saxo-rust:8000/api/execution`
+    - `http://daytrader-api.saxo-rust:8000/api/strategy-journal`
+
+    Read the repository wiki for maintained project knowledge:
+
+    - `wiki/index.md`
+    - `wiki/schema.md`
+    - `docs/hermes-agent.md`
+    - `docs/project-wiki.md`
+  SELF_IMPROVEMENT_GOAL.yaml: |
+    hermes_self_improvement:
+      enabled: false
+      mode: recommend_only
+      goal_version: 1
+      objective:
+        target_return_30d: 0.47
+        target_return_note: "Approximately 10x in 6 months if compounded monthly: 1.47^6 ~= 10.1"
+        max_drawdown: 0.20
+        min_sharpe: 1.0
+        failure_below_30d_return: -0.04
+        reflection_every: 7d
+        one_variable_only: true
+      constraints:
+        max_positions: 25
+        slippage_tolerance: 0.02
+        gas_reserve: 0.05
+        min_cash_buffer_pct: 0.10
+        allow_shorting: false
+        require_human_approval: true
+        require_backtest_before_activation: true
+        require_paper_or_sim_observation: true
+      forbidden:
+        - read_saxo_sessions
+        - expose_tokens_or_account_keys
+        - place_or_approve_live_orders
+        - mutate_kubernetes_secrets
+        - activate_strategy_without_approval
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-agent
+  labels:
+    app: hermes-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hermes-agent
+  template:
+    metadata:
+      labels:
+        app: hermes-agent
+    spec:
+      securityContext:
+        runAsGroup: 10000
+        runAsNonRoot: true
+        runAsUser: 10000
+        fsGroup: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hermes
+          image: nousresearch/hermes-agent:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - gateway
+            - run
+          envFrom:
+            - secretRef:
+                name: hermes-env
+                optional: true
+          ports:
+            - name: gateway
+              containerPort: 8642
+            - name: dashboard
+              containerPort: 9119
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            - name: tmp
+              mountPath: /tmp
+            - name: dev-shm
+              mountPath: /dev/shm
+            - name: daytrader-context
+              mountPath: /opt/daytrader-context
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hermes-data
+        - name: tmp
+          emptyDir: {}
+        - name: dev-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: daytrader-context
+          configMap:
+            name: hermes-daytrader-context
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-gateway
+  labels:
+    app: hermes-agent
+spec:
+  selector:
+    app: hermes-agent
+  ports:
+    - name: gateway
+      port: 8642
+      targetPort: gateway
+    - name: dashboard
+      port: 9119
+      targetPort: dashboard
