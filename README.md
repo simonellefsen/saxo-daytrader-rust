@@ -14,6 +14,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - The Rust app runs in Kubernetes namespace `saxo-rust`.
 - The existing CloudNativePG database remains in namespace `saxo`; the Rust app connects to it through the cross-namespace service DNS name `daytrader-postgres-rw.saxo.svc.cluster.local`.
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image; the separate Next.js deployment is no longer part of the base kustomization.
+- Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
 
 ## Legacy Phase 42 Surface
 
@@ -181,6 +182,12 @@ The Kubernetes manifests use `imagePullPolicy: IfNotPresent`. This is intentiona
 The S3-compatible backup target is intentionally run outside Kubernetes because Docker Desktop Kubernetes `hostPath` volumes are node-local and did not reliably mirror object files into the macOS project folder. The deploy-managed MinIO container uses a normal Docker bind mount, so backup objects should be visible under `./minio-data/daytrader-cnpg`. For rustFS, run the container separately on the host port in `RUSTFS_ENDPOINT_URL`.
 
 CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza as deprecated for a future CNPG release. It works for this local deployment, but the longer-term replacement is CNPG's Barman Cloud Plugin.
+
+## Hermes Agent Research Loop
+
+The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, decision reports, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become an active baseline.
+
+See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the full architecture and rollout plan.
 
 PostgreSQL backup strategy:
 
