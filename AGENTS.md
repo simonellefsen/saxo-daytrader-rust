@@ -18,6 +18,18 @@ The active runtime is a single Rust binary named `saxo-rust`.
 
 Trading-critical mutation paths are being ported incrementally. Saxo OAuth/session handling, scheduled decision reports, Trading Manager queue creation, and Saxo order precheck/placement now run in Rust. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption still use the legacy Python code as the behavior reference and should remain gated until each path has Rust audit/status tests.
 
+## Project Knowledge Wiki
+
+This repository uses an LLM-maintained knowledge wiki under `wiki/`. Treat it as a persistent synthesis layer for project learning, not as raw source of truth.
+
+- Read `wiki/index.md` first for durable project knowledge.
+- Follow `wiki/schema.md` when adding or updating wiki pages.
+- Append wiki maintenance actions to `wiki/log.md`.
+- Use `docs/project-wiki.md` for qmd and Obsidian setup.
+- Keep raw sources immutable; summarize them in `wiki/sources/`.
+- File durable insights from bug investigations, Hermes reflections, Saxo safety lessons, deployment work, and strategy experiments back into the wiki when they should survive the chat.
+- Never store Saxo tokens, refresh tokens, `ClientKey`, `AccountKey`, API keys, database credentials, TradingView credentials, or unredacted broker responses in the wiki.
+
 ## Rust File Structure
 
 Target these files for future Rust work:

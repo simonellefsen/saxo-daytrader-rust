@@ -251,6 +251,20 @@ CREATE TABLE hermes_reflections (
 
 For PostgreSQL deployment these should use `BIGSERIAL` or identity columns. The app already uses `sqlx::AnyPool`, so schema changes need to stay compatible with both local SQLite and Kubernetes PostgreSQL.
 
+## Knowledge Wiki Integration
+
+Hermes should also feed the LLM-maintained project wiki described in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md). The database remains the audited source of truth for proposals, approvals, metrics, and active baselines; the wiki is the human-readable synthesis layer that future Codex and Hermes sessions can search.
+
+Suggested mapping:
+
+- Weekly reflection -> `wiki/experiments/` or a concept page update.
+- Strategy hypothesis -> experiment note linked from `wiki/index.md`.
+- Rejected idea -> experiment note with rejection evidence, not deletion.
+- Reusable broker/safety lesson -> concept or runbook page.
+- Major workflow change -> decision record under `wiki/decisions/`.
+
+After Hermes or Codex files durable learning into the wiki, update [wiki/index.md](/Users/lindau/codex/rust_daytrader/wiki/index.md) and append [wiki/log.md](/Users/lindau/codex/rust_daytrader/wiki/log.md). Searchable wiki state can be indexed with qmd and browsed in Obsidian.
+
 ## Applying Self-Improved Strategies
 
 The app should apply Hermes proposals through a controlled promotion pipeline.

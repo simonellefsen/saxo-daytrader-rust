@@ -15,6 +15,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - The existing CloudNativePG database remains in namespace `saxo`; the Rust app connects to it through the cross-namespace service DNS name `daytrader-postgres-rw.saxo.svc.cluster.local`.
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image; the separate Next.js deployment is no longer part of the base kustomization.
 - Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
+- Project knowledge is organized through an LLM-maintained wiki under [wiki/](/Users/lindau/codex/rust_daytrader/wiki), with workflow details in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md).
 
 ## Legacy Phase 42 Surface
 
@@ -188,6 +189,12 @@ CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza a
 The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, decision reports, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become an active baseline.
 
 See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the full architecture and rollout plan.
+
+## Project Knowledge Wiki
+
+The repository has a persistent LLM-maintained knowledge layer under [wiki/](/Users/lindau/codex/rust_daytrader/wiki). It is intended for maintained project synthesis: architecture decisions, Saxo safety lessons, Hermes reflections, strategy experiments, and operational runbooks. Use [wiki/index.md](/Users/lindau/codex/rust_daytrader/wiki/index.md) as the entry point and [wiki/schema.md](/Users/lindau/codex/rust_daytrader/wiki/schema.md) as the maintenance contract.
+
+See [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md) for qmd and Obsidian setup.
 
 PostgreSQL backup strategy:
 

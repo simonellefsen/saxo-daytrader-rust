@@ -8,6 +8,8 @@
 ledger.db
 
 rustfs/
+.qmd/
+.obsidian/
 .pnpm-store/
 node_modules/
 frontend/.next/
