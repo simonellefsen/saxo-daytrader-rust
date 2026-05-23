@@ -453,6 +453,10 @@ async fn build_decision_prompt(
         .await
         .unwrap_or_else(|_| json!({}));
     let overview = state.overview_payload().await.unwrap_or_else(|_| json!({}));
+    let active_strategy_baseline = state
+        .active_strategy_baseline()
+        .await
+        .unwrap_or(JsonValue::Null);
     let capital_context = capital_planning_context(&overview);
     let system = [
         "You are the portfolio decision engine for a Danish SaxoInvestor swing/day-trading system.",
@@ -468,6 +472,7 @@ async fn build_decision_prompt(
         "For BUY trades, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
         "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
         "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
+        "When active_strategy_baseline is present, include its id in strategy_baseline_id and explain how the decision stays consistent with or intentionally departs from that baseline.",
     ]
     .join("\n");
     let user_payload = json!({
@@ -481,6 +486,7 @@ async fn build_decision_prompt(
             "selected_assets": [{"symbol": "string", "score": "number", "notes": "string"}],
             "symbol_sentiment": [{"symbol": "string", "sentiment": "SELL|UNDERWEIGHT|HOLD|OVERWEIGHT|BUY", "confidence": "number", "rationale": "string"}],
             "suggested_trades": [{"symbol": "string", "action": "BUY|SELL", "quantity": "number", "order_type": "Market|Limit", "estimated_value_dkk": "number", "strategy_key": "string", "strategy_role": "string", "strategy_metadata": {"technical": {"status": "ok|missing", "sentiment": "string", "trend_bias": "bullish|neutral|bearish", "confluence_count": "number", "min_confluences": "number"}}}],
+            "strategy_baseline_id": "string|null",
             "strategy_status": "string",
             "strategy_flow": {"portfolio": "number", "selected": "number", "trades": "number"}
         },
@@ -489,6 +495,7 @@ async fn build_decision_prompt(
         "goal_tracking": overview.get("goal_tracking").cloned().unwrap_or(JsonValue::Null),
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
         "capital_plan": capital_context,
+        "active_strategy_baseline": active_strategy_baseline,
         "opportunity_horizons": {
             "near_term": {
                 "label": "next_2_weeks",

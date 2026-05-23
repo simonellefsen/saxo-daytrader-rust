@@ -153,14 +153,14 @@ Implemented initial Kubernetes support:
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints.
-- The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections` and `strategy_experiments` so operators can review reflections and one-variable proposals without giving Hermes a promotion path.
+- The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
 - `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
 
 - Hermes is not yet connected to a native MCP adapter; the first adapter surface is HTTP.
 - The weekly reflection CronJob is installed but suspended by default.
-- No UI promotion flow or automatic strategy activation path is implemented yet; the current UI is review-only.
+- Promotion creates an active baseline audit record, but there is still no automatic live strategy activation path.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
 
 Hermes Docker runtime notes from the upstream documentation:
@@ -184,6 +184,8 @@ Initial HTTP adapter endpoints are implemented in `saxo-rust`:
 - `POST /api/hermes/experiments`
 
 These endpoints require `HERMES_DAYTRADER_API_KEY`. They intentionally expose sanitized decision reports and execution context, not Saxo sessions or broker mutation tools.
+
+`GET /api/hermes/context` also includes the active strategy baseline audit record when one has been promoted. That record contains the promoted experiment id, goal version, changed variable, prompt/config payload, and source metadata, but it does not grant Hermes any extra write authority.
 
 ## Dashboard Review Tab
 
@@ -399,7 +401,8 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 4. Scheduler/Trading Manager loads approved experiment as an overlay, not as a config rewrite.
 5. Results are measured against the goal contract.
 6. Operator promotes a winning experiment to a new baseline audit record.
-7. Future strategy decisions can reference the baseline id after a separate implementation wires baseline context into prompting or overlays.
+7. Hermes context and future xAI decision prompts receive the active baseline id and payload as advisory context.
+8. Live execution still requires a separate reviewed implementation and human approval.
 
 ```mermaid
 stateDiagram-v2
@@ -511,7 +514,8 @@ If evidence is insufficient, create a reflection with no experiment.
 5. Add weekly reflection cron. Implemented as suspended by default.
 6. Add SIM/paper experiment overlays. Implemented for Trading Manager cash buffer, min trade value, and technical confluence gates.
 7. Add promotion flow from approved experiment to active baseline audit record. Implemented in the Hermes dashboard.
-8. Only then consider live-mode overlays, still behind human approval and rollback gates.
+8. Wire active baseline context into Hermes context and xAI decision prompts. Implemented as advisory prompt/context data only.
+9. Only then consider live-mode overlays, still behind human approval and rollback gates.
 
 ## Non-Negotiable Safety Invariants
 

@@ -204,6 +204,11 @@ impl AppState {
             warn!("dashboard Hermes experiments degraded: {err:#}");
             Vec::new()
         });
+        let active_strategy_baseline =
+            self.active_strategy_baseline().await.unwrap_or_else(|err| {
+                warn!("dashboard active strategy baseline degraded: {err:#}");
+                JsonValue::Null
+            });
         let performance_history = self
             .performance_history_with_current(&performance_range, 5000)
             .await
@@ -288,6 +293,7 @@ impl AppState {
             scheduler_cycles,
             hermes_reflections,
             hermes_experiments,
+            active_strategy_baseline,
             performance_history,
             performance_summary,
             market_status,
@@ -1369,6 +1375,10 @@ impl AppState {
             .await
             .unwrap_or_default();
         let active_experiments = self.hermes_experiments(10).await.unwrap_or_default();
+        let active_strategy_baseline = self
+            .active_strategy_baseline()
+            .await
+            .unwrap_or(JsonValue::Null);
 
         Ok(json!({
             "status": "ok",
@@ -1397,7 +1407,8 @@ impl AppState {
                 "history": performance
             },
             "hermes": {
-                "experiments": active_experiments
+                "experiments": active_experiments,
+                "active_strategy_baseline": active_strategy_baseline
             },
             "safety": {
                 "saxo_sessions_excluded": true,
@@ -1416,6 +1427,19 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn active_strategy_baseline(&self) -> Result<JsonValue> {
+        Ok(self
+            .first_json(
+                "SELECT id, created_at, activated_at, status, goal_version, config_json, prompt_json, source
+                 FROM strategy_baselines
+                 WHERE status = 'active'
+                 ORDER BY activated_at DESC, created_at DESC
+                 LIMIT 1",
+            )
+            .await?
+            .unwrap_or(JsonValue::Null))
     }
 
     pub async fn hermes_execution_failures(&self, limit: i64) -> Result<Vec<JsonValue>> {

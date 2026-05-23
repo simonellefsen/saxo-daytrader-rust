@@ -263,7 +263,7 @@ Promotion flow:
 4. Mark `ready_for_promotion` only after the SIM observation meets the goal contract.
 5. Promote from the dashboard to create a `strategy_baselines` audit record.
 
-Promotion records do not activate live broker behavior. Treat a promoted baseline as an audited reference point until a separate implementation wires baseline context into prompts, overlays, and live-mode controls.
+Promotion records do not activate live broker behavior. Treat a promoted baseline as an audited reference point. After promotion, verify that the baseline appears in the dashboard `Hermes` tab, `/api/hermes/context`, and the next xAI decision report `request_json.user.active_strategy_baseline` payload.
 
 ## Live Trading Safety Gate
 

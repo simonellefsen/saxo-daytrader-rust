@@ -38,6 +38,7 @@ pub struct DashboardView {
     pub scheduler_cycles: Vec<JsonValue>,
     pub hermes_reflections: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,
+    pub active_strategy_baseline: JsonValue,
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
     pub market_status: JsonValue,

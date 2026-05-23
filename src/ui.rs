@@ -910,6 +910,20 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 strong { "Safety boundary" }
                 span { "Hermes can observe and propose. This dashboard can record paper/SIM lifecycle decisions, but it cannot place Saxo orders, expose secrets, or activate live broker behavior." }
             }
+            if !data.active_strategy_baseline.is_null() {
+                div { class: "event prewrap",
+                    strong { "Active Baseline Audit Record" }
+                    span {
+                        "{text(&data.active_strategy_baseline, \"id\")} · goal v{text_or(&data.active_strategy_baseline, \"goal_version\", \"n/a\")} · {format_timestamp(&text(&data.active_strategy_baseline, \"activated_at\"), &prefs)}"
+                    }
+                    span { "{compact_json(data.active_strategy_baseline.get(\"config_json\"))}" }
+                }
+            } else {
+                div { class: "event",
+                    strong { "No promoted baseline audit record yet." }
+                    span { class: "muted", "Promote a successful paper/SIM experiment to create one. Decision prompts will include it once present." }
+                }
+            }
             div { class: "mini-grid",
                 MetricCard { label: "Latest Reflection", value: latest_created, tone: "" }
                 MetricCard { label: "Goal Version", value: text_or(&latest_reflection, "goal_version", "n/a"), tone: "" }

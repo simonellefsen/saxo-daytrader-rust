@@ -56,6 +56,7 @@ sequenceDiagram
 - Every active strategy lesson should distinguish hypothesis, evidence, metric result, and promotion status.
 - Wiki notes are explanatory; the app applies strategy changes only through approved artifacts and scheduler overlays.
 - The dashboard `Hermes` tab is the operator lifecycle surface. It can move experiments through paper/SIM states and create baseline audit records, but it must not place orders or activate live broker behavior.
+- Promoted baseline audit records are visible in the dashboard `Hermes` tab, included in `/api/hermes/context`, and included in xAI decision prompt payloads as advisory context.
 - Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
 
 ## Related

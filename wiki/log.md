@@ -92,3 +92,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added an operator Rust transition path that records actor, action, status transition, notes, timestamp, and promoted baseline id in `approval_json`.
 - Promotion creates a `strategy_baselines` audit record and supersedes prior active baseline records.
 - Kept promotion as an audit/control-plane record only; it does not activate live broker behavior.
+
+## [2026-05-23] implementation | Hermes baseline context
+
+- Added active baseline visibility to the dashboard `Hermes` tab.
+- Included the active `strategy_baselines` audit record in the protected Hermes context adapter.
+- Included the active baseline payload in xAI decision prompts and required decision reports to return `strategy_baseline_id`.
+- Kept baseline context advisory only; it does not approve orders, mutate Saxo sessions, or enable live overlays.
