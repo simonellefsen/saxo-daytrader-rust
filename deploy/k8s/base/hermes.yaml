@@ -183,3 +183,65 @@ spec:
     - name: dashboard
       port: 9119
       targetPort: dashboard
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hermes-weekly-reflection
+  labels:
+    app: hermes-agent
+    component: reflection
+spec:
+  schedule: "15 22 * * 5"
+  timeZone: Europe/Copenhagen
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: hermes-agent
+            component: reflection
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: submit-reflection
+              image: curlimages/curl:8.17.0
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef:
+                    name: hermes-env
+                    optional: true
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  if [ -z "${API_SERVER_KEY:-}" ]; then
+                    echo "API_SERVER_KEY is required; set HERMES_API_SERVER_KEY in .env and redeploy." >&2
+                    exit 1
+                  fi
+                  if [ -z "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                    echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
+                    exit 1
+                  fi
+                  DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo-rust:8000}"
+                  cat > /tmp/hermes-run.json <<EOF
+                  {
+                    "session_id": "saxo-daytrader-weekly-reflection",
+                    "input": "Run the saxo daytrader weekly self-improvement reflection. Use DAYTRADER_API_BASE_URL=${DAYTRADER_API_BASE_URL} and HERMES_DAYTRADER_API_KEY from your environment. Fetch ${DAYTRADER_API_BASE_URL}/api/hermes/context?limit=40 with x-hermes-api-key. Analyze scheduler cycles, decision reports, strategy journals, execution outcomes, failures, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one /api/hermes/reflections record. If evidence is sufficient, create at most one /api/hermes/experiments proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
+                    "instructions": "You are Hermes Agent acting as a research/reflection agent for the saxo-rust day/swing trading system. You may observe and propose only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the protected /api/hermes/* adapter only.",
+                    "metadata": {
+                      "source": "kubernetes-cronjob",
+                      "job": "hermes-weekly-reflection"
+                    }
+                  }
+                  EOF
+                  curl -fsS \
+                    -H "Authorization: Bearer ${API_SERVER_KEY}" \
+                    -H "Content-Type: application/json" \
+                    --data @/tmp/hermes-run.json \
+                    http://hermes-gateway.saxo-rust:8642/v1/runs

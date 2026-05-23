@@ -153,12 +153,13 @@ Implemented initial Kubernetes support:
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints.
+- `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
 
 - Hermes is not yet connected to a native MCP adapter; the first adapter surface is HTTP.
-- No Hermes cron jobs are installed yet.
-- No strategy experiment tables or UI promotion flow are implemented yet.
+- The weekly reflection CronJob is installed but suspended by default.
+- No UI promotion flow or automatic strategy activation path is implemented yet.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
 
 Hermes Docker runtime notes from the upstream documentation:
@@ -182,6 +183,39 @@ Initial HTTP adapter endpoints are implemented in `saxo-rust`:
 - `POST /api/hermes/experiments`
 
 These endpoints require `HERMES_DAYTRADER_API_KEY`. They intentionally expose sanitized decision reports and execution context, not Saxo sessions or broker mutation tools.
+
+## Weekly Reflection Job
+
+The Kubernetes base includes a suspended weekly reflection job:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-weekly-reflection
+```
+
+Enable it only after setting:
+
+```bash
+HERMES_API_SERVER_ENABLED=true
+HERMES_API_SERVER_HOST=0.0.0.0
+HERMES_API_SERVER_KEY=<strong Hermes API key>
+HERMES_DAYTRADER_API_KEY=<strong app adapter key>
+```
+
+Then redeploy and unsuspend:
+
+```bash
+rtk make k8s-deploy
+rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
+```
+
+The CronJob calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
+
+- Fetch `/api/hermes/context?limit=40` using `HERMES_DAYTRADER_API_KEY`.
+- Analyze the last week against the goal contract.
+- Write exactly one reflection via `/api/hermes/reflections`.
+- Create at most one experiment via `/api/hermes/experiments`.
+- Change exactly one variable when proposing an experiment.
+- Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
 
 Read-only tools:
 

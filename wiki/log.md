@@ -35,3 +35,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added sanitized context, capabilities, reflection writes, and strategy experiment proposal writes.
 - Added runtime tables for `hermes_reflections`, `strategy_experiments`, and `strategy_baselines`.
 - Required `HERMES_DAYTRADER_API_KEY` for the adapter so these endpoints are not exposed as normal dashboard API routes.
+
+## [2026-05-23] implementation | Hermes weekly reflection CronJob
+
+- Added suspended `CronJob/hermes-weekly-reflection`.
+- The CronJob submits a run to Hermes' `/v1/runs` API instead of writing reflections directly.
+- The prompt instructs Hermes to fetch the protected daytrader context, create one reflection, and optionally create one one-variable experiment proposal.
+- The job requires `HERMES_API_SERVER_KEY` and `HERMES_DAYTRADER_API_KEY`, and remains suspended until explicitly enabled.
