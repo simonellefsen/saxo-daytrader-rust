@@ -19,6 +19,7 @@ __pycache__/
 
 *.csv
 *.tsv
+*.xls*
 
 .DS_Store
 
