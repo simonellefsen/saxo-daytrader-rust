@@ -248,6 +248,7 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=performance", label: "Performance", active: active_view == "performance" }
             TabLink { href: "/?view=market", label: "Market Status", active: active_view == "market" }
             TabLink { href: "/?view=watchlists", label: "Watchlists", active: active_view == "watchlists" }
+            TabLink { href: "/?view=markov", label: "Markov", active: active_view == "markov" }
             TabLink { href: "/?view=decisions", label: "Decision Reports", active: active_view == "decisions" }
             TabLink { href: "/?view=prompts", label: "AI Prompts", active: active_view == "prompts" }
             TabLink { href: "/?view=hermes", label: "Hermes", active: active_view == "hermes" }
@@ -277,6 +278,7 @@ fn DashboardBody(
         "performance" => rsx! { PerformanceView { data, prefs } },
         "market" => rsx! { MarketView { data, prefs } },
         "watchlists" => rsx! { WatchlistsView { data, prefs } },
+        "markov" => rsx! { MarkovView { data, prefs } },
         "decisions" => rsx! { DecisionsView { data, prefs } },
         "prompts" => rsx! { PromptsView { data, prefs } },
         "hermes" => rsx! { HermesView { data, prefs } },
@@ -625,6 +627,115 @@ fn WatchlistCategory(category: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
+fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let run = data.latest_markov_run.clone();
+    let config = run
+        .get("config_json")
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Null);
+    let ok_count = data
+        .markov_signals
+        .iter()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
+        .count();
+    let error_count = data
+        .markov_signals
+        .iter()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("error"))
+        .count();
+    rsx! {
+        section { class: "section stack loose",
+            div { class: "section-title-row",
+                div {
+                    h2 { "Markov Method" }
+                    p { class: "muted", "Daily observable Markov regime model for portfolio and watchlist assets. Signals are advisory and do not place orders." }
+                }
+                div { class: "pill-row right",
+                    span { class: "pill", "Signals: {ok_count}" }
+                    span { class: if error_count == 0 { "pill" } else { "pill bad" }, "Errors: {error_count}" }
+                }
+            }
+            if run.is_null() {
+                div { class: "event",
+                    strong { "No Markov run exists yet." }
+                    span { class: "muted", "The scheduler will create the first run after the configured daily time once Saxo chart data is available." }
+                }
+            } else {
+                div { class: "mini-grid",
+                    MetricCard { label: "Run Date", value: text(&run, "run_date"), tone: "" }
+                    MetricCard { label: "Status", value: text(&run, "status"), tone: "" }
+                    MetricCard { label: "Assets", value: text(&run, "asset_count"), tone: "" }
+                    MetricCard { label: "Succeeded", value: text(&run, "success_count"), tone: "good-text" }
+                    MetricCard { label: "Failed", value: text(&run, "error_count"), tone: if value_f64(&run, "error_count") > 0.0 { "bad-text" } else { "" } }
+                    MetricCard { label: "Signal Horizon", value: format!("{}d", text(&config, "signal_horizon_days")), tone: "" }
+                }
+                div { class: "event",
+                    strong { "Configuration" }
+                    span { "Window {text(&config, \"window_days\")} trading days · threshold {format_pct(value_f64(&config, \"threshold\"), &prefs)} · samples {text(&config, \"sample_count\")} · daily time {text(&config, \"daily_time\")}" }
+                }
+            }
+            div { class: "table-wrap compact-table",
+                table { class: "data-table",
+                    thead {
+                        tr {
+                            th { "Symbol" }
+                            th { "State" }
+                            th { "Signal" }
+                            th { "Direction" }
+                            th { "Bull" }
+                            th { "Sideways" }
+                            th { "Bear" }
+                            th { "Stationary Mix" }
+                            th { "20D Return" }
+                            th { "Samples" }
+                            th { "Status" }
+                        }
+                    }
+                    tbody {
+                        for row in data.markov_signals.iter() {
+                            MarkovSignalRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let signal = value_f64(&row, "signed_signal");
+    let tone = if signal > 0.0 {
+        "good-text"
+    } else if signal < 0.0 {
+        "bad-text"
+    } else {
+        ""
+    };
+    let status = text(&row, "status");
+    rsx! {
+        tr {
+            td { SymbolLink { symbol: text(&row, "symbol"), instrument_name: text(&row, "instrument_name") } }
+            td { "{fallback_text(&row, \"current_state\", \"n/a\")}" }
+            td { class: tone, "{format_signed_pct(signal, &prefs)}" }
+            td { "{fallback_text(&row, \"direction\", \"n/a\")}" }
+            td { "{format_pct(value_f64(&row, \"bull_prob\"), &prefs)}" }
+            td { "{format_pct(value_f64(&row, \"sideways_prob\"), &prefs)}" }
+            td { "{format_pct(value_f64(&row, \"bear_prob\"), &prefs)}" }
+            td { "{distribution_label(row.get(\"stationary_json\"), &prefs)}" }
+            td { class: if value_f64(&row, "rolling_return") >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_pct(value_f64(&row, \"rolling_return\"), &prefs)}" }
+            td { "{text(&row, \"sample_count\")}" }
+            td {
+                span { class: if status == "ok" { "pill good" } else { "pill bad" }, "{status}" }
+                if status != "ok" {
+                    div { class: "muted", "{text(&row, \"error_text\")}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let report = if data.selected_decision.is_null() {
         data.latest_decision.clone()
@@ -859,7 +970,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                     div { class: "event prewrap",
                         strong { "User Prompt / Payload" }
-                        span { "Latest completed Decision Report and current scheduler pulse context are loaded by the Python execution runtime." }
+                        span { "Latest completed Decision Report, Markov signals, and current scheduler pulse context are loaded by the Rust runtime." }
                     }
                 }
             }
@@ -2130,6 +2241,18 @@ fn format_dkk(value: f64, prefs: &LocalizationPrefs) -> String {
 
 fn format_pct(value: f64, prefs: &LocalizationPrefs) -> String {
     format_percent(value, prefs)
+}
+
+fn distribution_label(value: Option<&JsonValue>, prefs: &LocalizationPrefs) -> String {
+    let Some(value) = value else {
+        return "n/a".to_string();
+    };
+    format!(
+        "B {} / S {} / Bear {}",
+        format_pct(value_f64(value, "Bull"), prefs),
+        format_pct(value_f64(value, "Sideways"), prefs),
+        format_pct(value_f64(value, "Bear"), prefs)
+    )
 }
 
 #[cfg(test)]

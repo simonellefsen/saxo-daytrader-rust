@@ -7,6 +7,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
+    markov_method::run_markov_method_cycle,
     notifications::dispatch_execution_notifications,
     saxo_order::{run_saxo_execution_queue, sync_saxo_broker_orders},
     saxo_portfolio::refresh_broker_snapshots,
@@ -72,6 +73,13 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    let markov_method = match run_markov_method_cycle(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("Markov method cycle failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     let execution_queue = match run_saxo_execution_queue(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -122,6 +130,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "broker_order_sync": broker_order_sync,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
+        "markov_method": markov_method,
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "notifications": notifications,

@@ -72,6 +72,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/ladder-chart/{symbol}", get(asset_ladder_history))
         .route("/api/portfolio/trades", get(portfolio_trades))
         .route("/api/performance", get(performance))
+        .route("/api/markov/signals", get(markov_signals))
         .route("/api/market/status", get(market_status))
         .route("/api/market/watchlists", get(market_watchlists))
         .route("/api/prompts", get(prompts))
@@ -475,6 +476,22 @@ async fn performance(
     let range_key = params.range_key.unwrap_or_else(|| "1D".to_string());
     info!(range_key = %range_key, "loading performance payload");
     json_result(state.performance_payload(&range_key).await)
+}
+
+async fn markov_signals(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    let limit = params.limit.unwrap_or(100);
+    json_result(
+        async {
+            Ok::<JsonValue, anyhow::Error>(json!({
+                "latest_run": state.latest_markov_run().await.unwrap_or(JsonValue::Null),
+                "items": state.markov_signals(limit).await?
+            }))
+        }
+        .await,
+    )
 }
 
 async fn market_status(State(state): State<Arc<AppState>>) -> Response {
@@ -949,8 +966,8 @@ fn normalize_view(value: Option<&str>) -> String {
     match value.unwrap_or("overview").to_lowercase().as_str() {
         "overview" | "portfolio" => "overview".to_string(),
         "eod" | "end-of-day" => "eod".to_string(),
-        "performance" | "market" | "watchlists" | "decisions" | "execution" | "prompts"
-        | "hermes" => value.unwrap_or("overview").to_lowercase(),
+        "performance" | "market" | "watchlists" | "markov" | "decisions" | "execution"
+        | "prompts" | "hermes" => value.unwrap_or("overview").to_lowercase(),
         _ => "overview".to_string(),
     }
 }

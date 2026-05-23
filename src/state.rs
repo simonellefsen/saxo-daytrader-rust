@@ -209,6 +209,14 @@ impl AppState {
                 warn!("dashboard active strategy baseline degraded: {err:#}");
                 JsonValue::Null
             });
+        let markov_signals = self.markov_signals(80).await.unwrap_or_else(|err| {
+            warn!("dashboard Markov signals degraded: {err:#}");
+            Vec::new()
+        });
+        let latest_markov_run = self.latest_markov_run().await.unwrap_or_else(|err| {
+            warn!("dashboard latest Markov run degraded: {err:#}");
+            JsonValue::Null
+        });
         let performance_history = self
             .performance_history_with_current(&performance_range, 5000)
             .await
@@ -294,6 +302,8 @@ impl AppState {
             hermes_reflections,
             hermes_experiments,
             active_strategy_baseline,
+            markov_signals,
+            latest_markov_run,
             performance_history,
             performance_summary,
             market_status,
@@ -382,10 +392,15 @@ impl AppState {
             "analysis_summary": self.market_status_payload().await.unwrap_or_else(|_| json!({"summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []})),
             "latest_decision": self.latest_decision_summary().await.unwrap_or_else(|_| json!({"id": null, "created_at": null, "status": null})),
             "scheduler_status": self.scheduler_status_value().await.unwrap_or(JsonValue::Null),
-            "scheduler_health": {"status": "ok", "message": "Rust scheduler maintains Saxo sessions, submits/polls deferred xAI decision reports, runs the Trading Manager for fresh completed scheduled reports, and creates due end-of-day journals."},
+            "scheduler_health": {"status": "ok", "message": "Rust scheduler maintains Saxo sessions, submits/polls deferred xAI decision reports, runs the Trading Manager, refreshes daily Markov regime signals when due, and creates due end-of-day journals."},
             "trading_manager": {
                 "status": "available",
                 "latest_run": self.latest_trading_manager_run().await.unwrap_or(JsonValue::Null)
+            },
+            "markov_method": {
+                "status": "available",
+                "config": crate::markov_method::markov_config_json_for_state(self),
+                "latest_run": self.latest_markov_run().await.unwrap_or(JsonValue::Null),
             },
             "saxo_auth": self.saxo_auth_status_value().await,
             "settings": {"cash_buffer": self.cash_buffer_value()},
@@ -1130,6 +1145,14 @@ impl AppState {
         self.first_json(&sql).await
     }
 
+    pub async fn markov_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        crate::markov_method::latest_markov_signals(self, limit).await
+    }
+
+    pub async fn latest_markov_run(&self) -> Result<JsonValue> {
+        crate::markov_method::latest_markov_run(self).await
+    }
+
     #[allow(dead_code)]
     pub async fn generate_decision_report_fallback(&self) -> Result<JsonValue> {
         // This is a conservative Rust-side generator used by the manual button.
@@ -1306,6 +1329,7 @@ impl AppState {
                 "/api/hermes/experiments/{id}/transition",
                 "/api/health",
                 "/api/overview",
+                "/api/markov/signals",
                 "/api/scheduler",
                 "/api/execution",
                 "/api/strategy-journal"
@@ -1319,7 +1343,9 @@ impl AppState {
                 "execution_orders",
                 "execution_order_events",
                 "execution_fills",
-                "portfolio_value_history"
+                "portfolio_value_history",
+                "markov_signal_runs",
+                "markov_asset_signals"
             ],
             "restricted_writes": [
                 "hermes_reflections",
@@ -1347,6 +1373,7 @@ impl AppState {
                 "Hermes proposals are recommend-only until reviewed by the daytrader UI/operator flow.",
                 "Promoted baselines are audit records; they do not activate live broker behavior.",
                 "Strategy experiments must change exactly one variable while one_variable_only is true.",
+                "Markov method signals are advisory analytics and do not place or approve orders.",
                 "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
             ],
             "goal_contract": self.hermes_goal_contract_value()
@@ -1379,6 +1406,12 @@ impl AppState {
             .active_strategy_baseline()
             .await
             .unwrap_or(JsonValue::Null);
+        let markov = crate::markov_method::compact_markov_context(self, limit)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("Hermes Markov context degraded: {err:#}");
+                json!({"status": "degraded", "detail": err.to_string()})
+            });
 
         Ok(json!({
             "status": "ok",
@@ -1406,6 +1439,7 @@ impl AppState {
                 "range": "1M",
                 "history": performance
             },
+            "markov_method": markov,
             "hermes": {
                 "experiments": active_experiments,
                 "active_strategy_baseline": active_strategy_baseline
@@ -2200,6 +2234,12 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating strategy experiments table")?;
+        for sql in crate::markov_method::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating Markov method runtime tables")?;
+        }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_hermes_reflections_created
              ON hermes_reflections(created_at DESC)",

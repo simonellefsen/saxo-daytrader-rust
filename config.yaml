@@ -86,6 +86,19 @@ strategy:
   capital:
     max_deployment_pct: 0.90
     min_cash_buffer_pct: 0.10
+  markov:
+    enabled: true
+    timezone: Europe/Copenhagen
+    daily_time: "23:30"
+    run_weekdays_only: true
+    window_days: 20
+    threshold: 0.05
+    horizon_minutes: 1440
+    sample_count: 520
+    min_labeled_days: 60
+    signal_horizon_days: 5
+    forecast_steps: [1, 2, 3, 5, 10]
+    max_symbols: 0
   swing:
     min_holdings: 10
     max_holdings: 25

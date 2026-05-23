@@ -20,6 +20,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 ## Source Notes
 
 - [sources/llm-wiki](sources/llm-wiki.md) - Source-note summary for the LLM Wiki pattern.
+- [sources/markov-hedge-fund-method](sources/markov-hedge-fund-method.md) - Source-note summary for the Markov regime method.
 
 ## Concepts
 

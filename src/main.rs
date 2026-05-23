@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod localization;
+mod markov_method;
 mod mcp;
 mod models;
 mod notifications;

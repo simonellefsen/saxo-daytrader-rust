@@ -457,6 +457,9 @@ async fn build_decision_prompt(
         .active_strategy_baseline()
         .await
         .unwrap_or(JsonValue::Null);
+    let markov_method = crate::markov_method::compact_markov_context(state, 80)
+        .await
+        .unwrap_or_else(|_| json!({"signals": []}));
     let capital_context = capital_planning_context(&overview);
     let system = [
         "You are the portfolio decision engine for a Danish SaxoInvestor swing/day-trading system.",
@@ -471,6 +474,7 @@ async fn build_decision_prompt(
         "Only put BUY trades in suggested_trades when the trade fits inside capital_plan.available_buy_budget_dkk after preserving the cash buffer.",
         "For BUY trades, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
         "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
+        "Use Markov method regime signals as advisory context only: positive bull_prob-minus-bear_prob supports long bias, negative signal supports risk reduction or stand-down unless other gates disagree.",
         "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
         "When active_strategy_baseline is present, include its id in strategy_baseline_id and explain how the decision stays consistent with or intentionally departs from that baseline.",
     ]
@@ -509,6 +513,7 @@ async fn build_decision_prompt(
         "market_summary": market.get("summary").cloned().unwrap_or(JsonValue::Null),
         "positions": positions.into_iter().take(80).collect::<Vec<_>>(),
         "watchlists": compact_watchlists(&watchlists, &allowed_codes),
+        "markov_method": markov_method,
     });
     Ok(json!({"system": system, "user": user_payload}))
 }

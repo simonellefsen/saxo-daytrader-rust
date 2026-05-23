@@ -15,6 +15,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - The existing CloudNativePG database remains in namespace `saxo`; the Rust app connects to it through the cross-namespace service DNS name `daytrader-postgres-rw.saxo.svc.cluster.local`.
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image; the separate Next.js deployment is no longer part of the base kustomization.
 - Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
+- The Markov method runs as a daily advisory regime skill for portfolio/watchlist assets and is exposed through the dashboard, API, Hermes context, and xAI prompt context without mutating orders. See [docs/markov-method.md](docs/markov-method.md).
 - Project knowledge is organized through an LLM-maintained wiki under [wiki/](/Users/lindau/codex/rust_daytrader/wiki), with workflow details in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md).
 
 ## Legacy Phase 42 Surface
@@ -306,6 +307,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `max_assets_per_sector`: optional diversification cap when sector labels are available.
 - `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.90` to preserve a 10% cash buffer.
 - `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.10`.
+- `markov`: daily observable Markov regime skill for portfolio/watchlist assets. Defaults label each daily bar with a 20-trading-day rolling return and a +/-5% threshold, build a 3x3 Bull/Sideways/Bear transition matrix, forecast configured horizons with matrix powers, store the stationary distribution, and emit `bull_prob - bear_prob` as an advisory signed signal.
 - `swing.min_holdings` / `swing.max_holdings`: hard portfolio count guardrails, default `10` to `25`.
 - `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: hard target weight guardrails, default `5%` to `25%`.
 - `swing.never_trade_symbols`: hard blacklist. Defaults include `NOVOb:xcse` and `TSLA:xnas`.

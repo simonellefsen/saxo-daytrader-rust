@@ -121,3 +121,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Removed old Python convenience targets from the active Makefile surface.
 - Kept legacy Python source, migration helpers, Saxo OAuth helper, and regression scripts as reference/support material while remaining broker paths are ported.
 - Updated stale runtime wording in the dashboard and README.
+
+## [2026-05-23] implementation | Markov method advisory skill
+
+- Added a daily Rust Markov regime skill for portfolio and watchlist assets.
+- Stored run summaries in `markov_signal_runs` and asset signals in `markov_asset_signals`.
+- Exposed the latest signals through dashboard/API, Hermes context/MCP, and xAI decision prompt context.
+- Added [wiki/sources/markov-hedge-fund-method.md](sources/markov-hedge-fund-method.md) for the source method.
