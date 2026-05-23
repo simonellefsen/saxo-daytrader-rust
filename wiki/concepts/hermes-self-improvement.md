@@ -24,7 +24,7 @@ sequenceDiagram
   participant W as Wiki
   participant U as Operator
 
-  D->>DB: Decision reports, execution orders, fills, journals
+  D->>DB: Decision reports, EOD journals, Markov signals, executions
   H->>DB: Read sanitized context through MCP/API
   H->>DB: Write reflection or experiment proposal
   D->>U: Display Hermes review and lifecycle tab
@@ -58,6 +58,7 @@ sequenceDiagram
 - The dashboard `Hermes` tab is the operator lifecycle surface. It can move experiments through paper/SIM states and create baseline audit records, but it must not place orders or activate live broker behavior.
 - Promoted baseline audit records are visible in the dashboard `Hermes` tab, included in `/api/hermes/context`, and included in xAI decision prompt payloads as advisory context.
 - Hermes should prefer the `daytrader` MCP adapter for scheduled reflections because its tool allowlist is narrower than generic HTTP access.
+- Hermes should read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing a strategy experiment.
 - Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
 
 ## Related

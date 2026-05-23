@@ -1330,6 +1330,8 @@ impl AppState {
                 "/api/health",
                 "/api/overview",
                 "/api/markov/signals",
+                "/api/decision/latest",
+                "/api/decision/reports",
                 "/api/scheduler",
                 "/api/execution",
                 "/api/strategy-journal"
@@ -1374,6 +1376,8 @@ impl AppState {
                 "Promoted baselines are audit records; they do not activate live broker behavior.",
                 "Strategy experiments must change exactly one variable while one_variable_only is true.",
                 "Markov method signals are advisory analytics and do not place or approve orders.",
+                "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
+                "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
                 "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
             ],
             "goal_contract": self.hermes_goal_contract_value()
@@ -1393,6 +1397,7 @@ impl AppState {
         let scheduler_cycles = self.scheduler_cycles(limit).await.unwrap_or_default();
         let decision_reports = self.hermes_decision_report_items(limit).await?;
         let journals = self.strategy_journal_items(limit).await.unwrap_or_default();
+        let end_of_day_reports = self.hermes_end_of_day_report_items(limit).await?;
         let execution_orders = self.execution_orders(limit).await.unwrap_or_default();
         let execution_failures = self.hermes_execution_failures(limit).await?;
         let execution_events = self.execution_events(limit).await.unwrap_or_default();
@@ -1424,7 +1429,13 @@ impl AppState {
                 "cycles": scheduler_cycles
             },
             "decisions": {
+                "cadence": "two_daily_open_followups",
+                "pulses": crate::xai_decision::decision_pulse_summary(self).get("pulses").cloned().unwrap_or_else(|| json!([])),
                 "reports": decision_reports
+            },
+            "end_of_day": {
+                "cadence": "daily",
+                "reports": end_of_day_reports
             },
             "strategy_journal": {
                 "items": journals
@@ -1456,6 +1467,18 @@ impl AppState {
         let sql = format!(
             "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label
              FROM decision_reports
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn hermes_end_of_day_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, journal_date, cadence, status, summary, metrics_json, learnings_json, source_report_id, diary_json
+             FROM strategy_journal_entries
+             WHERE cadence = 'daily'
              ORDER BY created_at DESC, id DESC
              LIMIT {}",
             clamp_limit(limit, 1, 100)

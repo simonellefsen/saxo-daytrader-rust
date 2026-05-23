@@ -166,6 +166,26 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .unwrap_or(20);
             json!({"experiments": state.hermes_experiments(limit).await?})
         }
+        "get_decision_reports" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(10);
+            json!({
+                "cadence": "two_daily_open_followups",
+                "reports": state.hermes_decision_report_items(limit).await?
+            })
+        }
+        "get_end_of_day_reports" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(10);
+            json!({
+                "cadence": "daily",
+                "reports": state.hermes_end_of_day_report_items(limit).await?
+            })
+        }
         "get_markov_signals" => {
             let limit = arguments
                 .get("limit")
@@ -271,6 +291,28 @@ fn mcp_tools() -> Vec<JsonValue> {
         tool_schema(
             "list_experiments",
             "List recent one-variable Hermes experiment proposals and lifecycle states.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool_schema(
+            "get_decision_reports",
+            "Return recent sanitized scheduled decision reports. The scheduler targets two daily open-followup reports when market calendars make them due.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool_schema(
+            "get_end_of_day_reports",
+            "Return recent sanitized daily end-of-day strategy journal reports.",
             json!({
                 "type": "object",
                 "properties": {
@@ -399,6 +441,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"get_context".to_string()));
+        assert!(names.contains(&"get_decision_reports".to_string()));
+        assert!(names.contains(&"get_end_of_day_reports".to_string()));
         assert!(names.contains(&"get_markov_signals".to_string()));
         assert!(names.contains(&"create_reflection".to_string()));
         assert!(names.contains(&"create_experiment_proposal".to_string()));

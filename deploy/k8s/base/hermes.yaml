@@ -33,6 +33,11 @@ data:
 
     - Rust Axum HTTP/API server and Dioxus SSR dashboard.
     - Rust scheduler heartbeat and xAI decision report polling.
+    - Two scheduled decision-report pulses when markets are open: Nordic/EU
+      open +1h15 and US open +1h15.
+    - Daily end-of-day strategy journal reports after the configured local
+      journal time.
+    - Daily Markov method regime signals for portfolio and watchlist assets.
     - Trading Manager queue creation from completed decision reports.
     - Saxo order precheck and placement for approved queued orders.
     - Strategy journal entries, scheduler cycles, execution orders, events, and
@@ -49,6 +54,9 @@ data:
     - `http://daytrader-api.saxo-rust:8000/api/hermes/context`
     - `http://daytrader-api.saxo-rust:8000/api/hermes/reflections`
     - `http://daytrader-api.saxo-rust:8000/api/hermes/experiments`
+    - `http://daytrader-api.saxo-rust:8000/api/decision/latest`
+    - `http://daytrader-api.saxo-rust:8000/api/decision/reports`
+    - `http://daytrader-api.saxo-rust:8000/api/markov/signals`
     - `http://daytrader-api.saxo-rust:8000/api/scheduler`
     - `http://daytrader-api.saxo-rust:8000/api/execution`
     - `http://daytrader-api.saxo-rust:8000/api/strategy-journal`
@@ -298,6 +306,9 @@ spec:
                                 "get_app_capabilities",
                                 "get_goal_contract",
                                 "get_context",
+                                "get_decision_reports",
+                                "get_end_of_day_reports",
+                                "get_markov_signals",
                                 "list_reflections",
                                 "create_reflection",
                                 "list_experiments",
@@ -399,7 +410,7 @@ spec:
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-weekly-reflection",
-                    "input": "Run the saxo daytrader weekly self-improvement reflection. Prefer the configured daytrader MCP tools: get_context, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, decision reports, strategy journals, execution outcomes, failures, active baseline context, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. If evidence is sufficient, create at most one experiment proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
+                    "input": "Run the saxo daytrader weekly self-improvement reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, the two daily decision-report pulses, daily end-of-day reports, Markov regime signals, execution outcomes, failures, active baseline context, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. If evidence is sufficient, create at most one experiment proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
                     "instructions": "You are Hermes Agent acting as a research/reflection agent for the saxo-rust day/swing trading system. You may observe and propose only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",

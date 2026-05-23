@@ -128,3 +128,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Stored run summaries in `markov_signal_runs` and asset signals in `markov_asset_signals`.
 - Exposed the latest signals through dashboard/API, Hermes context/MCP, and xAI decision prompt context.
 - Added [wiki/sources/markov-hedge-fund-method.md](sources/markov-hedge-fund-method.md) for the source method.
+
+## [2026-05-23] implementation | Hermes report access
+
+- Added explicit Hermes MCP tools for recent decision reports, daily end-of-day reports, and Markov signals.
+- Updated the Hermes Kubernetes tool allowlist and weekly reflection prompt so deployed Hermes can read those sources.
+- Clarified that Hermes should treat Markov, decision reports, and EOD journals as advisory evidence and still cannot access Saxo secrets or broker mutation tools.

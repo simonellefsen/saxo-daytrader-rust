@@ -87,8 +87,9 @@ Current `saxo-rust` capabilities:
 
 - Axum HTTP/API server and Dioxus SSR dashboard.
 - Scheduler heartbeat in `src/scheduler.rs`.
-- Scheduled xAI decision report submission and polling in `src/xai_decision.rs`.
-- Strategy journal generation in `src/strategy_journal.rs`.
+- Scheduled xAI decision report submission and polling in `src/xai_decision.rs`. The active scheduler targets two daily market-pulse reports when the relevant markets are open: Nordic/EU open +1h15 and US open +1h15.
+- Strategy journal generation in `src/strategy_journal.rs`, including daily end-of-day reports after the configured local journal time.
+- Markov method advisory regime signals in `src/markov_method.rs`.
 - Trading Manager queue creation in `src/trading_manager.rs`.
 - Saxo order precheck and placement path in `src/saxo_order.rs`.
 - Local execution audit tables: `execution_orders`, `execution_order_events`, and `execution_fills`.
@@ -194,6 +195,9 @@ The internal MCP adapter is implemented by the same Rust binary in `--mcp-http` 
 - `get_app_capabilities`
 - `get_goal_contract`
 - `get_context`
+- `get_decision_reports`
+- `get_end_of_day_reports`
+- `get_markov_signals`
 - `list_reflections`
 - `create_reflection`
 - `list_experiments`
@@ -274,6 +278,7 @@ rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-re
 The CronJob calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
 
 - Prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals.
+- Read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing strategy changes.
 - Analyze the last week against the goal contract.
 - Write exactly one reflection.
 - Create at most one experiment proposal.
@@ -289,6 +294,9 @@ Read-only tools:
 - `get_app_capabilities`
 - `get_goal_contract`
 - `get_context`
+- `get_decision_reports`
+- `get_end_of_day_reports`
+- `get_markov_signals`
 - `list_reflections`
 - `list_experiments`
 
