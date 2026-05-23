@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::{yaml_i64, yaml_string},
-    db::{row_to_json, sql_escape, value_i64},
+    db::{row_to_json, sql_escape, value_f64, value_i64},
     state::AppState,
 };
 
@@ -453,13 +453,18 @@ async fn build_decision_prompt(
         .await
         .unwrap_or_else(|_| json!({}));
     let overview = state.overview_payload().await.unwrap_or_else(|_| json!({}));
+    let capital_context = capital_planning_context(&overview);
     let system = [
         "You are the portfolio decision engine for a Danish SaxoInvestor swing/day-trading system.",
         "Return strict JSON only. No markdown, no prose outside JSON.",
         "Use the sentiment scale SELL, UNDERWEIGHT, HOLD, OVERWEIGHT, BUY.",
         "Never short. Treat all pnl, commissions, and taxes in DKK where possible.",
+        "Always assess available cash before recommending BUY orders. Preserve the configured cash buffer and do not rely on margin.",
+        "Think in two horizons: near-term opportunities for the next 2 weeks, and medium-term opportunities for the next 1-3 months.",
+        "Use selected_assets and symbol_sentiment to document forward-looking opportunities even when they are not tradable or actionable today.",
         "Suggested trades must be conservative and include strategy_metadata.technical when available.",
         "Only put a symbol in suggested_trades when its exchange is currently tradable under the supplied market_scope.",
+        "Only put BUY trades in suggested_trades when the trade fits inside capital_plan.available_buy_budget_dkk after preserving the cash buffer.",
         "For BUY trades, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
         "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
         "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
@@ -472,6 +477,7 @@ async fn build_decision_prompt(
             "report_title": "string",
             "market_view": {"bias": "string", "summary": "string"},
             "reasoning_steps": ["string"],
+            "capital_plan": {"cash_balance_dkk": "number", "available_buy_budget_dkk": "number", "cash_policy": "string", "near_term_opportunities": ["string"], "medium_term_watchlist": ["string"]},
             "selected_assets": [{"symbol": "string", "score": "number", "notes": "string"}],
             "symbol_sentiment": [{"symbol": "string", "sentiment": "SELL|UNDERWEIGHT|HOLD|OVERWEIGHT|BUY", "confidence": "number", "rationale": "string"}],
             "suggested_trades": [{"symbol": "string", "action": "BUY|SELL", "quantity": "number", "order_type": "Market|Limit", "estimated_value_dkk": "number", "strategy_key": "string", "strategy_role": "string", "strategy_metadata": {"technical": {"status": "ok|missing", "sentiment": "string", "trend_bias": "bullish|neutral|bearish", "confluence_count": "number", "min_confluences": "number"}}}],
@@ -482,11 +488,61 @@ async fn build_decision_prompt(
         "portfolio_summary": overview.get("portfolio_summary").cloned().unwrap_or(JsonValue::Null),
         "goal_tracking": overview.get("goal_tracking").cloned().unwrap_or(JsonValue::Null),
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
+        "capital_plan": capital_context,
+        "opportunity_horizons": {
+            "near_term": {
+                "label": "next_2_weeks",
+                "instruction": "Find high-conviction setups, catalysts, pullbacks, and risk-reducing rotations that could become actionable soon. Only create an immediate order when market_scope and technical gates support it."
+            },
+            "medium_term": {
+                "label": "next_1_to_3_months",
+                "instruction": "Identify watchlist or portfolio names worth monitoring for earnings, valuation, macro, momentum, or allocation reasons. Prefer selected_assets or symbol_sentiment notes over immediate orders unless the setup is actionable today."
+            }
+        },
         "market_summary": market.get("summary").cloned().unwrap_or(JsonValue::Null),
         "positions": positions.into_iter().take(80).collect::<Vec<_>>(),
         "watchlists": compact_watchlists(&watchlists, &allowed_codes),
     });
     Ok(json!({"system": system, "user": user_payload}))
+}
+
+fn capital_planning_context(overview: &JsonValue) -> JsonValue {
+    let summary = overview
+        .get("portfolio_summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let cash_policy = overview
+        .get("settings")
+        .and_then(|value| value.get("cash_buffer"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let total_value_dkk = value_f64(&summary, "total_market_value_dkk");
+    let invested_value_dkk = value_f64(&summary, "invested_market_value_dkk");
+    let cash_balance_dkk = value_f64(&summary, "cash_balance_dkk");
+    let min_cash_buffer_pct = value_f64(&cash_policy, "min_cash_buffer_pct").max(0.0);
+    let max_deployment_pct = value_f64(&cash_policy, "max_deployment_pct").clamp(0.0, 1.0);
+    let required_cash_buffer_dkk = (total_value_dkk * min_cash_buffer_pct).max(0.0);
+    let deployment_cap_dkk = if max_deployment_pct > 0.0 {
+        total_value_dkk * max_deployment_pct
+    } else {
+        total_value_dkk
+    };
+    let available_cash_above_buffer_dkk = (cash_balance_dkk - required_cash_buffer_dkk).max(0.0);
+    let remaining_deployment_capacity_dkk = (deployment_cap_dkk - invested_value_dkk).max(0.0);
+    let available_buy_budget_dkk =
+        available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
+    json!({
+        "cash_balance_dkk": cash_balance_dkk,
+        "total_market_value_dkk": total_value_dkk,
+        "invested_market_value_dkk": invested_value_dkk,
+        "min_cash_buffer_pct": min_cash_buffer_pct,
+        "max_deployment_pct": max_deployment_pct,
+        "required_cash_buffer_dkk": required_cash_buffer_dkk,
+        "available_cash_above_buffer_dkk": available_cash_above_buffer_dkk,
+        "remaining_deployment_capacity_dkk": remaining_deployment_capacity_dkk,
+        "available_buy_budget_dkk": available_buy_budget_dkk,
+        "cash_policy": "Preserve the required cash buffer, avoid margin, and size any BUY recommendations within available_buy_budget_dkk.",
+    })
 }
 
 fn market_scope_for_pulse(
@@ -600,9 +656,57 @@ fn active_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
         .max(1),
     );
     let now = Utc::now();
+    configured_decision_pulses(state)
+        .into_iter()
+        .filter(|pulse| {
+            let Some(target) = parse_rfc3339_text(&pulse.target_at_utc) else {
+                return false;
+            };
+            now >= target && now < target + due_window
+        })
+        .collect()
+}
+
+/// Build UI-facing decision-pulse metadata from the same exchange schedule used
+/// by the scheduler. This is deliberately read-only: it helps operators see
+/// whether a report is due soon without submitting a report.
+pub fn decision_pulse_summary(state: &AppState) -> JsonValue {
+    let due_window = Duration::minutes(
+        yaml_i64(
+            &state.config,
+            &["strategy", "swing", "analysis_pulses", "due_window_minutes"],
+        )
+        .unwrap_or(DEFAULT_DUE_WINDOW_MINUTES)
+        .max(1),
+    );
+    let now = Utc::now();
+    let mut active = Vec::new();
+    let mut upcoming = Vec::new();
+
+    for pulse in configured_decision_pulses(state) {
+        let Some(target) = parse_rfc3339_text(&pulse.target_at_utc) else {
+            continue;
+        };
+        if now >= target && now < target + due_window {
+            active.push(pulse);
+        } else if target > now {
+            upcoming.push(pulse);
+        }
+    }
+    upcoming.sort_by_key(|pulse| pulse.target_at_utc.clone());
+    let next = upcoming.first();
+
+    json!({
+        "pulses": active.iter().map(pulse_to_json).collect::<Vec<_>>(),
+        "next_pulse_at": next.map(|pulse| JsonValue::from(pulse.target_at_utc.clone())).unwrap_or(JsonValue::Null),
+        "next_pulse_label": next.map(|pulse| JsonValue::from(pulse.label.clone())).unwrap_or(JsonValue::Null),
+    })
+}
+
+fn configured_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
     let rows = state.market_exchange_rows();
     let mut pulses = Vec::new();
-    pulses.extend(grouped_open_followup_pulses(
+    pulses.extend(grouped_open_followup_pulse_candidates(
         &rows,
         &configured_codes(
             state,
@@ -620,10 +724,8 @@ fn active_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
         "europe_open_followup",
         "Nordic/EU Open +1h15 Decision Report",
         minutes_after_open(state, "europe_open_followup"),
-        now,
-        due_window,
     ));
-    pulses.extend(grouped_open_followup_pulses(
+    pulses.extend(grouped_open_followup_pulse_candidates(
         &rows,
         &configured_codes(
             state,
@@ -639,20 +741,16 @@ fn active_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
         "us_open_followup",
         "US Open +1h15 Decision Report",
         minutes_after_open(state, "us_open_followup"),
-        now,
-        due_window,
     ));
     pulses
 }
 
-fn grouped_open_followup_pulses(
+fn grouped_open_followup_pulse_candidates(
     rows: &[JsonValue],
     configured_codes: &HashSet<String>,
     kind: &str,
     label: &str,
     minutes_after_open: i64,
-    now: DateTime<Utc>,
-    due_window: Duration,
 ) -> Vec<DecisionPulse> {
     let mut groups: Vec<(DateTime<Utc>, Vec<JsonValue>)> = Vec::new();
     for row in rows {
@@ -667,7 +765,7 @@ fn grouped_open_followup_pulses(
             continue;
         };
         let target = session_open + Duration::minutes(minutes_after_open);
-        if target >= tradable_close || now < target || now >= target + due_window {
+        if target >= tradable_close {
             continue;
         }
         if let Some((_, values)) = groups.iter_mut().find(|(existing, _)| *existing == target) {
@@ -989,6 +1087,10 @@ fn xai_http_timeout_seconds(state: &AppState) -> u64 {
 
 fn parse_time(value: Option<&JsonValue>) -> Option<DateTime<Utc>> {
     let text = value?.as_str()?;
+    parse_rfc3339_text(text)
+}
+
+fn parse_rfc3339_text(text: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(text)
         .ok()
         .map(|value| value.with_timezone(&Utc))
@@ -1087,5 +1189,31 @@ mod tests {
             1
         );
         assert_eq!(enforcement["status"], "enforced");
+    }
+
+    #[test]
+    fn builds_cash_aware_capital_planning_context() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 250000.0,
+                "cash_balance_dkk": 50000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90
+                }
+            }
+        });
+        let context = capital_planning_context(&overview);
+        assert_eq!(
+            context["required_cash_buffer_dkk"],
+            JsonValue::from(30000.0)
+        );
+        assert_eq!(
+            context["available_buy_budget_dkk"],
+            JsonValue::from(20000.0)
+        );
     }
 }

@@ -157,7 +157,7 @@ impl AppState {
             Vec::new()
         });
         let performance_history = self
-            .performance_history_for_range(&performance_range, 5000)
+            .performance_history_with_current(&performance_range, 5000)
             .await
             .unwrap_or_else(|err| {
                 warn!("dashboard performance history degraded: {err:#}");
@@ -279,6 +279,7 @@ impl AppState {
         let max_daily_orders =
             yaml_i64(&self.config, &["execution", "max_daily_orders"]).unwrap_or(0);
         let executed_today = self.executed_orders_today().await.unwrap_or(0);
+        let decision_refresh = crate::xai_decision::decision_pulse_summary(self);
 
         Ok(json!({
             "app": {
@@ -337,16 +338,16 @@ impl AppState {
                 "scheduler_poll_interval_minutes": yaml_i64(&self.config, &["scheduler", "poll_interval_minutes"]).unwrap_or(10),
                 "decision_cadence": "rust_dashboard",
                 "decision_cadence_label": "Rust dashboard",
-                "decision_pulses": [],
-                "next_decision_pulse_at": null,
-                "next_decision_pulse_label": null
+                "decision_pulses": decision_refresh.get("pulses").cloned().unwrap_or_else(|| json!([])),
+                "next_decision_pulse_at": decision_refresh.get("next_pulse_at").cloned().unwrap_or(JsonValue::Null),
+                "next_decision_pulse_label": decision_refresh.get("next_pulse_label").cloned().unwrap_or(JsonValue::Null)
             }
         }))
     }
 
     pub async fn performance_payload(&self, range_key: &str) -> Result<JsonValue> {
         let history = self
-            .performance_history_for_range(range_key, performance_range_limit(range_key))
+            .performance_history_with_current(range_key, performance_range_limit(range_key))
             .await?;
         let latest = history.last().cloned().unwrap_or_else(|| json!({}));
         let total = value_f64(&latest, "total_market_value_dkk");
@@ -801,11 +802,14 @@ impl AppState {
                 "currency": currency,
                 "paid_price_local": if quantity > 0.0 { cost_basis_local_total / quantity } else { broker_open_price },
                 "open_price_local": broker_open_price,
+                "cost_basis_local": if quantity > 0.0 { cost_basis_local_total / quantity } else { broker_open_price },
                 "current_price_local": current_price_local,
                 "cost_basis_dkk": cost_basis_dkk,
                 "market_value_dkk": market_value_dkk,
                 "unrealised_pnl_dkk": unrealised_pnl_dkk,
                 "daily_pnl_dkk": daily_pnl_dkk,
+                "daily_change_pct": exposure.map(|row| value_f64(row, "instrument_price_day_percent_change")).unwrap_or(0.0),
+                "total_return_pct": if cost_basis_dkk.abs() > 1e-9 { unrealised_pnl_dkk / cost_basis_dkk } else { 0.0 },
                 "allocation_pct": 0.0,
                 "asset_class": text_value(&broker, "asset_type")
                     .if_empty_then(|| base.map(|row| text_value(row, "asset_class")))
@@ -1070,6 +1074,7 @@ impl AppState {
         self.first_json(&sql).await
     }
 
+    #[allow(dead_code)]
     pub async fn generate_decision_report_fallback(&self) -> Result<JsonValue> {
         // This is a conservative Rust-side generator used by the manual button.
         // It does not call the xAI service yet; instead it persists a transparent
@@ -1221,19 +1226,27 @@ impl AppState {
             .and_then(|value| value.get("analysis_window_active"))
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
+        let notifications_status = cycle_json
+            .get("notifications")
+            .and_then(|value| value.get("status"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or("not_run");
+        let broker_alerts_status = notifications_status;
         let sql = format!(
             "INSERT INTO scheduler_cycle_history (
                 started_at, completed_at, status, analysis_window_active,
                 generated_decision, queue_status, notifications_status, broker_alerts_status,
                 cycle_json
             ) VALUES (
-                '{}', '{}', '{}', {}, 0, '{}', 'not_run', 'not_run', '{}'
+                '{}', '{}', '{}', {}, 0, '{}', '{}', '{}', '{}'
             )",
             sql_escape(started_at),
             sql_escape(completed_at),
             sql_escape(status),
             if analysis_window_active { 1 } else { 0 },
             sql_escape(queue_status),
+            sql_escape(notifications_status),
+            sql_escape(broker_alerts_status),
             sql_escape(&cycle_text)
         );
         sqlx::query(&sql)
@@ -1307,15 +1320,69 @@ impl AppState {
         range_key: &str,
         limit: i64,
     ) -> Result<Vec<JsonValue>> {
+        let columns = "recorded_at, snapshot_type, total_market_value_dkk, invested_market_value_dkk, cash_balance_dkk, total_cost_basis_dkk, total_unrealised_pnl_dkk, total_daily_pnl_dkk, position_count, source";
+        let limit = clamp_limit(limit, 1, 5000);
+        let mut rows = Vec::new();
         let where_clause = match performance_start_at(range_key) {
-            Some(start_at) => format!("WHERE recorded_at >= '{}'", sql_escape(&start_at)),
+            Some(start_at) => {
+                let escaped_start = sql_escape(&start_at);
+                let anchor_sql = format!(
+                    "SELECT {columns} FROM portfolio_value_history WHERE recorded_at < '{escaped_start}' ORDER BY recorded_at DESC, id DESC LIMIT 1"
+                );
+                rows.extend(self.select_json(&anchor_sql).await.unwrap_or_default());
+                format!("WHERE recorded_at >= '{escaped_start}'")
+            }
             None => String::new(),
         };
+        let remaining = (limit - rows.len() as i64).max(1);
         let sql = format!(
-            "SELECT recorded_at, snapshot_type, total_market_value_dkk, invested_market_value_dkk, cash_balance_dkk, total_cost_basis_dkk, total_unrealised_pnl_dkk, total_daily_pnl_dkk, position_count, source FROM portfolio_value_history {where_clause} ORDER BY recorded_at ASC, id ASC LIMIT {}",
-            clamp_limit(limit, 1, 5000)
+            "SELECT {columns} FROM portfolio_value_history {where_clause} ORDER BY recorded_at ASC, id ASC LIMIT {}",
+            clamp_limit(remaining, 1, 5000)
         );
-        Ok(self.select_json(&sql).await.unwrap_or_default())
+        rows.extend(self.select_json(&sql).await.unwrap_or_default());
+        rows.sort_by(|left, right| {
+            text_value(left, "recorded_at")
+                .cmp(&text_value(right, "recorded_at"))
+                .then_with(|| {
+                    text_value(left, "snapshot_type").cmp(&text_value(right, "snapshot_type"))
+                })
+        });
+        Ok(rows)
+    }
+
+    pub async fn performance_history_with_current(
+        &self,
+        range_key: &str,
+        limit: i64,
+    ) -> Result<Vec<JsonValue>> {
+        let mut history = self.performance_history_for_range(range_key, limit).await?;
+        let current = self.current_performance_row().await?;
+        let latest_matches_current = history
+            .last()
+            .is_some_and(|latest| performance_rows_have_same_values(latest, &current));
+        if !latest_matches_current {
+            history.push(current);
+        } else if history.len() == 1 {
+            history[0] = current;
+        }
+        Ok(history)
+    }
+
+    async fn current_performance_row(&self) -> Result<JsonValue> {
+        let latest_batch = self.latest_batch_id().await?;
+        let aggregate = self.position_aggregate(latest_batch.as_deref()).await?;
+        Ok(json!({
+            "recorded_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "snapshot_type": "runtime_current",
+            "total_market_value_dkk": value_f64(&aggregate, "total_market_value_dkk"),
+            "invested_market_value_dkk": value_f64(&aggregate, "invested_market_value_dkk"),
+            "cash_balance_dkk": value_f64(&aggregate, "cash_balance_dkk"),
+            "total_cost_basis_dkk": value_f64(&aggregate, "total_cost_basis_dkk"),
+            "total_unrealised_pnl_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
+            "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
+            "position_count": value_i64(&aggregate, "position_count"),
+            "source": text_value(&aggregate, "source"),
+        }))
     }
 
     pub async fn portfolio_trades_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -1956,6 +2023,22 @@ fn performance_start_at(range_key: &str) -> Option<String> {
     Some(start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
+fn performance_rows_have_same_values(left: &JsonValue, right: &JsonValue) -> bool {
+    const EPSILON_DKK: f64 = 0.01;
+    let numeric_keys = [
+        "total_market_value_dkk",
+        "invested_market_value_dkk",
+        "cash_balance_dkk",
+        "total_cost_basis_dkk",
+        "total_unrealised_pnl_dkk",
+        "total_daily_pnl_dkk",
+    ];
+    numeric_keys
+        .iter()
+        .all(|key| (value_f64(left, key) - value_f64(right, key)).abs() <= EPSILON_DKK)
+        && value_i64(left, "position_count") == value_i64(right, "position_count")
+}
+
 fn text_value(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -2084,6 +2167,7 @@ fn non_empty_session_text(value: Option<&JsonValue>) -> Option<&str> {
     if text.is_empty() { None } else { Some(text) }
 }
 
+#[allow(dead_code)]
 fn deterministic_selected_assets(
     positions: &[JsonValue],
     watchlists: &JsonValue,
@@ -2127,6 +2211,7 @@ fn deterministic_selected_assets(
     selected
 }
 
+#[allow(dead_code)]
 fn deterministic_symbol_sentiment(
     positions: &[JsonValue],
     selected_assets: &[JsonValue],
@@ -2171,6 +2256,7 @@ fn deterministic_symbol_sentiment(
     rows
 }
 
+#[allow(dead_code)]
 fn deterministic_suggested_trades(
     positions: &[JsonValue],
     watchlists: &JsonValue,

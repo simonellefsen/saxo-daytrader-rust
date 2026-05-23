@@ -5,8 +5,8 @@ metadata:
   namespace: saxo
 type: Opaque
 stringData:
-  ACCESS_KEY_ID: "__MINIO_ROOT_USER__"
-  ACCESS_SECRET_KEY: "__MINIO_ROOT_PASSWORD__"
+  ACCESS_KEY_ID: "__BACKUP_S3_ACCESS_KEY_ID__"
+  ACCESS_SECRET_KEY: "__BACKUP_S3_SECRET_ACCESS_KEY__"
 ---
 apiVersion: v1
 kind: Secret
@@ -37,8 +37,8 @@ spec:
   backup:
     retentionPolicy: "3650d"
     barmanObjectStore:
-      destinationPath: s3://daytrader-cnpg/
-      endpointURL: __MINIO_ENDPOINT_URL__
+      destinationPath: s3://__BACKUP_BUCKET__/
+      endpointURL: __BACKUP_S3_ENDPOINT_URL__
       s3Credentials:
         accessKeyId:
           name: daytrader-minio-backup

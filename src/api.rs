@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{
     Json, Router,
-    extract::{Form, Path, Query, State},
+    extract::{Form, Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -15,6 +15,7 @@ use tracing::{Level, error, info, warn};
 
 use crate::{
     auth::{self, SsoSession},
+    config::yaml_string,
     localization::LocalizationPrefs,
     models::{
         CashBufferRequest, LimitParams, LocalizationSettingsRequest, PerformanceParams,
@@ -98,6 +99,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/orders/{order_id}/manage",
             post(manage_order_not_ported),
+        )
+        .route(
+            "/api/portfolio/reset-from-live-csv",
+            post(reset_sim_from_live_csv),
         )
         .fallback(get(index))
         .layer(
@@ -617,6 +622,95 @@ async fn manage_order_not_ported(Path(order_id): Path<i64>) -> Response {
     safe_not_ported(&format!(
         "Order management for order {order_id} is disabled in the Rust runtime until Saxo replace/cancel handling is ported."
     ))
+}
+
+async fn reset_sim_from_live_csv(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
+    // For now we do a basic check via config
+    let env = yaml_string(&state.config, &["saxo", "environment"]).unwrap_or_default();
+    if env.to_uppercase() != "SIM" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"status": "forbidden", "message": "This reset is only allowed when saxo.environment=SIM"})),
+        ).into_response();
+    }
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut cash_dkk: Option<f64> = None;
+    let mut also_sync = false;
+    let mut confirm = false;
+
+    while let Some(field) = multipart.next_field().await.unwrap_or(None) {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            file_bytes = Some(field.bytes().await.unwrap_or_default().to_vec());
+        } else if name == "cash_dkk" {
+            if let Ok(text) = field.text().await {
+                cash_dkk = text.parse().ok();
+            }
+        } else if name == "also_sync_sim_broker" {
+            also_sync = true;
+        } else if name == "confirm_wipe" {
+            confirm = true;
+        }
+    }
+
+    if !confirm {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "Confirmation checkbox is required"})),
+        )
+            .into_response();
+    }
+    if cash_dkk.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "cash_dkk is required"})),
+        )
+            .into_response();
+    }
+    if file_bytes.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "CSV file is required"})),
+        )
+            .into_response();
+    }
+
+    let filename = "uploaded-live-positioner.csv"; // We can improve filename later
+    match state
+        .perform_sim_reset_from_live_csv(
+            &file_bytes.unwrap(),
+            cash_dkk.unwrap(),
+            filename,
+            also_sync,
+        )
+        .await
+    {
+        Ok(result) => Json(json!({
+            "status": "ok",
+            "batch_id": result.batch_id,
+            "imported_positions": result.imported_positions,
+            "cash_dkk": result.cash_dkk,
+            "also_sync_sim_broker": also_sync,
+            "message": "SIM portfolio has been reset from the uploaded Live export."
+        }))
+        .into_response(),
+        Err(err) => {
+            tracing::error!("SIM portfolio reset failed: {err:#}");
+            let full_msg = format!("{err:#}");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "status": "error",
+                    "message": full_msg
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 fn safe_not_ported(message: &str) -> Response {

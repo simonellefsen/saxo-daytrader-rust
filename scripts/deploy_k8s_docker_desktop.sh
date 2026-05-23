@@ -83,9 +83,34 @@ MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-daytrader-minio-password}"
 MINIO_API_PORT="${MINIO_API_PORT:-9000}"
 MINIO_CONSOLE_PORT="${MINIO_CONSOLE_PORT:-9001}"
 MINIO_ENDPOINT_URL="${MINIO_ENDPOINT_URL:-http://host.docker.internal:$MINIO_API_PORT}"
+BACKUP_OBJECT_STORE="${BACKUP_OBJECT_STORE:-minio}"
+BACKUP_BUCKET="${BACKUP_BUCKET:-daytrader-cnpg}"
+case "$BACKUP_OBJECT_STORE" in
+  minio)
+    BACKUP_S3_ENDPOINT_URL="${BACKUP_S3_ENDPOINT_URL:-$MINIO_ENDPOINT_URL}"
+    BACKUP_S3_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY_ID:-$MINIO_ROOT_USER}"
+    BACKUP_S3_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_ACCESS_KEY:-$MINIO_ROOT_PASSWORD}"
+    MINIO_ENDPOINT_URL="$BACKUP_S3_ENDPOINT_URL"
+    MINIO_ROOT_USER="$BACKUP_S3_ACCESS_KEY_ID"
+    MINIO_ROOT_PASSWORD="$BACKUP_S3_SECRET_ACCESS_KEY"
+    ;;
+  rustfs)
+    RUSTFS_ENDPOINT_URL="${RUSTFS_ENDPOINT_URL:-http://host.docker.internal:9000}"
+    RUSTFS_ACCESS_KEY="${RUSTFS_ACCESS_KEY:-rustfsadmin}"
+    RUSTFS_SECRET_KEY="${RUSTFS_SECRET_KEY:-rustfsadmin}"
+    BACKUP_S3_ENDPOINT_URL="${BACKUP_S3_ENDPOINT_URL:-$RUSTFS_ENDPOINT_URL}"
+    BACKUP_S3_ACCESS_KEY_ID="${BACKUP_S3_ACCESS_KEY_ID:-$RUSTFS_ACCESS_KEY}"
+    BACKUP_S3_SECRET_ACCESS_KEY="${BACKUP_S3_SECRET_ACCESS_KEY:-$RUSTFS_SECRET_KEY}"
+    ;;
+  *)
+    printf "Unsupported BACKUP_OBJECT_STORE: %s\n" "$BACKUP_OBJECT_STORE" >&2
+    printf "Expected one of: minio, rustfs\n" >&2
+    exit 1
+    ;;
+esac
 POSTGRES_APP_USER="${POSTGRES_APP_USER:-daytrader}"
 POSTGRES_APP_PASSWORD="${POSTGRES_APP_PASSWORD:-daytrader-postgres-password}"
-export MINIO_HOST_PATH MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_ENDPOINT_URL POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE DB_NAMESPACE
+export MINIO_HOST_PATH MINIO_ROOT_USER MINIO_ROOT_PASSWORD MINIO_ENDPOINT_URL BACKUP_BUCKET BACKUP_S3_ENDPOINT_URL BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE DB_NAMESPACE
 DATABASE_URL="$(python3 - <<'PY'
 import os
 from urllib.parse import quote
@@ -115,13 +140,16 @@ start_minio_container() {
     -v "$MINIO_HOST_PATH:/data" \
     quay.io/minio/minio:latest \
     server /data --console-address :9001 >/dev/null
+}
 
+ensure_backup_bucket() {
+  printf "Ensuring backup bucket %s at %s...\n" "$BACKUP_BUCKET" "$BACKUP_S3_ENDPOINT_URL"
   docker run --rm --entrypoint /bin/sh quay.io/minio/mc:latest \
     -ec "
-      until mc alias set local 'http://host.docker.internal:$MINIO_API_PORT' '$MINIO_ROOT_USER' '$MINIO_ROOT_PASSWORD'; do
+      until mc alias set backup '$BACKUP_S3_ENDPOINT_URL' '$BACKUP_S3_ACCESS_KEY_ID' '$BACKUP_S3_SECRET_ACCESS_KEY'; do
         sleep 1
       done
-      mc mb --ignore-existing local/daytrader-cnpg
+      mc mb --ignore-existing 'backup/$BACKUP_BUCKET'
     " >/dev/null
 }
 
@@ -154,7 +182,12 @@ helm upgrade --install ngrok-operator ngrok/ngrok-operator \
   --set "credentials.apiKey=$NGROK_API_KEY" \
   --set "credentials.authtoken=$NGROK_AUTHTOKEN"
 
-start_minio_container
+if [ "$BACKUP_OBJECT_STORE" = "minio" ]; then
+  start_minio_container
+else
+  printf "Using external %s backup target at %s.\n" "$BACKUP_OBJECT_STORE" "$BACKUP_S3_ENDPOINT_URL"
+fi
+ensure_backup_bucket
 
 printf "Applying app namespace and CloudNativePG resources in %s...\n" "$DB_NAMESPACE"
 kubectl --context "$CONTEXT" apply -f "$ROOT/deploy/k8s/base/namespace.yaml"
@@ -166,9 +199,10 @@ import sys
 
 template_path = sys.argv[1]
 replacements = {
-    "__MINIO_ROOT_USER__": os.environ["MINIO_ROOT_USER"],
-    "__MINIO_ROOT_PASSWORD__": os.environ["MINIO_ROOT_PASSWORD"],
-    "__MINIO_ENDPOINT_URL__": os.environ["MINIO_ENDPOINT_URL"],
+    "__BACKUP_BUCKET__": os.environ["BACKUP_BUCKET"],
+    "__BACKUP_S3_ACCESS_KEY_ID__": os.environ["BACKUP_S3_ACCESS_KEY_ID"],
+    "__BACKUP_S3_SECRET_ACCESS_KEY__": os.environ["BACKUP_S3_SECRET_ACCESS_KEY"],
+    "__BACKUP_S3_ENDPOINT_URL__": os.environ["BACKUP_S3_ENDPOINT_URL"],
     "__POSTGRES_APP_USER__": os.environ["POSTGRES_APP_USER"],
     "__POSTGRES_APP_PASSWORD__": os.environ["POSTGRES_APP_PASSWORD"],
     "__DATABASE_URL__": os.environ["DATABASE_URL"],

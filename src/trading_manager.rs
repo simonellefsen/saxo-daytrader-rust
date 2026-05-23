@@ -47,6 +47,18 @@ struct GateDecision {
     reason: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CapitalBudget {
+    cash_balance_dkk: f64,
+    total_market_value_dkk: f64,
+    invested_market_value_dkk: f64,
+    min_cash_buffer_pct: f64,
+    max_deployment_pct: f64,
+    required_cash_buffer_dkk: f64,
+    available_buy_budget_dkk: f64,
+    remaining_deployment_capacity_dkk: f64,
+}
+
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     let reports = fresh_unmanaged_reports(state).await?;
     if reports.is_empty() {
@@ -99,6 +111,12 @@ async fn run_for_report(
 ) -> Result<JsonValue> {
     let candidates = candidate_orders_from_report(&report.report_json);
     let excluded = excluded_symbols(state);
+    let overview = state.overview_payload().await.unwrap_or_else(|err| {
+        warn!("Trading Manager capital context degraded: {err:#}");
+        json!({})
+    });
+    let initial_capital_budget = capital_budget_from_overview(&overview);
+    let mut capital_budget = initial_capital_budget;
 
     let min_trade_value_dkk =
         yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0);
@@ -140,6 +158,19 @@ async fn run_for_report(
             ));
             continue;
         }
+        if order.action == "BUY" {
+            let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+            if estimated_value_dkk > capital_budget.available_buy_budget_dkk + 0.01 {
+                skipped.push(skip_order(
+                    &order,
+                    &format!(
+                        "BUY would exceed available cash budget after buffer: requested {:.2} DKK, available {:.2} DKK.",
+                        estimated_value_dkk, capital_budget.available_buy_budget_dkk
+                    ),
+                ));
+                continue;
+            }
+        }
         if order.action == "SELL" {
             let available = latest_position_quantity(state, &order.symbol)
                 .await
@@ -155,6 +186,9 @@ async fn run_for_report(
         }
         let gate = technical_gate(&order);
         if gate.approved {
+            if order.action == "BUY" {
+                capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
+            }
             approved.push((order, gate.reason));
         } else {
             skipped.push(skip_order(&order, &gate.reason));
@@ -174,6 +208,8 @@ async fn run_for_report(
     });
     let manager_json = json!({
         "summary": "Rust Trading Manager approved scheduled report orders using embedded daily technical gates.",
+        "capital_budget": initial_capital_budget.to_json(),
+        "remaining_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
         "approved_orders": approved.iter().map(|(order, reason)| json!({
@@ -185,6 +221,7 @@ async fn run_for_report(
         "skipped_orders": skipped,
         "execution_notes": [
             "Orders are deduplicated by strategy_key before insertion.",
+            "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
     });
@@ -656,6 +693,64 @@ fn unique_strategy_key(strategy_key: String, symbol: &str, action: &str) -> Stri
     }
 }
 
+fn capital_budget_from_overview(overview: &JsonValue) -> CapitalBudget {
+    let summary = overview
+        .get("portfolio_summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let cash_policy = overview
+        .get("settings")
+        .and_then(|value| value.get("cash_buffer"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let total_market_value_dkk = value_f64(&summary, "total_market_value_dkk");
+    let invested_market_value_dkk = value_f64(&summary, "invested_market_value_dkk");
+    let cash_balance_dkk = value_f64(&summary, "cash_balance_dkk");
+    let min_cash_buffer_pct = value_f64(&cash_policy, "min_cash_buffer_pct").max(0.0);
+    let max_deployment_pct = value_f64(&cash_policy, "max_deployment_pct").clamp(0.0, 1.0);
+    let required_cash_buffer_dkk = (total_market_value_dkk * min_cash_buffer_pct).max(0.0);
+    let deployment_cap_dkk = if max_deployment_pct > 0.0 {
+        total_market_value_dkk * max_deployment_pct
+    } else {
+        total_market_value_dkk
+    };
+    let available_cash_above_buffer_dkk = (cash_balance_dkk - required_cash_buffer_dkk).max(0.0);
+    let remaining_deployment_capacity_dkk =
+        (deployment_cap_dkk - invested_market_value_dkk).max(0.0);
+    let available_buy_budget_dkk =
+        available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
+    CapitalBudget {
+        cash_balance_dkk,
+        total_market_value_dkk,
+        invested_market_value_dkk,
+        min_cash_buffer_pct,
+        max_deployment_pct,
+        required_cash_buffer_dkk,
+        available_buy_budget_dkk,
+        remaining_deployment_capacity_dkk,
+    }
+}
+
+impl CapitalBudget {
+    fn reserve_buy(&mut self, estimated_value_dkk: f64) {
+        self.available_buy_budget_dkk =
+            (self.available_buy_budget_dkk - estimated_value_dkk.max(0.0)).max(0.0);
+    }
+
+    fn to_json(self) -> JsonValue {
+        json!({
+            "cash_balance_dkk": self.cash_balance_dkk,
+            "total_market_value_dkk": self.total_market_value_dkk,
+            "invested_market_value_dkk": self.invested_market_value_dkk,
+            "min_cash_buffer_pct": self.min_cash_buffer_pct,
+            "max_deployment_pct": self.max_deployment_pct,
+            "required_cash_buffer_dkk": self.required_cash_buffer_dkk,
+            "available_buy_budget_dkk": self.available_buy_budget_dkk,
+            "remaining_deployment_capacity_dkk": self.remaining_deployment_capacity_dkk,
+        })
+    }
+}
+
 fn excluded_symbols(state: &AppState) -> Vec<String> {
     let mut values = Vec::new();
     if let Some(items) = state
@@ -817,5 +912,27 @@ mod tests {
         assert!(technical_gate(&order("SELL", "SELL", "neutral", 1)).approved);
         assert!(technical_gate(&order("SELL", "HOLD", "bearish", 1)).approved);
         assert!(!technical_gate(&order("SELL", "HOLD", "bullish", 3)).approved);
+    }
+
+    #[test]
+    fn derives_available_buy_budget_after_cash_buffer() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 250000.0,
+                "cash_balance_dkk": 50000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90
+                }
+            }
+        });
+        let mut budget = capital_budget_from_overview(&overview);
+        assert_eq!(budget.required_cash_buffer_dkk, 30000.0);
+        assert_eq!(budget.available_buy_budget_dkk, 20000.0);
+        budget.reserve_buy(7500.0);
+        assert_eq!(budget.available_buy_budget_dkk, 12500.0);
     }
 }

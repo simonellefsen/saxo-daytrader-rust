@@ -6,9 +6,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates musl-tools \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
-RUN case "${TARGETARCH:-amd64}" in \
-      amd64) echo x86_64-unknown-linux-musl > /tmp/rust-target ;; \
-      arm64) echo aarch64-unknown-linux-musl > /tmp/rust-target ;; \
+RUN case "${TARGETARCH:-$(uname -m)}" in \
+      amd64|x86_64) echo x86_64-unknown-linux-musl > /tmp/rust-target ;; \
+      arm64|aarch64) echo aarch64-unknown-linux-musl > /tmp/rust-target ;; \
       *) echo "Unsupported TARGETARCH=${TARGETARCH:-unset}" >&2; exit 1 ;; \
     esac \
     && rustup target add "$(cat /tmp/rust-target)" \

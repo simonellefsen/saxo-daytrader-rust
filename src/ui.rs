@@ -10,6 +10,28 @@ use crate::{
 
 pub const CSS: &str = include_str!("../assets/app.css");
 pub const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
+const CHART_SCRIPT: &str = r#"
+<script>
+(() => {
+  const bindPerformanceCharts = () => {
+    document.querySelectorAll(".interactive-chart").forEach((chart) => {
+      chart.addEventListener("pointermove", (event) => {
+        const bounds = chart.getBoundingClientRect();
+        chart.style.setProperty("--crosshair-x", `${event.clientX - bounds.left}px`);
+        chart.style.setProperty("--crosshair-y", `${event.clientY - bounds.top}px`);
+        chart.classList.add("is-hovering");
+      });
+      chart.addEventListener("pointerleave", () => chart.classList.remove("is-hovering"));
+    });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindPerformanceCharts, { once: true });
+  } else {
+    bindPerformanceCharts();
+  }
+})();
+</script>
+"#;
 
 #[derive(Props, Clone, PartialEq)]
 struct DashboardProps {
@@ -30,7 +52,7 @@ pub fn render_index(data: DashboardView) -> String {
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
-  <body>{body}</body>
+  <body>{body}{CHART_SCRIPT}</body>
 </html>"#
     )
 }
@@ -286,8 +308,8 @@ fn OverviewView(
                     section { class: "section",
                         h2 { "Positions" }
                         div { class: "table-wrap",
-                            table {
-                                thead { tr { th { "Symbol" } th { "Decision" } th { "Trending" } th { "Instrument" } th { "Qty" } th { "Currency" } th { "Market value" } th { "Unrealised" } th { "Allocation" } } }
+                            table { class: "positions-table",
+                                thead { tr { th { "Position" } th { "Decision" } th { "Trend" } th { "Qty" } th { "Kostpris" } th { "Current" } th { "Market value" } th { "% 1D" } th { "Gevinst/tab i alt (DKK)" } th { "Allocation" } } }
                                 tbody { for row in data.positions.iter() { PositionRow { row: row.clone(), prefs: prefs.clone() } } }
                             }
                         }
@@ -413,7 +435,7 @@ fn RangeLink(range: &'static str, active: bool) -> Element {
 fn PerformanceChart(rows: Vec<JsonValue>) -> Element {
     let chart = chart_paths(&rows);
     rsx! {
-        div { class: "chart-card",
+        div { class: "chart-card interactive-chart",
             svg { view_box: "0 0 1000 280", role: "img",
                 line { x1: "56", y1: "24", x2: "56", y2: "236", class: "chart-axis" }
                 line { x1: "944", y1: "24", x2: "944", y2: "236", class: "chart-axis" }
@@ -427,6 +449,7 @@ fn PerformanceChart(rows: Vec<JsonValue>) -> Element {
                 text { x: "56", y: "276", class: "chart-label", "{chart.start_label}" }
                 text { x: "944", y: "276", class: "chart-label right-label", "{chart.end_label}" }
             }
+            div { class: "chart-crosshair", aria_hidden: "true" }
         }
     }
 }
@@ -942,6 +965,93 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { "Expires " strong { "{text(&data.saxo_auth, \"expires_in_minutes\")} min" } }
                 }
             }
+
+            // SIM-only: Reset portfolio from Live Positioner export
+            {
+                let saxo_env = data
+                    .saxo_auth
+                    .get("environment")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_uppercase();
+                if saxo_env == "SIM" {
+                    rsx! {
+                        section { class: "section sim-reset-card",
+                            h3 { "Reset SIM Portfolio from Live Export" }
+                            p { class: "muted",
+                                "Upload a Positioner CSV exported from your Live Saxo account. "
+                                "This will completely replace the current SIM portfolio state (lots, cost basis, cash) with your real holdings."
+                            }
+                            form {
+                                action: "/api/portfolio/reset-from-live-csv",
+                                method: "post",
+                                enctype: "multipart/form-data",
+                                class: "sim-reset-form",
+
+                                div { class: "form-row",
+                                    label { "Positioner CSV exported from your Live account" }
+                                    input {
+                                        r#type: "file",
+                                        name: "file",
+                                        accept: ".csv",
+                                        required: true
+                                    }
+                                }
+
+                                div { class: "form-row",
+                                    label { "Cash balance (DKK) at the time of the Live export" }
+                                    input {
+                                        r#type: "number",
+                                        name: "cash_dkk",
+                                        step: "0.01",
+                                        required: true,
+                                        placeholder: "e.g. 20860.00"
+                                    }
+                                    span { class: "hint", "Enter the exact cash figure from your Live account on the export date." }
+                                }
+
+                                div { class: "form-row checkbox",
+                                    label {
+                                        input {
+                                            r#type: "checkbox",
+                                            name: "also_sync_sim_broker",
+                                            value: "true"
+                                        }
+                                        " Also place market orders on this SIM account to match the Live holdings"
+                                    }
+                                }
+
+                                div { class: "form-row checkbox danger",
+                                    label {
+                                        input {
+                                            r#type: "checkbox",
+                                            name: "confirm_wipe",
+                                            value: "true",
+                                            required: true
+                                        }
+                                        strong { " I understand this will permanently wipe the current SIM portfolio (lots, cost basis, cash) and replace it with the Live snapshot." }
+                                    }
+                                }
+
+                                button {
+                                    class: "button danger",
+                                    r#type: "submit",
+                                    id: "reset-submit-btn",
+                                    "Reset SIM Portfolio from Live CSV"
+                                }
+                            }
+
+                            // Note: client-side fetch enhancement temporarily removed because it was
+                            // breaking the rsx! macro parser. The form now does a normal submit and the
+                            // server returns a nice full-page success HTML (with auto-redirect back to
+                            // the Execution tab). This is good enough for a first release and unblocks
+                            // the user immediately.
+                        }
+                    }
+                } else {
+                    rsx! { "" }
+                }
+            }
             div { class: "table-wrap",
                 h3 { "Execution Orders" }
                 table {
@@ -1036,25 +1146,137 @@ fn SummaryMetricCard(label: String, value: String, subtitle: String, tone: Strin
 
 #[component]
 fn PositionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let symbol = text(&row, "symbol");
-    let instrument_name = text(&row, "instrument_name");
     let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
     let currency = text(&row, "currency");
     let market_value = format_dkk(value_f64(&row, "market_value_dkk"), &prefs);
     let unrealised_value = value_f64(&row, "unrealised_pnl_dkk");
-    let unrealised = format_dkk(unrealised_value, &prefs);
+    let total_return_pct = position_total_return_pct(&row);
+    let unrealised = format_signed_dkk(unrealised_value, &prefs);
+    let total_return = format_signed_pct(total_return_pct, &prefs);
+    let daily_value = value_f64(&row, "daily_pnl_dkk");
+    let daily_pct = position_daily_return_pct(&row);
+    let daily = format_signed_dkk(daily_value, &prefs);
+    let daily_return = format_signed_pct(daily_pct, &prefs);
     let allocation = format_pct(value_f64(&row, "allocation_pct"), &prefs);
+    let cost_price = format_position_price(position_cost_price_local(&row), &currency, &prefs);
+    let current_price =
+        format_position_price(value_f64(&row, "current_price_local"), &currency, &prefs);
     rsx! {
         tr {
-            td { SymbolLink { symbol: symbol.clone(), instrument_name: instrument_name.clone() } }
+            td { PositionSymbolCell { row: row.clone(), prefs: prefs.clone() } }
             td { DecisionBadge { decision: row.get("decision").cloned().unwrap_or(JsonValue::Null), prefs: prefs.clone() } }
             td { TrendSparkline { row: row.clone() } }
-            td { "{instrument_name}" }
             td { "{quantity}" }
-            td { "{currency}" }
+            td { "{cost_price}" }
+            td { "{current_price}" }
             td { "{market_value}" }
-            td { class: if unrealised_value >= 0.0 { "good-text" } else { "bad-text" }, "{unrealised}" }
+            td { class: if daily_value >= 0.0 { "good-text" } else { "bad-text" },
+                div { class: "metric-stack",
+                    span { "{daily_return}" }
+                    span { "{daily}" }
+                }
+            }
+            td { class: if unrealised_value >= 0.0 { "good-text" } else { "bad-text" },
+                div { class: "metric-stack",
+                    span { "{total_return}" }
+                    span { "{unrealised}" }
+                }
+            }
             td { "{allocation}" }
+        }
+    }
+}
+
+#[component]
+fn PositionSymbolCell(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let symbol = text(&row, "symbol");
+    let instrument_name = text(&row, "instrument_name");
+    let currency = text(&row, "currency");
+    let modal_id = position_modal_id(&symbol);
+    rsx! {
+        div { class: "position-symbol-cell",
+            a {
+                class: "symbol-link",
+                href: "#{modal_id}",
+                title: "Open position details for {symbol}",
+                "{symbol}"
+            }
+            span { class: "position-name", "{instrument_name}" }
+            span { class: "asset-pill", "{asset_label(&row)} · {currency}" }
+            PositionDetailModal { row, prefs }
+        }
+    }
+}
+
+#[component]
+fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let symbol = text(&row, "symbol");
+    let instrument_name = text(&row, "instrument_name");
+    let modal_id = position_modal_id(&symbol);
+    let yahoo_url = yahoo_finance_url(&symbol);
+    let tradingview_symbol = tradingview_symbol(&symbol);
+    let currency = text(&row, "currency");
+    let cost_price = format_position_price(position_cost_price_local(&row), &currency, &prefs);
+    let open_price = format_position_price(value_f64(&row, "open_price_local"), &currency, &prefs);
+    let current_price =
+        format_position_price(value_f64(&row, "current_price_local"), &currency, &prefs);
+    let total_return_pct = position_total_return_pct(&row);
+    let daily_pct = position_daily_return_pct(&row);
+    let unrealised_value = value_f64(&row, "unrealised_pnl_dkk");
+    let daily_value = value_f64(&row, "daily_pnl_dkk");
+    rsx! {
+        div { id: "{modal_id}", class: "modal-target",
+            a { class: "modal-dismiss", href: "#", "Close" }
+            section { class: "chart-modal position-detail-modal", role: "dialog", aria_label: "Position details for {symbol}",
+                div { class: "section-title-row",
+                    div {
+                        h2 { "{symbol}" }
+                        p { class: "muted", "{instrument_name}" }
+                    }
+                    div { class: "button-row",
+                        a { class: "small-button", href: "{yahoo_url}", target: "_blank", rel: "noopener noreferrer", "Yahoo" }
+                        a { class: "small-button", href: "{tradingview_page_url(&tradingview_symbol)}", target: "_blank", rel: "noopener noreferrer", "TradingView" }
+                        a { class: "small-button", href: "#", "Close" }
+                    }
+                }
+                div { class: "position-detail-grid",
+                    section { class: "detail-panel",
+                        h3 { "Gevinst/tab" }
+                        DetailLine { label: "Kostpris", value: format_dkk(value_f64(&row, "cost_basis_dkk"), &prefs), tone: "" }
+                        DetailLine { label: "Aktuel", value: format_dkk(value_f64(&row, "market_value_dkk"), &prefs), tone: "" }
+                        DetailLine { label: "Afkast", value: format!("{} · {}", format_signed_dkk(unrealised_value, &prefs), format_signed_pct(total_return_pct, &prefs)), tone: if unrealised_value >= 0.0 { "good-text" } else { "bad-text" } }
+                        DetailLine { label: "1D", value: format!("{} · {}", format_signed_dkk(daily_value, &prefs), format_signed_pct(daily_pct, &prefs)), tone: if daily_value >= 0.0 { "good-text" } else { "bad-text" } }
+                    }
+                    section { class: "detail-panel",
+                        h3 { "Position" }
+                        DetailLine { label: "Antal", value: format_quantity(value_f64(&row, "quantity"), &prefs), tone: "" }
+                        DetailLine { label: "Kostpris pr. aktie", value: cost_price, tone: "" }
+                        DetailLine { label: "Åbningskurs", value: open_price, tone: "" }
+                        DetailLine { label: "Aktuel kurs", value: current_price, tone: "" }
+                    }
+                    section { class: "detail-panel",
+                        h3 { "Om virksomheden" }
+                        DetailLine { label: "Symbol", value: symbol.clone(), tone: "" }
+                        DetailLine { label: "ISIN", value: text_or(&row, "isin", "n/a"), tone: "" }
+                        DetailLine { label: "Type", value: asset_label(&row), tone: "" }
+                        DetailLine { label: "Marked", value: text_or(&row, "market_status", "n/a"), tone: "" }
+                    }
+                    section { class: "detail-panel muted-detail-panel",
+                        h3 { "ESG, nyheder og analytikere" }
+                        p { class: "muted", "Saxo's public OpenAPI portfolio data covers positions, exposure, prices, and instrument reference data. I did not find documented OpenAPI endpoints for the ESG-risk, news, or analyst-consensus panels shown in the Saxo app, so this view leaves those fields empty until we add a licensed data source." }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DetailLine(label: String, value: String, tone: String) -> Element {
+    rsx! {
+        div { class: "detail-line",
+            span { "{label}" }
+            strong { class: "{tone}", "{value}" }
         }
     }
 }
@@ -1271,6 +1493,15 @@ fn text(value: &JsonValue, key: &str) -> String {
     }
 }
 
+fn text_or(value: &JsonValue, key: &str, fallback: &str) -> String {
+    let text = text(value, key);
+    if text.is_empty() {
+        fallback.to_string()
+    } else {
+        text
+    }
+}
+
 fn json_list_label(value: Option<&JsonValue>) -> String {
     let Some(items) = value.and_then(JsonValue::as_array) else {
         return "None".to_string();
@@ -1343,6 +1574,74 @@ fn format_local_money(value: f64, currency: &str, prefs: &LocalizationPrefs) -> 
     }
 }
 
+fn format_position_price(value: f64, currency: &str, prefs: &LocalizationPrefs) -> String {
+    if value.abs() < f64::EPSILON {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} {}",
+            crate::localization::format_number(value, 2, prefs),
+            currency.trim().to_uppercase()
+        )
+    }
+}
+
+fn format_signed_dkk(value: f64, prefs: &LocalizationPrefs) -> String {
+    let sign = if value > 0.0 { "+" } else { "" };
+    format!("{sign}{}", format_dkk(value, prefs))
+}
+
+fn format_signed_pct(value: f64, prefs: &LocalizationPrefs) -> String {
+    let sign = if value > 0.0 { "+" } else { "" };
+    format!("{sign}{}", format_pct(value, prefs))
+}
+
+fn position_cost_price_local(row: &JsonValue) -> f64 {
+    [
+        value_f64(row, "cost_basis_local"),
+        value_f64(row, "paid_price_local"),
+        value_f64(row, "open_price_local"),
+    ]
+    .into_iter()
+    .find(|value| value.abs() > f64::EPSILON)
+    .unwrap_or(0.0)
+}
+
+fn position_total_return_pct(row: &JsonValue) -> f64 {
+    let explicit = value_f64(row, "total_return_pct");
+    if explicit.abs() > f64::EPSILON {
+        return explicit;
+    }
+    let cost_basis = value_f64(row, "cost_basis_dkk");
+    if cost_basis.abs() > f64::EPSILON {
+        value_f64(row, "unrealised_pnl_dkk") / cost_basis
+    } else {
+        0.0
+    }
+}
+
+fn position_daily_return_pct(row: &JsonValue) -> f64 {
+    let explicit = value_f64(row, "daily_change_pct");
+    if explicit.abs() > f64::EPSILON {
+        return explicit;
+    }
+    let daily = value_f64(row, "daily_pnl_dkk");
+    let prior_value = value_f64(row, "market_value_dkk") - daily;
+    if prior_value.abs() > f64::EPSILON {
+        daily / prior_value
+    } else {
+        0.0
+    }
+}
+
+fn position_modal_id(symbol: &str) -> String {
+    format!("position-{}", modal_id_for_symbol(symbol))
+}
+
+fn asset_label(row: &JsonValue) -> String {
+    text_or(row, "asset_class", "Equity")
+}
+
 struct ChartPaths {
     portfolio_points: String,
     cash_points: String,
@@ -1388,6 +1687,10 @@ fn chart_paths(rows: &[JsonValue]) -> ChartPaths {
 fn series_points(values: &[f64], min: f64, max: f64) -> String {
     if values.is_empty() {
         return "56,236 944,236".to_string();
+    }
+    if values.len() == 1 {
+        let y = 236.0 - ((values[0] - min) / (max - min).abs().max(1.0)) * 212.0;
+        return format!("56,{y:.1} 944,{y:.1}");
     }
     let span = (max - min).abs().max(1.0);
     let last_index = (values.len().saturating_sub(1)).max(1) as f64;
