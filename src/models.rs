@@ -79,6 +79,13 @@ pub struct HermesExperimentRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HermesExperimentTransitionRequest {
+    pub action: String,
+    pub notes: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PerformanceParams {
     pub range_key: Option<String>,
 }

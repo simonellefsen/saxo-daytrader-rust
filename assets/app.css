@@ -190,6 +190,18 @@ h2 {
   text-decoration: none;
 }
 
+.small-button.danger {
+  border-color: #f2b8b5;
+  color: var(--bad);
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 180px;
+}
+
 .section-title-row {
   display: flex;
   justify-content: space-between;

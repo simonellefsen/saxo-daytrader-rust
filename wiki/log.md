@@ -85,3 +85,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Kept the project copy of the LLM Wiki source note under [wiki/sources/llm-wiki.md](/Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md).
 - Removed the duplicate root-level `llm-wiki.md`.
 - Updated wiki metadata and docs to point at the wiki source note and original Andrej Karpathy gist.
+
+## [2026-05-23] implementation | Hermes experiment lifecycle
+
+- Added dashboard actions for Hermes experiment lifecycle transitions from `pending_review` through paper, SIM, readiness, rejection/failure, and promotion.
+- Added an operator Rust transition path that records actor, action, status transition, notes, timestamp, and promoted baseline id in `approval_json`.
+- Promotion creates a `strategy_baselines` audit record and supersedes prior active baseline records.
+- Kept promotion as an audit/control-plane record only; it does not activate live broker behavior.

@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde_json::{Value as JsonValue, json};
@@ -52,6 +52,15 @@ fn sql_optional_text(value: Option<&str>) -> String {
     }
 }
 
+fn json_text(value: &JsonValue, key: &str) -> String {
+    match value.get(key) {
+        Some(JsonValue::String(text)) => text.clone(),
+        Some(JsonValue::Number(number)) => number.to_string(),
+        Some(JsonValue::Bool(flag)) => flag.to_string(),
+        _ => String::new(),
+    }
+}
+
 fn performance_range_limit(range_key: &str) -> i64 {
     // Rust match expressions are similar to Python's match/case or a JS switch, but they
     // must cover every possible input. The final `_` arm is the default case.
@@ -64,6 +73,26 @@ fn performance_range_limit(range_key: &str) -> i64 {
         "1Y" => 5000,
         "ALL" => 5000,
         _ => 120,
+    }
+}
+
+fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
+    match (current_status, action.trim()) {
+        ("pending_review", "approve_paper") => Some("approved_paper"),
+        ("pending_review", "reject") => Some("rejected"),
+        ("approved_paper", "activate_paper") => Some("active_paper"),
+        ("approved_paper", "reject") => Some("rejected"),
+        ("active_paper", "approve_sim") => Some("approved_sim"),
+        ("active_paper", "mark_paper_failed") => Some("paper_failed"),
+        ("active_paper", "reject") => Some("rejected"),
+        ("approved_sim", "activate_sim") => Some("active_sim"),
+        ("approved_sim", "reject") => Some("rejected"),
+        ("active_sim", "ready_for_promotion") => Some("ready_for_promotion"),
+        ("active_sim", "mark_sim_failed") => Some("sim_failed"),
+        ("active_sim", "reject") => Some("rejected"),
+        ("ready_for_promotion", "promote") => Some("promoted"),
+        ("ready_for_promotion", "reject") => Some("rejected"),
+        _ => None,
     }
 }
 
@@ -1268,6 +1297,7 @@ impl AppState {
                 "/api/hermes/context",
                 "/api/hermes/reflections",
                 "/api/hermes/experiments",
+                "/api/hermes/experiments/{id}/transition",
                 "/api/health",
                 "/api/overview",
                 "/api/scheduler",
@@ -1305,10 +1335,11 @@ impl AppState {
                 "order precheck/place/replace/cancel",
                 "live order approval",
                 "Kubernetes secret mutation",
-                "active baseline activation"
+                "live broker baseline activation"
             ],
             "notes": [
                 "Hermes proposals are recommend-only until reviewed by the daytrader UI/operator flow.",
+                "Promoted baselines are audit records; they do not activate live broker behavior.",
                 "Strategy experiments must change exactly one variable while one_variable_only is true.",
                 "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
             ],
@@ -1512,6 +1543,129 @@ impl AppState {
             ))
             .await?
             .unwrap_or(JsonValue::Null))
+    }
+
+    pub async fn transition_hermes_experiment(
+        &self,
+        experiment_id: &str,
+        action: &str,
+        notes: Option<&str>,
+        actor: &str,
+    ) -> Result<JsonValue> {
+        let experiment_id = experiment_id.trim();
+        if experiment_id.is_empty() {
+            bail!("experiment id is required");
+        }
+        let experiment = self
+            .first_json(&format!(
+                "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
+                 FROM strategy_experiments WHERE id = '{}' LIMIT 1",
+                sql_escape(experiment_id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        if experiment.is_null() {
+            bail!("Hermes experiment not found: {experiment_id}");
+        }
+        let current_status = json_text(&experiment, "status");
+        let next_status =
+            hermes_experiment_next_status(&current_status, action).with_context(|| {
+                format!("invalid Hermes experiment transition {current_status} -> {action}")
+            })?;
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut baseline_id = None;
+        if next_status == "promoted" {
+            baseline_id = Some(
+                self.promote_hermes_experiment_baseline(&experiment, &now)
+                    .await?,
+            );
+        }
+        let approval = json!({
+            "action": action.trim(),
+            "from_status": current_status,
+            "to_status": next_status,
+            "actor": actor,
+            "notes": notes.unwrap_or("").trim(),
+            "recorded_at": now,
+            "baseline_id": baseline_id
+        });
+        sqlx::query(&format!(
+            "UPDATE strategy_experiments
+             SET status = '{}', approval_json = '{}'
+             WHERE id = '{}'",
+            sql_escape(next_status),
+            sql_escape(&serde_json::to_string(&approval)?),
+            sql_escape(experiment_id)
+        ))
+        .execute(&self.pool)
+        .await
+        .context("updating Hermes experiment transition")?;
+
+        let updated = self
+            .first_json(&format!(
+                "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
+                 FROM strategy_experiments WHERE id = '{}' LIMIT 1",
+                sql_escape(experiment_id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        Ok(json!({
+            "status": "ok",
+            "experiment": updated,
+            "transition": approval
+        }))
+    }
+
+    async fn promote_hermes_experiment_baseline(
+        &self,
+        experiment: &JsonValue,
+        activated_at: &str,
+    ) -> Result<String> {
+        let baseline_id = runtime_id("strategy-baseline");
+        let config_json = json!({
+            "source_experiment_id": json_text(experiment, "id"),
+            "goal_version": experiment.get("goal_version").cloned().unwrap_or_else(|| json!(1)),
+            "changed_variable_path": json_text(experiment, "changed_variable_path"),
+            "old_value": experiment.get("old_value_json").cloned().unwrap_or(JsonValue::Null),
+            "new_value": experiment.get("new_value_json").cloned().unwrap_or(JsonValue::Null),
+            "hypothesis": json_text(experiment, "hypothesis"),
+            "expected_effect": json_text(experiment, "expected_effect"),
+            "risk_notes": json_text(experiment, "risk_notes"),
+            "scope": "baseline_record_only",
+            "live_activation": false
+        });
+        let prompt_json = json!({
+            "source": "hermes_experiment_promotion",
+            "raw_payload": experiment.get("raw_payload_json").cloned().unwrap_or(JsonValue::Null)
+        });
+        sqlx::query("UPDATE strategy_baselines SET status = 'superseded' WHERE status = 'active'")
+            .execute(&self.pool)
+            .await
+            .context("superseding prior strategy baselines")?;
+        sqlx::query(&format!(
+            "INSERT INTO strategy_baselines (
+                id, created_at, activated_at, status, goal_version, config_json, prompt_json, source
+            ) VALUES (
+                '{}', '{}', '{}', 'active', {}, '{}', '{}', '{}'
+            )",
+            sql_escape(&baseline_id),
+            sql_escape(activated_at),
+            sql_escape(activated_at),
+            experiment
+                .get("goal_version")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(1),
+            sql_escape(&serde_json::to_string(&config_json)?),
+            sql_escape(&serde_json::to_string(&prompt_json)?),
+            sql_escape(&format!(
+                "hermes_experiment:{}",
+                json_text(experiment, "id")
+            ))
+        ))
+        .execute(&self.pool)
+        .await
+        .context("creating promoted Hermes strategy baseline")?;
+        Ok(baseline_id)
     }
 
     pub async fn latest_trading_manager_run(&self) -> Result<JsonValue> {
@@ -2726,5 +2880,25 @@ mod tests {
         });
 
         assert!(saxo_session_score(&old_refreshable) > saxo_session_score(&recently_invalid));
+    }
+
+    #[test]
+    fn validates_hermes_experiment_lifecycle_transitions() {
+        assert_eq!(
+            hermes_experiment_next_status("pending_review", "approve_paper"),
+            Some("approved_paper")
+        );
+        assert_eq!(
+            hermes_experiment_next_status("active_sim", "ready_for_promotion"),
+            Some("ready_for_promotion")
+        );
+        assert_eq!(
+            hermes_experiment_next_status("ready_for_promotion", "promote"),
+            Some("promoted")
+        );
+        assert_eq!(
+            hermes_experiment_next_status("pending_review", "promote"),
+            None
+        );
     }
 }

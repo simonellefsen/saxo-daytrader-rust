@@ -27,7 +27,7 @@ sequenceDiagram
   D->>DB: Decision reports, execution orders, fills, journals
   H->>DB: Read sanitized context through MCP/API
   H->>DB: Write reflection or experiment proposal
-  D->>U: Display read-only Hermes review tab
+  D->>U: Display Hermes review and lifecycle tab
   H->>W: Write summarized learning and cross-links
   U->>W: Review narrative and evidence
   U->>DB: Approve, reject, or promote via app flow
@@ -55,7 +55,7 @@ sequenceDiagram
 - Every experiment should name exactly one changed variable when `one_variable_only` is true.
 - Every active strategy lesson should distinguish hypothesis, evidence, metric result, and promotion status.
 - Wiki notes are explanatory; the app applies strategy changes only through approved artifacts and scheduler overlays.
-- The dashboard `Hermes` tab is a review surface only. It can show reflections and proposals, but it must not approve or activate strategies.
+- The dashboard `Hermes` tab is the operator lifecycle surface. It can move experiments through paper/SIM states and create baseline audit records, but it must not place orders or activate live broker behavior.
 - Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
 
 ## Related

@@ -255,6 +255,16 @@ Current allowlist:
 
 After a scheduler cycle, verify the applied overlay in `trading_manager_runs.manager_json` and queued order `request_json` before any SIM broker submission.
 
+Promotion flow:
+
+1. Keep new proposals in `pending_review`.
+2. Approve and activate paper first from the dashboard `Hermes` tab.
+3. Move to SIM only after paper evidence is acceptable.
+4. Mark `ready_for_promotion` only after the SIM observation meets the goal contract.
+5. Promote from the dashboard to create a `strategy_baselines` audit record.
+
+Promotion records do not activate live broker behavior. Treat a promoted baseline as an audited reference point until a separate implementation wires baseline context into prompts, overlays, and live-mode controls.
+
 ## Live Trading Safety Gate
 
 Do not run LIVE broker mutation tests as part of routine validation.

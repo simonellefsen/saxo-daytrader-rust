@@ -196,7 +196,16 @@ The tab shows:
 - A recent reflection table backed by `hermes_reflections`.
 - A strategy experiment proposal table backed by `strategy_experiments`.
 
-This is intentionally read-only. It does not approve, activate, promote, or write strategy state.
+The tab also exposes operator-only lifecycle actions. These actions update `strategy_experiments` status and, on promotion, create a `strategy_baselines` audit record. They do not place orders, approve live orders, change Kubernetes secrets, or activate live broker behavior.
+
+Supported lifecycle transitions:
+
+- `pending_review` -> `approved_paper` or `rejected`
+- `approved_paper` -> `active_paper` or `rejected`
+- `active_paper` -> `approved_sim`, `paper_failed`, or `rejected`
+- `approved_sim` -> `active_sim` or `rejected`
+- `active_sim` -> `ready_for_promotion`, `sim_failed`, or `rejected`
+- `ready_for_promotion` -> `promoted` or `rejected`
 
 ## SIM/Paper Experiment Overlays
 
@@ -217,7 +226,7 @@ Supported one-variable overlay paths:
 - `strategy.swing.cash_buffer_pct`
 - `strategy.swing.daily_indicators.min_confluences`
 
-Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or promote baselines.
+Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or activate live broker behavior.
 
 ## Weekly Reflection Job
 
@@ -389,8 +398,8 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 3. Operator approves the experiment for SIM/paper mode.
 4. Scheduler/Trading Manager loads approved experiment as an overlay, not as a config rewrite.
 5. Results are measured against the goal contract.
-6. Operator promotes a winning experiment to a new baseline.
-7. App records the baseline and all future decisions reference the baseline id.
+6. Operator promotes a winning experiment to a new baseline audit record.
+7. Future strategy decisions can reference the baseline id after a separate implementation wires baseline context into prompting or overlays.
 
 ```mermaid
 stateDiagram-v2
@@ -501,7 +510,7 @@ If evidence is insufficient, create a reflection with no experiment.
 4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
 5. Add weekly reflection cron. Implemented as suspended by default.
 6. Add SIM/paper experiment overlays. Implemented for Trading Manager cash buffer, min trade value, and technical confluence gates.
-7. Add promotion flow from approved experiment to active baseline.
+7. Add promotion flow from approved experiment to active baseline audit record. Implemented in the Hermes dashboard.
 8. Only then consider live-mode overlays, still behind human approval and rollback gates.
 
 ## Non-Negotiable Safety Invariants

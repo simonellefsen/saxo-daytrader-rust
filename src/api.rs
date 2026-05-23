@@ -18,8 +18,9 @@ use crate::{
     config::yaml_string,
     localization::LocalizationPrefs,
     models::{
-        CashBufferRequest, HermesExperimentRequest, HermesReflectionRequest, LimitParams,
-        LocalizationSettingsRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
+        CashBufferRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
+        HermesReflectionRequest, LimitParams, LocalizationSettingsRequest, PerformanceParams,
+        SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
@@ -88,6 +89,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/hermes/experiments",
             get(hermes_experiments).post(create_hermes_experiment),
+        )
+        .route(
+            "/api/hermes/experiments/{experiment_id}/transition",
+            post(transition_hermes_experiment),
         )
         .route(
             "/api/actions/decision-report",
@@ -680,6 +685,57 @@ async fn create_hermes_experiment(
             (StatusCode::CREATED, Json(value)).into_response()
         }
         Err(err) => json_result(Err(err)),
+    }
+}
+
+async fn transition_hermes_experiment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(experiment_id): Path<String>,
+    Form(request): Form<HermesExperimentTransitionRequest>,
+) -> Response {
+    let sso = SsoSession::from_headers(&headers);
+    let actor = sso
+        .user
+        .as_ref()
+        .map(|user| user.email.as_str())
+        .unwrap_or("operator");
+    match state
+        .transition_hermes_experiment(
+            &experiment_id,
+            &request.action,
+            request.notes.as_deref(),
+            actor,
+        )
+        .await
+    {
+        Ok(value) => {
+            info!(
+                experiment_id,
+                action = %request.action,
+                actor,
+                "Hermes experiment transition recorded"
+            );
+            let redirect = request.return_to.as_deref().unwrap_or("/?view=hermes");
+            if value
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("ok")
+                == "ok"
+            {
+                Redirect::to(safe_return_to(Some(redirect))).into_response()
+            } else {
+                json_result(Ok(value))
+            }
+        }
+        Err(err) => {
+            warn!(
+                experiment_id,
+                action = %request.action,
+                "Hermes experiment transition failed: {err:#}"
+            );
+            json_result(Err(err))
+        }
     }
 }
 

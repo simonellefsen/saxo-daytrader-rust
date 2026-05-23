@@ -898,7 +898,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "section-title-row",
                 div {
                     h2 { "Hermes Self-Improvement" }
-                    p { class: "muted", "Read-only review of Hermes reflections and one-variable experiment proposals. Promotion into trading remains an explicit operator workflow." }
+                    p { class: "muted", "Operator review and lifecycle controls for Hermes reflections and one-variable experiment proposals. Promotion records a baseline audit artifact; live trading remains separately gated." }
                 }
                 div { class: "pill-row right",
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
@@ -908,7 +908,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "notice-banner warn-banner",
                 strong { "Safety boundary" }
-                span { "Hermes can observe and propose. It cannot place Saxo orders, expose secrets, or activate a strategy baseline from this dashboard." }
+                span { "Hermes can observe and propose. This dashboard can record paper/SIM lifecycle decisions, but it cannot place Saxo orders, expose secrets, or activate live broker behavior." }
             }
             div { class: "mini-grid",
                 MetricCard { label: "Latest Reflection", value: latest_created, tone: "" }
@@ -966,6 +966,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             th { "Hypothesis" }
                             th { "Expected Effect" }
                             th { "Evidence" }
+                            th { "Actions" }
                         }
                     }
                     tbody {
@@ -1588,10 +1589,16 @@ fn HermesReflectionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = text_or(&row, "status", "pending_review");
     let status_class = match status.as_str() {
-        "approved" | "activated" | "promoted" => "status good-status",
-        "rejected" | "failed" => "status bad-status",
+        "approved_paper"
+        | "active_paper"
+        | "approved_sim"
+        | "active_sim"
+        | "ready_for_promotion"
+        | "promoted" => "status good-status",
+        "rejected" | "paper_failed" | "sim_failed" | "failed" => "status bad-status",
         _ => "status",
     };
+    let experiment_id = text(&row, "id");
     rsx! {
         tr {
             td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
@@ -1602,6 +1609,23 @@ fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{text_or(&row, \"hypothesis\", \"No hypothesis recorded.\")}" }
             td { "{text_or(&row, \"expected_effect\", \"n/a\")}" }
             td { class: "mono", "{short_json(row.get(\"evidence_json\"))}" }
+            td {
+                div { class: "inline-actions",
+                    for (action, label, tone) in hermes_transition_actions(&status) {
+                        form {
+                            method: "post",
+                            action: "/api/hermes/experiments/{experiment_id}/transition",
+                            input { r#type: "hidden", name: "action", value: "{action}" }
+                            input { r#type: "hidden", name: "return_to", value: "/?view=hermes" }
+                            button {
+                                class: if tone == "danger" { "small-button danger" } else { "small-button" },
+                                r#type: "submit",
+                                "{label}"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1666,6 +1690,36 @@ fn json_item_count(value: &JsonValue, key: &str) -> usize {
         Some(JsonValue::String(text)) if !text.trim().is_empty() => 1,
         Some(value) if !value.is_null() => 1,
         _ => 0,
+    }
+}
+
+fn hermes_transition_actions(status: &str) -> Vec<(&'static str, &'static str, &'static str)> {
+    match status {
+        "pending_review" => vec![
+            ("approve_paper", "Approve Paper", ""),
+            ("reject", "Reject", "danger"),
+        ],
+        "approved_paper" => vec![
+            ("activate_paper", "Start Paper", ""),
+            ("reject", "Reject", "danger"),
+        ],
+        "active_paper" => vec![
+            ("approve_sim", "Approve SIM", ""),
+            ("mark_paper_failed", "Paper Failed", "danger"),
+        ],
+        "approved_sim" => vec![
+            ("activate_sim", "Start SIM", ""),
+            ("reject", "Reject", "danger"),
+        ],
+        "active_sim" => vec![
+            ("ready_for_promotion", "Ready", ""),
+            ("mark_sim_failed", "SIM Failed", "danger"),
+        ],
+        "ready_for_promotion" => vec![
+            ("promote", "Promote Baseline", ""),
+            ("reject", "Reject", "danger"),
+        ],
+        _ => Vec::new(),
     }
 }
 
