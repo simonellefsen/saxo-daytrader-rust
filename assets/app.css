@@ -417,6 +417,11 @@ tr:last-child td {
   background: #e8f7ee;
 }
 
+.bad-status {
+  color: var(--bad);
+  background: #fdebea;
+}
+
 .legend-row {
   display: flex;
   flex-wrap: wrap;

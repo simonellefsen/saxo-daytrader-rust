@@ -893,9 +893,8 @@ fn normalize_view(value: Option<&str>) -> String {
     match value.unwrap_or("overview").to_lowercase().as_str() {
         "overview" | "portfolio" => "overview".to_string(),
         "eod" | "end-of-day" => "eod".to_string(),
-        "performance" | "market" | "watchlists" | "decisions" | "execution" | "prompts" => {
-            value.unwrap_or("overview").to_lowercase()
-        }
+        "performance" | "market" | "watchlists" | "decisions" | "execution" | "prompts"
+        | "hermes" => value.unwrap_or("overview").to_lowercase(),
         _ => "overview".to_string(),
     }
 }

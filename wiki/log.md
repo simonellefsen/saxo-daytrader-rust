@@ -64,3 +64,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added `wiki/runbooks/k8s-diagnostics.md`.
 - Documented simple one-liners for Docker Desktop Kubernetes diagnostics, pod debugging, rollouts, in-cluster smoke tests, CloudNativePG, ngrok, Hermes, and RustFS.
 - Clarified that RustFS is the normal S3-compatible storage backend and runs in the Docker context to use a local filesystem bind mount.
+
+## [2026-05-23] implementation | Hermes review dashboard
+
+- Added a read-only `Hermes` dashboard tab at `/?view=hermes`.
+- Loaded recent `hermes_reflections` and `strategy_experiments` into the server-rendered dashboard model.
+- Displayed the latest reflection summary, proposed actions, reflection history, experiment proposal status, one-variable path, and evidence preview.
+- Kept the UI review-only; it does not approve, activate, promote, or mutate strategy baselines.

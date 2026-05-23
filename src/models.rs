@@ -36,6 +36,8 @@ pub struct DashboardView {
     pub reports: Vec<JsonValue>,
     pub journal_entries: Vec<JsonValue>,
     pub scheduler_cycles: Vec<JsonValue>,
+    pub hermes_reflections: Vec<JsonValue>,
+    pub hermes_experiments: Vec<JsonValue>,
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
     pub market_status: JsonValue,

@@ -167,6 +167,14 @@ impl AppState {
             warn!("dashboard scheduler cycles degraded: {err:#}");
             Vec::new()
         });
+        let hermes_reflections = self.hermes_reflections(20).await.unwrap_or_else(|err| {
+            warn!("dashboard Hermes reflections degraded: {err:#}");
+            Vec::new()
+        });
+        let hermes_experiments = self.hermes_experiments(20).await.unwrap_or_else(|err| {
+            warn!("dashboard Hermes experiments degraded: {err:#}");
+            Vec::new()
+        });
         let performance_history = self
             .performance_history_with_current(&performance_range, 5000)
             .await
@@ -249,6 +257,8 @@ impl AppState {
             reports,
             journal_entries,
             scheduler_cycles,
+            hermes_reflections,
+            hermes_experiments,
             performance_history,
             performance_summary,
             market_status,

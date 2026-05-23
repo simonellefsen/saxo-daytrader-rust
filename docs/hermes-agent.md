@@ -153,13 +153,14 @@ Implemented initial Kubernetes support:
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints.
+- The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections` and `strategy_experiments` so operators can review reflections and one-variable proposals without giving Hermes a promotion path.
 - `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
 
 - Hermes is not yet connected to a native MCP adapter; the first adapter surface is HTTP.
 - The weekly reflection CronJob is installed but suspended by default.
-- No UI promotion flow or automatic strategy activation path is implemented yet.
+- No UI promotion flow or automatic strategy activation path is implemented yet; the current UI is review-only.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
 
 Hermes Docker runtime notes from the upstream documentation:
@@ -183,6 +184,19 @@ Initial HTTP adapter endpoints are implemented in `saxo-rust`:
 - `POST /api/hermes/experiments`
 
 These endpoints require `HERMES_DAYTRADER_API_KEY`. They intentionally expose sanitized decision reports and execution context, not Saxo sessions or broker mutation tools.
+
+## Dashboard Review Tab
+
+The Dioxus dashboard has a `Hermes` tab at `/?view=hermes`.
+
+The tab shows:
+
+- Reflection counts, experiment counts, pending proposal counts, latest reflection timestamp, goal version, finding count, and proposed-action count.
+- The latest reflection summary and proposed actions.
+- A recent reflection table backed by `hermes_reflections`.
+- A strategy experiment proposal table backed by `strategy_experiments`.
+
+This is intentionally read-only. It does not approve, activate, promote, or write strategy state.
 
 ## Weekly Reflection Job
 
@@ -459,10 +473,10 @@ If evidence is insufficient, create a reflection with no experiment.
 ## Rollout Plan
 
 1. Deploy Hermes in `saxo-rust` with ClusterIP-only access. Initial manifests are implemented in `deploy/k8s/base/hermes.yaml`.
-2. Add a read-only `daytrader-mcp` adapter.
-3. Add `hermes_reflections` and `strategy_experiments`.
-4. Add a Hermes dashboard tab to the Rust UI.
-5. Add weekly reflection cron.
+2. Add a read-only `daytrader-mcp` adapter. The current first adapter is protected HTTP; native MCP is still pending.
+3. Add `hermes_reflections` and `strategy_experiments`. Implemented.
+4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
+5. Add weekly reflection cron. Implemented as suspended by default.
 6. Add SIM/paper experiment overlays.
 7. Add promotion flow from approved experiment to active baseline.
 8. Only then consider live-mode overlays, still behind human approval and rollback gates.

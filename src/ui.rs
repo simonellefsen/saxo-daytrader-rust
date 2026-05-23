@@ -250,6 +250,7 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=watchlists", label: "Watchlists", active: active_view == "watchlists" }
             TabLink { href: "/?view=decisions", label: "Decision Reports", active: active_view == "decisions" }
             TabLink { href: "/?view=prompts", label: "AI Prompts", active: active_view == "prompts" }
+            TabLink { href: "/?view=hermes", label: "Hermes", active: active_view == "hermes" }
             TabLink { href: "/?view=eod", label: "End-Of-Day", active: active_view == "eod" }
             TabLink { href: "/?view=execution", label: "Execution", active: active_view == "execution" }
         }
@@ -278,6 +279,7 @@ fn DashboardBody(
         "watchlists" => rsx! { WatchlistsView { data, prefs } },
         "decisions" => rsx! { DecisionsView { data, prefs } },
         "prompts" => rsx! { PromptsView { data, prefs } },
+        "hermes" => rsx! { HermesView { data, prefs } },
         "eod" => rsx! { EndOfDayView { data, prefs } },
         "execution" => rsx! { ExecutionView { data, prefs } },
         _ => rsx! {
@@ -867,6 +869,110 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "event prewrap code-panel",
                     strong { "System Prompt" }
                     span { "You are the trading diary reviewer. Return strict JSON only." }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let latest_reflection = data
+        .hermes_reflections
+        .first()
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let pending_experiments = data
+        .hermes_experiments
+        .iter()
+        .filter(|row| text_or(row, "status", "pending_review") == "pending_review")
+        .count();
+    let latest_created = if latest_reflection.is_null() {
+        "None".to_string()
+    } else {
+        format_timestamp(&text(&latest_reflection, "created_at"), &prefs)
+    };
+
+    rsx! {
+        section { class: "section stack loose",
+            div { class: "section-title-row",
+                div {
+                    h2 { "Hermes Self-Improvement" }
+                    p { class: "muted", "Read-only review of Hermes reflections and one-variable experiment proposals. Promotion into trading remains an explicit operator workflow." }
+                }
+                div { class: "pill-row right",
+                    span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
+                    span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
+                    span { class: "pill", "Pending: {pending_experiments}" }
+                }
+            }
+            div { class: "notice-banner warn-banner",
+                strong { "Safety boundary" }
+                span { "Hermes can observe and propose. It cannot place Saxo orders, expose secrets, or activate a strategy baseline from this dashboard." }
+            }
+            div { class: "mini-grid",
+                MetricCard { label: "Latest Reflection", value: latest_created, tone: "" }
+                MetricCard { label: "Goal Version", value: text_or(&latest_reflection, "goal_version", "n/a"), tone: "" }
+                MetricCard { label: "Findings", value: json_item_count(&latest_reflection, "findings_json").to_string(), tone: "" }
+                MetricCard { label: "Actions", value: json_item_count(&latest_reflection, "proposed_actions_json").to_string(), tone: "" }
+            }
+            if latest_reflection.is_null() {
+                div { class: "event",
+                    strong { "No Hermes reflection exists yet." }
+                    span { class: "muted", "Run a manual Hermes reflection job or enable the suspended weekly CronJob after its smoke test is approved." }
+                }
+            } else {
+                div { class: "grid-2",
+                    div { class: "event prewrap",
+                        strong { "Latest Summary" }
+                        span { "{text_or(&latest_reflection, \"summary\", \"No summary recorded.\")}" }
+                    }
+                    div { class: "event prewrap",
+                        strong { "Proposed Actions" }
+                        span { "{compact_json(latest_reflection.get(\"proposed_actions_json\"))}" }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Recent Reflections" }
+                table {
+                    thead {
+                        tr {
+                            th { "Created" }
+                            th { "Goal" }
+                            th { "Summary" }
+                            th { "Findings" }
+                            th { "Actions" }
+                            th { "Session" }
+                        }
+                    }
+                    tbody {
+                        for row in data.hermes_reflections.iter() {
+                            HermesReflectionRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Experiment Proposals" }
+                table {
+                    thead {
+                        tr {
+                            th { "Created" }
+                            th { "Status" }
+                            th { "Variable" }
+                            th { "Old Value" }
+                            th { "New Value" }
+                            th { "Hypothesis" }
+                            th { "Expected Effect" }
+                            th { "Evidence" }
+                        }
+                    }
+                    tbody {
+                        for row in data.hermes_experiments.iter() {
+                            HermesExperimentRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
                 }
             }
         }
@@ -1465,6 +1571,42 @@ fn ExecutionFillRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
+fn HermesReflectionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    rsx! {
+        tr {
+            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { "{text_or(&row, \"goal_version\", \"n/a\")}" }
+            td { "{text_or(&row, \"summary\", \"No summary recorded.\")}" }
+            td { "{json_item_count(&row, \"findings_json\")}" }
+            td { "{json_item_count(&row, \"proposed_actions_json\")}" }
+            td { class: "muted", "{text(&row, \"source_session_id\")}" }
+        }
+    }
+}
+
+#[component]
+fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text_or(&row, "status", "pending_review");
+    let status_class = match status.as_str() {
+        "approved" | "activated" | "promoted" => "status good-status",
+        "rejected" | "failed" => "status bad-status",
+        _ => "status",
+    };
+    rsx! {
+        tr {
+            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { span { class: "{status_class}", "{status}" } }
+            td { "{text(&row, \"changed_variable_path\")}" }
+            td { class: "mono", "{short_json(row.get(\"old_value_json\"))}" }
+            td { class: "mono", "{short_json(row.get(\"new_value_json\"))}" }
+            td { "{text_or(&row, \"hypothesis\", \"No hypothesis recorded.\")}" }
+            td { "{text_or(&row, \"expected_effect\", \"n/a\")}" }
+            td { class: "mono", "{short_json(row.get(\"evidence_json\"))}" }
+        }
+    }
+}
+
+#[component]
 fn DecisionCard(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let id = text(&row, "id");
     let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
@@ -1515,6 +1657,16 @@ fn json_list_label(value: Option<&JsonValue>) -> String {
         .take(4)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn json_item_count(value: &JsonValue, key: &str) -> usize {
+    match value.get(key) {
+        Some(JsonValue::Array(items)) => items.len(),
+        Some(JsonValue::Object(map)) => map.len(),
+        Some(JsonValue::String(text)) if !text.trim().is_empty() => 1,
+        Some(value) if !value.is_null() => 1,
+        _ => 0,
+    }
 }
 
 fn leader_row(items: &[JsonValue], high: bool) -> JsonValue {
@@ -1841,6 +1993,22 @@ fn compact_json(value: Option<&JsonValue>) -> String {
     };
     let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     let max_len = 1600;
+    if rendered.len() > max_len {
+        format!("{}...", &rendered[..max_len])
+    } else {
+        rendered
+    }
+}
+
+fn short_json(value: Option<&JsonValue>) -> String {
+    let Some(value) = value else {
+        return "n/a".to_string();
+    };
+    let rendered = match value {
+        JsonValue::String(text) => text.clone(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    };
+    let max_len = 220;
     if rendered.len() > max_len {
         format!("{}...", &rendered[..max_len])
     } else {
