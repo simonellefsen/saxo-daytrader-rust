@@ -194,17 +194,19 @@ CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza a
 
 The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, the two daily market-pulse decision reports, daily end-of-day reports, Markov regime signals, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become a baseline audit record. The dashboard includes a `Hermes` tab at `/?view=hermes` for reviewing stored reflections, moving experiment proposals through paper/SIM lifecycle states, promoting successful experiments into `strategy_baselines`, and showing the active baseline audit record. The Rust Trading Manager can apply an operator-approved SIM/paper overlay for a small allowlist of strategy variables, but it refuses overlays for `execution.mode=live` with `saxo.environment=LIVE`. Promoted baselines are included in Hermes context and future xAI decision prompts as advisory context; they do not activate live broker behavior.
 
-The Kubernetes base now includes `Deployment/hermes-agent`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `Service/hermes-gateway`, `Service/daytrader-mcp`, `ConfigMap/hermes-daytrader-context`, and a suspended `CronJob/hermes-weekly-reflection`. The services are internal-only. Hermes exposes gateway port `8642` plus dashboard port `9119` if enabled; the MCP adapter exposes port `8610` and only Hermes-safe tools. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal Hermes API should be reachable. Set `HERMES_INFERENCE_PROVIDER` and `HERMES_MODEL` to a model/provider the configured Hermes account can access, and set `HERMES_DAYTRADER_API_KEY` so Hermes can call the app's protected `/api/hermes/*` adapter endpoints or the `daytrader-mcp` adapter.
+The Kubernetes base now includes `Deployment/hermes-agent`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `Service/hermes-gateway`, `Service/daytrader-mcp`, `ConfigMap/hermes-daytrader-context`, and suspended `CronJob/hermes-daily-reflection` plus `CronJob/hermes-weekly-reflection`. The services are internal-only. Hermes exposes gateway port `8642` plus dashboard port `9119` if enabled; the MCP adapter exposes port `8610` and only Hermes-safe tools. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal Hermes API should be reachable. Set `HERMES_INFERENCE_PROVIDER` and `HERMES_MODEL` to a model/provider the configured Hermes account can access, and set `HERMES_DAYTRADER_API_KEY` so Hermes can call the app's protected `/api/hermes/*` adapter endpoints or the `daytrader-mcp` adapter.
 
-To enable the weekly Hermes reflection after deployment:
+To enable the daily EOD and weekly Hermes reflections after deployment:
 
 ```bash
+rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
 rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-To trigger one immediate run:
+To trigger immediate runs while keeping the schedules suspended:
 
 ```bash
+rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
 rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
 ```
 

@@ -157,12 +157,14 @@ Implemented initial Kubernetes support:
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints. The MCP adapter uses the same bearer key.
 - The Hermes pod waits for `daytrader-mcp` health before starting so MCP discovery does not race the adapter rollout.
 - The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
-- `CronJob/hermes-weekly-reflection` submits a scheduled run to Hermes' `/v1/runs` API. It is created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
+- `CronJob/hermes-daily-reflection` submits a weekday end-of-day reflection run after the EOD journal and Markov skill runs. It writes one concise reflection record only.
+- `CronJob/hermes-weekly-reflection` submits a scheduled self-improvement run to Hermes' `/v1/runs` API. It may create at most one one-variable experiment proposal when evidence is sufficient.
+- Both CronJobs are created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
 
 - The MCP adapter is intentionally small; broader database or broker tools are still excluded.
-- The weekly reflection CronJob is installed but suspended by default.
+- The daily and weekly reflection CronJobs are installed but suspended by default.
 - Promotion creates an active baseline audit record, but there is still no automatic live strategy activation path.
 - The Hermes gateway service is ClusterIP only; there is no ngrok/public exposure.
 
@@ -248,11 +250,12 @@ Supported one-variable overlay paths:
 
 Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or activate live broker behavior.
 
-## Weekly Reflection Job
+## Reflection Jobs
 
-The Kubernetes base includes a suspended weekly reflection job:
+The Kubernetes base includes suspended daily and weekly reflection jobs:
 
 ```bash
+rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-daily-reflection
 rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-weekly-reflection
 ```
 
@@ -272,10 +275,18 @@ Then redeploy and unsuspend:
 
 ```bash
 rtk make k8s-deploy
+rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
 rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-The CronJob calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
+`CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
+
+- Prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes.
+- Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
+- Write exactly one concise reflection.
+- Create no experiment proposals.
+
+`CronJob/hermes-weekly-reflection` runs Friday at `22:15` Europe/Copenhagen. It calls the same Hermes API with a prompt that instructs Hermes to:
 
 - Prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals.
 - Read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing strategy changes.
@@ -510,6 +521,17 @@ Recommended jobs:
 - Weekly: run the Hermes reflection loop and create at most one new experiment.
 - Monthly: compare active baseline vs goal contract and decide whether to keep, rollback, or propose a new baseline.
 
+Hermes daily EOD reflection prompt:
+
+```text
+Review today's two decision-report pulses, end-of-day report, Markov regime
+signals, scheduler status, execution outcomes, failures, and goal-contract
+status.
+
+Write exactly one concise reflection. Do not create experiment proposals.
+Do not request Saxo tokens or secrets. Do not propose live order mutations.
+```
+
 Hermes weekly reflection prompt:
 
 ```text
@@ -527,7 +549,7 @@ If evidence is insufficient, create a reflection with no experiment.
 2. Add a read-mostly `daytrader-mcp` adapter. Implemented as internal HTTP MCP at `Service/daytrader-mcp`.
 3. Add `hermes_reflections` and `strategy_experiments`. Implemented.
 4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
-5. Add weekly reflection cron. Implemented as suspended by default.
+5. Add daily EOD and weekly reflection cron. Implemented as suspended by default.
 6. Add SIM/paper experiment overlays. Implemented for Trading Manager cash buffer, min trade value, and technical confluence gates.
 7. Add promotion flow from approved experiment to active baseline audit record. Implemented in the Hermes dashboard.
 8. Wire active baseline context into Hermes context and xAI decision prompts. Implemented as advisory prompt/context data only.

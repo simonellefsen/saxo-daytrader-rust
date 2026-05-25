@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-05-23
+updated: 2026-05-25
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-05-25] implementation | Hermes daily EOD reflection
+
+- Added suspended `CronJob/hermes-daily-reflection` for weekday end-of-day Hermes reflection.
+- Kept `CronJob/hermes-weekly-reflection` for weekly self-improvement and one-variable experiment proposals.
+- Updated README and wiki runbooks with daily and weekly Hermes reflection commands.
 
 ## [2026-05-23] ingest | LLM Wiki pattern
 

@@ -166,7 +166,7 @@ rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api da
 
 ## Hermes Smoke Test
 
-Hermes is deployed as an internal-only agent. Its weekly reflection CronJob is suspended by default.
+Hermes is deployed as an internal-only agent. Its daily EOD and weekly reflection CronJobs are suspended by default.
 
 Required `.env` values before enabling scheduled Hermes runs:
 
@@ -204,20 +204,33 @@ rtk kubectl --context docker-desktop -n saxo-rust run daytrader-mcp-smoke --rm -
   curl -fsS http://daytrader-mcp.saxo-rust:8610/health
 ```
 
-Trigger one manual reflection run while keeping the CronJob suspended:
+Trigger one manual daily EOD reflection run while keeping the CronJob suspended:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
+rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-daily-reflection-manual
+```
+
+Trigger one manual weekly self-improvement reflection run while keeping the CronJob suspended:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
 rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-weekly-reflection-manual
 ```
 
-Only unsuspend the recurring schedule after the manual job writes one reflection and, when evidence is sufficient, at most one experiment proposal:
+Only unsuspend the daily recurring schedule after the manual job writes one daily reflection and no experiment proposal:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
+```
+
+Only unsuspend the weekly recurring schedule after the manual job writes one reflection and, when evidence is sufficient, at most one experiment proposal:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-The weekly job should prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals. The protected HTTP adapter remains available for manual inspection and fallback.
+The daily job should prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes. The weekly job should prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals. The protected HTTP adapter remains available for manual inspection and fallback.
 
 ## Saxo SIM Testing
 

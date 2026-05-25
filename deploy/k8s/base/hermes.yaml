@@ -365,10 +365,75 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
+  name: hermes-daily-reflection
+  labels:
+    app: hermes-agent
+    component: reflection
+    cadence: daily
+spec:
+  schedule: "45 23 * * 1-5"
+  timeZone: Europe/Copenhagen
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: hermes-agent
+            component: reflection
+            cadence: daily
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: submit-reflection
+              image: curlimages/curl:8.17.0
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - secretRef:
+                    name: hermes-env
+                    optional: true
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  if [ -z "${API_SERVER_KEY:-}" ]; then
+                    echo "API_SERVER_KEY is required; set HERMES_API_SERVER_KEY in .env and redeploy." >&2
+                    exit 1
+                  fi
+                  if [ -z "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                    echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
+                    exit 1
+                  fi
+                  cat > /tmp/hermes-run.json <<EOF
+                  {
+                    "session_id": "saxo-daytrader-daily-eod-reflection",
+                    "input": "Run the saxo daytrader daily end-of-day reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, and create_reflection. Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract. Create exactly one concise daily reflection record. Do not create experiment proposals from the daily job; reserve one-variable experiment proposals for the weekly reflection. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                    "instructions": "You are Hermes Agent acting as a daily EOD reflection agent for the saxo-rust day/swing trading system. You may observe and write a reflection only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
+                    "metadata": {
+                      "source": "kubernetes-cronjob",
+                      "job": "hermes-daily-reflection",
+                      "cadence": "daily"
+                    }
+                  }
+                  EOF
+                  curl -fsS \
+                    -H "Authorization: Bearer ${API_SERVER_KEY}" \
+                    -H "Content-Type: application/json" \
+                    --data @/tmp/hermes-run.json \
+                    http://hermes-gateway.saxo-rust:8642/v1/runs
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
   name: hermes-weekly-reflection
   labels:
     app: hermes-agent
     component: reflection
+    cadence: weekly
 spec:
   schedule: "15 22 * * 5"
   timeZone: Europe/Copenhagen
@@ -384,6 +449,7 @@ spec:
           labels:
             app: hermes-agent
             component: reflection
+            cadence: weekly
         spec:
           restartPolicy: Never
           containers:

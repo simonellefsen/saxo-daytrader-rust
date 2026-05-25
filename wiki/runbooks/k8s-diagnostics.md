@@ -252,10 +252,17 @@ rtk kubectl --context docker-desktop -n ngrok-operator logs deployment/ngrok-ope
 CronJob status:
 
 ```bash
+rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-daily-reflection
 rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-weekly-reflection
 ```
 
-Manual reflection job:
+Manual daily EOD reflection job:
+
+```bash
+rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
+```
+
+Manual weekly reflection job:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
@@ -264,6 +271,7 @@ rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/herm
 Reflection job logs:
 
 ```bash
+rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-daily-reflection-manual
 rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-weekly-reflection-manual
 ```
 
