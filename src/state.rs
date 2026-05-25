@@ -2,11 +2,13 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     path::PathBuf,
+    sync::{OnceLock, RwLock},
 };
 
-use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Timelike, Utc};
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
+use reqwest::header;
 use serde_json::{Value as JsonValue, json};
 use serde_yaml::Value as YamlValue;
 use sqlx::{AnyPool, Row, any::AnyPoolOptions};
@@ -27,6 +29,38 @@ pub struct AppState {
     pub config: YamlValue,
     pub db_url: String,
     pub pool: AnyPool,
+}
+
+static SAXO_EXCHANGE_CALENDAR_CACHE: OnceLock<RwLock<Option<SaxoExchangeCalendarCache>>> =
+    OnceLock::new();
+
+#[derive(Clone, Debug)]
+struct SaxoExchangeCalendarCache {
+    checked_date: NaiveDate,
+    checked_at: DateTime<Utc>,
+    exchanges: HashMap<String, SaxoExchangeCalendar>,
+    source: String,
+}
+
+#[derive(Clone, Debug)]
+struct SaxoExchangeCalendar {
+    exchange_id: String,
+    name: Option<String>,
+    timezone_id: Option<String>,
+    sessions: Vec<SaxoExchangeSession>,
+}
+
+#[derive(Clone, Debug)]
+struct SaxoExchangeSession {
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    state: String,
+}
+
+#[derive(Clone, Debug)]
+struct ExchangeDaySession {
+    open_at: DateTime<Utc>,
+    close_at: DateTime<Utc>,
 }
 
 fn redacted_database_url(value: &str) -> String {
@@ -460,6 +494,13 @@ impl AppState {
     }
 
     pub async fn market_status_payload(&self) -> Result<JsonValue> {
+        let calendar_refresh = match self.refresh_saxo_exchange_calendars_if_stale().await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("Saxo exchange calendar refresh skipped: {err:#}");
+                json!({"status": "error", "error": err.to_string()})
+            }
+        };
         let items = self.market_exchange_rows();
         let scheduler = self
             .scheduler_status_value()
@@ -495,12 +536,136 @@ impl AppState {
             "last_heartbeat_at": scheduler.get("last_heartbeat_at").cloned().unwrap_or(JsonValue::Null),
             "next_pulse_at": manager_status.get("next_pulse_at").cloned().unwrap_or(JsonValue::Null),
             "next_pulse_label": manager_status.get("next_pulse_label").cloned().unwrap_or(JsonValue::Null),
+            "calendar_refresh": calendar_refresh,
         });
         Ok(json!({
             "items": items,
             "summary": summary,
             "scheduler": scheduler
         }))
+    }
+
+    pub async fn refresh_saxo_exchange_calendars_if_stale(&self) -> Result<JsonValue> {
+        let today = Utc::now().date_naive();
+        if let Some(cache) = current_saxo_exchange_calendar_cache() {
+            if cache.checked_date == today {
+                return Ok(json!({
+                    "status": "fresh",
+                    "source": cache.source,
+                    "checked_at": cache.checked_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "exchange_count": cache.exchanges.len(),
+                }));
+            }
+        }
+
+        let cache = self
+            .fetch_saxo_exchange_calendar_cache(today)
+            .await
+            .context("refreshing Saxo exchange calendar cache")?;
+        let result = json!({
+            "status": "refreshed",
+            "source": cache.source,
+            "checked_at": cache.checked_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "exchange_count": cache.exchanges.len(),
+        });
+        let lock = saxo_exchange_calendar_cache_lock();
+        *lock
+            .write()
+            .map_err(|_| anyhow!("Saxo exchange calendar cache lock is poisoned"))? = Some(cache);
+        Ok(result)
+    }
+
+    async fn fetch_saxo_exchange_calendar_cache(
+        &self,
+        checked_date: NaiveDate,
+    ) -> Result<SaxoExchangeCalendarCache> {
+        self.refresh_saxo_session()
+            .await
+            .context("refreshing Saxo session before exchange calendar lookup")?;
+        let session = auth::ensure_session_json(&self.config, &self.config_path)
+            .await
+            .context("loading Saxo session for exchange calendar lookup")?;
+        let data = self
+            .fetch_saxo_exchange_summaries(&session)
+            .await
+            .context("fetching Saxo ref/v1/exchanges")?;
+        let mut exchanges = HashMap::new();
+        for exchange in default_exchanges() {
+            let Some(summary) = data
+                .iter()
+                .find(|item| saxo_exchange_matches(item, exchange.code))
+            else {
+                continue;
+            };
+            let exchange_id = saxo_exchange_text(summary, "ExchangeId")
+                .unwrap_or_else(|| exchange.code.to_string());
+            let mut detail = summary.clone();
+            if parse_saxo_exchange_sessions(&detail).is_empty() {
+                match saxo_reference_get_json(
+                    self,
+                    &session,
+                    &format!("/ref/v1/exchanges/{exchange_id}"),
+                    &[],
+                )
+                .await
+                {
+                    Ok(value) => detail = value,
+                    Err(err) => warn!(
+                        exchange = exchange.code,
+                        exchange_id, "Saxo exchange detail lookup failed: {err:#}"
+                    ),
+                }
+            }
+            if let Some(calendar) = saxo_exchange_calendar_from_detail(&detail, &exchange_id) {
+                exchanges.insert(exchange.code.to_string(), calendar);
+            }
+        }
+        if exchanges.is_empty() {
+            bail!("Saxo ref/v1/exchanges did not match any configured exchange MICs");
+        }
+        Ok(SaxoExchangeCalendarCache {
+            checked_date,
+            checked_at: Utc::now(),
+            exchanges,
+            source: "saxo_ref_v1_exchanges".to_string(),
+        })
+    }
+
+    async fn fetch_saxo_exchange_summaries(&self, session: &JsonValue) -> Result<Vec<JsonValue>> {
+        let mut skip = 0usize;
+        let top = 1000usize;
+        let mut all = Vec::new();
+        loop {
+            let payload = saxo_reference_get_json(
+                self,
+                session,
+                "/ref/v1/exchanges",
+                &[("$skip", skip.to_string()), ("$top", top.to_string())],
+            )
+            .await?;
+            let page = payload
+                .get("Data")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| anyhow!("Saxo ref/v1/exchanges response did not contain Data"))?;
+            let page_len = page.len();
+            all.extend(page.iter().cloned());
+            let total_count = payload
+                .get("__count")
+                .and_then(JsonValue::as_u64)
+                .map(|value| value as usize);
+            let has_next = payload
+                .get("__next")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| !value.trim().is_empty());
+            if page_len < top || !has_next || total_count.is_some_and(|total| all.len() >= total) {
+                break;
+            }
+            skip += top;
+            if skip > 10_000 {
+                bail!("Saxo ref/v1/exchanges pagination exceeded 10000 rows");
+            }
+        }
+        Ok(all)
     }
 
     pub async fn watchlists_payload(&self) -> Result<JsonValue> {
@@ -2413,89 +2578,8 @@ impl AppState {
     }
 
     pub(crate) fn market_exchange_rows(&self) -> Vec<JsonValue> {
-        let offset_minutes = yaml_i64(
-            &self.config,
-            &["analysis_windows", "offset_minutes_after_open"],
-        )
-        .unwrap_or(30);
-        let pre_sync_minutes = yaml_i64(
-            &self.config,
-            &["analysis_windows", "pre_sync_minutes_before_analysis"],
-        )
-        .unwrap_or(5);
-        let end_buffer_minutes = yaml_i64(
-            &self.config,
-            &["analysis_windows", "end_buffer_minutes_before_close"],
-        )
-        .unwrap_or(15);
-        default_exchanges()
-            .into_iter()
-            .map(|exchange| {
-                let tz = exchange
-                    .timezone
-                    .parse::<Tz>()
-                    .unwrap_or(chrono_tz::Europe::Copenhagen);
-                let now_utc = Utc::now();
-                let local_now = now_utc.with_timezone(&tz);
-                let local_date = local_now.date_naive();
-                let is_weekend = local_now.weekday().number_from_monday() >= 6;
-                let open_local = local_session_time(tz, local_date, exchange.open_time);
-                let close_local = local_session_time(tz, local_date, exchange.close_time);
-                let tradable_close_local =
-                    close_local - Duration::minutes(exchange.tradable_close_offset_minutes);
-                let session_open_at = open_local.with_timezone(&Utc);
-                let session_close_at = close_local.with_timezone(&Utc);
-                let tradable_close_at = tradable_close_local.with_timezone(&Utc);
-                let is_open = !is_weekend && now_utc >= session_open_at && now_utc <= session_close_at;
-                let is_tradable =
-                    !is_weekend && now_utc >= session_open_at && now_utc < tradable_close_at;
-                let open_analysis_start = open_local + Duration::minutes(offset_minutes);
-                let open_analysis_end = tradable_close_local - Duration::minutes(end_buffer_minutes);
-                let pre_sync_start =
-                    open_analysis_start - Duration::minutes(pre_sync_minutes);
-                let pre_analysis_sync_active =
-                    !is_weekend && local_now >= pre_sync_start && local_now < open_analysis_start;
-                let open_analysis_window_active =
-                    !is_weekend && local_now >= open_analysis_start && local_now <= open_analysis_end;
-                let next_open = next_open_time(tz, &exchange, local_now);
-                let status_reason = if is_weekend {
-                    "Closed - Weekend"
-                } else if local_now < open_local {
-                    "Pre-open"
-                } else if local_now >= tradable_close_local && local_now <= close_local {
-                    "Closed - Closing auction / post-trade"
-                } else if local_now > close_local {
-                    "Closed - After hours"
-                } else {
-                    "Open"
-                };
-                json!({
-                    "code": exchange.code,
-                    "market": exchange.name,
-                    "timezone": exchange.timezone,
-                    "local_time": local_now.format("%Y-%m-%d %H:%M").to_string(),
-                    "status_reason": status_reason,
-                    "session_open_local": open_local.format("%Y-%m-%d %H:%M").to_string(),
-                    "session_close_local": close_local.format("%Y-%m-%d %H:%M").to_string(),
-                    "tradable_close_local": tradable_close_local.format("%Y-%m-%d %H:%M").to_string(),
-                    "session_open_at_utc": session_open_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "session_close_at_utc": session_close_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "tradable_close_at_utc": tradable_close_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "is_open": is_open,
-                    "is_tradable": is_tradable,
-                    "pre_analysis_sync_active": pre_analysis_sync_active,
-                    "open_analysis_window_active": open_analysis_window_active,
-                    "close_analysis_window_active": false,
-                    "analysis_window_active": open_analysis_window_active,
-                    "pre_analysis_sync_start_at_utc": pre_sync_start.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "open_analysis_window_start_at_utc": open_analysis_start.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "open_analysis_window_end_at_utc": open_analysis_end.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "next_open_at_utc": next_open.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "next_open": next_open.format("%Y-%m-%d %H:%M").to_string(),
-                    "calendar_source": "configured"
-                })
-            })
-            .collect()
+        let cache = current_saxo_exchange_calendar_cache();
+        market_exchange_rows_for_config(&self.config, Utc::now(), cache.as_ref())
     }
 
     async fn first_json(&self, sql: &str) -> Result<Option<JsonValue>> {
@@ -2507,6 +2591,326 @@ impl AppState {
         let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_json).collect())
     }
+}
+
+async fn saxo_reference_get_json(
+    state: &AppState,
+    session: &JsonValue,
+    path: &str,
+    query: &[(&str, String)],
+) -> Result<JsonValue> {
+    let access_token = json_text(session, "access_token");
+    if access_token.trim().is_empty() {
+        bail!("Saxo access token is missing from session");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let response = client
+        .get(format!(
+            "{}{}",
+            saxo_openapi_base_url(state, session)?,
+            path
+        ))
+        .bearer_auth(access_token)
+        .header(header::ACCEPT, "application/json")
+        .query(query)
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
+        if let Some(error_text) = extract_saxo_error_text(&payload) {
+            bail!("Saxo reference lookup failed: {error_text}");
+        }
+        let snippet: String = body.chars().take(300).collect();
+        bail!(
+            "Saxo reference lookup failed: HTTP {}: {}",
+            status.as_u16(),
+            snippet
+        );
+    }
+    if body.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(&body).context("parsing Saxo reference response")
+}
+
+fn extract_saxo_error_text(payload: &JsonValue) -> Option<String> {
+    for key in ["Message", "ErrorMessage", "ErrorCode"] {
+        if let Some(text) = payload.get(key).and_then(JsonValue::as_str) {
+            if !text.trim().is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    payload
+        .get("ErrorInfo")
+        .and_then(|value| {
+            value
+                .get("Message")
+                .or_else(|| value.get("ErrorMessage"))
+                .or_else(|| value.get("ErrorCode"))
+        })
+        .and_then(JsonValue::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+fn saxo_openapi_base_url(state: &AppState, session: &JsonValue) -> Result<&'static str> {
+    let environment = json_text(session, "environment")
+        .trim()
+        .to_string()
+        .to_lowercase();
+    let environment = if environment.is_empty() {
+        yaml_string(&state.config, &["saxo", "environment"])
+            .unwrap_or_else(|| "sim".to_string())
+            .to_lowercase()
+    } else {
+        environment
+    };
+    match environment.as_str() {
+        "sim" => Ok("https://gateway.saxobank.com/sim/openapi"),
+        "live" => Ok("https://gateway.saxobank.com/openapi"),
+        _ => bail!("Unsupported Saxo environment: {environment}"),
+    }
+}
+
+fn saxo_exchange_calendar_cache_lock() -> &'static RwLock<Option<SaxoExchangeCalendarCache>> {
+    SAXO_EXCHANGE_CALENDAR_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn current_saxo_exchange_calendar_cache() -> Option<SaxoExchangeCalendarCache> {
+    saxo_exchange_calendar_cache_lock()
+        .read()
+        .ok()
+        .and_then(|cache| cache.clone())
+}
+
+fn market_exchange_rows_for_config(
+    config: &YamlValue,
+    now_utc: DateTime<Utc>,
+    cache: Option<&SaxoExchangeCalendarCache>,
+) -> Vec<JsonValue> {
+    let offset_minutes =
+        yaml_i64(config, &["analysis_windows", "offset_minutes_after_open"]).unwrap_or(30);
+    let pre_sync_minutes = yaml_i64(
+        config,
+        &["analysis_windows", "pre_sync_minutes_before_analysis"],
+    )
+    .unwrap_or(5);
+    let end_buffer_minutes = yaml_i64(
+        config,
+        &["analysis_windows", "end_buffer_minutes_before_close"],
+    )
+    .unwrap_or(15);
+    default_exchanges()
+        .into_iter()
+        .map(|exchange| {
+            market_exchange_row(
+                &exchange,
+                now_utc,
+                offset_minutes,
+                pre_sync_minutes,
+                end_buffer_minutes,
+                cache,
+            )
+        })
+        .collect()
+}
+
+fn market_exchange_row(
+    exchange: &ExchangeRuntime,
+    now_utc: DateTime<Utc>,
+    offset_minutes: i64,
+    pre_sync_minutes: i64,
+    end_buffer_minutes: i64,
+    cache: Option<&SaxoExchangeCalendarCache>,
+) -> JsonValue {
+    let tz = exchange
+        .timezone
+        .parse::<Tz>()
+        .unwrap_or(chrono_tz::Europe::Copenhagen);
+    let local_now = now_utc.with_timezone(&tz);
+    let local_date = local_now.date_naive();
+    let is_weekend = local_now.weekday().number_from_monday() >= 6;
+    let saxo_calendar = cache.and_then(|cache| cache.exchanges.get(exchange.code));
+    let configured_holiday = if !is_weekend {
+        configured_holiday_name(exchange.code, local_date)
+    } else {
+        None
+    };
+    let saxo_day_session =
+        saxo_calendar.and_then(|calendar| saxo_trading_session_for_date(calendar, tz, local_date));
+    let day_session = saxo_day_session.or_else(|| {
+        if saxo_calendar.is_none() && !is_weekend && configured_holiday.is_none() {
+            let open_local = local_session_time(tz, local_date, exchange.open_time);
+            let close_local = local_session_time(tz, local_date, exchange.close_time);
+            Some(ExchangeDaySession {
+                open_at: open_local.with_timezone(&Utc),
+                close_at: close_local.with_timezone(&Utc),
+            })
+        } else {
+            None
+        }
+    });
+    let holiday_name = if day_session.is_none() && !is_weekend {
+        configured_holiday
+    } else {
+        None
+    };
+
+    let current_saxo_state = saxo_calendar.and_then(|calendar| {
+        calendar
+            .sessions
+            .iter()
+            .find(|session| session.start_at <= now_utc && now_utc < session.end_at)
+            .map(|session| session.state.as_str())
+    });
+    let calendar_source = if saxo_calendar.is_some() {
+        cache
+            .map(|cache| cache.source.as_str())
+            .unwrap_or("saxo_ref_v1_exchanges")
+    } else if holiday_name.is_some() {
+        "configured_holiday"
+    } else {
+        "configured"
+    };
+    let calendar_last_checked = cache
+        .map(|cache| {
+            cache
+                .checked_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        })
+        .unwrap_or_default();
+
+    if let Some(day_session) = day_session {
+        let open_local = day_session.open_at.with_timezone(&tz);
+        let close_local = day_session.close_at.with_timezone(&tz);
+        let tradable_close_local =
+            close_local - Duration::minutes(exchange.tradable_close_offset_minutes);
+        let tradable_close_at = tradable_close_local.with_timezone(&Utc);
+        let is_open = current_saxo_state
+            .map(is_saxo_open_state)
+            .unwrap_or(now_utc >= day_session.open_at && now_utc <= day_session.close_at);
+        let is_tradable = current_saxo_state
+            .map(is_saxo_trading_state)
+            .unwrap_or(now_utc >= day_session.open_at && now_utc < tradable_close_at)
+            && now_utc < tradable_close_at;
+        let open_analysis_start = open_local + Duration::minutes(offset_minutes);
+        let open_analysis_end = std::cmp::max(
+            open_analysis_start,
+            tradable_close_local - Duration::minutes(end_buffer_minutes),
+        );
+        let pre_sync_start = std::cmp::max(
+            open_local,
+            open_analysis_start - Duration::minutes(pre_sync_minutes),
+        );
+        let pre_analysis_sync_active =
+            local_now >= pre_sync_start && local_now < open_analysis_start;
+        let open_analysis_window_active =
+            local_now >= open_analysis_start && local_now <= open_analysis_end;
+        let next_open = saxo_calendar
+            .and_then(|calendar| next_saxo_open_time(calendar, now_utc))
+            .map(|value| value.with_timezone(&tz))
+            .unwrap_or_else(|| next_open_time(tz, exchange, local_now));
+        let status_reason = current_saxo_state
+            .map(saxo_status_reason)
+            .unwrap_or_else(|| {
+                if local_now < open_local {
+                    "Pre-open"
+                } else if local_now >= tradable_close_local && local_now <= close_local {
+                    "Closed - Closing auction / post-trade"
+                } else if local_now > close_local {
+                    "Closed - After hours"
+                } else {
+                    "Open"
+                }
+            });
+        return json!({
+            "code": exchange.code,
+            "market": exchange.name,
+            "timezone": exchange.timezone,
+            "local_time": local_now.format("%Y-%m-%d %H:%M").to_string(),
+            "status_reason": status_reason,
+            "holiday_name": JsonValue::Null,
+            "session_open_local": open_local.format("%Y-%m-%d %H:%M").to_string(),
+            "session_close_local": close_local.format("%Y-%m-%d %H:%M").to_string(),
+            "tradable_close_local": tradable_close_local.format("%Y-%m-%d %H:%M").to_string(),
+            "session_open_at_utc": day_session.open_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "session_close_at_utc": day_session.close_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "tradable_close_at_utc": tradable_close_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "is_open": is_open,
+            "is_tradable": is_tradable,
+            "pre_analysis_sync_active": pre_analysis_sync_active,
+            "open_analysis_window_active": open_analysis_window_active,
+            "close_analysis_window_active": false,
+            "analysis_window_active": open_analysis_window_active,
+            "pre_analysis_sync_start_at_utc": pre_sync_start.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "open_analysis_window_start_at_utc": open_analysis_start.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "open_analysis_window_end_at_utc": open_analysis_end.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "next_open_at_utc": next_open.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "next_open": next_open.format("%Y-%m-%d %H:%M").to_string(),
+            "calendar_source": calendar_source,
+            "calendar_last_checked": calendar_last_checked,
+            "saxo_exchange_id": saxo_calendar.map(|calendar| calendar.exchange_id.clone()).unwrap_or_default(),
+            "saxo_exchange_name": saxo_calendar.and_then(|calendar| calendar.name.clone()).unwrap_or_default(),
+            "saxo_timezone_id": saxo_calendar.and_then(|calendar| calendar.timezone_id.clone()).unwrap_or_default(),
+            "saxo_session_state": current_saxo_state.unwrap_or_default(),
+        });
+    }
+
+    let next_open = saxo_calendar
+        .and_then(|calendar| next_saxo_open_time(calendar, now_utc))
+        .map(|value| value.with_timezone(&tz))
+        .unwrap_or_else(|| next_open_time(tz, exchange, local_now));
+    let status_reason = if is_weekend {
+        "Closed - Weekend".to_string()
+    } else if let Some(holiday) = holiday_name {
+        format!("Closed - {holiday}")
+    } else if saxo_calendar.is_some() {
+        "Closed - No Saxo trading session".to_string()
+    } else {
+        let open_local = local_session_time(tz, local_date, exchange.open_time);
+        if local_now < open_local {
+            "Pre-open".to_string()
+        } else {
+            "Closed - After hours".to_string()
+        }
+    };
+
+    json!({
+        "code": exchange.code,
+        "market": exchange.name,
+        "timezone": exchange.timezone,
+        "local_time": local_now.format("%Y-%m-%d %H:%M").to_string(),
+        "status_reason": status_reason,
+        "holiday_name": holiday_name.unwrap_or_default(),
+        "session_open_local": "n/a",
+        "session_close_local": "n/a",
+        "tradable_close_local": "n/a",
+        "session_open_at_utc": JsonValue::Null,
+        "session_close_at_utc": JsonValue::Null,
+        "tradable_close_at_utc": JsonValue::Null,
+        "is_open": false,
+        "is_tradable": false,
+        "pre_analysis_sync_active": false,
+        "open_analysis_window_active": false,
+        "close_analysis_window_active": false,
+        "analysis_window_active": false,
+        "pre_analysis_sync_start_at_utc": JsonValue::Null,
+        "open_analysis_window_start_at_utc": JsonValue::Null,
+        "open_analysis_window_end_at_utc": JsonValue::Null,
+        "next_open_at_utc": next_open.with_timezone(&Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "next_open": next_open.format("%Y-%m-%d %H:%M").to_string(),
+        "calendar_source": calendar_source,
+        "calendar_last_checked": calendar_last_checked,
+        "saxo_exchange_id": saxo_calendar.map(|calendar| calendar.exchange_id.clone()).unwrap_or_default(),
+        "saxo_exchange_name": saxo_calendar.and_then(|calendar| calendar.name.clone()).unwrap_or_default(),
+        "saxo_timezone_id": saxo_calendar.and_then(|calendar| calendar.timezone_id.clone()).unwrap_or_default(),
+        "saxo_session_state": current_saxo_state.unwrap_or_default(),
+    })
 }
 
 fn saxo_session_score(session: &JsonValue) -> (i64, i64) {
@@ -2594,6 +2998,238 @@ fn exchange(
     }
 }
 
+fn saxo_exchange_calendar_from_detail(
+    detail: &JsonValue,
+    fallback_exchange_id: &str,
+) -> Option<SaxoExchangeCalendar> {
+    let exchange_id = saxo_exchange_text(detail, "ExchangeId")
+        .unwrap_or_else(|| fallback_exchange_id.to_string());
+    let sessions = parse_saxo_exchange_sessions(detail);
+    if sessions.is_empty() {
+        return None;
+    }
+    Some(SaxoExchangeCalendar {
+        exchange_id,
+        name: saxo_exchange_text(detail, "Name"),
+        timezone_id: saxo_exchange_text(detail, "TimeZoneId"),
+        sessions,
+    })
+}
+
+fn parse_saxo_exchange_sessions(detail: &JsonValue) -> Vec<SaxoExchangeSession> {
+    let Some(sessions) = detail.get("ExchangeSessions").and_then(JsonValue::as_array) else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter_map(|session| {
+            let start = saxo_exchange_text(session, "StartTime")
+                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())?
+                .with_timezone(&Utc);
+            let end = saxo_exchange_text(session, "EndTime")
+                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())?
+                .with_timezone(&Utc);
+            let state =
+                saxo_exchange_text(session, "State").unwrap_or_else(|| "Undefined".to_string());
+            Some(SaxoExchangeSession {
+                start_at: start,
+                end_at: end,
+                state,
+            })
+        })
+        .collect()
+}
+
+fn saxo_exchange_matches(value: &JsonValue, code: &str) -> bool {
+    ["ExchangeId", "Mic", "IsoMic", "OperatingMic"]
+        .iter()
+        .filter_map(|key| saxo_exchange_text(value, key))
+        .any(|value| value.eq_ignore_ascii_case(code))
+}
+
+fn saxo_exchange_text(value: &JsonValue, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn saxo_trading_session_for_date(
+    calendar: &SaxoExchangeCalendar,
+    tz: Tz,
+    local_date: NaiveDate,
+) -> Option<ExchangeDaySession> {
+    let sessions = calendar
+        .sessions
+        .iter()
+        .filter(|session| is_saxo_trading_state(&session.state))
+        .filter(|session| session_overlaps_local_date(session, tz, local_date))
+        .collect::<Vec<_>>();
+    let open_at = sessions.iter().map(|session| session.start_at).min()?;
+    let close_at = sessions.iter().map(|session| session.end_at).max()?;
+    Some(ExchangeDaySession { open_at, close_at })
+}
+
+fn next_saxo_open_time(
+    calendar: &SaxoExchangeCalendar,
+    now_utc: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    calendar
+        .sessions
+        .iter()
+        .filter(|session| is_saxo_trading_state(&session.state))
+        .filter(|session| session.start_at > now_utc)
+        .map(|session| session.start_at)
+        .min()
+}
+
+fn session_overlaps_local_date(
+    session: &SaxoExchangeSession,
+    tz: Tz,
+    local_date: NaiveDate,
+) -> bool {
+    let start_date = session.start_at.with_timezone(&tz).date_naive();
+    let end_date = (session.end_at - Duration::seconds(1))
+        .with_timezone(&tz)
+        .date_naive();
+    start_date <= local_date && local_date <= end_date
+}
+
+fn is_saxo_trading_state(state: &str) -> bool {
+    matches!(
+        state.to_ascii_lowercase().as_str(),
+        "automatedtrading"
+            | "pittrading"
+            | "callauctiontrading"
+            | "auction"
+            | "openingauction"
+            | "tradingatlast"
+    )
+}
+
+fn is_saxo_open_state(state: &str) -> bool {
+    !matches!(
+        state.to_ascii_lowercase().as_str(),
+        "closed" | "break" | "halt" | "suspended" | "undefined"
+    )
+}
+
+fn saxo_status_reason(state: &str) -> &'static str {
+    match state.to_ascii_lowercase().as_str() {
+        "automatedtrading" | "pittrading" | "callauctiontrading" | "auction" | "openingauction"
+        | "tradingatlast" => "Open",
+        "preautomatedtrading" | "premarket" | "pretrading" => "Pre-open",
+        "postautomatedtrading" | "postmarket" | "posttrading" => {
+            "Closed - Closing auction / post-trade"
+        }
+        "break" => "Closed - Exchange break",
+        "halt" => "Closed - Halted",
+        "suspended" => "Closed - Suspended",
+        "closed" => "Closed",
+        _ => "Closed - Unknown Saxo session state",
+    }
+}
+
+fn configured_holiday_name(exchange_code: &str, local_date: NaiveDate) -> Option<&'static str> {
+    match (
+        exchange_code,
+        local_date.year(),
+        local_date.month(),
+        local_date.day(),
+    ) {
+        ("XCSE", 2026, 1, 1) => Some("New Year's Day"),
+        ("XCSE", 2026, 4, 2) => Some("Maundy Thursday"),
+        ("XCSE", 2026, 4, 3) => Some("Good Friday"),
+        ("XCSE", 2026, 4, 6) => Some("Easter Monday"),
+        ("XCSE", 2026, 5, 14) => Some("Ascension Day"),
+        ("XCSE", 2026, 5, 15) => Some("Day after Ascension Day"),
+        ("XCSE", 2026, 5, 25) => Some("Whit Monday"),
+        ("XCSE", 2026, 6, 5) => Some("Constitution Day"),
+        ("XCSE", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XCSE", 2026, 12, 25) => Some("Christmas Day"),
+        ("XCSE", 2026, 12, 31) => Some("New Year's Eve"),
+        ("XLON", 2026, 1, 1) => Some("New Year's Day"),
+        ("XLON", 2026, 4, 3) => Some("Good Friday"),
+        ("XLON", 2026, 4, 6) => Some("Easter Monday"),
+        ("XLON", 2026, 5, 4) => Some("Early May bank holiday"),
+        ("XLON", 2026, 5, 25) => Some("Spring bank holiday"),
+        ("XLON", 2026, 8, 31) => Some("Summer bank holiday"),
+        ("XLON", 2026, 12, 25) => Some("Christmas Day"),
+        ("XLON", 2026, 12, 28) => Some("Boxing Day (substitute day)"),
+        ("XETR", 2026, 1, 1) => Some("New Year's Day"),
+        ("XETR", 2026, 4, 3) => Some("Good Friday"),
+        ("XETR", 2026, 4, 6) => Some("Easter Monday"),
+        ("XETR", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XETR", 2026, 12, 25) => Some("Christmas Day"),
+        ("XETR", 2026, 12, 31) => Some("New Year's Eve"),
+        ("XAMS", 2026, 1, 1) => Some("New Year's Day"),
+        ("XAMS", 2026, 4, 3) => Some("Good Friday"),
+        ("XAMS", 2026, 4, 6) => Some("Easter Monday"),
+        ("XAMS", 2026, 5, 1) => Some("Labour Day"),
+        ("XAMS", 2026, 12, 25) => Some("Christmas Day"),
+        ("XNAS", 2026, 1, 1) => Some("New Year's Day"),
+        ("XNAS", 2026, 1, 19) => Some("Martin Luther King Jr. Day"),
+        ("XNAS", 2026, 2, 16) => Some("Presidents Day"),
+        ("XNAS", 2026, 4, 3) => Some("Good Friday"),
+        ("XNAS", 2026, 5, 25) => Some("Memorial Day"),
+        ("XNAS", 2026, 6, 19) => Some("Juneteenth"),
+        ("XNAS", 2026, 7, 3) => Some("Independence Day (observed)"),
+        ("XNAS", 2026, 9, 7) => Some("Labor Day"),
+        ("XNAS", 2026, 11, 26) => Some("Thanksgiving Day"),
+        ("XNAS", 2026, 12, 25) => Some("Christmas Day"),
+        ("XNYS", 2026, 1, 1) => Some("New Year's Day"),
+        ("XNYS", 2026, 1, 19) => Some("Martin Luther King Jr. Day"),
+        ("XNYS", 2026, 2, 16) => Some("Washington's Birthday"),
+        ("XNYS", 2026, 4, 3) => Some("Good Friday"),
+        ("XNYS", 2026, 5, 25) => Some("Memorial Day"),
+        ("XNYS", 2026, 6, 19) => Some("Juneteenth"),
+        ("XNYS", 2026, 7, 3) => Some("Independence Day (observed)"),
+        ("XNYS", 2026, 9, 7) => Some("Labor Day"),
+        ("XNYS", 2026, 11, 26) => Some("Thanksgiving Day"),
+        ("XNYS", 2026, 12, 25) => Some("Christmas Day"),
+        ("XSTO", 2026, 1, 1) => Some("New Year's Day"),
+        ("XSTO", 2026, 1, 6) => Some("Epiphany"),
+        ("XSTO", 2026, 4, 3) => Some("Good Friday"),
+        ("XSTO", 2026, 4, 6) => Some("Easter Monday"),
+        ("XSTO", 2026, 5, 1) => Some("Labour Day"),
+        ("XSTO", 2026, 5, 14) => Some("Ascension Day"),
+        ("XSTO", 2026, 6, 19) => Some("Midsummer Eve"),
+        ("XSTO", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XSTO", 2026, 12, 25) => Some("Christmas Day"),
+        ("XSTO", 2026, 12, 31) => Some("New Year's Eve"),
+        ("XOSL", 2026, 1, 1) => Some("New Year's Day"),
+        ("XOSL", 2026, 4, 2) => Some("Maundy Thursday"),
+        ("XOSL", 2026, 4, 3) => Some("Good Friday"),
+        ("XOSL", 2026, 4, 6) => Some("Easter Monday"),
+        ("XOSL", 2026, 5, 1) => Some("Labour Day"),
+        ("XOSL", 2026, 5, 14) => Some("Ascension Day"),
+        ("XOSL", 2026, 5, 25) => Some("Whit Monday"),
+        ("XOSL", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XOSL", 2026, 12, 25) => Some("Christmas Day"),
+        ("XOSL", 2026, 12, 31) => Some("New Year's Eve"),
+        ("XHEL", 2026, 1, 1) => Some("New Year's Day"),
+        ("XHEL", 2026, 1, 6) => Some("Epiphany"),
+        ("XHEL", 2026, 4, 3) => Some("Good Friday"),
+        ("XHEL", 2026, 4, 6) => Some("Easter Monday"),
+        ("XHEL", 2026, 5, 1) => Some("Labour Day"),
+        ("XHEL", 2026, 5, 14) => Some("Ascension Day"),
+        ("XHEL", 2026, 6, 19) => Some("Midsummer Eve"),
+        ("XHEL", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XHEL", 2026, 12, 25) => Some("Christmas Day"),
+        ("XHEL", 2026, 12, 31) => Some("New Year's Eve"),
+        ("XMIL", 2026, 1, 1) => Some("New Year's Day"),
+        ("XMIL", 2026, 4, 3) => Some("Good Friday"),
+        ("XMIL", 2026, 4, 6) => Some("Easter Monday"),
+        ("XMIL", 2026, 5, 1) => Some("Labour Day"),
+        ("XMIL", 2026, 12, 24) => Some("Christmas Eve"),
+        ("XMIL", 2026, 12, 25) => Some("Christmas Day"),
+        ("XMIL", 2026, 12, 31) => Some("New Year's Eve"),
+        _ => None,
+    }
+}
+
 fn local_session_time(tz: Tz, date: chrono::NaiveDate, time: NaiveTime) -> DateTime<Tz> {
     tz.with_ymd_and_hms(
         date.year(),
@@ -2611,6 +3247,9 @@ fn next_open_time(tz: Tz, exchange: &ExchangeRuntime, local_now: DateTime<Tz>) -
     for offset in 0..10 {
         let candidate_date = local_now.date_naive() + Duration::days(offset);
         if candidate_date.weekday().number_from_monday() >= 6 {
+            continue;
+        }
+        if configured_holiday_name(exchange.code, candidate_date).is_some() {
             continue;
         }
         let candidate = local_session_time(tz, candidate_date, exchange.open_time);
@@ -2967,6 +3606,68 @@ mod tests {
         });
 
         assert!(saxo_session_score(&old_refreshable) > saxo_session_score(&recently_invalid));
+    }
+
+    #[test]
+    fn configured_holiday_fallback_closes_copenhagen_and_oslo_on_whit_monday_2026() {
+        let config = YamlValue::Null;
+        let now = DateTime::parse_from_rfc3339("2026-05-25T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let rows = market_exchange_rows_for_config(&config, now, None);
+        let copenhagen = rows
+            .iter()
+            .find(|row| row.get("code").and_then(JsonValue::as_str) == Some("XCSE"))
+            .unwrap();
+        let oslo = rows
+            .iter()
+            .find(|row| row.get("code").and_then(JsonValue::as_str) == Some("XOSL"))
+            .unwrap();
+
+        assert_eq!(
+            copenhagen.get("status_reason").and_then(JsonValue::as_str),
+            Some("Closed - Whit Monday")
+        );
+        assert_eq!(
+            oslo.get("status_reason").and_then(JsonValue::as_str),
+            Some("Closed - Whit Monday")
+        );
+        assert_eq!(
+            copenhagen.get("is_tradable").and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            oslo.get("is_tradable").and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            copenhagen
+                .get("next_open_at_utc")
+                .and_then(JsonValue::as_str),
+            Some("2026-05-26T07:00:00Z")
+        );
+        assert_eq!(
+            oslo.get("next_open_at_utc").and_then(JsonValue::as_str),
+            Some("2026-05-26T07:00:00Z")
+        );
+        for (code, reason) in [
+            ("XLON", "Closed - Spring bank holiday"),
+            ("XNAS", "Closed - Memorial Day"),
+            ("XNYS", "Closed - Memorial Day"),
+        ] {
+            let row = rows
+                .iter()
+                .find(|row| row.get("code").and_then(JsonValue::as_str) == Some(code))
+                .unwrap();
+            assert_eq!(
+                row.get("status_reason").and_then(JsonValue::as_str),
+                Some(reason)
+            );
+            assert_eq!(
+                row.get("is_tradable").and_then(JsonValue::as_bool),
+                Some(false)
+            );
+        }
     }
 
     #[test]

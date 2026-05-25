@@ -89,6 +89,9 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
         return Ok(json!({"status": "not_due", "runs": []}));
     }
 
+    if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
+        warn!("Trading Manager using fallback exchange calendar: {err:#}");
+    }
     let market_rows = state.market_exchange_rows();
     let open_codes = market_rows
         .iter()

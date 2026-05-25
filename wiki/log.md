@@ -134,3 +134,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added explicit Hermes MCP tools for recent decision reports, daily end-of-day reports, and Markov signals.
 - Updated the Hermes Kubernetes tool allowlist and weekly reflection prompt so deployed Hermes can read those sources.
 - Clarified that Hermes should treat Markov, decision reports, and EOD journals as advisory evidence and still cannot access Saxo secrets or broker mutation tools.
+
+## [2026-05-25] implementation | Saxo-backed market calendars
+
+- Changed the Rust market status path to refresh Saxo `/ref/v1/exchanges` once per UTC date and derive exchange windows from `ExchangeSessions` when available.
+- Wired the refreshed calendar into dashboard market status, scheduled xAI report gating, Trading Manager queue gating, and live Saxo execution queue gating.
+- Kept a no-secret configured holiday fallback for known 2026 exchange holidays, including Whit Monday closures for Copenhagen and Oslo, so temporary Saxo session/API failures do not incorrectly reopen known closed markets.

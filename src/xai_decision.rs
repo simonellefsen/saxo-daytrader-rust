@@ -62,6 +62,9 @@ pub async fn submit_manual_decision_report(state: &AppState) -> Result<JsonValue
 }
 
 async fn submit_due_scheduled_reports(state: &AppState) -> Result<Vec<JsonValue>> {
+    if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
+        warn!("xAI decision scheduler using fallback exchange calendar: {err:#}");
+    }
     let pulses = active_decision_pulses(state);
     if pulses.is_empty() {
         return Ok(Vec::new());

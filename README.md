@@ -427,7 +427,8 @@ The scheduler:
 
 - checks the configured exchange analysis windows
 - refreshes portfolio quotes every `price_monitor.poll_interval_minutes` while at least one tracked exchange is open, then continues for `price_monitor.post_close_grace_minutes` after the final close before pausing until the next open
-- refreshes the exchange-calendar cache on a recurring interval
+- refreshes the Saxo-backed exchange-calendar cache daily from `/ref/v1/exchanges`
+- falls back to configured holiday closures if Saxo calendar refresh is unavailable
 - generates xAI decision reports during eligible windows
 - queues suggested trades
 - auto-executes queued trades in simulation mode
@@ -458,7 +459,7 @@ The scheduler:
 Each scheduler cycle does the following in order:
 
 1. Updates scheduler heartbeat and status in SQLite.
-2. Refreshes exchange calendars if their refresh interval has elapsed.
+2. Refreshes the Saxo `/ref/v1/exchanges` calendar cache once per UTC date and keeps configured holiday closures as a fallback.
 3. Computes current market status and whether any analysis window is active.
 4. Decides whether a new xAI decision report should be generated.
 5. If eligible, generates a decision report.
