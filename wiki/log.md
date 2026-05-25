@@ -140,3 +140,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Changed the Rust market status path to refresh Saxo `/ref/v1/exchanges` once per UTC date and derive exchange windows from `ExchangeSessions` when available.
 - Wired the refreshed calendar into dashboard market status, scheduled xAI report gating, Trading Manager queue gating, and live Saxo execution queue gating.
 - Kept a no-secret configured holiday fallback for known 2026 exchange holidays, including Whit Monday closures for Copenhagen and Oslo, so temporary Saxo session/API failures do not incorrectly reopen known closed markets.
+
+## [2026-05-25] implementation | Shared ngrok base path
+
+- Made the Rust dashboard base-path aware for the shared ngrok endpoint at `/saxo-daytrader`.
+- Added prefixed link, asset, form, and Saxo OAuth callback handling while keeping root routes available for local development and for prefix-stripping ngrok forwarding.
+- Updated the ngrok manifest to preserve shared routing for `/danske-spil` and `/saxo-daytrader`, and added the internal `saxo-daytrader.internal` AgentEndpoint to the repo-managed manifests.

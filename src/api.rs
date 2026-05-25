@@ -15,7 +15,7 @@ use tracing::{Level, error, info, warn};
 
 use crate::{
     auth::{self, SsoSession},
-    config::yaml_string,
+    config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
         CashBufferRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
@@ -32,6 +32,23 @@ use crate::{
 // handler functions. This is close to Express/Next route registration, but each
 // handler's inputs are typed extractors such as `State`, `Path`, and `Query`.
 pub fn router(state: Arc<AppState>) -> Router {
+    let base_path = public_base_path(&state.config);
+    let routes = app_routes();
+    let routes = if base_path.is_empty() {
+        routes
+    } else {
+        routes.clone().nest(&base_path, routes)
+    };
+    routes
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        .with_state(state)
+}
+
+fn app_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(index))
         .route("/assets/app.css", get(css))
@@ -121,12 +138,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(reset_sim_from_live_csv),
         )
         .fallback(get(index))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
-        )
-        .with_state(state)
 }
 
 async fn index(
@@ -150,6 +161,7 @@ async fn index(
         time_zone = %localization.time_zone,
         "rendering dashboard view"
     );
+    let base_path = public_base_path(&state.config);
     Html(render_index(
         state
             .dashboard_view(
@@ -160,6 +172,7 @@ async fn index(
                 params.report_id,
             )
             .await,
+        &base_path,
     ))
 }
 

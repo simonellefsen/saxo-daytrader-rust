@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 use url::Url;
 
-use crate::config::{resolve_config_path, yaml_string};
+use crate::config::{public_base_path, resolve_config_path, yaml_string};
 
 const TOKEN_SAFETY_MARGIN_SECONDS: i64 = 15 * 60;
 
@@ -120,7 +120,7 @@ pub async fn start_saxo_auth(
     } else {
         (None, None)
     };
-    let public_base_url = public_base_url(headers);
+    let public_base_url = public_base_url(config, headers);
     let redirect_uri = format!("{public_base_url}/api/saxo/auth/callback");
     let return_to =
         first_header(headers, header::REFERER.as_str()).unwrap_or_else(|| "/".to_string());
@@ -659,26 +659,35 @@ fn build_authorize_url(
     Ok(url.to_string())
 }
 
-fn public_base_url(headers: &HeaderMap) -> String {
-    if let Some(host) = first_header(headers, "x-forwarded-host") {
+fn public_base_url(config: &YamlValue, headers: &HeaderMap) -> String {
+    let base_path = public_base_path(config);
+    let origin = if let Some(host) = first_header(headers, "x-forwarded-host") {
         let proto =
             first_header(headers, "x-forwarded-proto").unwrap_or_else(|| "https".to_string());
-        return format!("{}://{}", first_csv_value(&proto), first_csv_value(&host));
-    }
-    if let Some(origin) = first_header(headers, header::ORIGIN.as_str()) {
-        return origin.trim_end_matches('/').to_string();
-    }
-    if let Some(referer) = first_header(headers, header::REFERER.as_str()) {
+        format!("{}://{}", first_csv_value(&proto), first_csv_value(&host))
+    } else if let Some(origin) = first_header(headers, header::ORIGIN.as_str()) {
+        origin.trim_end_matches('/').to_string()
+    } else if let Some(referer) = first_header(headers, header::REFERER.as_str()) {
         if let Ok(url) = Url::parse(&referer) {
             if let Some(host) = url.host_str() {
                 let port = url
                     .port()
                     .map(|port| format!(":{port}"))
                     .unwrap_or_default();
-                return format!("{}://{}{}", url.scheme(), host, port);
+                format!("{}://{}{}", url.scheme(), host, port)
+            } else {
+                fallback_public_origin(headers)
             }
+        } else {
+            fallback_public_origin(headers)
         }
-    }
+    } else {
+        fallback_public_origin(headers)
+    };
+    format!("{origin}{base_path}")
+}
+
+fn fallback_public_origin(headers: &HeaderMap) -> String {
     let host = first_header(headers, header::HOST.as_str())
         .unwrap_or_else(|| "localhost:8000".to_string());
     format!("http://{host}")
@@ -874,6 +883,32 @@ mod tests {
             HeaderValue::from_static("example.ngrok-free.dev"),
         );
 
-        assert_eq!(public_base_url(&headers), "https://example.ngrok-free.dev");
+        let config = YamlValue::Null;
+        assert_eq!(
+            public_base_url(&config, &headers),
+            "https://example.ngrok-free.dev"
+        );
+    }
+
+    #[test]
+    fn public_base_url_includes_configured_base_path() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("example.ngrok-free.dev"),
+        );
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+app:
+  public_base_path: /saxo-daytrader
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            public_base_url(&config, &headers),
+            "https://example.ngrok-free.dev/saxo-daytrader"
+        );
     }
 }

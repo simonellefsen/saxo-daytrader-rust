@@ -135,7 +135,7 @@ The deployment also creates:
 - S3-compatible CloudNativePG backup target: RustFS running in the Docker context so it can persist objects to the local filesystem.
 - `saxo/daytrader-postgres-app`: CNPG app-user secret; deploy also mirrors a `DATABASE_URL`-only `daytrader-postgres-app` secret into `saxo-rust` because Kubernetes secret references cannot cross namespaces.
 
-The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list.
+The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list. In the shared local ngrok setup, the public domain routes `/saxo-daytrader` to the daytrader service through the internal `saxo-daytrader.internal` AgentEndpoint. The Kubernetes config sets `app.public_base_path: /saxo-daytrader` so rendered links, forms, assets, and Saxo OAuth callback URLs stay under that prefix even when ngrok strips the prefix before forwarding.
 
 Required `.env` values:
 
@@ -182,7 +182,7 @@ make k8s-db-status
 make k8s-stop
 ```
 
-`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades the CloudNativePG and ngrok operators via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo-rust`, and renders the ngrok OAuth endpoint to `saxo-rust/daytrader-frontend`. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
+`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades the CloudNativePG and ngrok operators via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo-rust`, and renders the shared ngrok OAuth endpoint plus the internal `saxo-daytrader` AgentEndpoint. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
 
 The Kubernetes manifests use `imagePullPolicy: IfNotPresent`. This is intentional for Docker Desktop: the deploy script builds local images into the Docker Desktop image store and then updates deployments to those concrete image tags.
 

@@ -23,6 +23,22 @@ spec:
               headers:
                 x-daytrader-user-email: "${actions.ngrok.oauth.identity.email}"
                 x-daytrader-user-name: "${actions.ngrok.oauth.identity.name}"
+      - expressions:
+          - 'req.url.path.startsWith("/danske-spil")'
+        actions:
+          - type: forward-internal
+            config:
+              url: http://danske-spil-gambler.internal:80
+      - expressions:
+          - 'req.url.path.startsWith("/saxo-daytrader")'
+        actions:
+          - type: url-rewrite
+            config:
+              from: /saxo-daytrader/?(.*)
+              to: /$1
+          - type: forward-internal
+            config:
+              url: http://saxo-daytrader.internal:80
 ---
 apiVersion: ngrok.k8s.ngrok.com/v1alpha1
 kind: AgentEndpoint
@@ -39,3 +55,16 @@ spec:
   trafficPolicy:
     targetRef:
       name: daytrader-oauth
+---
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: AgentEndpoint
+metadata:
+  name: saxo-daytrader-internal
+  namespace: saxo-rust
+spec:
+  url: http://saxo-daytrader.internal:80
+  bindings:
+    - internal
+  upstream:
+    protocol: http1
+    url: http://daytrader-frontend.saxo-rust:8000

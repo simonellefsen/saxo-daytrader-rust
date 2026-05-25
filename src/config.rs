@@ -38,6 +38,28 @@ pub fn yaml_bool(value: &YamlValue, keys: &[&str]) -> Option<bool> {
     yaml_at(value, keys).and_then(YamlValue::as_bool)
 }
 
+pub fn public_base_path(config: &YamlValue) -> String {
+    let configured = env::var("DAYTRADER_PUBLIC_BASE_PATH")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| yaml_string(config, &["app", "public_base_path"]))
+        .or_else(|| yaml_string(config, &["app", "base_path"]))
+        .unwrap_or_default();
+    normalize_public_base_path(&configured)
+}
+
+fn normalize_public_base_path(value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return String::new();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
 pub fn database_url(config: &YamlValue, config_path: &PathBuf) -> Result<String> {
     if let Ok(database_url) = env::var("DATABASE_URL") {
         if !database_url.trim().is_empty() {
@@ -95,6 +117,20 @@ execution:
         assert_eq!(
             yaml_bool(&config, &["execution", "require_approval_live"]),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn normalizes_public_base_path() {
+        assert_eq!(normalize_public_base_path(""), "");
+        assert_eq!(normalize_public_base_path("/"), "");
+        assert_eq!(
+            normalize_public_base_path("saxo-daytrader/"),
+            "/saxo-daytrader"
+        );
+        assert_eq!(
+            normalize_public_base_path("/saxo-daytrader/"),
+            "/saxo-daytrader"
         );
     }
 

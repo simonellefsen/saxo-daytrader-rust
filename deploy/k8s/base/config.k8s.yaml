@@ -3,6 +3,7 @@ app:
   environment: kubernetes
   dry_run: false
   simulation_mode: true
+  public_base_path: /saxo-daytrader
   launch_scheduler_with_ui: false
   scheduler_restart_on_failure: false
   scheduler_max_restarts: 0

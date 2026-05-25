@@ -38,11 +38,11 @@ struct DashboardProps {
     data: DashboardView,
 }
 
-pub fn render_index(data: DashboardView) -> String {
+pub fn render_index(data: DashboardView, public_base_path: &str) -> String {
     // Dioxus components compile to Rust functions. For this server-side render
     // path we turn the component tree into an HTML string.
     let body = dioxus_ssr::render_element(rsx! { Dashboard { data } });
-    format!(
+    let html = format!(
         r#"<!doctype html>
 <html lang="en">
   <head>
@@ -54,7 +54,19 @@ pub fn render_index(data: DashboardView) -> String {
   </head>
   <body>{body}{CHART_SCRIPT}</body>
 </html>"#
-    )
+    );
+    prefix_root_relative_urls(&html, public_base_path)
+}
+
+fn prefix_root_relative_urls(html: &str, public_base_path: &str) -> String {
+    if public_base_path.is_empty() {
+        return html.to_string();
+    }
+    let base = public_base_path.trim_end_matches('/');
+    html.replace("href=\"/", &format!("href=\"{base}/"))
+        .replace("action=\"/", &format!("action=\"{base}/"))
+        .replace("src=\"/", &format!("src=\"{base}/"))
+        .replace("value=\"/", &format!("value=\"{base}/"))
 }
 
 #[component]
@@ -2301,5 +2313,17 @@ mod tests {
         let value = json!({"symbol": "AAPL:xnas", "quantity": 12});
         assert_eq!(text(&value, "symbol"), "AAPL:xnas");
         assert_eq!(number(&value, "quantity", 0), "12");
+    }
+
+    #[test]
+    fn prefixes_root_relative_urls_for_shared_ngrok_base_path() {
+        let html = r#"<a href="/api/health">Health</a><form action="/api/actions/decision-report"><input value="/?view=market" /><img src="/favicon.svg" /><a href="https://example.com">External</a>"#;
+        let prefixed = prefix_root_relative_urls(html, "/saxo-daytrader");
+
+        assert!(prefixed.contains(r#"href="/saxo-daytrader/api/health""#));
+        assert!(prefixed.contains(r#"action="/saxo-daytrader/api/actions/decision-report""#));
+        assert!(prefixed.contains(r#"value="/saxo-daytrader/?view=market""#));
+        assert!(prefixed.contains(r#"src="/saxo-daytrader/favicon.svg""#));
+        assert!(prefixed.contains(r#"href="https://example.com""#));
     }
 }
