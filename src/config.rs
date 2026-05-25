@@ -48,6 +48,29 @@ pub fn public_base_path(config: &YamlValue) -> String {
     normalize_public_base_path(&configured)
 }
 
+pub fn configured_public_base_url(config: &YamlValue) -> Option<String> {
+    let configured = env::var("DAYTRADER_PUBLIC_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| yaml_string(config, &["app", "public_base_url"]))?;
+    Some(normalize_public_base_url(
+        &configured,
+        &public_base_path(config),
+    ))
+}
+
+fn normalize_public_base_url(value: &str, public_base_path: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if public_base_path.is_empty() || trimmed.ends_with(public_base_path) {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}{public_base_path}")
+    }
+}
+
 fn normalize_public_base_path(value: &str) -> String {
     let trimmed = value.trim().trim_end_matches('/');
     if trimmed.is_empty() || trimmed == "/" {
@@ -131,6 +154,40 @@ execution:
         assert_eq!(
             normalize_public_base_path("/saxo-daytrader/"),
             "/saxo-daytrader"
+        );
+    }
+
+    #[test]
+    fn normalizes_configured_public_base_url_with_base_path() {
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+app:
+  public_base_path: /saxo-daytrader
+  public_base_url: https://example.ngrok-free.dev
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            configured_public_base_url(&config).as_deref(),
+            Some("https://example.ngrok-free.dev/saxo-daytrader")
+        );
+    }
+
+    #[test]
+    fn leaves_configured_public_base_url_path_unchanged() {
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+app:
+  public_base_path: /saxo-daytrader
+  public_base_url: https://example.ngrok-free.dev/saxo-daytrader/
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            configured_public_base_url(&config).as_deref(),
+            Some("https://example.ngrok-free.dev/saxo-daytrader")
         );
     }
 

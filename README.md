@@ -135,7 +135,7 @@ The deployment also creates:
 - S3-compatible CloudNativePG backup target: RustFS running in the Docker context so it can persist objects to the local filesystem.
 - `saxo/daytrader-postgres-app`: CNPG app-user secret; deploy also mirrors a `DATABASE_URL`-only `daytrader-postgres-app` secret into `saxo-rust` because Kubernetes secret references cannot cross namespaces.
 
-The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list. In the shared local ngrok setup, the public domain routes `/saxo-daytrader` to the daytrader service through the internal `saxo-daytrader.internal` AgentEndpoint. The Kubernetes config sets `app.public_base_path: /saxo-daytrader` so rendered links, forms, assets, and Saxo OAuth callback URLs stay under that prefix even when ngrok strips the prefix before forwarding.
+The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list. In the shared local ngrok setup, the public domain routes `/saxo-daytrader` to the daytrader service through the internal `saxo-daytrader.internal` AgentEndpoint. The Kubernetes config sets `app.public_base_path: /saxo-daytrader` so rendered links, forms, and assets stay under that prefix even when ngrok strips the prefix before forwarding. The deploy script also derives `DAYTRADER_PUBLIC_BASE_URL=https://$NGROK_DOMAIN/saxo-daytrader`; Saxo OAuth uses that configured URL for the callback instead of trusting internal forwarded hosts.
 
 Required `.env` values:
 

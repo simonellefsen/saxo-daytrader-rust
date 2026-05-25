@@ -146,3 +146,4 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Made the Rust dashboard base-path aware for the shared ngrok endpoint at `/saxo-daytrader`.
 - Added prefixed link, asset, form, and Saxo OAuth callback handling while keeping root routes available for local development and for prefix-stripping ngrok forwarding.
 - Updated the ngrok manifest to preserve shared routing for `/danske-spil` and `/saxo-daytrader`, and added the internal `saxo-daytrader.internal` AgentEndpoint to the repo-managed manifests.
+- Hardened Saxo OAuth start so callback URL generation prefers the configured public ngrok base URL over any internal forwarded host from shared endpoint routing.

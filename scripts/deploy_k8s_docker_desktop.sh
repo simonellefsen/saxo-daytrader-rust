@@ -117,6 +117,7 @@ require_env NGROK_AUTHTOKEN
 require_env NGROK_DOMAIN
 require_env NGROK_ALLOWED_EMAILS
 NGROK_OAUTH_PROVIDER="${NGROK_OAUTH_PROVIDER:-google}"
+DAYTRADER_PUBLIC_BASE_URL="${DAYTRADER_PUBLIC_BASE_URL:-https://$NGROK_DOMAIN/saxo-daytrader}"
 BACKUP_OBJECT_STORE="${BACKUP_OBJECT_STORE:-rustfs}"
 BACKUP_BUCKET="${BACKUP_BUCKET:-daytrader-cnpg}"
 case "$BACKUP_OBJECT_STORE" in
@@ -148,6 +149,29 @@ print(f"postgresql://{user}:{password}@daytrader-postgres-rw.{db_namespace}.svc.
 PY
 )"
 export DATABASE_URL
+export DAYTRADER_PUBLIC_BASE_URL
+
+python3 - "$SANITIZED_ENV_FILE" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+key = "DAYTRADER_PUBLIC_BASE_URL"
+line = f"{key}={os.environ[key]}\n"
+lines: list[str] = []
+replaced = False
+with open(path, encoding="utf-8") as handle:
+    for existing in handle:
+        if existing.startswith(f"{key}="):
+            lines.append(line)
+            replaced = True
+        else:
+            lines.append(existing)
+if not replaced:
+    lines.append(line)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.writelines(lines)
+PY
 
 ensure_backup_bucket() {
   printf "Ensuring backup bucket %s at %s...\n" "$BACKUP_BUCKET" "$BACKUP_S3_ENDPOINT_URL"

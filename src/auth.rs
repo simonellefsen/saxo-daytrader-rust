@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 use url::Url;
 
-use crate::config::{public_base_path, resolve_config_path, yaml_string};
+use crate::config::{
+    configured_public_base_url, public_base_path, resolve_config_path, yaml_string,
+};
 
 const TOKEN_SAFETY_MARGIN_SECONDS: i64 = 15 * 60;
 
@@ -660,6 +662,9 @@ fn build_authorize_url(
 }
 
 fn public_base_url(config: &YamlValue, headers: &HeaderMap) -> String {
+    if let Some(configured) = configured_public_base_url(config) {
+        return configured;
+    }
     let base_path = public_base_path(config);
     let origin = if let Some(host) = first_header(headers, "x-forwarded-host") {
         let proto =
@@ -902,6 +907,29 @@ mod tests {
             r#"
 app:
   public_base_path: /saxo-daytrader
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            public_base_url(&config, &headers),
+            "https://example.ngrok-free.dev/saxo-daytrader"
+        );
+    }
+
+    #[test]
+    fn public_base_url_prefers_configured_url_over_forwarded_internal_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+        headers.insert(
+            "x-forwarded-host",
+            HeaderValue::from_static("saxo-daytrader.internal"),
+        );
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+app:
+  public_base_path: /saxo-daytrader
+  public_base_url: https://example.ngrok-free.dev/saxo-daytrader
 "#,
         )
         .unwrap();
