@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod config;
+mod daily_indicators;
 mod db;
 mod localization;
 mod markov_method;
@@ -8,6 +9,7 @@ mod mcp;
 mod models;
 mod notifications;
 mod portfolio_reset;
+mod price_monitor;
 mod saxo_order;
 mod saxo_portfolio;
 mod scheduler;

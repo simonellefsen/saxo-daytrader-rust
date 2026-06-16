@@ -3,12 +3,19 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-05-25
+updated: 2026-06-16
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-06-16] operations | Kubernetes namespace and backup helper cleanup
+
+- Documented that app, Hermes, MCP, and CloudNativePG resources now run in the consolidated `saxo` namespace.
+- Updated runbooks and Hermes configuration examples so in-cluster URLs use `.saxo` service DNS.
+- Investigated `daytrader-postgres-backup-*` `StartError` pods and found the backup CronJobs were still invoking Python scripts inside the Rust runtime image.
+- Added a dedicated backup helper image path for the Python `requests`/`boto3` backup scripts so the Rust app image can stay Python-free.
 
 ## [2026-05-25] implementation | Hermes daily EOD reflection
 
@@ -153,3 +160,77 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added prefixed link, asset, form, and Saxo OAuth callback handling while keeping root routes available for local development and for prefix-stripping ngrok forwarding.
 - Updated the ngrok manifest to preserve shared routing for `/danske-spil` and `/saxo-daytrader`, and added the internal `saxo-daytrader.internal` AgentEndpoint to the repo-managed manifests.
 - Hardened Saxo OAuth start so callback URL generation prefers the configured public ngrok base URL over any internal forwarded host from shared endpoint routing.
+
+## [2026-05-26] fix | Markov dashboard probability rendering
+
+- Fixed Markov dashboard/API probability fields that rendered as zero/null because PostgreSQL `REAL` values were being read through the generic row adapter before float handling.
+- Kept Markov `signed_signal`, `bull_prob`, `sideways_prob`, `bear_prob`, `rolling_return`, `threshold`, `current_close`, and `conviction` as fractional JSON values for UI, API, Hermes, and xAI context consumers.
+- Changed Markov asset failure rows to persist full error chains on future runs so Saxo reference lookup, chart-history, entitlement, and HTTP failures are distinguishable.
+- Made the Hermes daily and weekly Kubernetes CronJobs active in the base manifest so redeploys do not suspend reflections.
+- Retried the failed Markov instrument set against Saxo SIM reference data. Most failures were transient/rate-limit related; added Markov Saxo GET pacing and HTTP 429 backoff to reduce future false failures.
+
+## [2026-05-27] fix | Saxo sell guard position aggregation
+
+- Investigated a Slack `execution_failed` alert for a live `MSTR:xnas` sell order from the US Open decision pulse.
+- The sell guard correctly blocked broker submission before Saxo precheck, but the diagnostic exposed a parser bug: Saxo `/port/v1/positions/me` can return multiple rows for the same symbol, and the Rust guard was keeping the last row instead of summing all symbol rows.
+- Changed the Saxo live position parser to aggregate duplicate symbol amounts before applying sell quantity and active reservation checks.
+- Deployed the fix to Docker Desktop Kubernetes; the existing failed MSTR order remains an immutable audit row and should only be retried through an explicit live trading action.
+
+## [2026-05-27] maintenance | Shared ngrok gateway ownership
+
+- Updated this repo's operational docs to treat `/Users/lindau/codex/shared-ngrok-gateway` as the source of truth for the public ngrok endpoint, OAuth policy, allow-list, and `/saxo-daytrader` route.
+- Kept this repo responsible only for the internal `saxo-daytrader.internal` AgentEndpoint that targets `daytrader-frontend.saxo-rust:8000`.
+- Added Make targets for inspecting and applying the shared gateway from this repo without duplicating the public gateway manifests here.
+
+## [2026-05-28] fix | Rust portfolio value snapshots
+
+- Found that the Rust dashboard could calculate live portfolio performance from broker snapshots, but the scheduler did not persist those values into `portfolio_value_history`.
+- Added Rust-side `portfolio_value_history` schema creation and a scheduler-cycle snapshot writer so performance history, EOD journals, and Hermes reflections have a durable valuation source.
+- The missing 2026-05-27 valuation was not backfilled because no same-day persisted valuation existed; future scheduler cycles should record fresh snapshots before journal generation.
+
+## [2026-05-28] fix | Positioner reset decimal parsing
+
+- Found that the Rust SIM reset parser treated Saxo Positioner dot-decimal fields as Danish thousands-formatted values, corrupting reset cost basis for the 2026-05-18 import batch.
+- Changed the reset parser to preserve dot decimals and added regression tests using an MSTR Positioner row.
+- Repaired the affected reset batch rows in `position_snapshots` and `position_lots`, and corrected the MSTR/AJG sell ledger rows whose realised P/L had been calculated from the corrupted reset basis.
+
+## [2026-05-28] improvement | Reinvestment pressure diagnostics
+
+- Investigated cash accumulation and found the system was de-risking through SELL recommendations while recent scheduled reports supplied no actionable BUY candidates.
+- Added a configurable `strategy.capital.reinvestment_pressure_threshold_pct` defaulting to 5 percentage points above the minimum cash buffer.
+- Decision prompts now include explicit reinvestment pressure context and ask the model to either redeploy excess cash, wait in cash, or reduce risk with a stated reason.
+- Trading Manager run records now include `reinvestment_diagnostics` so excess cash with no BUY candidates, blocked BUY candidates, and approved reinvestment candidates are distinguishable.
+
+## [2026-05-28] config | Reduce cash buffer to 2%
+
+- Reduced `strategy.capital.min_cash_buffer_pct` and `strategy.swing.cash_buffer_pct` from 10% to 2%.
+- Raised `strategy.capital.max_deployment_pct` from 90% to 98% so the lower cash buffer is effective instead of being constrained by the deployment ceiling.
+- Left `strategy.capital.reinvestment_pressure_threshold_pct` at 5 percentage points above the configured buffer, so reinvestment pressure now activates when cash is about 7% or higher.
+
+## [2026-06-16] config | Switch decision reports and Hermes to OpenRouter
+
+- Changed active decision-report configuration to use `OPENROUTER_API_KEY`, provider `openrouter`, base URL `https://openrouter.ai/api/v1`, and model `openai/gpt-5.5`.
+- Updated the Rust decision-report transport so OpenRouter Chat Completions are recorded as completed reports immediately, while the old xAI deferred polling path is skipped unless the provider is explicitly set back to `xai`.
+- Changed Hermes defaults to `HERMES_INFERENCE_PROVIDER=openrouter` and `HERMES_MODEL=openai/gpt-5.5`, and kept Hermes secrets limited to the Hermes/model/chat whitelist.
+- Removed `XAI_API_KEY` from the app secret generation path after the OpenRouter migration so stale provider credentials are not carried into Kubernetes.
+- Moved Hermes model/provider/MCP configuration from a `postStart` hook into the container startup wrapper and corrected the local MCP URL to `daytrader-mcp.saxo`, so Hermes reads the current provider and namespace before gateway startup.
+- Fixed manual decision-report generation after it still surfaced the old xAI deferred parser error from a stale image and then timed out OpenRouter responses at 30 seconds. The Rust resolver now honors `xai.timeout_seconds`, local config uses a 600-second report timeout, and provider parse/body failures are stored as `xai_error` report rows instead of returning a raw handler error. Verified report `95` completed through OpenRouter after redeploy.
+
+## [2026-06-16] fix | Reject malformed limit orders before execution
+
+- Investigated execution orders 105-110 from report `95` and found every failed row was a local validation failure: the decision report emitted `Limit` orders without `limit_price_local`, so no Saxo precheck or broker placement was attempted.
+- Added a Trading Manager order-shape gate that rejects unsupported order types, requires limit/stop prices where applicable, and only uses `price_local` as a positive fallback for limit prices.
+- Updated the decision-report prompt schema to require `limit_price_local` whenever `order_type` is `Limit`, and to prefer `Market` when no explicit limit is intended.
+- Hardened Saxo session handling by serializing in-pod refresh attempts and routing broker snapshots, price monitoring, Markov, daily indicators, execution, and order sync through the state-level database-backed session loader.
+- Confirmed the Saxo 401 state required a manual SIM OAuth login; after reauth, the scheduler reported a healthy Saxo session and refreshed broker snapshots again.
+- After report `97` successfully retried the `PLTR:xnas` sell, found that `BAC:xnys`, `CSCO:xnas`, and `ARM:xnas` starter BUYs were skipped because the duplicate-starter guard counted earlier `execution_failed` rows from report `95`.
+- Changed the duplicate-starter guard to count only non-terminal BUY orders, so immutable failed audit rows do not block later same-day retries while pending, submitted, or executed orders still suppress duplicates.
+- Added a Web UI runtime setting for the OpenRouter decision-report model, stored in `runtime_settings` and defaulting to `xai.model` from config. The settings form suggests `openrouter/fusion` as an operator-selectable model.
+- Fixed manual decision-report redirects to stay under `/saxo-daytrader` and changed completed manual reports to immediately run the Trading Manager and Saxo execution queue instead of waiting for the next scheduler heartbeat.
+
+## [2026-06-16] fix | Hermes reflection watchdog
+
+- Found that `CronJob/hermes-weekly-reflection` and `CronJob/hermes-daily-reflection` were active and completing, but they only submitted asynchronous Hermes `/v1/runs` requests and did not verify that a reflection row was written.
+- Confirmed the latest persisted Hermes reflection was still from 2026-05-23 before a manual weekly run on 2026-06-16.
+- Triggered a manual weekly reflection after the OpenRouter/Hermes configuration fixes; Hermes wrote a current 2026-06-16 weekly reflection.
+- Updated both reflection CronJobs to instruct Hermes to write a deterministic `source_session_id`, wait for that row, and write a watchdog reflection through the protected daytrader adapter if Hermes starts a run but does not persist a reflection inside the watchdog window.

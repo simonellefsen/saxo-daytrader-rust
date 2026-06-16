@@ -11,11 +11,11 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - Dioxus-rendered dashboard in [src/main.rs](/Users/lindau/codex/rust_daytrader/src/main.rs).
 - Workspace-local Cargo cache supported through `CARGO_HOME=.cargo-home`.
 - Docker image built from [Dockerfile.api](/Users/lindau/codex/rust_daytrader/Dockerfile.api).
-- The Rust app runs in Kubernetes namespace `saxo-rust`.
+- The Rust app runs in Kubernetes namespace `saxo`.
 - The existing CloudNativePG database remains in namespace `saxo`; the Rust app connects to it through the cross-namespace service DNS name `daytrader-postgres-rw.saxo.svc.cluster.local`.
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image; the separate Next.js deployment is no longer part of the base kustomization.
 - Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
-- The Markov method runs as a daily advisory regime skill for portfolio/watchlist assets and is exposed through the dashboard, API, Hermes context, and xAI prompt context without mutating orders. See [docs/markov-method.md](docs/markov-method.md).
+- The Markov method runs as a daily advisory regime skill for portfolio/watchlist assets and is exposed through the dashboard, API, Hermes context, and AI decision prompt context without mutating orders. See [docs/markov-method.md](docs/markov-method.md).
 - Project knowledge is organized through an LLM-maintained wiki under [wiki/](/Users/lindau/codex/rust_daytrader/wiki), with workflow details in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md).
 
 ## Legacy Phase 42 Surface
@@ -34,7 +34,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - Danish share-income tax engine with 27% / 42% brackets
 - Configurable commission and FX-conversion cost handling
 - Immutable trade ledger and lot-realization records
-- xAI decision engine using the official Responses API
+- OpenRouter-backed decision engine using `openai/gpt-5.5`
 - Structured JSON decision reports with step-by-step rationale, watchlist focus, and suggested trades
 - Decision report persistence with prompt, raw response, parsed report, and error tracking
 - APScheduler-based background worker for recurring analysis cycles
@@ -121,7 +121,7 @@ The mutation endpoints for decision generation, queue processing, broker sync, a
 
 ## Docker Desktop Kubernetes
 
-The repository includes a local Docker Desktop Kubernetes deployment with app resources in namespace `saxo-rust` and the CNPG database in namespace `saxo`. It runs two Rust workloads:
+The repository includes a local Docker Desktop Kubernetes deployment with app resources in namespace `saxo` and the CNPG database in namespace `saxo`. It runs two Rust workloads:
 
 - `daytrader-api`: Rust Axum/Dioxus app on port `8000`.
 - `daytrader-frontend`: Kubernetes Service pointing at `daytrader-api` for the ngrok public endpoint.
@@ -133,18 +133,14 @@ The deployment also creates:
 
 - `daytrader-postgres`: a two-instance CloudNativePG cluster with one primary and one standby in namespace `saxo`.
 - S3-compatible CloudNativePG backup target: RustFS running in the Docker context so it can persist objects to the local filesystem.
-- `saxo/daytrader-postgres-app`: CNPG app-user secret; deploy also mirrors a `DATABASE_URL`-only `daytrader-postgres-app` secret into `saxo-rust` because Kubernetes secret references cannot cross namespaces.
+- `saxo/daytrader-postgres-app`: CNPG app-user secret; deploy also mirrors a `DATABASE_URL`-only `daytrader-postgres-app` secret into `saxo` because Kubernetes secret references cannot cross namespaces.
 
-The `saxo-rust/daytrader-frontend` service is exposed through the ngrok Kubernetes operator with Google OAuth and an email allow-list. In the shared local ngrok setup, the public domain routes `/saxo-daytrader` to the daytrader service through the internal `saxo-daytrader.internal` AgentEndpoint. The Kubernetes config sets `app.public_base_path: /saxo-daytrader` so rendered links, forms, and assets stay under that prefix even when ngrok strips the prefix before forwarding. The deploy script also derives `DAYTRADER_PUBLIC_BASE_URL=https://$NGROK_DOMAIN/saxo-daytrader`; Saxo OAuth uses that configured URL for the callback instead of trusting internal forwarded hosts.
+The `saxo/daytrader-frontend` service is exposed through the shared ngrok gateway maintained in `../shared-ngrok-gateway`. This repo owns only the internal `saxo-daytrader.internal` AgentEndpoint that points to the daytrader service; the shared repo owns the public endpoint, Google OAuth allow-list, and `/saxo-daytrader` path routing. The Kubernetes config sets `app.public_base_path: /saxo-daytrader` so rendered links, forms, and assets stay under that prefix even when ngrok strips the prefix before forwarding. The deploy script derives `DAYTRADER_PUBLIC_BASE_URL=https://$NGROK_DOMAIN/saxo-daytrader` when `DAYTRADER_PUBLIC_BASE_URL` is not set; Saxo OAuth uses that configured URL for the callback instead of trusting internal forwarded hosts.
 
 Required `.env` values:
 
 ```bash
-NGROK_API_KEY=
-NGROK_AUTHTOKEN=
 NGROK_DOMAIN=your-domain.ngrok.app
-NGROK_OAUTH_PROVIDER=google
-NGROK_ALLOWED_EMAILS=you@example.com,another@example.com
 BACKUP_OBJECT_STORE=rustfs
 BACKUP_BUCKET=daytrader-cnpg
 RUSTFS_ENDPOINT_URL=http://host.docker.internal:9000
@@ -156,16 +152,17 @@ HERMES_API_SERVER_ENABLED=false
 HERMES_API_SERVER_HOST=0.0.0.0
 HERMES_API_SERVER_KEY=
 HERMES_API_SERVER_CORS_ORIGINS=http://127.0.0.1:8000
-HERMES_INFERENCE_PROVIDER=xai
-HERMES_MODEL=grok-4
+OPENROUTER_API_KEY=...
+HERMES_INFERENCE_PROVIDER=openrouter
+HERMES_MODEL=openai/gpt-5.5
 HERMES_DASHBOARD=false
 HERMES_DASHBOARD_TUI=false
 HERMES_DAYTRADER_API_KEY=
-HERMES_DAYTRADER_API_BASE_URL=http://daytrader-api.saxo-rust:8000
-HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo-rust:8610/mcp
+HERMES_DAYTRADER_API_BASE_URL=http://daytrader-api.saxo:8000
+HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
 ```
 
-`NGROK_DOMAIN` must be a domain available in your ngrok account. `NGROK_OAUTH_PROVIDER` defaults to `google` when omitted. `BACKUP_OBJECT_STORE` should be `rustfs`; RustFS runs in the Docker context and exposes the S3-compatible endpoint at `RUSTFS_ENDPOINT_URL`, defaulting to `http://host.docker.internal:9000` for Kubernetes pods. Keep the existing Saxo, xAI, Slack, and OpenFIGI values in `.env`; the deploy script creates the Kubernetes secret from that file.
+`NGROK_DOMAIN` is used only to derive `DAYTRADER_PUBLIC_BASE_URL`; set `DAYTRADER_PUBLIC_BASE_URL` directly if the app should use a different public callback base. The ngrok API key, authtoken, OAuth provider, and allow-list now belong in `../shared-ngrok-gateway`. `BACKUP_OBJECT_STORE` should be `rustfs`; RustFS runs in the Docker context and exposes the S3-compatible endpoint at `RUSTFS_ENDPOINT_URL`, defaulting to `http://host.docker.internal:9000` for Kubernetes pods. Keep the existing Saxo, OpenRouter, Slack, and OpenFIGI values in `.env`; the deploy script creates the Kubernetes secret from that file.
 
 Deploy to Docker Desktop:
 
@@ -179,10 +176,11 @@ Useful Kubernetes targets:
 make docker-build
 make k8s-status
 make k8s-db-status
+make shared-ngrok-status
 make k8s-stop
 ```
 
-`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades the CloudNativePG and ngrok operators via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo-rust`, and renders the shared ngrok OAuth endpoint plus the internal `saxo-daytrader` AgentEndpoint. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
+`make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades CloudNativePG via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo`, and applies the app-owned internal `saxo-daytrader` AgentEndpoint. It does not apply the shared public ngrok gateway; run `ENV_FILE=../rust_daytrader/.env make apply` from `../shared-ngrok-gateway` when shared edge routing or OAuth config changes. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
 
 The Kubernetes manifests use `imagePullPolicy: IfNotPresent`. This is intentional for Docker Desktop: the deploy script builds local images into the Docker Desktop image store and then updates deployments to those concrete image tags.
 
@@ -192,22 +190,22 @@ CloudNativePG currently reports the built-in `barmanObjectStore` backup stanza a
 
 ## Hermes Agent Research Loop
 
-The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, the two daily market-pulse decision reports, daily end-of-day reports, Markov regime signals, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become a baseline audit record. The dashboard includes a `Hermes` tab at `/?view=hermes` for reviewing stored reflections, moving experiment proposals through paper/SIM lifecycle states, promoting successful experiments into `strategy_baselines`, and showing the active baseline audit record. The Rust Trading Manager can apply an operator-approved SIM/paper overlay for a small allowlist of strategy variables, but it refuses overlays for `execution.mode=live` with `saxo.environment=LIVE`. Promoted baselines are included in Hermes context and future xAI decision prompts as advisory context; they do not activate live broker behavior.
+The Hermes integration plan keeps self-improvement outside the live broker mutation path. Hermes can observe scheduler cycles, the two daily market-pulse decision reports, daily end-of-day reports, Markov regime signals, execution outcomes, and strategy journals through a read-mostly adapter, then propose one-variable experiments against an explicit goal contract. Proposed prompt/config/strategy changes must be recorded, reviewed, tested in backtest or SIM/paper mode, and promoted by an operator before they can become a baseline audit record. The dashboard includes a `Hermes` tab at `/?view=hermes` for reviewing stored reflections, moving experiment proposals through paper/SIM lifecycle states, promoting successful experiments into `strategy_baselines`, and showing the active baseline audit record. The Rust Trading Manager can apply an operator-approved SIM/paper overlay for a small allowlist of strategy variables, but it refuses overlays for `execution.mode=live` with `saxo.environment=LIVE`. Promoted baselines are included in Hermes context and future AI decision prompts as advisory context; they do not activate live broker behavior.
 
 The Kubernetes base now includes `Deployment/hermes-agent`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `Service/hermes-gateway`, `Service/daytrader-mcp`, `ConfigMap/hermes-daytrader-context`, and suspended `CronJob/hermes-daily-reflection` plus `CronJob/hermes-weekly-reflection`. The services are internal-only. Hermes exposes gateway port `8642` plus dashboard port `9119` if enabled; the MCP adapter exposes port `8610` and only Hermes-safe tools. The deploy script creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables; Saxo credentials are not included in that secret. Set `HERMES_API_SERVER_ENABLED=true` and a strong `HERMES_API_SERVER_KEY` when the internal Hermes API should be reachable. Set `HERMES_INFERENCE_PROVIDER` and `HERMES_MODEL` to a model/provider the configured Hermes account can access, and set `HERMES_DAYTRADER_API_KEY` so Hermes can call the app's protected `/api/hermes/*` adapter endpoints or the `daytrader-mcp` adapter.
 
 To enable the daily EOD and weekly Hermes reflections after deployment:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
 To trigger immediate runs while keeping the schedules suspended:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
-rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
+rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
+rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
 ```
 
 See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the full architecture and rollout plan.
@@ -307,8 +305,8 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `selection_interval_minutes`: minimum spacing between strategy-driven re-selection passes.
 - `max_candidates`, `min_selected_assets`, `max_selected_assets`: selection funnel sizing.
 - `max_assets_per_sector`: optional diversification cap when sector labels are available.
-- `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.90` to preserve a 10% cash buffer.
-- `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.10`.
+- `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.98` to preserve a 2% cash buffer.
+- `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.02`.
 - `markov`: daily observable Markov regime skill for portfolio/watchlist assets. Defaults label each daily bar with a 20-trading-day rolling return and a +/-5% threshold, build a 3x3 Bull/Sideways/Bear transition matrix, forecast configured horizons with matrix powers, store the stationary distribution, and emit `bull_prob - bear_prob` as an advisory signed signal.
 - `swing.min_holdings` / `swing.max_holdings`: hard portfolio count guardrails, default `10` to `25`.
 - `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: hard target weight guardrails, default `5%` to `25%`.
@@ -348,13 +346,14 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 
 ### `xai`
 
-- `api_key`: xAI API key from `.env`.
-- `base_url`: xAI API base URL.
-- `model`: Grok model used for decision generation.
+- `provider`: AI provider name. The active default is `openrouter`.
+- `api_key`: OpenRouter API key from `OPENROUTER_API_KEY`.
+- `base_url`: OpenRouter-compatible API base URL.
+- `model`: model used for decision generation, currently `openai/gpt-5.5`.
 - `goal`: embedded objective included in every trading prompt.
-- `timeout_seconds`: HTTP timeout for xAI calls.
+- `timeout_seconds`: HTTP timeout for AI provider calls.
 - `auto_run_interval_minutes`: minimum spacing between automatic decision reports.
-- `include_encrypted_reasoning`: when `true`, requests encrypted reasoning content from xAI.
+- `include_encrypted_reasoning`: legacy xAI option; ignored by the OpenRouter path.
 
 ### `saxo`
 
@@ -431,7 +430,7 @@ The scheduler:
 - refreshes portfolio quotes every `price_monitor.poll_interval_minutes` while at least one tracked exchange is open, then continues for `price_monitor.post_close_grace_minutes` after the final close before pausing until the next open
 - refreshes the Saxo-backed exchange-calendar cache daily from `/ref/v1/exchanges`
 - falls back to configured holiday closures if Saxo calendar refresh is unavailable
-- generates xAI decision reports during eligible windows
+- generates OpenRouter decision reports during eligible windows
 - queues suggested trades
 - auto-executes queued trades in simulation mode
 - dispatches execution notifications for successes, warnings, and failures
@@ -463,7 +462,7 @@ Each scheduler cycle does the following in order:
 1. Updates scheduler heartbeat and status in SQLite.
 2. Refreshes the Saxo `/ref/v1/exchanges` calendar cache once per UTC date and keeps configured holiday closures as a fallback.
 3. Computes current market status and whether any analysis window is active.
-4. Decides whether a new xAI decision report should be generated.
+4. Decides whether a new AI decision report should be generated.
 5. If eligible, generates a decision report.
 6. Queues trades from the latest completed decision report.
 7. If `execution.mode: simulation` and `execution.auto_execute_simulation: true`, executes queued simulation orders immediately.
@@ -486,7 +485,7 @@ It does not mean:
 
 - the app waits 10 minutes before every single trade inside a cycle
 - the app trades exactly every 10 minutes
-- the app generates a new xAI report every 10 minutes regardless of market state
+- the app generates a new AI report every 10 minutes regardless of market state
 
 What it really means in practice:
 
@@ -655,7 +654,7 @@ Run the Phase 36 validation script:
 .venv/bin/python scripts/validate_phase36.py
 ```
 
-Earlier phase validations remain available. To validate against the live xAI API:
+Earlier phase validations remain available. To validate the live AI decision provider path:
 
 ```bash
 .venv/bin/python scripts/validate_phase4.py --live

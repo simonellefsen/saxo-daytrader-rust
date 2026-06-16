@@ -86,6 +86,14 @@ fn sql_optional_text(value: Option<&str>) -> String {
     }
 }
 
+fn sql_f64(value: f64) -> String {
+    if value.is_finite() {
+        value.to_string()
+    } else {
+        "0".to_string()
+    }
+}
+
 fn json_text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -93,6 +101,19 @@ fn json_text(value: &JsonValue, key: &str) -> String {
         Some(JsonValue::Bool(flag)) => flag.to_string(),
         _ => String::new(),
     }
+}
+
+/// Midnight at the start of a local calendar date, rendered as the UTC
+/// RFC3339 string format used by portfolio_value_history.recorded_at.
+fn local_date_start_to_utc_string(date: NaiveDate, tz: Tz) -> String {
+    let midnight = date.and_hms_opt(0, 0, 0).unwrap_or_default();
+    let local = tz
+        .from_local_datetime(&midnight)
+        .earliest()
+        .unwrap_or_else(|| tz.from_utc_datetime(&midnight));
+    local
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn performance_range_limit(range_key: &str) -> i64 {
@@ -322,6 +343,10 @@ impl AppState {
                 .to_string(),
             saxo_auth: JsonValue::Object(saxo_auth_object),
             sso_session,
+            ai_settings: self.ai_settings_value().await.unwrap_or_else(|err| {
+                warn!("dashboard AI settings degraded: {err:#}");
+                self.default_ai_settings_value()
+            }),
             localization,
             active_view,
             performance_range,
@@ -421,7 +446,7 @@ impl AppState {
                 "unrealised_pnl_after_tax_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
                 "estimated_tax_dkk": 0.0
             },
-            "goal_tracking": self.goal_tracking(total_value, initial_cash),
+            "goal_tracking": self.goal_tracking(total_value).await,
             "integrity": {"healthy": true, "warnings": [], "mismatches": [], "unreconciled_orders": []},
             "analysis_summary": self.market_status_payload().await.unwrap_or_else(|_| json!({"summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []})),
             "latest_decision": self.latest_decision_summary().await.unwrap_or_else(|_| json!({"id": null, "created_at": null, "status": null})),
@@ -437,7 +462,10 @@ impl AppState {
                 "latest_run": self.latest_markov_run().await.unwrap_or(JsonValue::Null),
             },
             "saxo_auth": self.saxo_auth_status_value().await,
-            "settings": {"cash_buffer": self.cash_buffer_value()},
+            "settings": {
+                "cash_buffer": self.cash_buffer_value(),
+                "ai": self.ai_settings_value().await.unwrap_or_else(|_| self.default_ai_settings_value())
+            },
             "refresh": {
                 "price_poll_interval_minutes": yaml_i64(&self.config, &["price_monitor", "poll_interval_minutes"]).unwrap_or(1),
                 "scheduler_poll_interval_minutes": yaml_i64(&self.config, &["scheduler", "poll_interval_minutes"]).unwrap_or(10),
@@ -456,13 +484,11 @@ impl AppState {
             .await?;
         let latest = history.last().cloned().unwrap_or_else(|| json!({}));
         let total = value_f64(&latest, "total_market_value_dkk");
-        let initial_cash =
-            yaml_f64(&self.config, &["portfolio", "initial_cash_dkk"]).unwrap_or(0.0);
         Ok(json!({
             "range_key": range_key,
             "history": history,
             "summary": self.performance_summary(&history),
-            "goal_tracking": self.goal_tracking(total, initial_cash)
+            "goal_tracking": self.goal_tracking(total).await
         }))
     }
 
@@ -579,10 +605,8 @@ impl AppState {
         &self,
         checked_date: NaiveDate,
     ) -> Result<SaxoExchangeCalendarCache> {
-        self.refresh_saxo_session()
-            .await
-            .context("refreshing Saxo session before exchange calendar lookup")?;
-        let session = auth::ensure_session_json(&self.config, &self.config_path)
+        let session = self
+            .ensure_saxo_session_json("exchange_calendar")
             .await
             .context("loading Saxo session for exchange calendar lookup")?;
         let data = self
@@ -1000,8 +1024,7 @@ impl AppState {
             };
             let cost_basis_dkk = unit_cost_dkk * quantity;
             let cost_basis_local_total = if base_quantity > 0.0 {
-                let base_cost_local_total =
-                    value_f64(base.unwrap(), "cost_basis_local") * base_quantity;
+                let base_cost_local_total = value_f64(base.unwrap(), "cost_basis_local");
                 if base_cost_local_total > 0.0 {
                     base_cost_local_total / base_quantity * quantity
                 } else {
@@ -1272,7 +1295,7 @@ impl AppState {
 
     pub async fn execution_orders(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {}",
+            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id, execution_result_json FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {}",
             clamp_limit(limit, 1, 500)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
@@ -1484,7 +1507,7 @@ impl AppState {
         json!({
             "status": "ok",
             "runtime": "saxo-rust",
-            "namespace": "saxo-rust",
+            "namespace": "saxo",
             "database_namespace": "saxo",
             "safe_endpoints": [
                 "/api/hermes/capabilities",
@@ -2087,6 +2110,110 @@ impl AppState {
         Ok(history)
     }
 
+    pub async fn record_portfolio_value_snapshot(
+        &self,
+        snapshot_type: &str,
+        baseline_session_date: Option<&str>,
+        source: &str,
+        extra_payload: JsonValue,
+    ) -> Result<JsonValue> {
+        let recorded_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let latest_batch = self.latest_batch_id().await?;
+        let aggregate = self.position_aggregate(latest_batch.as_deref()).await?;
+        let payload = json!({
+            "summary": aggregate,
+            "snapshot_type": snapshot_type,
+            "baseline_session_date": baseline_session_date,
+            "source": source,
+            "extra": extra_payload,
+        });
+        let payload_text =
+            serde_json::to_string(&payload).context("serializing portfolio snapshot payload")?;
+        let sql = format!(
+            "INSERT INTO portfolio_value_history (
+                recorded_at,
+                snapshot_type,
+                baseline_session_date,
+                batch_id,
+                total_market_value_dkk,
+                invested_market_value_dkk,
+                cash_balance_dkk,
+                total_cost_basis_dkk,
+                total_unrealised_pnl_dkk,
+                total_daily_pnl_dkk,
+                position_count,
+                source,
+                raw_payload_json
+            ) VALUES (
+                '{}',
+                '{}',
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                {},
+                '{}'
+            )",
+            sql_escape(&recorded_at),
+            sql_escape(snapshot_type),
+            sql_optional_text(baseline_session_date),
+            sql_optional_text(latest_batch.as_deref()),
+            sql_f64(value_f64(&aggregate, "total_market_value_dkk")),
+            sql_f64(value_f64(&aggregate, "invested_market_value_dkk")),
+            sql_f64(value_f64(&aggregate, "cash_balance_dkk")),
+            sql_f64(value_f64(&aggregate, "total_cost_basis_dkk")),
+            sql_f64(value_f64(&aggregate, "total_unrealised_pnl_dkk")),
+            sql_f64(value_f64(&aggregate, "total_daily_pnl_dkk")),
+            value_i64(&aggregate, "position_count"),
+            sql_optional_text(Some(source)),
+            sql_escape(&payload_text)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .context("recording portfolio value snapshot")?;
+        let snapshot = self
+            .first_json(&format!(
+                "SELECT recorded_at, snapshot_type, baseline_session_date, batch_id,
+                        total_market_value_dkk, invested_market_value_dkk, cash_balance_dkk,
+                        total_cost_basis_dkk, total_unrealised_pnl_dkk, total_daily_pnl_dkk,
+                        position_count, source
+                 FROM portfolio_value_history
+                 WHERE recorded_at = '{}' AND snapshot_type = '{}' AND source = '{}'
+                 ORDER BY id DESC
+                 LIMIT 1",
+                sql_escape(&recorded_at),
+                sql_escape(snapshot_type),
+                sql_escape(source)
+            ))
+            .await?
+            .unwrap_or_else(|| {
+                json!({
+                    "recorded_at": recorded_at,
+                    "snapshot_type": snapshot_type,
+                    "baseline_session_date": baseline_session_date,
+                    "batch_id": latest_batch,
+                    "total_market_value_dkk": value_f64(&aggregate, "total_market_value_dkk"),
+                    "invested_market_value_dkk": value_f64(&aggregate, "invested_market_value_dkk"),
+                    "cash_balance_dkk": value_f64(&aggregate, "cash_balance_dkk"),
+                    "total_cost_basis_dkk": value_f64(&aggregate, "total_cost_basis_dkk"),
+                    "total_unrealised_pnl_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
+                    "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
+                    "position_count": value_i64(&aggregate, "position_count"),
+                    "source": source,
+                })
+            });
+        Ok(json!({
+            "status": "ok",
+            "snapshot": snapshot,
+        }))
+    }
+
     async fn current_performance_row(&self) -> Result<JsonValue> {
         let latest_batch = self.latest_batch_id().await?;
         let aggregate = self.position_aggregate(latest_batch.as_deref()).await?;
@@ -2155,7 +2282,7 @@ impl AppState {
         Ok(value_i64(&row, "count"))
     }
 
-    pub fn goal_tracking(&self, total_value: f64, initial_cash: f64) -> JsonValue {
+    pub async fn goal_tracking(&self, total_value: f64) -> JsonValue {
         let weekly_target = yaml_f64(
             &self.config,
             &["xai", "performance_goals", "weekly_target_dkk"],
@@ -2166,15 +2293,84 @@ impl AppState {
             &["xai", "performance_goals", "monthly_target_dkk"],
         )
         .unwrap_or(20000.0);
-        let pnl = total_value - initial_cash;
+        let tz = yaml_string(&self.config, &["localization", "time_zone"])
+            .and_then(|value| value.parse::<Tz>().ok())
+            .unwrap_or(chrono_tz::Europe::Copenhagen);
+        let now_local = Utc::now().with_timezone(&tz);
+        let week_start_date = now_local.date_naive()
+            - Duration::days(now_local.weekday().num_days_from_monday() as i64);
+        let month_start_date = now_local
+            .date_naive()
+            .with_day(1)
+            .unwrap_or_else(|| now_local.date_naive());
+        let week_start_utc = local_date_start_to_utc_string(week_start_date, tz);
+        let month_start_utc = local_date_start_to_utc_string(month_start_date, tz);
+        // Scope baselines to the active import batch so portfolio resets
+        // start a fresh P&L baseline instead of bleeding through as losses.
+        let batch_id = self.latest_batch_id().await.ok().flatten();
+        let week_baseline = self
+            .portfolio_value_at(&week_start_utc, batch_id.as_deref())
+            .await
+            .unwrap_or(None);
+        let month_baseline = self
+            .portfolio_value_at(&month_start_utc, batch_id.as_deref())
+            .await
+            .unwrap_or(None);
+        let period_json = |baseline: Option<f64>, target: f64, period_start: &str| {
+            let pnl = baseline
+                .map(|baseline| total_value - baseline)
+                .unwrap_or(0.0);
+            json!({
+                "pnl_dkk": pnl,
+                "target_dkk": target,
+                "progress_pct": pct(pnl, target),
+                "baseline_value_dkk": baseline,
+                "period_start_utc": period_start,
+            })
+        };
         json!({
             "weekly_target_dkk": weekly_target,
             "monthly_target_dkk": monthly_target,
+            "basis": "pnl_dkk is total portfolio value change since the period start, measured against the portfolio value history baseline.",
             "periods": {
-                "week": {"pnl_dkk": pnl, "target_dkk": weekly_target, "progress_pct": pct(pnl, weekly_target)},
-                "month": {"pnl_dkk": pnl, "target_dkk": monthly_target, "progress_pct": pct(pnl, monthly_target)}
+                "week": period_json(week_baseline, weekly_target, &week_start_utc),
+                "month": period_json(month_baseline, monthly_target, &month_start_utc)
             }
         })
+    }
+
+    /// Portfolio value at a moment in time: the last snapshot before the
+    /// cutoff, falling back to the first snapshot after it when history
+    /// starts mid-period. Restricted to one import batch when given so
+    /// values from before a portfolio reset are never used as baselines.
+    async fn portfolio_value_at(
+        &self,
+        cutoff_utc: &str,
+        batch_id: Option<&str>,
+    ) -> Result<Option<f64>> {
+        let batch_filter = batch_id
+            .map(|batch_id| format!(" AND batch_id = '{}'", sql_escape(batch_id)))
+            .unwrap_or_default();
+        let before = self
+            .first_json(&format!(
+                "SELECT total_market_value_dkk FROM portfolio_value_history \
+                 WHERE recorded_at < '{}'{} ORDER BY recorded_at DESC LIMIT 1",
+                sql_escape(cutoff_utc),
+                batch_filter
+            ))
+            .await?;
+        if let Some(row) = before {
+            return Ok(Some(value_f64(&row, "total_market_value_dkk")));
+        }
+        let after = self
+            .first_json(&format!(
+                "SELECT total_market_value_dkk FROM portfolio_value_history \
+                 WHERE recorded_at >= '{}'{} ORDER BY recorded_at ASC LIMIT 1",
+                sql_escape(cutoff_utc),
+                batch_filter
+            ))
+            .await?;
+        Ok(after.map(|row| value_f64(&row, "total_market_value_dkk")))
     }
 
     pub fn cash_buffer_value(&self) -> JsonValue {
@@ -2185,13 +2381,95 @@ impl AppState {
         .unwrap_or(0.10);
         let max_deployment_pct =
             yaml_f64(&self.config, &["strategy", "capital", "max_deployment_pct"]).unwrap_or(0.90);
+        let reinvestment_pressure_threshold_pct = yaml_f64(
+            &self.config,
+            &["strategy", "capital", "reinvestment_pressure_threshold_pct"],
+        )
+        .unwrap_or(0.05);
         json!({
             "min_cash_buffer_pct": min_cash_buffer_pct,
             "max_deployment_pct": max_deployment_pct,
+            "reinvestment_pressure_threshold_pct": reinvestment_pressure_threshold_pct,
             "source": "config",
             "updated_at": null,
             "config_default_min_cash_buffer_pct": min_cash_buffer_pct
         })
+    }
+
+    fn default_ai_settings_value(&self) -> JsonValue {
+        let provider = yaml_string(&self.config, &["xai", "provider"])
+            .or_else(|| yaml_string(&self.config, &["xai", "inference_provider"]))
+            .unwrap_or_else(|| "openrouter".to_string());
+        let config_model = yaml_string(&self.config, &["xai", "model"]).unwrap_or_else(|| {
+            if provider == "openrouter" {
+                "openai/gpt-5.5".to_string()
+            } else {
+                "grok-4.3".to_string()
+            }
+        });
+        json!({
+            "provider": provider,
+            "model": config_model,
+            "config_model": config_model,
+            "source": "config",
+            "updated_at": null
+        })
+    }
+
+    pub async fn ai_settings_value(&self) -> Result<JsonValue> {
+        let mut value = self.default_ai_settings_value();
+        if let Some(saved) = self.runtime_setting("ai_settings").await? {
+            let model = saved
+                .get("model")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string);
+            if let Some(model) = model {
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("model".to_string(), JsonValue::from(model));
+                    obj.insert("source".to_string(), JsonValue::from("runtime"));
+                    obj.insert(
+                        "updated_at".to_string(),
+                        saved.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+                    );
+                }
+            }
+        }
+        Ok(value)
+    }
+
+    pub async fn save_ai_settings(&self, model: &str) -> Result<JsonValue> {
+        let model = model.trim();
+        if model.is_empty() {
+            anyhow::bail!("AI model cannot be empty");
+        }
+        if model.len() > 160 {
+            anyhow::bail!("AI model is too long");
+        }
+        if !model
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | ':'))
+        {
+            anyhow::bail!("AI model contains unsupported characters");
+        }
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let value = json!({
+            "model": model,
+            "updated_at": updated_at
+        });
+        self.save_runtime_setting("ai_settings", &value).await?;
+        self.ai_settings_value().await
+    }
+
+    pub async fn effective_xai_model(&self) -> Result<String> {
+        Ok(self
+            .ai_settings_value()
+            .await?
+            .get("model")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("openai/gpt-5.5")
+            .to_string())
     }
 
     pub async fn saxo_auth_status_value(&self) -> JsonValue {
@@ -2222,9 +2500,43 @@ impl AppState {
         if let Err(err) = self.sync_saxo_session_storage().await {
             warn!("Saxo session restore before refresh failed: {err:#}");
         }
-        let status = auth::refresh_session(&self.config, &self.config_path).await?;
-        self.persist_saxo_session_file_to_db("refresh").await?;
-        Ok(status)
+        match auth::refresh_session(&self.config, &self.config_path).await {
+            Ok(status) => {
+                self.persist_saxo_session_file_to_db("refresh").await?;
+                Ok(status)
+            }
+            Err(err) => {
+                if let Err(persist_err) = self
+                    .persist_invalid_saxo_session_file_to_db("refresh_invalid")
+                    .await
+                {
+                    warn!("Saxo invalid session database persistence failed: {persist_err:#}");
+                }
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn ensure_saxo_session_json(&self, source: &str) -> Result<JsonValue> {
+        if let Err(err) = self.sync_saxo_session_storage().await {
+            warn!("Saxo session restore before session load failed: {err:#}");
+        }
+        match auth::ensure_session_json(&self.config, &self.config_path).await {
+            Ok(session) => {
+                self.persist_saxo_session_file_to_db(source).await?;
+                Ok(session)
+            }
+            Err(err) => {
+                let invalid_source = format!("{source}_invalid");
+                if let Err(persist_err) = self
+                    .persist_invalid_saxo_session_file_to_db(&invalid_source)
+                    .await
+                {
+                    warn!("Saxo invalid session database persistence failed: {persist_err:#}");
+                }
+                Err(err)
+            }
+        }
     }
 
     pub async fn user_logout_saxo_session(&self) -> Result<JsonValue> {
@@ -2269,6 +2581,58 @@ impl AppState {
         // The database is the durable runtime state for tokens and operator
         // preferences. The on-disk session file is only an ephemeral working
         // copy for the OAuth helper functions.
+        if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS portfolio_value_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    recorded_at TEXT NOT NULL,
+                    snapshot_type TEXT NOT NULL,
+                    baseline_session_date TEXT,
+                    batch_id TEXT,
+                    total_market_value_dkk REAL NOT NULL,
+                    invested_market_value_dkk REAL NOT NULL,
+                    cash_balance_dkk REAL NOT NULL,
+                    total_cost_basis_dkk REAL NOT NULL,
+                    total_unrealised_pnl_dkk REAL NOT NULL,
+                    total_daily_pnl_dkk REAL NOT NULL,
+                    position_count INTEGER NOT NULL,
+                    source TEXT,
+                    raw_payload_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating portfolio value history table")?;
+        } else {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS portfolio_value_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recorded_at TEXT NOT NULL,
+                    snapshot_type TEXT NOT NULL,
+                    baseline_session_date TEXT,
+                    batch_id TEXT,
+                    total_market_value_dkk REAL NOT NULL,
+                    invested_market_value_dkk REAL NOT NULL,
+                    cash_balance_dkk REAL NOT NULL,
+                    total_cost_basis_dkk REAL NOT NULL,
+                    total_unrealised_pnl_dkk REAL NOT NULL,
+                    total_daily_pnl_dkk REAL NOT NULL,
+                    position_count INTEGER NOT NULL,
+                    source TEXT,
+                    raw_payload_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating portfolio value history table")?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_value_history_recorded
+             ON portfolio_value_history(recorded_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating portfolio value history recorded index")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS saxo_sessions (
                 singleton_key TEXT PRIMARY KEY,
@@ -2428,6 +2792,12 @@ impl AppState {
                 .await
                 .context("creating Markov method runtime tables")?;
         }
+        for sql in crate::daily_indicators::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating daily indicator runtime tables")?;
+        }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_hermes_reflections_created
              ON hermes_reflections(created_at DESC)",
@@ -2525,6 +2895,15 @@ impl AppState {
         let session = auth::export_session_json(&self.config, &self.config_path)
             .context("reading Saxo session file for database persistence")?;
         self.save_saxo_session_to_db(&session, source).await
+    }
+
+    async fn persist_invalid_saxo_session_file_to_db(&self, source: &str) -> Result<()> {
+        let session = auth::export_session_json(&self.config, &self.config_path)
+            .context("reading Saxo session file for invalid database persistence")?;
+        if saxo_session_refresh_invalid(&session) {
+            self.save_saxo_session_to_db(&session, source).await?;
+        }
+        Ok(())
     }
 
     pub async fn clear_saxo_session_from_db(&self) -> Result<()> {
@@ -2915,7 +3294,7 @@ fn market_exchange_row(
 
 fn saxo_session_score(session: &JsonValue) -> (i64, i64) {
     let now = Utc::now().timestamp();
-    let refresh_invalid = non_empty_session_text(session.get("refresh_token_invalid_at")).is_some();
+    let refresh_invalid = saxo_session_refresh_invalid(session);
     let has_refresh = non_empty_session_text(session.get("refresh_token")).is_some();
     let has_access = non_empty_session_text(session.get("access_token")).is_some();
     let refresh_expires_at = parse_session_time(session.get("refresh_token_expires_at"));
@@ -2934,6 +3313,10 @@ fn saxo_session_score(session: &JsonValue) -> (i64, i64) {
     };
 
     (health, saxo_session_rank(session))
+}
+
+fn saxo_session_refresh_invalid(session: &JsonValue) -> bool {
+    non_empty_session_text(session.get("refresh_token_invalid_at")).is_some()
 }
 
 struct ExchangeRuntime {

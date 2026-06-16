@@ -3,7 +3,7 @@ type: concept
 tags:
   - daytrader/wiki
   - project-knowledge
-updated: 2026-05-23
+updated: 2026-06-16
 sources:
   - /Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md
   - https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
@@ -19,7 +19,7 @@ This repository has several knowledge streams that are easy to lose:
 
 - Rust porting status from the legacy Python/FastAPI and Next.js system.
 - Saxo safety constraints around sessions, order payloads, prechecks, tick sizes, and reconciliation.
-- Kubernetes deployment choices across `saxo-rust` and `saxo`.
+- Kubernetes deployment choices consolidated into the `saxo` namespace.
 - Strategy and prompt changes proposed by Hermes or xAI.
 - Daily/weekly learnings from decision reports, execution outcomes, and strategy journals.
 

@@ -3,11 +3,12 @@ CARGO_HOME ?= $(CURDIR)/.cargo-home
 API_PORT ?= 8000
 BIND_ADDR ?= 127.0.0.1:$(API_PORT)
 KUBE_CONTEXT ?= docker-desktop
-APP_NAMESPACE ?= saxo-rust
+APP_NAMESPACE ?= saxo
 DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
+SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
 
-.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward
+.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward shared-ngrok-status shared-ngrok-apply
 
 help:
 	@printf "%s\n" \
@@ -24,10 +25,12 @@ help:
 		"Docker/Kubernetes:" \
 		"  make docker-build         Build $(IMAGE)" \
 		"  make k8s-deploy           Deploy app to $(APP_NAMESPACE), DB remains in $(DB_NAMESPACE)" \
-		"  make k8s-status           Show app pods/services/ngrok endpoint" \
+		"  make k8s-status           Show app pods/services/internal endpoint" \
 		"  make k8s-db-status        Show CNPG database resources" \
 		"  make k8s-logs             Tail API and scheduler logs" \
 		"  make k8s-port-forward     Forward daytrader-frontend to localhost:$(API_PORT)" \
+		"  make shared-ngrok-status  Show shared public ngrok gateway status" \
+		"  make shared-ngrok-apply   Apply shared public ngrok gateway from $(SHARED_NGROK_GATEWAY_DIR)" \
 		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)"
 
 install:
@@ -62,7 +65,7 @@ k8s-deploy:
 	KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
 
 k8s-status:
-	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) get pods,svc,agentendpoint,ngroktrafficpolicy
+	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) get pods,svc,agentendpoint
 	kubectl --context $(KUBE_CONTEXT) -n $(DB_NAMESPACE) get cluster,svc,pvc
 
 k8s-db-status:
@@ -78,11 +81,14 @@ k8s-logs:
 k8s-port-forward:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) port-forward svc/daytrader-frontend $(API_PORT):8000
 
+shared-ngrok-status:
+	$(MAKE) -C $(SHARED_NGROK_GATEWAY_DIR) KUBE_CONTEXT=$(KUBE_CONTEXT) status
+
+shared-ngrok-apply:
+	$(MAKE) -C $(SHARED_NGROK_GATEWAY_DIR) KUBE_CONTEXT=$(KUBE_CONTEXT) ENV_FILE=$(CURDIR)/.env apply
+
 k8s-stop:
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete ingress daytrader-frontend --ignore-not-found
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete agentendpoint daytrader-rust daytrader-frontend --ignore-not-found --wait=false
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) patch domain --all --type merge -p '{"metadata":{"finalizers":[]}}'
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete domain --all --ignore-not-found --wait=false
-	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete ngroktrafficpolicy daytrader-oauth --ignore-not-found
+	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete agentendpoint saxo-daytrader-internal --ignore-not-found --wait=false
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete deployment daytrader-api daytrader-scheduler daytrader-mcp daytrader-frontend --ignore-not-found
 	-kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) delete service daytrader-api daytrader-frontend daytrader-mcp --ignore-not-found

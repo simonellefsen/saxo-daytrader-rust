@@ -35,8 +35,7 @@ kind: CronJob
 metadata:
   name: daytrader-postgres-backup-retention
 spec:
-  schedule: "30 9-23 * * 1-5"
-  timeZone: Europe/Copenhagen
+  schedule: "5,35 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
@@ -49,11 +48,11 @@ spec:
           restartPolicy: Never
           containers:
             - name: retention
-              image: daytrader-api:local
+              image: daytrader-backup:local
               imagePullPolicy: IfNotPresent
               command:
                 - python
-                - scripts/prune_postgres_backups.py
+                - /app/scripts/prune_postgres_backups.py
               env:
                 - name: CLUSTER_NAME
                   value: daytrader-postgres
@@ -61,20 +60,6 @@ spec:
                   value: daytrader-cnpg
                 - name: S3_ENDPOINT_URL
                   value: http://host.docker.internal:9000
-                - name: BACKUP_KEEP_HOURLY
-                  value: "24"
-                - name: BACKUP_KEEP_DAILY
-                  value: "7"
-                - name: BACKUP_KEEP_WEEKLY
-                  value: "4"
-                - name: BACKUP_KEEP_MONTHLY
-                  value: "12"
-                - name: BACKUP_KEEP_YEARLY
-                  value: "10"
-                - name: BACKUP_LOCAL_TIMEZONE
-                  value: Europe/Copenhagen
-                - name: BACKUP_PURGE_WEEKENDS
-                  value: "true"
                 - name: AWS_ACCESS_KEY_ID
                   valueFrom:
                     secretKeyRef:

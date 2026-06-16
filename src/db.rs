@@ -14,11 +14,26 @@ pub fn row_to_json(row: &sqlx::any::AnyRow) -> JsonValue {
 }
 
 fn row_value(row: &sqlx::any::AnyRow, name: &str) -> JsonValue {
+    if prefers_float_column(name) {
+        if let Ok(value) = row.try_get::<Option<f64>, _>(name) {
+            return value.map(JsonValue::from).unwrap_or(JsonValue::Null);
+        }
+        if let Ok(value) = row.try_get::<Option<f32>, _>(name) {
+            return value
+                .map(|value| JsonValue::from(value as f64))
+                .unwrap_or(JsonValue::Null);
+        }
+    }
     if let Ok(value) = row.try_get::<Option<i64>, _>(name) {
         return value.map(JsonValue::from).unwrap_or(JsonValue::Null);
     }
     if let Ok(value) = row.try_get::<Option<f64>, _>(name) {
         return value.map(JsonValue::from).unwrap_or(JsonValue::Null);
+    }
+    if let Ok(value) = row.try_get::<Option<f32>, _>(name) {
+        return value
+            .map(|value| JsonValue::from(value as f64))
+            .unwrap_or(JsonValue::Null);
     }
     if let Ok(value) = row.try_get::<Option<bool>, _>(name) {
         return value.map(JsonValue::from).unwrap_or(JsonValue::Null);
@@ -35,10 +50,29 @@ fn row_value(row: &sqlx::any::AnyRow, name: &str) -> JsonValue {
     JsonValue::Null
 }
 
+fn prefers_float_column(name: &str) -> bool {
+    matches!(
+        name,
+        "bull_prob"
+            | "sideways_prob"
+            | "bear_prob"
+            | "signed_signal"
+            | "conviction"
+            | "rolling_return"
+            | "current_close"
+            | "threshold"
+    )
+}
+
 pub fn value_f64(value: &JsonValue, key: &str) -> f64 {
     value
         .get(key)
-        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|v| v as f64))
+                .or_else(|| value.as_str()?.parse().ok())
+        })
         .unwrap_or(0.0)
 }
 
@@ -100,5 +134,15 @@ mod tests {
         assert_eq!(value_f64(&value, "f"), 12.5);
         assert_eq!(value_i64(&value, "i"), 7);
         assert_eq!(pct(25.0, 100.0), 0.25);
+    }
+
+    #[test]
+    fn preserves_known_fractional_columns() {
+        assert!(prefers_float_column("bull_prob"));
+        assert!(prefers_float_column("signed_signal"));
+        assert!(!prefers_float_column("sample_count"));
+
+        let value = json!({"signed_signal": "0.63371605"});
+        assert_eq!(value_f64(&value, "signed_signal"), 0.63371605);
     }
 }

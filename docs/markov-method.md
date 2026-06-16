@@ -1,6 +1,6 @@
 # Markov Method
 
-The Markov method is an advisory regime skill for the Rust daytrader. It runs daily over the current portfolio and watchlist universe, stores one signal row per asset, and exposes the results to the dashboard, API, Hermes context, and xAI decision prompts.
+The Markov method is an advisory regime skill for the Rust daytrader. It runs daily over the current portfolio and watchlist universe, stores one signal row per asset, and exposes the results to the dashboard, API, Hermes context, and AI decision prompts.
 
 Source inspiration:
 
@@ -35,7 +35,7 @@ flowchart LR
   F --> G["Signed signal"]
   G --> DB["markov_asset_signals"]
   DB --> UI["Dashboard/API"]
-  DB --> XAI["xAI prompt context"]
+  DB --> XAI["AI decision prompt context"]
   DB --> H["Hermes context/MCP"]
 ```
 
@@ -74,7 +74,7 @@ strategy:
 - Dashboard: `/?view=markov`
 - API: `/api/markov/signals`
 - Hermes MCP tool: `get_markov_signals`
-- xAI decision prompt context: `markov_method`
+- AI decision prompt context: `markov_method`
 
 ## Safety
 

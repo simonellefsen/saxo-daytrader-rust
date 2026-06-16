@@ -9,7 +9,6 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    auth,
     config::{yaml_bool, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
     saxo_portfolio::refresh_broker_snapshots,
@@ -54,6 +53,13 @@ struct SaxoInstrument {
     description: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct BrokerPosition {
+    quantity: f64,
+    can_be_closed: bool,
+    instrument: Option<SaxoInstrument>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct PositionCostBasis {
     quantity: f64,
@@ -96,11 +102,10 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
 
     // Refresh is intentionally service-level. It does not depend on a logged-in UI user,
     // which lets the scheduler survive rollouts and dashboard logout.
-    state
-        .refresh_saxo_session()
+    let session = state
+        .ensure_saxo_session_json("execution_queue")
         .await
-        .context("refreshing Saxo session before executing queued orders")?;
-    let session = auth::ensure_session_json(&state.config, &state.config_path).await?;
+        .context("loading Saxo session before executing queued orders")?;
 
     if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
         warn!("Saxo execution queue using fallback exchange calendar: {err:#}");
@@ -178,11 +183,10 @@ pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
         );
     }
 
-    state
-        .refresh_saxo_session()
+    let session = state
+        .ensure_saxo_session_json("broker_order_sync")
         .await
-        .context("refreshing Saxo session before broker order sync")?;
-    let session = auth::ensure_session_json(&state.config, &state.config_path).await?;
+        .context("loading Saxo session before broker order sync")?;
     let client_key = client_key(state, &session)?;
     let mut processed = Vec::new();
     let mut updated = 0;
@@ -246,6 +250,30 @@ async fn refresh_after_execution(state: &AppState) -> JsonValue {
             json!({"status": "error", "error": err.to_string()})
         }
     }
+}
+
+/// Count of orders that still need scheduler attention: queued locally or
+/// awaiting broker fill/state sync. Used to switch the scheduler to a fast
+/// poll interval while work is in flight. Statuses that idle by design for
+/// long stretches (market closed, human approval) do not count.
+pub(crate) async fn outstanding_order_count(state: &AppState) -> Result<i64> {
+    let statuses = ACTIVE_SELL_STATUSES
+        .iter()
+        .chain(BROKER_SYNC_STATUSES)
+        .filter(|status| !matches!(**status, "waiting_for_market_open" | "pending_approval"))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row = sqlx::query(&format!(
+        "SELECT COUNT(*) AS outstanding
+         FROM execution_orders
+         WHERE mode = 'live' AND adapter = 'saxo' AND status IN ({statuses})"
+    ))
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.try_get::<i64, _>("outstanding").unwrap_or(0))
 }
 
 async fn pending_live_saxo_orders(state: &AppState) -> Result<Vec<JsonValue>> {
@@ -512,7 +540,7 @@ async fn execute_order(
     state: &AppState,
     session: &JsonValue,
     market_rows: &[JsonValue],
-    broker_positions: &HashMap<String, f64>,
+    broker_positions: &HashMap<String, BrokerPosition>,
     order: &JsonValue,
 ) -> Result<JsonValue> {
     let order_id = value_i64(order, "id");
@@ -560,7 +588,10 @@ async fn execute_order(
         // Python/Node systems often trust their latest cached row, while broker APIs can
         // already have a later fill that changed the holding.
         let local_snapshot_quantity = latest_position_quantity(state, &symbol).await?;
-        let held_quantity = broker_positions.get(&symbol).copied().unwrap_or(0.0);
+        let broker_position = broker_positions.get(&symbol);
+        let held_quantity = broker_position
+            .map(|position| position.quantity.max(0.0))
+            .unwrap_or(0.0);
         let reserved_quantity = active_sell_reservations(state, &symbol, order_id).await?;
         let available = (held_quantity - reserved_quantity).max(0.0);
         if available + 1e-9 < quantity {
@@ -582,7 +613,8 @@ async fn execute_order(
                         "held_quantity": held_quantity,
                         "local_snapshot_quantity": local_snapshot_quantity,
                         "reserved_quantity": reserved_quantity,
-                        "available_quantity": available
+                        "available_quantity": available,
+                        "broker_position": broker_position.map(sanitized_broker_position)
                     }
                 }),
             )
@@ -590,8 +622,31 @@ async fn execute_order(
         }
     }
 
-    let request_payload = build_order_payload(state, session, order, quantity).await?;
-    let precheck = precheck_order(state, session, &request_payload).await?;
+    let closing_position = if action == "SELL" {
+        broker_positions.get(&symbol)
+    } else {
+        None
+    };
+    let request_payload =
+        build_order_payload(state, session, order, quantity, closing_position).await?;
+    let precheck = match precheck_order(state, session, &request_payload).await {
+        Ok(precheck) => precheck,
+        Err(err) => {
+            return fail_order(
+                state,
+                order_id,
+                "execution_failed",
+                &err.to_string(),
+                &json!({
+                    "adapter": "saxo",
+                    "error": err.to_string(),
+                    "payload": sanitized_order_payload(&request_payload),
+                    "broker_position": closing_position.map(sanitized_broker_position)
+                }),
+            )
+            .await;
+        }
+    };
     let broker_result = place_order(state, session, order_id, &request_payload).await?;
     let broker_order_id = broker_order_id(&broker_result);
     let execution_result = json!({
@@ -624,11 +679,21 @@ async fn build_order_payload(
     session: &JsonValue,
     order: &JsonValue,
     quantity: f64,
+    closing_position: Option<&BrokerPosition>,
 ) -> Result<JsonValue> {
     let symbol = order_text(order, "symbol");
     let action = order_text(order, "action").to_uppercase();
     let order_type = normalize_order_type(&order_text(order, "order_type"));
-    let instrument = if let Some(instrument) = instrument_from_reviewed_order(order) {
+    let instrument = if action == "SELL" {
+        closing_position
+            .and_then(|position| position.instrument.clone())
+            .or_else(|| instrument_from_reviewed_order(order))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Sell blocked before Saxo precheck for {symbol}: no broker-held instrument metadata was available."
+                )
+            })?
+    } else if let Some(instrument) = instrument_from_reviewed_order(order) {
         instrument
     } else {
         lookup_instrument(state, session, &symbol).await?
@@ -783,7 +848,7 @@ fn instrument_from_reviewed_order(order: &JsonValue) -> Option<SaxoInstrument> {
 async fn broker_position_quantities(
     state: &AppState,
     session: &JsonValue,
-) -> Result<HashMap<String, f64>> {
+) -> Result<HashMap<String, BrokerPosition>> {
     let payload = saxo_get_json(
         state,
         session,
@@ -797,8 +862,9 @@ async fn broker_position_quantities(
     Ok(parse_position_quantities(&payload))
 }
 
-fn parse_position_quantities(payload: &JsonValue) -> HashMap<String, f64> {
-    payload
+fn parse_position_quantities(payload: &JsonValue) -> HashMap<String, BrokerPosition> {
+    let mut positions = HashMap::new();
+    for (symbol, amount, can_be_closed, instrument) in payload
         .get("Data")
         .and_then(JsonValue::as_array)
         .into_iter()
@@ -815,9 +881,47 @@ fn parse_position_quantities(payload: &JsonValue) -> HashMap<String, f64> {
                 .get("PositionBase")
                 .and_then(|value| value.get("Amount"))
                 .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))?;
-            Some((symbol, amount))
+            let can_be_closed = position
+                .get("PositionView")
+                .and_then(|value| value.get("CanBeClosed"))
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true);
+            let instrument = broker_position_instrument(position);
+            Some((symbol, amount, can_be_closed, instrument))
         })
-        .collect()
+    {
+        let amount_available_to_sell = if can_be_closed { amount.max(0.0) } else { 0.0 };
+        let entry = positions
+            .entry(symbol)
+            .or_insert_with(BrokerPosition::default);
+        let previous_quantity = entry.quantity;
+        let missing_instrument = entry.instrument.is_none();
+        entry.quantity += amount_available_to_sell;
+        entry.can_be_closed |= can_be_closed;
+        if missing_instrument || amount_available_to_sell > previous_quantity {
+            entry.instrument = instrument;
+        }
+    }
+    positions
+}
+
+fn broker_position_instrument(position: &JsonValue) -> Option<SaxoInstrument> {
+    let base = position.get("PositionBase")?;
+    let display = position.get("DisplayAndFormat").unwrap_or(&JsonValue::Null);
+    let uic = base
+        .get("Uic")
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))?;
+    let asset_type = json_text(base, "AssetType")?;
+    Some(SaxoInstrument {
+        uic,
+        asset_type,
+        exchange_id: json_text(display, "ExchangeId")
+            .or_else(|| json_text(display, "Exchange"))
+            .unwrap_or_default(),
+        description: json_text(display, "Description")
+            .or_else(|| json_text(display, "InstrumentDescription"))
+            .unwrap_or_default(),
+    })
 }
 
 async fn precheck_order(
@@ -1202,6 +1306,17 @@ async fn sync_final_fill(
         .await?;
         ledger_id = Some(new_ledger_id);
         inserted_fill = 1;
+        // Backfill the order row so the UI shows the fill price for market
+        // orders that were submitted without a known price.
+        sqlx::query(&format!(
+            "UPDATE execution_orders
+             SET price_local = {average_price_local},
+                 currency = COALESCE(currency, '{}')
+             WHERE id = {order_id} AND price_local IS NULL",
+            sql_escape(&currency)
+        ))
+        .execute(&state.pool)
+        .await?;
     }
     update_order_broker_status(state, order, "executed", broker_state, ledger_id).await?;
     Ok(json!({
@@ -1622,11 +1737,18 @@ async fn resolve_order_currency(
     ))
     .fetch_optional(&state.pool)
     .await?;
-    Ok(row
+    if let Some(currency) = row
         .as_ref()
         .map(row_to_json)
         .and_then(|row| json_text(&row, "currency"))
-        .unwrap_or_else(|| "DKK".to_string()))
+    {
+        return Ok(currency);
+    }
+    // Exchange suffix is a reliable currency signal for symbols that were
+    // never held locally; a blind DKK default silently corrupts FX math.
+    Ok(currency_for_exchange(&symbol_parts(&symbol).exchange)
+        .unwrap_or("DKK")
+        .to_string())
 }
 
 async fn active_sell_reservations(
@@ -2063,7 +2185,7 @@ fn default_min_commission_dkk(symbol: &str) -> f64 {
     }
 }
 
-fn fx_rate_to_dkk(currency: &str) -> f64 {
+pub(crate) fn fx_rate_to_dkk(currency: &str) -> f64 {
     match currency.trim().to_uppercase().as_str() {
         "DKK" => 1.0,
         "EUR" => 7.4604,
@@ -2073,6 +2195,22 @@ fn fx_rate_to_dkk(currency: &str) -> f64 {
         "SEK" => 0.67,
         "PLN" => 1.75,
         _ => 1.0,
+    }
+}
+
+/// Trading currency implied by the exchange suffix of a symbol like
+/// "AMD:xnas". Deterministic for the exchanges this system trades; used to
+/// verify order values and as the fallback when no broker currency is known.
+pub(crate) fn currency_for_exchange(exchange: &str) -> Option<&'static str> {
+    match exchange.trim().to_lowercase().as_str() {
+        "xnas" | "xnys" => Some("USD"),
+        "xcse" => Some("DKK"),
+        "xetr" | "xfra" | "xmil" | "xams" | "xpar" | "xbru" | "xhel" => Some("EUR"),
+        "xlon" | "xlse" => Some("GBP"),
+        "xsto" => Some("SEK"),
+        "xosl" => Some("NOK"),
+        "xwar" => Some("PLN"),
+        _ => None,
     }
 }
 
@@ -2107,6 +2245,27 @@ fn compact_number(value: f64) -> String {
             .trim_end_matches('.')
             .to_string()
     }
+}
+
+fn sanitized_order_payload(payload: &JsonValue) -> JsonValue {
+    let mut sanitized = payload.clone();
+    if let Some(object) = sanitized.as_object_mut() {
+        object.remove("AccountKey");
+    }
+    sanitized
+}
+
+fn sanitized_broker_position(position: &BrokerPosition) -> JsonValue {
+    json!({
+        "quantity": position.quantity,
+        "can_be_closed": position.can_be_closed,
+        "instrument": position.instrument.as_ref().map(|instrument| json!({
+            "uic": instrument.uic,
+            "asset_type": instrument.asset_type,
+            "exchange_id": instrument.exchange_id,
+            "description": instrument.description
+        }))
+    })
 }
 
 fn now_iso() -> String {
@@ -2221,6 +2380,10 @@ mod tests {
                     "PositionBase": {"Amount": 48}
                 },
                 {
+                    "DisplayAndFormat": {"Symbol": "MSTR:xnas"},
+                    "PositionBase": {"Amount": 3}
+                },
+                {
                     "DisplayAndFormat": {"Symbol": ""},
                     "PositionBase": {"Amount": 99}
                 }
@@ -2229,9 +2392,45 @@ mod tests {
 
         let quantities = parse_position_quantities(&payload);
 
-        assert_eq!(quantities.get("AJG:xnys"), Some(&2.0));
-        assert_eq!(quantities.get("MSTR:xnas"), Some(&48.0));
+        assert_eq!(
+            quantities.get("AJG:xnys").map(|value| value.quantity),
+            Some(2.0)
+        );
+        assert_eq!(
+            quantities.get("MSTR:xnas").map(|value| value.quantity),
+            Some(51.0)
+        );
         assert_eq!(quantities.len(), 2);
+    }
+
+    #[test]
+    fn parses_broker_held_instrument_for_sells() {
+        let payload = json!({
+            "Data": [
+                {
+                    "DisplayAndFormat": {
+                        "Symbol": "PLTR:xnas",
+                        "ExchangeId": "NASDAQ",
+                        "Description": "Palantir Technologies Inc."
+                    },
+                    "PositionBase": {
+                        "Amount": 31,
+                        "AssetType": "CfdOnStock",
+                        "Uic": 46019839
+                    },
+                    "PositionView": {"CanBeClosed": true}
+                }
+            ]
+        });
+
+        let positions = parse_position_quantities(&payload);
+        let position = positions.get("PLTR:xnas").expect("PLTR broker position");
+        let instrument = position.instrument.as_ref().expect("held Saxo instrument");
+
+        assert_eq!(position.quantity, 31.0);
+        assert!(position.can_be_closed);
+        assert_eq!(instrument.uic, 46019839);
+        assert_eq!(instrument.asset_type, "CfdOnStock");
     }
 
     #[test]

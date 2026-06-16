@@ -26,6 +26,17 @@ metadata:
   namespace: saxo
 spec:
   instances: 2
+  stopDelay: 60
+  smartShutdownTimeout: 15
+  primaryUpdateMethod: switchover
+  primaryUpdateStrategy: unsupervised
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
   bootstrap:
     initdb:
       database: daytrader
@@ -37,6 +48,7 @@ spec:
   backup:
     retentionPolicy: "3650d"
     barmanObjectStore:
+      serverName: daytrader-postgres-v2
       destinationPath: s3://__BACKUP_BUCKET__/
       endpointURL: __BACKUP_S3_ENDPOINT_URL__
       s3Credentials:

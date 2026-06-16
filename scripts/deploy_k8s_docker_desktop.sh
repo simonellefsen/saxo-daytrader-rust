@@ -3,11 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTEXT="${KUBE_CONTEXT:-docker-desktop}"
-NAMESPACE="saxo-rust"
+NAMESPACE="saxo"
 DB_NAMESPACE="${DB_NAMESPACE:-saxo}"
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
 API_IMAGE="${API_IMAGE:-daytrader-api:$IMAGE_TAG}"
+BACKUP_IMAGE="${BACKUP_IMAGE:-daytrader-backup:$IMAGE_TAG}"
 SANITIZED_ENV_FILE=""
 HERMES_ENV_FILE=""
 
@@ -60,14 +61,17 @@ import sys
 source_path, target_path = sys.argv[1], sys.argv[2]
 key_pattern = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 keys: list[str] = []
+blocked_keys = {"XAI_API_KEY"}
 with open(source_path, encoding="utf-8") as handle:
     for line in handle:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         match = key_pattern.match(line)
-        if match and match.group(1) not in keys:
-            keys.append(match.group(1))
+        if match:
+            key = match.group(1)
+            if key not in blocked_keys and key not in keys:
+                keys.append(key)
 
 with open(target_path, "w", encoding="utf-8") as handle:
     for key in keys:
@@ -95,7 +99,6 @@ mappings = {
     "OPENAI_API_KEY": "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY": "OPENROUTER_API_KEY",
-    "XAI_API_KEY": "XAI_API_KEY",
     "TELEGRAM_BOT_TOKEN": "TELEGRAM_BOT_TOKEN",
     "DISCORD_BOT_TOKEN": "DISCORD_BOT_TOKEN",
     "SLACK_BOT_TOKEN": "SLACK_BOT_TOKEN",
@@ -112,12 +115,10 @@ with open(target_path, "w", encoding="utf-8") as handle:
             handle.write(f"{target}={sanitized}\n")
 PY
 
-require_env NGROK_API_KEY
-require_env NGROK_AUTHTOKEN
-require_env NGROK_DOMAIN
-require_env NGROK_ALLOWED_EMAILS
-NGROK_OAUTH_PROVIDER="${NGROK_OAUTH_PROVIDER:-google}"
-DAYTRADER_PUBLIC_BASE_URL="${DAYTRADER_PUBLIC_BASE_URL:-https://$NGROK_DOMAIN/saxo-daytrader}"
+if [ -z "${DAYTRADER_PUBLIC_BASE_URL:-}" ]; then
+  require_env NGROK_DOMAIN
+  DAYTRADER_PUBLIC_BASE_URL="https://$NGROK_DOMAIN/saxo-daytrader"
+fi
 BACKUP_OBJECT_STORE="${BACKUP_OBJECT_STORE:-rustfs}"
 BACKUP_BUCKET="${BACKUP_BUCKET:-daytrader-cnpg}"
 case "$BACKUP_OBJECT_STORE" in
@@ -137,7 +138,7 @@ case "$BACKUP_OBJECT_STORE" in
 esac
 POSTGRES_APP_USER="${POSTGRES_APP_USER:-daytrader}"
 POSTGRES_APP_PASSWORD="${POSTGRES_APP_PASSWORD:-daytrader-postgres-password}"
-export BACKUP_BUCKET BACKUP_S3_ENDPOINT_URL BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE DB_NAMESPACE
+export BACKUP_BUCKET BACKUP_S3_ENDPOINT_URL BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY POSTGRES_APP_USER POSTGRES_APP_PASSWORD API_IMAGE BACKUP_IMAGE DB_NAMESPACE
 DATABASE_URL="$(python3 - <<'PY'
 import os
 from urllib.parse import quote
@@ -192,6 +193,7 @@ fi
 
 printf "Building local Docker images...\n"
 docker build -f "$ROOT/Dockerfile.api" -t "$API_IMAGE" -t daytrader-api:local "$ROOT"
+docker build -f "$ROOT/Dockerfile.backup" -t "$BACKUP_IMAGE" -t daytrader-backup:local "$ROOT"
 
 printf "Installing/upgrading CloudNativePG operator...\n"
 helm repo add cnpg https://cloudnative-pg.github.io/charts >/dev/null 2>&1 || true
@@ -203,15 +205,6 @@ kubectl --context "$CONTEXT" -n cnpg-system wait \
   --for=condition=Available deployment \
   -l app.kubernetes.io/name=cloudnative-pg \
   --timeout=180s
-
-printf "Installing/upgrading ngrok Kubernetes operator...\n"
-helm repo add ngrok https://charts.ngrok.com >/dev/null 2>&1 || true
-helm repo update ngrok >/dev/null
-helm upgrade --install ngrok-operator ngrok/ngrok-operator \
-  --namespace ngrok-operator \
-  --create-namespace \
-  --set "credentials.apiKey=$NGROK_API_KEY" \
-  --set "credentials.authtoken=$NGROK_AUTHTOKEN"
 
 printf "Using external RustFS backup target at %s.\n" "$BACKUP_S3_ENDPOINT_URL"
 ensure_backup_bucket
@@ -248,10 +241,6 @@ kubectl --context "$CONTEXT" delete pv daytrader-minio-pv --ignore-not-found
 kubectl --context "$CONTEXT" -n "$DB_NAMESPACE" wait --for=condition=Ready cluster/daytrader-postgres --timeout=420s
 
 printf "Applying app Kubernetes resources...\n"
-kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic daytrader-postgres-app \
-  --from-literal=database-url="$DATABASE_URL" \
-  --dry-run=client \
-  -o yaml | kubectl --context "$CONTEXT" apply -f -
 kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic daytrader-env \
   --from-env-file="$SANITIZED_ENV_FILE" \
   --dry-run=client \
@@ -268,8 +257,9 @@ kubectl --context "$CONTEXT" apply -k "$ROOT/deploy/k8s/base"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-api "api=$API_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-scheduler "scheduler=$API_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" set image deployment/daytrader-mcp "mcp=$API_IMAGE"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" set image cronjob/daytrader-postgres-backup-schedule "backup=$BACKUP_IMAGE"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" set image cronjob/daytrader-postgres-backup-retention "retention=$BACKUP_IMAGE"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete deployment daytrader-frontend --ignore-not-found
-kubectl --context "$CONTEXT" -n "$NAMESPACE" delete cronjob daytrader-postgres-backup-schedule daytrader-postgres-backup-retention --ignore-not-found
 kubectl --context "$CONTEXT" -n "$NAMESPACE" delete job daytrader-sqlite-to-postgres-migration --ignore-not-found
 
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-api
@@ -278,36 +268,8 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrade
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-mcp --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-agent
 
-printf "Applying ngrok OAuth endpoint for %s...\n" "$NGROK_DOMAIN"
-kubectl --context "$CONTEXT" -n "$NAMESPACE" delete ingress daytrader-frontend --ignore-not-found
-kubectl --context "$CONTEXT" -n "$NAMESPACE" delete agentendpoint daytrader-rust daytrader-frontend --ignore-not-found --wait=false
-kubectl --context "$CONTEXT" -n "$NAMESPACE" delete agentendpoint \
-  -l k8s.ngrok.com/controller-name=ngrok-operator-manager \
-  --ignore-not-found
-python3 - "$ROOT/deploy/k8s/ngrok/ingress.template.yaml" <<'PY' | kubectl --context "$CONTEXT" apply -f -
-import json
-import os
-import sys
-
-template_path = sys.argv[1]
-allowed_emails = [
-    email.strip()
-    for email in os.environ["NGROK_ALLOWED_EMAILS"].split(",")
-    if email.strip()
-]
-if not allowed_emails:
-    raise SystemExit("NGROK_ALLOWED_EMAILS must include at least one email address.")
-
-deny_expr = f"!(actions.ngrok.oauth.identity.email in {json.dumps(allowed_emails)})"
-with open(template_path, encoding="utf-8") as handle:
-    rendered = (
-        handle.read()
-        .replace("__NGROK_DOMAIN__", os.environ["NGROK_DOMAIN"])
-        .replace("__NGROK_OAUTH_PROVIDER__", os.environ.get("NGROK_OAUTH_PROVIDER", "google"))
-        .replace("__NGROK_DENY_EXPR__", deny_expr)
-    )
-sys.stdout.write(rendered)
-PY
+printf "Shared ngrok public gateway is owned by ../shared-ngrok-gateway.\n"
+printf "This deploy only applies the app-owned saxo-daytrader.internal AgentEndpoint via kustomize.\n"
 
 printf "Waiting for deployments...\n"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-api --timeout=180s
@@ -315,4 +277,4 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
 
 printf "Deployment complete.\n"
-printf "Rust app: https://%s\n" "$NGROK_DOMAIN"
+printf "Rust app: %s\n" "$DAYTRADER_PUBLIC_BASE_URL"

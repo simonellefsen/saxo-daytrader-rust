@@ -7,7 +7,6 @@ use serde_json::{Value as JsonValue, json};
 use tracing::info;
 
 use crate::{
-    auth,
     config::yaml_string,
     db::{sql_escape, value_f64},
     state::AppState,
@@ -50,11 +49,8 @@ pub async fn refresh_broker_snapshots(state: &AppState) -> Result<JsonValue> {
     // Refreshing broker snapshots is read-only against Saxo, but it changes the local
     // read model. Keeping this in Rust means the dashboard no longer depends on the
     // old Python scheduler to discover fills after a rollout.
-    state
-        .refresh_saxo_session()
-        .await
-        .context("refreshing Saxo session before broker snapshot refresh")?;
-    let session = auth::ensure_session_json(&state.config, &state.config_path)
+    let session = state
+        .ensure_saxo_session_json("broker_snapshot_refresh")
         .await
         .context("loading Saxo session for broker snapshot refresh")?;
 

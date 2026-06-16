@@ -56,7 +56,7 @@ Examples of one variable:
 - RSI entry threshold: `rsi_entry_lt: 25 -> 22`
 - stop loss ATR multiple: `2.0 -> 1.7`
 - max holding weight: `0.25 -> 0.20`
-- xAI prompt instruction for catalyst scoring
+- AI decision prompt instruction for catalyst scoring
 - Trading Manager minimum reward/risk: `2.0 -> 2.5`
 
 Examples that are not allowed as one experiment:
@@ -87,7 +87,7 @@ Current `saxo-rust` capabilities:
 
 - Axum HTTP/API server and Dioxus SSR dashboard.
 - Scheduler heartbeat in `src/scheduler.rs`.
-- Scheduled xAI decision report submission and polling in `src/xai_decision.rs`. The active scheduler targets two daily market-pulse reports when the relevant markets are open: Nordic/EU open +1h15 and US open +1h15.
+- Scheduled OpenRouter decision report submission in `src/xai_decision.rs`. The active scheduler targets two daily market-pulse reports when the relevant markets are open: Nordic/EU open +1h15 and US open +1h15.
 - Strategy journal generation in `src/strategy_journal.rs`, including daily end-of-day reports after the configured local journal time.
 - Markov method advisory regime signals in `src/markov_method.rs`.
 - Trading Manager queue creation in `src/trading_manager.rs`.
@@ -96,7 +96,7 @@ Current `saxo-rust` capabilities:
 - Persistent scheduler audit tables: `scheduler_status` and `scheduler_cycle_history`.
 - Strategy journal table: `strategy_journal_entries`.
 - Durable Saxo session table: `saxo_sessions`.
-- Kubernetes app namespace: `saxo-rust`.
+- Kubernetes app namespace: `saxo`.
 - CloudNativePG database namespace: `saxo`.
 
 Capabilities Hermes must treat as unavailable until explicitly added:
@@ -114,9 +114,9 @@ Hermes should run as a separate workload in the same Docker Desktop cluster and 
 ```mermaid
 flowchart TB
   subgraph K["docker-desktop Kubernetes"]
-    subgraph NS["namespace: saxo-rust"]
-      API["daytrader-api\nsaxo-rust"]
-      SCH["daytrader-scheduler\nsaxo-rust --scheduler"]
+    subgraph NS["namespace: saxo"]
+      API["daytrader-api\n/app/saxo-rust"]
+      SCH["daytrader-scheduler\n/app/saxo-rust --scheduler"]
       H["hermes-agent\ngateway run"]
       MCP["daytrader-mcp\nread-mostly tool surface"]
       HPVC[("hermes-data PVC\n/opt/data")]
@@ -153,7 +153,7 @@ Implemented initial Kubernetes support:
 - `scripts/deploy_k8s_docker_desktop.sh` creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables.
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
 - `saxo-rust` exposes protected `/api/hermes/*` adapter endpoints for capabilities, context, reflections, and experiment proposals.
-- `saxo-rust --mcp-http` runs the internal `daytrader-mcp` adapter at `http://daytrader-mcp.saxo-rust:8610/mcp`.
+- `saxo-rust --mcp-http` runs the internal `daytrader-mcp` adapter at `http://daytrader-mcp.saxo:8610/mcp`.
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints. The MCP adapter uses the same bearer key.
 - The Hermes pod waits for `daytrader-mcp` health before starting so MCP discovery does not race the adapter rollout.
 - The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
@@ -255,8 +255,8 @@ Unsupported variables are ignored and logged. The overlay affects queue creation
 The Kubernetes base includes suspended daily and weekly reflection jobs:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-daily-reflection
-rtk kubectl --context docker-desktop -n saxo-rust get cronjob hermes-weekly-reflection
+rtk kubectl --context docker-desktop -n saxo get cronjob hermes-daily-reflection
+rtk kubectl --context docker-desktop -n saxo get cronjob hermes-weekly-reflection
 ```
 
 Enable it only after setting:
@@ -265,26 +265,29 @@ Enable it only after setting:
 HERMES_API_SERVER_ENABLED=true
 HERMES_API_SERVER_HOST=0.0.0.0
 HERMES_API_SERVER_KEY=<strong Hermes API key>
-HERMES_INFERENCE_PROVIDER=xai
-HERMES_MODEL=grok-4
+OPENROUTER_API_KEY=...
+HERMES_INFERENCE_PROVIDER=openrouter
+HERMES_MODEL=openai/gpt-5.5
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
-HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo-rust:8610/mcp
+HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
 ```
 
 Then redeploy and unsuspend:
 
 ```bash
 rtk make k8s-deploy
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-`CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-gateway.saxo-rust:8642/v1/runs` with a prompt that instructs Hermes to:
+`CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-gateway.saxo:8642/v1/runs` with a prompt that instructs Hermes to:
 
 - Prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes.
 - Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
 - Write exactly one concise reflection.
 - Create no experiment proposals.
+
+After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.
 
 `CronJob/hermes-weekly-reflection` runs Friday at `22:15` Europe/Copenhagen. It calls the same Hermes API with a prompt that instructs Hermes to:
 
@@ -295,6 +298,8 @@ rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-re
 - Create at most one experiment proposal.
 - Change exactly one variable when proposing an experiment.
 - Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
+
+After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`weekly-reflection-YYYY-MM-DD`). If Hermes does not persist one inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter. This keeps the Hermes dashboard auditable even when Hermes' asynchronous `/v1/runs` endpoint returns `started` but the run fails later.
 
 Smoke-test finding: Hermes' API server starts only when `API_SERVER_ENABLED=true` and `API_SERVER_HOST=0.0.0.0` are present inside `hermes-env`. The deploy script maps the committed `.env` names `HERMES_API_SERVER_ENABLED` and `HERMES_API_SERVER_HOST` to those runtime names. Hermes model selection is persisted in `/opt/data/config.yaml`; the Kubernetes deployment applies `HERMES_MODEL` and `HERMES_INFERENCE_PROVIDER` to that config on pod startup so a recreated PVC does not fall back to an inaccessible default model.
 
@@ -428,7 +433,7 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 4. Scheduler/Trading Manager loads approved experiment as an overlay, not as a config rewrite.
 5. Results are measured against the goal contract.
 6. Operator promotes a winning experiment to a new baseline audit record.
-7. Hermes context and future xAI decision prompts receive the active baseline id and payload as advisory context.
+7. Hermes context and future AI decision prompts receive the active baseline id and payload as advisory context.
 8. Live execution still requires a separate reviewed implementation and human approval.
 
 ```mermaid
@@ -449,7 +454,7 @@ stateDiagram-v2
 
 ## Prompt Improvement
 
-Hermes may propose changes to xAI prompting, but prompt changes are strategy variables and follow the same one-variable rule.
+Hermes may propose changes to AI prompting, but prompt changes are strategy variables and follow the same one-variable rule.
 
 Prompt proposal format:
 
@@ -478,7 +483,7 @@ Hermes must never store, print, infer, or hard-code:
 - Saxo `ClientKey`.
 - Saxo `AccountKey`.
 - Saxo client secret.
-- xAI/OpenAI/OpenRouter API keys.
+- OpenRouter/OpenAI/xAI API keys.
 - ngrok API key or authtoken.
 - Database credentials.
 - TradingView credentials or TOTP seed.
@@ -545,14 +550,14 @@ If evidence is insufficient, create a reflection with no experiment.
 
 ## Rollout Plan
 
-1. Deploy Hermes in `saxo-rust` with ClusterIP-only access. Initial manifests are implemented in `deploy/k8s/base/hermes.yaml`.
+1. Deploy Hermes in `saxo` with ClusterIP-only access. Initial manifests are implemented in `deploy/k8s/base/hermes.yaml`.
 2. Add a read-mostly `daytrader-mcp` adapter. Implemented as internal HTTP MCP at `Service/daytrader-mcp`.
 3. Add `hermes_reflections` and `strategy_experiments`. Implemented.
 4. Add a Hermes dashboard tab to the Rust UI. Implemented as a read-only review tab.
 5. Add daily EOD and weekly reflection cron. Implemented as suspended by default.
 6. Add SIM/paper experiment overlays. Implemented for Trading Manager cash buffer, min trade value, and technical confluence gates.
 7. Add promotion flow from approved experiment to active baseline audit record. Implemented in the Hermes dashboard.
-8. Wire active baseline context into Hermes context and xAI decision prompts. Implemented as advisory prompt/context data only.
+8. Wire active baseline context into Hermes context and AI decision prompts. Implemented as advisory prompt/context data only.
 9. Only then consider live-mode overlays, still behind human approval and rollback gates.
 
 ## Non-Negotiable Safety Invariants

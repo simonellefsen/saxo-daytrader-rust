@@ -1,0 +1,15 @@
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: AgentEndpoint
+metadata:
+  name: saxo-daytrader-internal
+  namespace: saxo
+  labels:
+    app.kubernetes.io/name: saxo-daytrader
+    app.kubernetes.io/part-of: saxo-daytrader
+spec:
+  url: http://saxo-daytrader.internal:80
+  bindings:
+    - internal
+  upstream:
+    protocol: http1
+    url: http://daytrader-frontend.saxo:8000

@@ -57,7 +57,7 @@ sequenceDiagram
 - Every active strategy lesson should distinguish hypothesis, evidence, metric result, and promotion status.
 - Wiki notes are explanatory; the app applies strategy changes only through approved artifacts and scheduler overlays.
 - The dashboard `Hermes` tab is the operator lifecycle surface. It can move experiments through paper/SIM states and create baseline audit records, but it must not place orders or activate live broker behavior.
-- Promoted baseline audit records are visible in the dashboard `Hermes` tab, included in `/api/hermes/context`, and included in xAI decision prompt payloads as advisory context.
+- Promoted baseline audit records are visible in the dashboard `Hermes` tab, included in `/api/hermes/context`, and included in AI decision prompt payloads as advisory context.
 - Hermes should prefer the `daytrader` MCP adapter for scheduled reflections because its tool allowlist is narrower than generic HTTP access.
 - Hermes should read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing a strategy experiment.
 - Daily Hermes reflections should summarize the day and preserve evidence from decision reports, EOD reports, Markov regime signals, scheduler status, executions, and failures. They should not create experiment proposals.

@@ -106,6 +106,9 @@ h2 {
   padding: 6px 10px;
   font-size: 0.9rem;
   white-space: nowrap;
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pill.good {
@@ -167,6 +170,17 @@ h2 {
 .button.secondary {
   background: #ffffff;
   color: var(--accent);
+}
+
+.button:disabled,
+.button[disabled] {
+  cursor: progress;
+  opacity: 0.62;
+  filter: grayscale(0.15);
+}
+
+form.is-submitting .button {
+  cursor: progress;
 }
 
 .button-row {
@@ -432,6 +446,52 @@ tr:last-child td {
 .bad-status {
   color: var(--bad);
   background: #fdebea;
+}
+
+.execution-status-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+  min-width: 170px;
+}
+
+.detail-status {
+  color: var(--bad);
+  background: #fff3f1;
+  border: 1px solid #f2b8b5;
+}
+
+.error-cell {
+  min-width: 260px;
+  max-width: 520px;
+}
+
+.error-details {
+  max-width: 520px;
+}
+
+.error-details summary {
+  cursor: pointer;
+  color: var(--bad);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.error-details pre {
+  max-width: min(520px, calc(100vw - 80px));
+  max-height: 340px;
+  overflow: auto;
+  margin: 8px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .legend-row {
@@ -936,6 +996,23 @@ tr:last-child td {
 
 .settings-form .button {
   grid-column: 1 / -1;
+}
+
+.settings-form-wide {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-form-wide label,
+.settings-hint {
+  grid-column: 1 / -1;
+}
+
+.settings-hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .watch-summary-grid {

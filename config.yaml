@@ -30,6 +30,13 @@ market_data:
     us_limit: 100
     eu_limit: 75
     global_limit: 100
+    extra_symbols:
+      # SpaceX IPO'd 2026-06-12 on Nasdaq (confirmed on the Live account).
+      # Saxo SIM reference data has not synced it yet; resolution retries
+      # every poll, ISIN-first, and activates automatically when SIM catches up.
+      - symbol: SPCX:xnas
+        isin: US84615Q1031
+      - RKLB:xnas
   rss:
     market_feeds:
       - name: Yahoo Finance
@@ -84,8 +91,9 @@ strategy:
   estimated_slippage_bps: 8
   cost_guard_multiple: 1.5
   capital:
-    max_deployment_pct: 0.90
-    min_cash_buffer_pct: 0.10
+    max_deployment_pct: 0.98
+    min_cash_buffer_pct: 0.02
+    reinvestment_pressure_threshold_pct: 0.05
   markov:
     enabled: true
     timezone: Europe/Copenhagen
@@ -104,7 +112,7 @@ strategy:
     max_holdings: 25
     min_holding_weight_pct: 0.05
     max_holding_weight_pct: 0.25
-    cash_buffer_pct: 0.10
+    cash_buffer_pct: 0.02
     risk_per_trade_pct: 0.01
     never_trade_symbols:
       - NOVOb:xcse
@@ -116,6 +124,14 @@ strategy:
       sample_count: 260
       min_confluences: 3
       min_reward_risk: 2.0
+      daily_time: "23:45"
+      run_weekdays_only: true
+      timezone: Europe/Copenhagen
+    markov_gate:
+      enabled: true
+      min_signed_signal: 0.15
+      max_position_pct: 0.05
+      max_signal_age_days: 5
     trading_manager:
       enabled: true
       use_ai: true
@@ -229,12 +245,13 @@ commissions:
       amount: 3.0
 
 xai:
-  api_key: ENV:XAI_API_KEY
-  base_url: https://api.x.ai/v1
-  model: grok-4.3
+  provider: openrouter
+  api_key: ENV:OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  model: openai/gpt-5.5
   reasoning_effort: medium
   max_output_tokens: 8192
-  http_timeout_seconds: 30
+  http_timeout_seconds: 600
   performance_goals:
     currency: DKK
     week_start_weekday: 0

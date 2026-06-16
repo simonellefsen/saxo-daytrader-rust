@@ -5,7 +5,7 @@ tags:
   - runbooks
   - testing
   - deployment
-updated: 2026-05-23
+updated: 2026-06-16
 ---
 
 # Build, Test, Deploy, And Smoke Runbook
@@ -115,14 +115,21 @@ rtk kubectl apply --dry-run=client -k deploy/k8s/base
 rtk bash -n scripts/deploy_k8s_docker_desktop.sh
 ```
 
-The app namespace is `saxo-rust`. The CloudNativePG database namespace is `saxo`. Do not change app pods to reference CNPG secrets directly from the `saxo` namespace.
+The app namespace is `saxo`. The CloudNativePG database namespace is also `saxo`. Do not change app pods to reference CNPG secrets directly from the `saxo` namespace.
 
 ## Docker Desktop Deployment
 
-Deploy the Rust app, scheduler, Hermes Agent, CNPG resources, and ngrok endpoint:
+Deploy the Rust app, scheduler, Hermes Agent, CNPG resources, and the app-owned internal ngrok endpoint:
 
 ```bash
 rtk make k8s-deploy
+```
+
+The shared public ngrok gateway, OAuth policy, and `/saxo-daytrader` route are owned by `/Users/lindau/codex/shared-ngrok-gateway`. Apply shared edge changes there, not from this app deployment:
+
+```bash
+cd /Users/lindau/codex/shared-ngrok-gateway
+rtk env ENV_FILE=/Users/lindau/codex/rust_daytrader/.env make apply
 ```
 
 Check status:
@@ -130,15 +137,16 @@ Check status:
 ```bash
 rtk make k8s-status
 rtk make k8s-db-status
-rtk kubectl --context docker-desktop -n saxo-rust get pods,svc,cronjob,agentendpoint,ngroktrafficpolicy,pvc
+rtk make shared-ngrok-status
+rtk kubectl --context docker-desktop -n saxo get pods,svc,cronjob,agentendpoint,pvc
 ```
 
 Inspect recent logs:
 
 ```bash
 rtk make k8s-logs
-rtk kubectl --context docker-desktop -n saxo-rust logs deployment/daytrader-mcp --tail=120
-rtk kubectl --context docker-desktop -n saxo-rust logs deployment/hermes-agent --tail=120
+rtk kubectl --context docker-desktop -n saxo logs deployment/daytrader-mcp --tail=120
+rtk kubectl --context docker-desktop -n saxo logs deployment/hermes-agent --tail=120
 ```
 
 Stop only app resources:
@@ -154,14 +162,14 @@ rtk make k8s-stop
 After deployment, verify the app from inside the cluster:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust run daytrader-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \
-  curl -fsS http://daytrader-api.saxo-rust:8000/api/health
+rtk kubectl --context docker-desktop -n saxo run daytrader-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \
+  curl -fsS http://daytrader-api.saxo:8000/api/health
 ```
 
 If the pod cannot resolve the service, inspect:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get endpoints daytrader-api daytrader-frontend daytrader-mcp hermes-gateway
+rtk kubectl --context docker-desktop -n saxo get endpoints daytrader-api daytrader-frontend daytrader-mcp hermes-gateway
 ```
 
 ## Hermes Smoke Test
@@ -174,10 +182,11 @@ Required `.env` values before enabling scheduled Hermes runs:
 HERMES_API_SERVER_ENABLED=true
 HERMES_API_SERVER_HOST=0.0.0.0
 HERMES_API_SERVER_KEY=<strong Hermes API key>
-HERMES_INFERENCE_PROVIDER=xai
-HERMES_MODEL=grok-4
+OPENROUTER_API_KEY=...
+HERMES_INFERENCE_PROVIDER=openrouter
+HERMES_MODEL=openai/gpt-5.5
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
-HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo-rust:8610/mcp
+HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
 ```
 
 Do not place Saxo credentials in `hermes-env`.
@@ -191,43 +200,45 @@ rtk env BACKUP_OBJECT_STORE=rustfs make k8s-deploy
 After redeploying, check Hermes:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust get deployment hermes-agent
-rtk kubectl --context docker-desktop -n saxo-rust get deployment daytrader-mcp
-rtk kubectl --context docker-desktop -n saxo-rust logs deployment/hermes-agent --tail=120
-rtk kubectl --context docker-desktop -n saxo-rust logs deployment/daytrader-mcp --tail=120
+rtk kubectl --context docker-desktop -n saxo get deployment hermes-agent
+rtk kubectl --context docker-desktop -n saxo get deployment daytrader-mcp
+rtk kubectl --context docker-desktop -n saxo logs deployment/hermes-agent --tail=120
+rtk kubectl --context docker-desktop -n saxo logs deployment/daytrader-mcp --tail=120
 ```
 
 Check the MCP adapter health:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust run daytrader-mcp-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \
-  curl -fsS http://daytrader-mcp.saxo-rust:8610/health
+rtk kubectl --context docker-desktop -n saxo run daytrader-mcp-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \
+  curl -fsS http://daytrader-mcp.saxo:8610/health
 ```
 
 Trigger one manual daily EOD reflection run while keeping the CronJob suspended:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
-rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-daily-reflection-manual
+rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
+rtk kubectl --context docker-desktop -n saxo logs job/hermes-daily-reflection-manual
 ```
 
 Trigger one manual weekly self-improvement reflection run while keeping the CronJob suspended:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
-rtk kubectl --context docker-desktop -n saxo-rust logs job/hermes-weekly-reflection-manual
+rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
+rtk kubectl --context docker-desktop -n saxo logs job/hermes-weekly-reflection-manual
 ```
+
+The reflection CronJobs submit asynchronous Hermes `/v1/runs` requests and then wait for a matching `source_session_id` reflection in the daytrader database. If no row appears inside the watchdog window, the job writes a watchdog reflection through `/api/hermes/reflections` so the dashboard records the missed run instead of leaving the latest reflection stale.
 
 Only unsuspend the daily recurring schedule after the manual job writes one daily reflection and no experiment proposal:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
 ```
 
 Only unsuspend the weekly recurring schedule after the manual job writes one reflection and, when evidence is sufficient, at most one experiment proposal:
 
 ```bash
-rtk kubectl --context docker-desktop -n saxo-rust patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
+rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
 The daily job should prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes. The weekly job should prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals. The protected HTTP adapter remains available for manual inspection and fallback.
@@ -287,7 +298,7 @@ Promotion flow:
 4. Mark `ready_for_promotion` only after the SIM observation meets the goal contract.
 5. Promote from the dashboard to create a `strategy_baselines` audit record.
 
-Promotion records do not activate live broker behavior. Treat a promoted baseline as an audited reference point. After promotion, verify that the baseline appears in the dashboard `Hermes` tab, `/api/hermes/context`, and the next xAI decision report `request_json.user.active_strategy_baseline` payload.
+Promotion records do not activate live broker behavior. Treat a promoted baseline as an audited reference point. After promotion, verify that the baseline appears in the dashboard `Hermes` tab, `/api/hermes/context`, and the next AI decision report `request_json.user.active_strategy_baseline` payload.
 
 ## Live Trading Safety Gate
 

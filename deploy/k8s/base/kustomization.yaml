@@ -1,12 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: saxo-rust
+namespace: saxo
 
 resources:
   - namespace.yaml
   - api.yaml
   - scheduler.yaml
   - hermes.yaml
+  - ngrok-internal-agentendpoint.yaml
+  - postgres-backup-schedule.yaml
+  - postgres-backup-retention.yaml
 
 configMapGenerator:
   - name: daytrader-config

@@ -31,14 +31,16 @@ struct DecisionPulse {
 struct PendingDeferredReport {
     id: i64,
     request_id: String,
+    request_json: JsonValue,
     report_json: JsonValue,
 }
 
-/// One scheduler step for xAI decision reports.
+/// One scheduler step for AI decision reports.
 ///
-/// The older Python code made a blocking model call. Rust instead treats xAI as a
-/// background job system: submit with `deferred: true`, save the request id in
-/// Postgres, and poll on later scheduler cycles.
+/// xAI is treated as a background job system: submit with `deferred: true`, save
+/// the request id in Postgres, and poll on later scheduler cycles. OpenRouter is
+/// handled as a synchronous Chat Completions provider and inserted as a completed
+/// report immediately.
 pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
     let polled = poll_pending_deferred_reports(state).await?;
     let submitted = submit_due_scheduled_reports(state).await?;
@@ -91,58 +93,139 @@ async fn submit_deferred_report(
 ) -> Result<JsonValue> {
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt = build_decision_prompt(state, pulse, manual).await?;
-    let request_json = build_chat_request(state, &prompt)?;
+    let provider = ai_provider(state);
+    let model = state.effective_xai_model().await?;
+    let request_json = build_chat_request(state, &prompt, &model)?;
 
-    let Some(api_key) = yaml_string(&state.config, &["xai", "api_key"]) else {
+    let Some(api_key) = ai_api_key(state) else {
         let report = insert_xai_error_report(
             state,
             &created_at,
             pulse,
+            &model,
             &prompt,
             &request_json,
-            "XAI_API_KEY is missing; deferred decision report was not submitted.",
+            &format!(
+                "{} is missing; decision report was not submitted.",
+                ai_api_key_env_name(state)
+            ),
         )
         .await?;
-        warn!(pulse_key = %pulse.key, "xAI decision report submit skipped because API key is missing");
+        warn!(pulse_key = %pulse.key, provider = %provider, "AI decision report submit skipped because API key is missing");
         return Ok(report);
     };
 
-    let base_url = xai_base_url(state);
+    let base_url = ai_base_url(state);
     let client = reqwest::Client::builder()
         .timeout(StdDuration::from_secs(xai_http_timeout_seconds(state)))
         .build()
-        .context("building xAI HTTP client")?;
+        .context("building AI provider HTTP client")?;
+    let mut outbound_request = request_json.clone();
+    if provider == "xai" {
+        if let Some(obj) = outbound_request.as_object_mut() {
+            obj.insert("deferred".to_string(), JsonValue::from(true));
+        }
+    }
     let response = client
         .post(format!("{base_url}/chat/completions"))
         .bearer_auth(api_key)
-        .json(&request_json)
+        .json(&outbound_request)
         .send()
         .await
-        .context("submitting deferred xAI decision report")?;
+        .context("submitting AI decision report")?;
     let status = response.status();
     let response_body = response
         .text()
         .await
-        .unwrap_or_else(|err| format!("failed to read xAI response body: {err}"));
+        .unwrap_or_else(|err| format!("failed to read AI provider response body: {err}"));
     if !status.is_success() {
+        let response_excerpt = truncate_error_text(&response_body, 2_000);
         let report = insert_xai_error_report(
             state,
             &created_at,
             pulse,
+            &model,
             &prompt,
-            &request_json,
-            &format!("xAI deferred submit failed with HTTP {status}: {response_body}"),
+            &outbound_request,
+            &format!("{provider} decision submit failed with HTTP {status}: {response_excerpt}"),
         )
         .await?;
         warn!(
             pulse_key = %pulse.key,
+            provider = %provider,
             status = %status,
-            "xAI deferred decision report submit failed"
+            "AI decision report submit failed"
         );
         return Ok(report);
     }
-    let response_json: JsonValue =
-        serde_json::from_str(&response_body).context("parsing xAI deferred submit response")?;
+    let response_json: JsonValue = match serde_json::from_str(&response_body) {
+        Ok(value) => value,
+        Err(err) => {
+            let response_excerpt = truncate_error_text(&response_body, 2_000);
+            let report = insert_xai_error_report(
+                state,
+                &created_at,
+                pulse,
+                &model,
+                &prompt,
+                &outbound_request,
+                &format!(
+                    "{provider} decision submit returned invalid JSON despite HTTP {status}: {err}; response excerpt: {response_excerpt}"
+                ),
+            )
+            .await?;
+            warn!(
+                pulse_key = %pulse.key,
+                provider = %provider,
+                status = %status,
+                error = %err,
+                "AI decision report submit returned invalid JSON"
+            );
+            return Ok(report);
+        }
+    };
+    if provider != "xai" {
+        let response_id = response_json
+            .get("id")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let seed_report = json!({
+            "created_at": created_at,
+            "analysis_pulse": pulse_to_json(pulse)
+        });
+        let report_json = completed_report_json_from_parts(
+            &outbound_request,
+            &seed_report,
+            &response_json,
+            "openrouter",
+            json!({
+                "response_id": response_id,
+                "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "mode": "chat_completion"
+            }),
+        )?;
+        let row = insert_decision_report(
+            state,
+            &created_at,
+            pulse,
+            model.clone(),
+            "completed",
+            Some(response_id),
+            &prompt,
+            &outbound_request,
+            Some(&response_json),
+            &report_json,
+            None,
+        )
+        .await?;
+        info!(
+            pulse_key = %pulse.key,
+            provider = %provider,
+            response_id = %response_id,
+            "completed AI decision report"
+        );
+        return Ok(row);
+    }
     let request_id = response_json
         .get("request_id")
         .and_then(JsonValue::as_str)
@@ -176,11 +259,11 @@ async fn submit_deferred_report(
         state,
         &created_at,
         pulse,
-        xai_model(state),
+        model,
         "xai_deferred",
         Some(request_id),
         &prompt,
-        &request_json,
+        &outbound_request,
         Some(&response_json),
         &report_json,
         None,
@@ -196,6 +279,9 @@ async fn submit_deferred_report(
 }
 
 async fn poll_pending_deferred_reports(state: &AppState) -> Result<Vec<JsonValue>> {
+    if ai_provider(state) != "xai" {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(
         "SELECT id, request_json, response_json, report_json, response_id
          FROM decision_reports
@@ -230,11 +316,12 @@ async fn poll_one_deferred_report(
     pending: &PendingDeferredReport,
 ) -> Result<JsonValue> {
     let Some(api_key) = yaml_string(&state.config, &["xai", "api_key"]) else {
+        let key_name = ai_api_key_env_name(state);
         return Ok(json!({
             "status": "pending",
             "report_id": pending.id,
             "request_id": pending.request_id,
-            "reason": "XAI_API_KEY is missing"
+            "reason": format!("{key_name} is missing")
         }));
     };
     let base_url = xai_base_url(state);
@@ -302,6 +389,25 @@ fn completed_report_json(
     pending: &PendingDeferredReport,
     response_json: &JsonValue,
 ) -> Result<JsonValue> {
+    completed_report_json_from_parts(
+        &pending.request_json,
+        &pending.report_json,
+        response_json,
+        "xai_deferred",
+        json!({
+            "request_id": pending.request_id,
+            "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        }),
+    )
+}
+
+fn completed_report_json_from_parts(
+    request_json: &JsonValue,
+    report_json: &JsonValue,
+    response_json: &JsonValue,
+    provider_key: &str,
+    provider_metadata: JsonValue,
+) -> Result<JsonValue> {
     let content = response_json
         .get("choices")
         .and_then(JsonValue::as_array)
@@ -309,16 +415,15 @@ fn completed_report_json(
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
         .and_then(JsonValue::as_str)
-        .ok_or_else(|| anyhow!("xAI deferred completion did not include message.content"))?;
+        .ok_or_else(|| anyhow!("AI completion did not include message.content"))?;
     let mut parsed = parse_json_content(content).context("parsing xAI decision report JSON")?;
-    let created_at = pending
-        .report_json
+    let requested_capital_plan = request_capital_plan(request_json);
+    let created_at = report_json
         .get("created_at")
         .and_then(JsonValue::as_str)
         .map(ToString::to_string)
         .unwrap_or_else(|| Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let pulse = pending
-        .report_json
+    let pulse = report_json
         .get("analysis_pulse")
         .cloned()
         .unwrap_or(JsonValue::Null);
@@ -329,13 +434,7 @@ fn completed_report_json(
             .or_insert_with(|| JsonValue::from(created_at));
         obj.entry("analysis_pulse".to_string()).or_insert(pulse);
         obj.insert("market_scope_enforcement".to_string(), scope_enforcement);
-        obj.insert(
-            "xai_deferred".to_string(),
-            json!({
-                "request_id": pending.request_id,
-                "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            }),
-        );
+        obj.insert(provider_key.to_string(), provider_metadata);
         if !obj.contains_key("strategy_plan") {
             let suggested = obj
                 .get("suggested_trades")
@@ -352,8 +451,37 @@ fn completed_report_json(
                 }),
             );
         }
+        if let Some(capital_plan) = requested_capital_plan {
+            obj.entry("capital_plan".to_string())
+                .or_insert_with(|| capital_plan.clone());
+            if let Some(plan) = obj
+                .get_mut("strategy_plan")
+                .and_then(JsonValue::as_object_mut)
+            {
+                plan.entry("capital_plan".to_string())
+                    .or_insert(capital_plan);
+            }
+        }
     }
     Ok(parsed)
+}
+
+fn request_capital_plan(request_json: &JsonValue) -> Option<JsonValue> {
+    request_json
+        .get("messages")
+        .and_then(JsonValue::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .filter_map(|message| {
+                    message
+                        .get("content")
+                        .and_then(JsonValue::as_str)
+                        .and_then(|content| serde_json::from_str::<JsonValue>(content).ok())
+                })
+                .find_map(|payload| payload.get("capital_plan").cloned())
+        })
+        .or_else(|| request_json.get("capital_plan").cloned())
 }
 
 fn enforce_completed_report_scope(report: &mut JsonValue, pulse: &JsonValue) -> JsonValue {
@@ -463,21 +591,35 @@ async fn build_decision_prompt(
     let markov_method = crate::markov_method::compact_markov_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"signals": []}));
+    let daily_indicators = crate::daily_indicators::compact_indicator_context(state, 80)
+        .await
+        .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
     let capital_context = capital_planning_context(&overview);
+    let markov_gate = crate::trading_manager::markov_gate_config(state);
+    let markov_buy_instruction = format!(
+        "When daily technical indicator data is unavailable for a BUY candidate, you may still propose a starter BUY backed by the supplied markov_method signals: the symbol must have a fresh signal with direction long and signed_signal at or above {:.2}. Set strategy_role to \"starter\" and reference the signal in strategy_metadata.markov. The manager re-verifies the signal against its own database and caps starter positions at {:.0}% of total portfolio value, so prefer several smaller starters over one large order.",
+        markov_gate.min_signed_signal,
+        markov_gate.max_position_pct * 100.0
+    );
     let system = [
         "You are the portfolio decision engine for a Danish SaxoInvestor swing/day-trading system.",
         "Return strict JSON only. No markdown, no prose outside JSON.",
         "Use the sentiment scale SELL, UNDERWEIGHT, HOLD, OVERWEIGHT, BUY.",
         "Never short. Treat all pnl, commissions, and taxes in DKK where possible.",
         "Always assess available cash before recommending BUY orders. Preserve the configured cash buffer and do not rely on margin.",
+        "When reinvestment_pressure.active is true, explicitly decide whether to redeploy excess cash, wait in cash, or rotate risk. If qualifying Markov-backed starter candidates exist, prefer proposing capped starter BUYs over waiting in cash; only wait when no candidate qualifies, and explain the blocker in capital_plan.cash_policy with watched candidates in capital_plan.near_term_opportunities.",
         "Think in two horizons: near-term opportunities for the next 2 weeks, and medium-term opportunities for the next 1-3 months.",
         "Use selected_assets and symbol_sentiment to document forward-looking opportunities even when they are not tradable or actionable today.",
         "Suggested trades must be conservative and include strategy_metadata.technical when available.",
         "Only put a symbol in suggested_trades when its exchange is currently tradable under the supplied market_scope.",
         "Only put BUY trades in suggested_trades when the trade fits inside capital_plan.available_buy_budget_dkk after preserving the cash buffer.",
-        "For BUY trades, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
+        "Prices in daily_indicators and markov_method are quoted in each instrument's trading currency; use the supplied close_dkk (close converted to DKK) when sizing orders: estimated_value_dkk must equal quantity times close_dkk. Instruments on XNAS/XNYS trade in USD, not DKK. The manager recomputes every BUY value from its own data and downsizes oversized orders to fit the budget.",
+        "If order_type is Limit, include limit_price_local in the instrument's trading currency. Use Market when no explicit limit price is intended.",
+        "For BUY trades backed by technical indicator data, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
+        "The supplied daily_indicators section contains technical data (SMA trend, RSI, MACD, ATR reward/risk, confluence counts) computed by the runtime from broker chart history. Base technical claims on this data; the manager re-verifies every order against its own indicator database, so fabricated confluence counts are discarded.",
+        markov_buy_instruction.as_str(),
         "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
-        "Use Markov method regime signals as advisory context only: positive bull_prob-minus-bear_prob supports long bias, negative signal supports risk reduction or stand-down unless other gates disagree.",
+        "Markov method regime signals also serve as general directional context: positive bull_prob-minus-bear_prob supports long bias, negative signal supports risk reduction or stand-down.",
         "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
         "When active_strategy_baseline is present, include its id in strategy_baseline_id and explain how the decision stays consistent with or intentionally departs from that baseline.",
     ]
@@ -489,10 +631,10 @@ async fn build_decision_prompt(
             "report_title": "string",
             "market_view": {"bias": "string", "summary": "string"},
             "reasoning_steps": ["string"],
-            "capital_plan": {"cash_balance_dkk": "number", "available_buy_budget_dkk": "number", "cash_policy": "string", "near_term_opportunities": ["string"], "medium_term_watchlist": ["string"]},
+            "capital_plan": {"cash_balance_dkk": "number", "available_buy_budget_dkk": "number", "cash_policy": "string", "reinvestment_decision": "redeploy|wait|risk_reduce", "near_term_opportunities": ["string"], "medium_term_watchlist": ["string"]},
             "selected_assets": [{"symbol": "string", "score": "number", "notes": "string"}],
             "symbol_sentiment": [{"symbol": "string", "sentiment": "SELL|UNDERWEIGHT|HOLD|OVERWEIGHT|BUY", "confidence": "number", "rationale": "string"}],
-            "suggested_trades": [{"symbol": "string", "action": "BUY|SELL", "quantity": "number", "order_type": "Market|Limit", "estimated_value_dkk": "number", "strategy_key": "string", "strategy_role": "string", "strategy_metadata": {"technical": {"status": "ok|missing", "sentiment": "string", "trend_bias": "bullish|neutral|bearish", "confluence_count": "number", "min_confluences": "number"}}}],
+            "suggested_trades": [{"symbol": "string", "action": "BUY|SELL", "quantity": "number", "order_type": "Market|Limit", "limit_price_local": "number|null; required when order_type is Limit", "estimated_value_dkk": "number", "strategy_key": "string", "strategy_role": "string", "strategy_metadata": {"technical": {"status": "ok|missing", "sentiment": "string", "trend_bias": "bullish|neutral|bearish", "confluence_count": "number", "min_confluences": "number"}, "markov": {"signed_signal": "number", "direction": "long|short", "state": "string", "run_date": "string"}}}],
             "strategy_baseline_id": "string|null",
             "strategy_status": "string",
             "strategy_flow": {"portfolio": "number", "selected": "number", "trades": "number"}
@@ -502,6 +644,7 @@ async fn build_decision_prompt(
         "goal_tracking": overview.get("goal_tracking").cloned().unwrap_or(JsonValue::Null),
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
         "capital_plan": capital_context,
+        "reinvestment_pressure": capital_context.get("reinvestment_pressure").cloned().unwrap_or(JsonValue::Null),
         "active_strategy_baseline": active_strategy_baseline,
         "opportunity_horizons": {
             "near_term": {
@@ -517,6 +660,7 @@ async fn build_decision_prompt(
         "positions": positions.into_iter().take(80).collect::<Vec<_>>(),
         "watchlists": compact_watchlists(&watchlists, &allowed_codes),
         "markov_method": markov_method,
+        "daily_indicators": daily_indicators,
     });
     Ok(json!({"system": system, "user": user_payload}))
 }
@@ -536,6 +680,11 @@ fn capital_planning_context(overview: &JsonValue) -> JsonValue {
     let cash_balance_dkk = value_f64(&summary, "cash_balance_dkk");
     let min_cash_buffer_pct = value_f64(&cash_policy, "min_cash_buffer_pct").max(0.0);
     let max_deployment_pct = value_f64(&cash_policy, "max_deployment_pct").clamp(0.0, 1.0);
+    let reinvestment_pressure_threshold_pct = cash_policy
+        .get("reinvestment_pressure_threshold_pct")
+        .map(|_| value_f64(&cash_policy, "reinvestment_pressure_threshold_pct"))
+        .unwrap_or(0.05)
+        .max(0.0);
     let required_cash_buffer_dkk = (total_value_dkk * min_cash_buffer_pct).max(0.0);
     let deployment_cap_dkk = if max_deployment_pct > 0.0 {
         total_value_dkk * max_deployment_pct
@@ -546,16 +695,34 @@ fn capital_planning_context(overview: &JsonValue) -> JsonValue {
     let remaining_deployment_capacity_dkk = (deployment_cap_dkk - invested_value_dkk).max(0.0);
     let available_buy_budget_dkk =
         available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
+    let cash_pct = if total_value_dkk > 0.0 {
+        cash_balance_dkk / total_value_dkk
+    } else {
+        0.0
+    };
+    let excess_cash_pct = (cash_pct - min_cash_buffer_pct).max(0.0);
+    let reinvestment_pressure_active =
+        excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
     json!({
         "cash_balance_dkk": cash_balance_dkk,
         "total_market_value_dkk": total_value_dkk,
         "invested_market_value_dkk": invested_value_dkk,
+        "cash_pct": cash_pct,
         "min_cash_buffer_pct": min_cash_buffer_pct,
         "max_deployment_pct": max_deployment_pct,
+        "reinvestment_pressure_threshold_pct": reinvestment_pressure_threshold_pct,
         "required_cash_buffer_dkk": required_cash_buffer_dkk,
         "available_cash_above_buffer_dkk": available_cash_above_buffer_dkk,
         "remaining_deployment_capacity_dkk": remaining_deployment_capacity_dkk,
         "available_buy_budget_dkk": available_buy_budget_dkk,
+        "excess_cash_pct": excess_cash_pct,
+        "reinvestment_pressure": {
+            "active": reinvestment_pressure_active,
+            "excess_cash_dkk": available_buy_budget_dkk,
+            "excess_cash_pct": excess_cash_pct,
+            "threshold_pct": reinvestment_pressure_threshold_pct,
+            "instruction": "If active, either recommend gated BUY candidates within available_buy_budget_dkk or explicitly justify holding cash."
+        },
         "cash_policy": "Preserve the required cash buffer, avoid margin, and size any BUY recommendations within available_buy_budget_dkk.",
     })
 }
@@ -628,8 +795,7 @@ fn filter_rows_by_exchange(
         .collect()
 }
 
-fn build_chat_request(state: &AppState, prompt: &JsonValue) -> Result<JsonValue> {
-    let model = xai_model(state);
+fn build_chat_request(state: &AppState, prompt: &JsonValue, model: &str) -> Result<JsonValue> {
     let system = prompt
         .get("system")
         .and_then(JsonValue::as_str)
@@ -642,7 +808,6 @@ fn build_chat_request(state: &AppState, prompt: &JsonValue) -> Result<JsonValue>
     let max_tokens = yaml_i64(&state.config, &["xai", "max_output_tokens"]).unwrap_or(8192);
     let mut request = json!({
         "model": model,
-        "deferred": true,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
@@ -868,6 +1033,7 @@ async fn insert_xai_error_report(
     state: &AppState,
     created_at: &str,
     pulse: &DecisionPulse,
+    model: &str,
     prompt: &JsonValue,
     request_json: &JsonValue,
     error_text: &str,
@@ -885,7 +1051,7 @@ async fn insert_xai_error_report(
         state,
         created_at,
         pulse,
-        xai_model(state),
+        model.to_string(),
         "xai_error",
         None,
         prompt,
@@ -895,6 +1061,14 @@ async fn insert_xai_error_report(
         Some(error_text),
     )
     .await
+}
+
+fn truncate_error_text(value: &str, max_chars: usize) -> String {
+    let mut text = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        text.push_str("...");
+    }
+    text
 }
 
 async fn insert_decision_report(
@@ -1014,6 +1188,7 @@ fn decode_pending_report(row: &JsonValue) -> Result<PendingDeferredReport> {
     Ok(PendingDeferredReport {
         id: value_i64(row, "id"),
         request_id,
+        request_json,
         report_json,
     })
 }
@@ -1083,19 +1258,55 @@ fn pulse_to_json(pulse: &DecisionPulse) -> JsonValue {
 }
 
 fn xai_base_url(state: &AppState) -> String {
+    ai_base_url(state)
+}
+
+fn ai_base_url(state: &AppState) -> String {
     yaml_string(&state.config, &["xai", "base_url"])
-        .unwrap_or_else(|| "https://api.x.ai/v1".to_string())
+        .unwrap_or_else(|| {
+            if ai_provider(state) == "openrouter" {
+                "https://openrouter.ai/api/v1".to_string()
+            } else {
+                "https://api.x.ai/v1".to_string()
+            }
+        })
         .trim_end_matches('/')
         .to_string()
 }
 
-fn xai_model(state: &AppState) -> String {
-    yaml_string(&state.config, &["xai", "model"]).unwrap_or_else(|| "grok-4.3".to_string())
+fn ai_provider(state: &AppState) -> String {
+    yaml_string(&state.config, &["xai", "provider"])
+        .or_else(|| yaml_string(&state.config, &["xai", "inference_provider"]))
+        .unwrap_or_else(|| {
+            if yaml_string(&state.config, &["xai", "base_url"])
+                .map(|value| value.to_lowercase().contains("openrouter.ai"))
+                .unwrap_or(false)
+            {
+                "openrouter".to_string()
+            } else {
+                "xai".to_string()
+            }
+        })
+        .trim()
+        .to_lowercase()
+}
+
+fn ai_api_key(state: &AppState) -> Option<String> {
+    yaml_string(&state.config, &["xai", "api_key"])
+}
+
+fn ai_api_key_env_name(state: &AppState) -> &'static str {
+    if ai_provider(state) == "openrouter" {
+        "OPENROUTER_API_KEY"
+    } else {
+        "XAI_API_KEY"
+    }
 }
 
 fn xai_http_timeout_seconds(state: &AppState) -> u64 {
     yaml_i64(&state.config, &["xai", "http_timeout_seconds"])
         .or_else(|| yaml_i64(&state.config, &["xai", "deferred_http_timeout_seconds"]))
+        .or_else(|| yaml_i64(&state.config, &["xai", "timeout_seconds"]))
         .unwrap_or(30)
         .max(5) as u64
 }
@@ -1161,6 +1372,7 @@ mod tests {
         let pending = PendingDeferredReport {
             id: 1,
             request_id: "req-1".to_string(),
+            request_json: json!({}),
             report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "europe_open_followup:2026-05-11"}}),
         };
         let response = json!({
@@ -1170,6 +1382,34 @@ mod tests {
         let report = completed_report_json(&pending, &response).unwrap();
         assert_eq!(report["status"], "completed");
         assert_eq!(report["strategy_plan"]["status"], "completed");
+    }
+
+    #[test]
+    fn completed_report_preserves_requested_capital_plan() {
+        let pending = PendingDeferredReport {
+            id: 1,
+            request_id: "req-1".to_string(),
+            request_json: json!({
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "{\"capital_plan\":{\"cash_balance_dkk\":76000.0,\"available_buy_budget_dkk\":47000.0}}"}
+                ]
+            }),
+            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "us_open_followup:2026-05-11"}}),
+        };
+        let response = json!({
+            "id": "chatcmpl-1",
+            "choices": [{"message": {"content": "{\"report_title\":\"Daily\",\"suggested_trades\":[]}"}}]
+        });
+        let report = completed_report_json(&pending, &response).unwrap();
+        assert_eq!(
+            report["capital_plan"]["available_buy_budget_dkk"],
+            JsonValue::from(47000.0)
+        );
+        assert_eq!(
+            report["strategy_plan"]["capital_plan"]["cash_balance_dkk"],
+            JsonValue::from(76000.0)
+        );
     }
 
     #[test]
@@ -1217,7 +1457,8 @@ mod tests {
             "settings": {
                 "cash_buffer": {
                     "min_cash_buffer_pct": 0.10,
-                    "max_deployment_pct": 0.90
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
                 }
             }
         });
@@ -1229,6 +1470,10 @@ mod tests {
         assert_eq!(
             context["available_buy_budget_dkk"],
             JsonValue::from(20000.0)
+        );
+        assert_eq!(
+            context["reinvestment_pressure"]["active"],
+            JsonValue::from(true)
         );
     }
 }

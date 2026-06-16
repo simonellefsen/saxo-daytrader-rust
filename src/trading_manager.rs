@@ -22,6 +22,8 @@ const EXPERIMENT_VARIABLE_ALLOWLIST: &[&str] = &[
     "strategy.capital.min_cash_buffer_pct",
     "strategy.swing.cash_buffer_pct",
     "strategy.swing.daily_indicators.min_confluences",
+    "strategy.swing.markov_gate.min_signed_signal",
+    "strategy.swing.markov_gate.max_position_pct",
 ];
 
 #[derive(Clone, Debug)]
@@ -60,15 +62,56 @@ struct GateDecision {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MarkovGateConfig {
+    pub(crate) enabled: bool,
+    pub(crate) min_signed_signal: f64,
+    pub(crate) max_position_pct: f64,
+    pub(crate) max_signal_age_days: i64,
+}
+
+pub(crate) fn markov_gate_config(state: &AppState) -> MarkovGateConfig {
+    MarkovGateConfig {
+        enabled: yaml_bool(
+            &state.config,
+            &["strategy", "swing", "markov_gate", "enabled"],
+        )
+        .unwrap_or(true),
+        min_signed_signal: yaml_f64(
+            &state.config,
+            &["strategy", "swing", "markov_gate", "min_signed_signal"],
+        )
+        .unwrap_or(0.15)
+        .max(0.0),
+        max_position_pct: yaml_f64(
+            &state.config,
+            &["strategy", "swing", "markov_gate", "max_position_pct"],
+        )
+        .unwrap_or(0.05)
+        .clamp(0.0, 1.0),
+        max_signal_age_days: yaml_i64(
+            &state.config,
+            &["strategy", "swing", "markov_gate", "max_signal_age_days"],
+        )
+        .unwrap_or(5)
+        .max(1),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct CapitalBudget {
     cash_balance_dkk: f64,
     total_market_value_dkk: f64,
     invested_market_value_dkk: f64,
+    cash_pct: f64,
     min_cash_buffer_pct: f64,
     max_deployment_pct: f64,
+    reinvestment_pressure_threshold_pct: f64,
     required_cash_buffer_dkk: f64,
+    available_cash_above_buffer_dkk: f64,
     available_buy_budget_dkk: f64,
     remaining_deployment_capacity_dkk: f64,
+    excess_cash_pct: f64,
+    reinvestment_pressure_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,9 +147,37 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
         .map(|code| code.to_uppercase())
         .collect::<Vec<_>>();
 
+    // One budget for the whole cycle: every report's approved BUYs reserve
+    // from the same pool, so near-simultaneous reports cannot double-spend
+    // the same cash snapshot.
+    let overview = state.overview_payload().await.unwrap_or_else(|err| {
+        warn!("Trading Manager capital context degraded: {err:#}");
+        json!({})
+    });
+    let overlay = approved_strategy_experiment_overlay(state)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("Trading Manager experiment overlay disabled: {err:#}");
+            None
+        });
+    let overlay_min_cash_buffer_pct = overlay.as_ref().and_then(|overlay| {
+        overlay
+            .f64_value("strategy.capital.min_cash_buffer_pct")
+            .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
+    });
+    let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
+
     let mut runs = Vec::new();
     for report in reports {
-        match run_for_report(state, &report, &open_codes).await {
+        match run_for_report(
+            state,
+            &report,
+            &open_codes,
+            overlay.as_ref(),
+            &mut capital_budget,
+        )
+        .await
+        {
             Ok(run) => runs.push(run),
             Err(err) => {
                 warn!(
@@ -134,41 +205,43 @@ async fn run_for_report(
     state: &AppState,
     report: &DecisionReport,
     open_codes: &[String],
+    overlay: Option<&StrategyExperimentOverlay>,
+    capital_budget: &mut CapitalBudget,
 ) -> Result<JsonValue> {
     let candidates = candidate_orders_from_report(&report.report_json);
+    let candidate_order_count = candidates.len();
+    let buy_candidate_count = candidates
+        .iter()
+        .filter(|order| order.action == "BUY")
+        .count();
+    let sell_candidate_count = candidates
+        .iter()
+        .filter(|order| order.action == "SELL")
+        .count();
     let excluded = excluded_symbols(state);
-    let overview = state.overview_payload().await.unwrap_or_else(|err| {
-        warn!("Trading Manager capital context degraded: {err:#}");
-        json!({})
-    });
-    let overlay = approved_strategy_experiment_overlay(state)
-        .await
-        .unwrap_or_else(|err| {
-            warn!("Trading Manager experiment overlay disabled: {err:#}");
-            None
-        });
     let overlay_json = overlay
-        .as_ref()
-        .map(StrategyExperimentOverlay::to_json)
+        .map(|overlay| overlay.clone().to_json())
         .unwrap_or(JsonValue::Null);
-    let overlay_min_cash_buffer_pct = overlay.as_ref().and_then(|overlay| {
-        overlay
-            .f64_value("strategy.capital.min_cash_buffer_pct")
-            .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
-    });
-    let initial_capital_budget =
-        capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
-    let mut capital_budget = initial_capital_budget;
+    let initial_capital_budget = *capital_budget;
 
     let min_trade_value_dkk = overlay
-        .as_ref()
         .and_then(|overlay| overlay.f64_value("execution.min_trade_value_dkk"))
         .unwrap_or_else(|| {
             yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0)
         });
     let overlay_min_confluences = overlay
-        .as_ref()
         .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
+    let mut markov_cfg = markov_gate_config(state);
+    if let Some(value) = overlay
+        .and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.min_signed_signal"))
+    {
+        markov_cfg.min_signed_signal = value.max(0.0);
+    }
+    if let Some(value) =
+        overlay.and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.max_position_pct"))
+    {
+        markov_cfg.max_position_pct = value.clamp(0.0, 1.0);
+    }
     let require_approval = yaml_bool(&state.config, &["execution", "require_approval_live"])
         .unwrap_or(true)
         && yaml_string(&state.config, &["execution", "mode"])
@@ -200,25 +273,69 @@ async fn run_for_report(
             skipped.push(skip_order(&order, "Order quantity is zero or negative."));
             continue;
         }
+        let shape = order_shape_gate(&mut order);
+        if !shape.approved {
+            skipped.push(skip_order(&order, &shape.reason));
+            continue;
+        }
+        let mut value_verified = false;
+        if order.action == "BUY" {
+            value_verified = verify_buy_value(state, &mut order).await;
+            let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+            if estimated_value_dkk > capital_budget.available_buy_budget_dkk + 0.01 {
+                // With a verified per-share price the order can be downsized
+                // to fit the budget instead of being rejected outright.
+                let per_share_dkk = if value_verified && order.quantity >= 1.0 {
+                    estimated_value_dkk / order.quantity
+                } else {
+                    0.0
+                };
+                let affordable_quantity = if per_share_dkk > f64::EPSILON {
+                    (capital_budget.available_buy_budget_dkk / per_share_dkk).floor()
+                } else {
+                    0.0
+                };
+                if affordable_quantity >= 1.0 {
+                    let original_quantity = order.quantity;
+                    order.quantity = affordable_quantity;
+                    order.estimated_value_dkk = Some(per_share_dkk * affordable_quantity);
+                    if let Some(metadata) = order
+                        .raw
+                        .as_object_mut()
+                        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+                        .and_then(JsonValue::as_object_mut)
+                    {
+                        metadata.insert(
+                            "budget_downsize".to_string(),
+                            json!({
+                                "original_quantity": original_quantity,
+                                "downsized_quantity": affordable_quantity,
+                                "per_share_dkk": per_share_dkk,
+                                "available_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
+                            }),
+                        );
+                    }
+                } else {
+                    skipped.push(skip_order(
+                        &order,
+                        &format!(
+                            "BUY would exceed available cash budget after buffer: requested {:.2} DKK ({}), available {:.2} DKK{}.",
+                            estimated_value_dkk,
+                            if value_verified { "database-verified value" } else { "model-claimed value, no verified price available" },
+                            capital_budget.available_buy_budget_dkk,
+                            if value_verified { "; even one share does not fit" } else { "; cannot downsize without a verified price" }
+                        ),
+                    ));
+                    continue;
+                }
+            }
+        }
         if order.estimated_value_dkk.unwrap_or(0.0) < min_trade_value_dkk {
             skipped.push(skip_order(
                 &order,
                 "Estimated trade value is below the configured minimum.",
             ));
             continue;
-        }
-        if order.action == "BUY" {
-            let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
-            if estimated_value_dkk > capital_budget.available_buy_budget_dkk + 0.01 {
-                skipped.push(skip_order(
-                    &order,
-                    &format!(
-                        "BUY would exceed available cash budget after buffer: requested {:.2} DKK, available {:.2} DKK.",
-                        estimated_value_dkk, capital_budget.available_buy_budget_dkk
-                    ),
-                ));
-                continue;
-            }
         }
         if order.action == "SELL" {
             let available = latest_position_quantity(state, &order.symbol)
@@ -233,7 +350,59 @@ async fn run_for_report(
             }
             order.quantity = order.quantity.min(available);
         }
-        let gate = technical_gate(&order, overlay_min_confluences);
+        let verified = apply_verified_technical(state, &mut order, Utc::now().date_naive()).await;
+        let mut gate = technical_gate(&order, overlay_min_confluences);
+        if verified {
+            gate.reason = format!("{} (database-verified daily indicators)", gate.reason);
+        }
+        // The Markov starter path is fallback evidence for symbols without
+        // indicator coverage; it never overrides verified technicals.
+        if !verified && !gate.approved && order.action == "BUY" && markov_cfg.enabled {
+            let held_quantity = latest_position_quantity(state, &order.symbol)
+                .await
+                .unwrap_or(0.0);
+            let starter_block = if !value_verified {
+                Some("no database-verified price is available for starter sizing".to_string())
+            } else if held_quantity > 0.0 {
+                Some(format!(
+                    "symbol is already held ({held_quantity}); starters only initiate new positions"
+                ))
+            } else if has_buy_order_today(state, &order.symbol)
+                .await
+                .unwrap_or(true)
+            {
+                Some("a BUY order for this symbol was already created today".to_string())
+            } else {
+                None
+            };
+            match starter_block {
+                Some(reason) => {
+                    gate.reason = format!("{} Markov starter blocked: {reason}.", gate.reason);
+                }
+                None => {
+                    let evidence = match latest_markov_signal(state, &order.symbol).await {
+                        Ok(evidence) => evidence,
+                        Err(err) => {
+                            warn!("Markov gate lookup failed for {}: {err:#}", order.symbol);
+                            None
+                        }
+                    };
+                    let markov_gate = markov_buy_gate(
+                        &mut order,
+                        evidence.as_ref(),
+                        markov_cfg,
+                        initial_capital_budget.total_market_value_dkk,
+                        Utc::now().date_naive(),
+                    );
+                    if markov_gate.approved {
+                        gate = markov_gate;
+                    } else {
+                        gate.reason =
+                            format!("{} Markov fallback: {}", gate.reason, markov_gate.reason);
+                    }
+                }
+            }
+        }
         if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
@@ -266,6 +435,16 @@ async fn run_for_report(
     let manager_json = json!({
         "summary": "Rust Trading Manager approved scheduled report orders using embedded daily technical gates.",
         "capital_budget": initial_capital_budget.to_json(),
+        "reinvestment_diagnostics": reinvestment_diagnostics(
+            &initial_capital_budget,
+            candidate_order_count,
+            buy_candidate_count,
+            sell_candidate_count,
+            approved.iter().filter(|(order, _)| order.action == "BUY").count(),
+            approved.iter().filter(|(order, _)| order.action == "SELL").count(),
+            skipped.iter().filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("BUY")).count(),
+            skipped.iter().filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("SELL")).count(),
+        ),
         "remaining_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
@@ -281,6 +460,7 @@ async fn run_for_report(
             "Approved Hermes experiment overlays are loaded only in paper/simulation mode or Saxo SIM.",
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
+            "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
     });
@@ -445,6 +625,87 @@ impl CandidateOrder {
     }
 }
 
+fn order_shape_gate(order: &mut CandidateOrder) -> GateDecision {
+    let order_type = order.order_type.trim();
+    let canonical = if order_type.eq_ignore_ascii_case("market") || order_type.is_empty() {
+        "Market"
+    } else if order_type.eq_ignore_ascii_case("limit") {
+        "Limit"
+    } else if order_type.eq_ignore_ascii_case("stop") {
+        "Stop"
+    } else if order_type.eq_ignore_ascii_case("stoplimit")
+        || order_type.eq_ignore_ascii_case("stop_limit")
+        || order_type.eq_ignore_ascii_case("stop-limit")
+    {
+        "StopLimit"
+    } else {
+        return GateDecision {
+            approved: false,
+            reason: format!("Unsupported order_type {order_type}."),
+        };
+    };
+    order.order_type = canonical.to_string();
+
+    match canonical {
+        "Market" => GateDecision {
+            approved: true,
+            reason: "Order shape is broker-compatible.".to_string(),
+        },
+        "Limit" => {
+            if order.limit_price_local.is_none() {
+                order.limit_price_local = order.price_local.filter(|price| *price > 0.0);
+            }
+            if order.limit_price_local.is_some_and(|price| price > 0.0) {
+                GateDecision {
+                    approved: true,
+                    reason: "Limit order has a usable limit price.".to_string(),
+                }
+            } else {
+                GateDecision {
+                    approved: false,
+                    reason:
+                        "Limit orders require limit_price_local or a positive price_local fallback."
+                            .to_string(),
+                }
+            }
+        }
+        "Stop" => {
+            if order.stop_price_local.is_some_and(|price| price > 0.0) {
+                GateDecision {
+                    approved: true,
+                    reason: "Stop order has a usable stop price.".to_string(),
+                }
+            } else {
+                GateDecision {
+                    approved: false,
+                    reason: "Stop orders require stop_price_local.".to_string(),
+                }
+            }
+        }
+        "StopLimit" => {
+            if order.limit_price_local.is_none() {
+                order.limit_price_local = order.price_local.filter(|price| *price > 0.0);
+            }
+            if order.stop_price_local.is_none() || order.limit_price_local.is_none() {
+                GateDecision {
+                    approved: false,
+                    reason: "StopLimit orders require stop_price_local and limit_price_local."
+                        .to_string(),
+                }
+            } else {
+                GateDecision {
+                    approved: true,
+                    reason: "StopLimit order has usable stop and limit prices.".to_string(),
+                }
+            }
+        }
+        _ => GateDecision {
+            approved: false,
+            reason: format!("Unsupported order_type {canonical}."),
+        },
+    }
+}
+
 fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) -> GateDecision {
     let technical = order
         .raw
@@ -522,6 +783,277 @@ fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) 
             approved: false,
             reason: format!("Unsupported manager action {other}."),
         },
+    }
+}
+
+const INDICATOR_MAX_AGE_DAYS: i64 = 5;
+
+/// Server-verified per-share price in DKK for a symbol: close from our own
+/// daily indicator run (preferred) or Markov signal, converted via the
+/// exchange-implied currency. None when this process has no own price data.
+async fn verified_close_dkk(state: &AppState, symbol: &str) -> Option<f64> {
+    let signal_close = |signal: Option<JsonValue>, key: &str| -> Option<f64> {
+        let signal = signal?;
+        if signal.get("status").and_then(JsonValue::as_str) != Some("ok") {
+            return None;
+        }
+        Some(value_f64(&signal, key)).filter(|close| *close > 0.0)
+    };
+    let indicator = crate::daily_indicators::latest_indicator_signal(state, symbol)
+        .await
+        .ok()
+        .flatten();
+    let close = match signal_close(indicator, "close") {
+        Some(close) => close,
+        None => {
+            let markov = latest_markov_signal(state, symbol).await.ok().flatten();
+            signal_close(markov, "current_close")?
+        }
+    };
+    let currency = crate::saxo_order::currency_for_exchange(&exchange_code(symbol).to_lowercase())?;
+    Some(close * crate::saxo_order::fx_rate_to_dkk(currency))
+}
+
+/// Overwrite the model-claimed estimated_value_dkk on a BUY with a value
+/// computed from our own price data. Model-supplied estimates have already
+/// produced orders ~6x over budget by quoting USD prices as DKK.
+async fn verify_buy_value(state: &AppState, order: &mut CandidateOrder) -> bool {
+    let Some(per_share_dkk) = verified_close_dkk(state, &order.symbol).await else {
+        return false;
+    };
+    let verified_value = per_share_dkk * order.quantity.max(0.0);
+    let claimed = order.estimated_value_dkk;
+    order.estimated_value_dkk = Some(verified_value);
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "value_verification".to_string(),
+            json!({
+                "verified_from_db": true,
+                "per_share_dkk": per_share_dkk,
+                "verified_value_dkk": verified_value,
+                "model_claimed_value_dkk": claimed,
+            }),
+        );
+    }
+    true
+}
+
+/// True when a non-terminal BUY execution order for this symbol already exists
+/// today (UTC); guards against duplicate starters from near-simultaneous
+/// reports while still allowing retries after pre-broker validation failures.
+async fn has_buy_order_today(state: &AppState, symbol: &str) -> Result<bool> {
+    let today = Utc::now().format("%Y-%m-%d");
+    let row = sqlx::query(&format!(
+        "SELECT id FROM execution_orders
+         WHERE symbol = '{}' AND action = 'BUY' AND created_at >= '{today}T00:00:00Z'
+           AND COALESCE(status, '') NOT IN (
+               'execution_failed',
+               'broker_cancelled',
+               'cancelled',
+               'rejected'
+           )
+         LIMIT 1",
+        sql_escape(symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Replace model-supplied technical metadata with database-verified daily
+/// indicator values when a fresh signal exists for the symbol. Returns true
+/// when verified data was applied; the technical gate then runs on numbers
+/// this process computed itself instead of model-self-reported claims.
+async fn apply_verified_technical(
+    state: &AppState,
+    order: &mut CandidateOrder,
+    today: chrono::NaiveDate,
+) -> bool {
+    let signal = match crate::daily_indicators::latest_indicator_signal(state, &order.symbol).await
+    {
+        Ok(Some(signal)) => signal,
+        Ok(None) => return false,
+        Err(err) => {
+            warn!(
+                "verified indicator lookup failed for {}: {err:#}",
+                order.symbol
+            );
+            return false;
+        }
+    };
+    if signal.get("status").and_then(JsonValue::as_str) != Some("ok") {
+        return false;
+    }
+    let Some(run_date) = signal
+        .get("run_date")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+    else {
+        return false;
+    };
+    if (today - run_date).num_days() > INDICATOR_MAX_AGE_DAYS {
+        return false;
+    }
+    let technical = json!({
+        "status": "ok",
+        "source": "daily_indicators_db",
+        "verified_from_db": true,
+        "run_date": run_date.to_string(),
+        "sentiment": signal.get("sentiment").cloned().unwrap_or(JsonValue::Null),
+        "trend_bias": signal.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
+        "confluence_count": signal.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
+        "min_confluences": signal.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
+        "rsi14": signal.get("rsi14").cloned().unwrap_or(JsonValue::Null),
+        "reward_risk": signal.get("reward_risk").cloned().unwrap_or(JsonValue::Null),
+        "confluences": signal.get("confluences_json")
+            .and_then(JsonValue::as_str)
+            .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+            .unwrap_or(JsonValue::Null),
+    });
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert("technical".to_string(), technical);
+        return true;
+    }
+    false
+}
+
+/// Latest Markov regime signal for one symbol from the most recent run.
+/// Queried server-side so the gate never trusts model-reported signal values.
+async fn latest_markov_signal(state: &AppState, symbol: &str) -> Result<Option<JsonValue>> {
+    let sql = format!(
+        "SELECT run_date, status, current_state, current_close, signed_signal, direction, conviction
+         FROM markov_asset_signals
+         WHERE symbol = '{}' AND run_id = (
+            SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
+         )
+         LIMIT 1",
+        sql_escape(symbol)
+    );
+    let row = sqlx::query(&sql).fetch_optional(&state.pool).await?;
+    Ok(row.as_ref().map(row_to_json))
+}
+
+/// Fallback BUY gate: a fresh database-verified Markov long signal admits a
+/// size-capped starter position when daily technical confluence is missing.
+fn markov_buy_gate(
+    order: &mut CandidateOrder,
+    evidence: Option<&JsonValue>,
+    config: MarkovGateConfig,
+    total_market_value_dkk: f64,
+    today: chrono::NaiveDate,
+) -> GateDecision {
+    let Some(evidence) = evidence else {
+        return GateDecision {
+            approved: false,
+            reason: "No Markov regime signal is available for this symbol.".to_string(),
+        };
+    };
+    if evidence.get("status").and_then(JsonValue::as_str) != Some("ok") {
+        return GateDecision {
+            approved: false,
+            reason: "Latest Markov regime signal for this symbol did not complete.".to_string(),
+        };
+    }
+    let run_date = evidence
+        .get("run_date")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
+    let Some(run_date) = run_date else {
+        return GateDecision {
+            approved: false,
+            reason: "Markov regime signal has no parsable run date.".to_string(),
+        };
+    };
+    let age_days = (today - run_date).num_days();
+    if age_days > config.max_signal_age_days {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Markov regime signal from {run_date} is {age_days} days old (max {}).",
+                config.max_signal_age_days
+            ),
+        };
+    }
+    let direction = evidence
+        .get("direction")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
+    let signed_signal = value_f64(evidence, "signed_signal");
+    if direction != "long" || signed_signal < config.min_signed_signal {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Markov signal {signed_signal:.2} ({direction}) does not meet the long threshold {:.2}.",
+                config.min_signed_signal
+            ),
+        };
+    }
+
+    // Cap the starter position to a small share of the portfolio.
+    let max_value_dkk = total_market_value_dkk * config.max_position_pct;
+    let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+    let mut scaled = false;
+    if max_value_dkk > 0.0 && estimated_value_dkk > max_value_dkk {
+        let factor = max_value_dkk / estimated_value_dkk;
+        let scaled_quantity = (order.quantity * factor).floor();
+        if scaled_quantity < 1.0 {
+            return GateDecision {
+                approved: false,
+                reason: format!(
+                    "Starter cap {max_value_dkk:.0} DKK is below the value of a single share."
+                ),
+            };
+        }
+        let quantity_ratio = scaled_quantity / order.quantity;
+        order.quantity = scaled_quantity;
+        order.estimated_value_dkk = Some(estimated_value_dkk * quantity_ratio);
+        scaled = true;
+    }
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "markov_gate".to_string(),
+            json!({
+                "verified_from_db": true,
+                "run_date": run_date.to_string(),
+                "signed_signal": signed_signal,
+                "direction": direction,
+                "state": evidence.get("current_state").cloned().unwrap_or(JsonValue::Null),
+                "min_signed_signal": config.min_signed_signal,
+                "max_position_pct": config.max_position_pct,
+                "size_capped": scaled,
+            }),
+        );
+    }
+    GateDecision {
+        approved: true,
+        reason: format!(
+            "Starter BUY approved by database-verified Markov long signal {signed_signal:.2} (state {}); position capped at {:.0}% of portfolio{}.",
+            evidence
+                .get("current_state")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("unknown"),
+            config.max_position_pct * 100.0,
+            if scaled {
+                ", quantity scaled down to fit"
+            } else {
+                ""
+            }
+        ),
     }
 }
 
@@ -887,6 +1419,11 @@ fn capital_budget_from_overview(
         .unwrap_or_else(|| value_f64(&cash_policy, "min_cash_buffer_pct"))
         .clamp(0.0, 1.0);
     let max_deployment_pct = value_f64(&cash_policy, "max_deployment_pct").clamp(0.0, 1.0);
+    let reinvestment_pressure_threshold_pct = cash_policy
+        .get("reinvestment_pressure_threshold_pct")
+        .map(|_| value_f64(&cash_policy, "reinvestment_pressure_threshold_pct"))
+        .unwrap_or(0.05)
+        .max(0.0);
     let required_cash_buffer_dkk = (total_market_value_dkk * min_cash_buffer_pct).max(0.0);
     let deployment_cap_dkk = if max_deployment_pct > 0.0 {
         total_market_value_dkk * max_deployment_pct
@@ -898,15 +1435,28 @@ fn capital_budget_from_overview(
         (deployment_cap_dkk - invested_market_value_dkk).max(0.0);
     let available_buy_budget_dkk =
         available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
+    let cash_pct = if total_market_value_dkk > 0.0 {
+        cash_balance_dkk / total_market_value_dkk
+    } else {
+        0.0
+    };
+    let excess_cash_pct = (cash_pct - min_cash_buffer_pct).max(0.0);
+    let reinvestment_pressure_active =
+        excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
     CapitalBudget {
         cash_balance_dkk,
         total_market_value_dkk,
         invested_market_value_dkk,
+        cash_pct,
         min_cash_buffer_pct,
         max_deployment_pct,
+        reinvestment_pressure_threshold_pct,
         required_cash_buffer_dkk,
+        available_cash_above_buffer_dkk,
         available_buy_budget_dkk,
         remaining_deployment_capacity_dkk,
+        excess_cash_pct,
+        reinvestment_pressure_active,
     }
 }
 
@@ -921,13 +1471,62 @@ impl CapitalBudget {
             "cash_balance_dkk": self.cash_balance_dkk,
             "total_market_value_dkk": self.total_market_value_dkk,
             "invested_market_value_dkk": self.invested_market_value_dkk,
+            "cash_pct": self.cash_pct,
             "min_cash_buffer_pct": self.min_cash_buffer_pct,
             "max_deployment_pct": self.max_deployment_pct,
+            "reinvestment_pressure_threshold_pct": self.reinvestment_pressure_threshold_pct,
             "required_cash_buffer_dkk": self.required_cash_buffer_dkk,
+            "available_cash_above_buffer_dkk": self.available_cash_above_buffer_dkk,
             "available_buy_budget_dkk": self.available_buy_budget_dkk,
             "remaining_deployment_capacity_dkk": self.remaining_deployment_capacity_dkk,
+            "excess_cash_pct": self.excess_cash_pct,
+            "reinvestment_pressure_active": self.reinvestment_pressure_active,
         })
     }
+}
+
+fn reinvestment_diagnostics(
+    budget: &CapitalBudget,
+    candidate_order_count: usize,
+    buy_candidate_count: usize,
+    sell_candidate_count: usize,
+    approved_buy_count: usize,
+    approved_sell_count: usize,
+    skipped_buy_count: usize,
+    skipped_sell_count: usize,
+) -> JsonValue {
+    let status = if !budget.reinvestment_pressure_active {
+        "within_policy"
+    } else if buy_candidate_count == 0 {
+        "excess_cash_without_buy_candidates"
+    } else if approved_buy_count == 0 {
+        "excess_cash_with_blocked_buy_candidates"
+    } else {
+        "reinvestment_candidates_approved"
+    };
+    json!({
+        "status": status,
+        "active": budget.reinvestment_pressure_active,
+        "cash_balance_dkk": budget.cash_balance_dkk,
+        "cash_pct": budget.cash_pct,
+        "min_cash_buffer_pct": budget.min_cash_buffer_pct,
+        "excess_cash_pct": budget.excess_cash_pct,
+        "available_buy_budget_dkk": budget.available_buy_budget_dkk,
+        "threshold_pct": budget.reinvestment_pressure_threshold_pct,
+        "candidate_order_count": candidate_order_count,
+        "buy_candidate_count": buy_candidate_count,
+        "sell_candidate_count": sell_candidate_count,
+        "approved_buy_count": approved_buy_count,
+        "approved_sell_count": approved_sell_count,
+        "skipped_buy_count": skipped_buy_count,
+        "skipped_sell_count": skipped_sell_count,
+        "message": match status {
+            "excess_cash_without_buy_candidates" => "Cash is above policy, but the decision report supplied no BUY candidates.",
+            "excess_cash_with_blocked_buy_candidates" => "Cash is above policy, but BUY candidates were blocked by exchange, budget, risk, minimum value, or technical gates.",
+            "reinvestment_candidates_approved" => "Cash is above policy and at least one BUY candidate was approved for queueing.",
+            _ => "Cash is inside the configured policy band or no deployment capacity is available.",
+        }
+    })
 }
 
 fn excluded_symbols(state: &AppState) -> Vec<String> {
@@ -1094,9 +1693,193 @@ mod tests {
     }
 
     #[test]
+    fn rejects_limit_order_without_limit_price() {
+        let mut order = CandidateOrder::from_json(json!({
+            "symbol": "GE:xnys",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "Limit",
+            "estimated_value_dkk": 2300,
+            "strategy_key": "test:limit-missing"
+        }))
+        .unwrap();
+
+        let gate = order_shape_gate(&mut order);
+
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("Limit orders require"));
+    }
+
+    #[test]
+    fn uses_price_local_as_limit_price_fallback() {
+        let mut order = CandidateOrder::from_json(json!({
+            "symbol": "GE:xnys",
+            "action": "BUY",
+            "quantity": 1,
+            "order_type": "limit",
+            "price_local": 325.25,
+            "estimated_value_dkk": 2300,
+            "strategy_key": "test:limit-price-fallback"
+        }))
+        .unwrap();
+
+        let gate = order_shape_gate(&mut order);
+
+        assert!(gate.approved, "{}", gate.reason);
+        assert_eq!(order.order_type, "Limit");
+        assert_eq!(order.limit_price_local, Some(325.25));
+    }
+
+    #[test]
     fn experiment_overlay_can_adjust_min_confluences() {
         assert!(!technical_gate(&order("BUY", "BUY", "bullish", 2), None).approved);
         assert!(technical_gate(&order("BUY", "BUY", "bullish", 2), Some(2)).approved);
+    }
+
+    fn markov_test_config() -> MarkovGateConfig {
+        MarkovGateConfig {
+            enabled: true,
+            min_signed_signal: 0.15,
+            max_position_pct: 0.05,
+            max_signal_age_days: 5,
+        }
+    }
+
+    fn buy_order(quantity: f64, estimated_value_dkk: f64) -> CandidateOrder {
+        CandidateOrder::from_json(json!({
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "quantity": quantity,
+            "order_type": "Market",
+            "estimated_value_dkk": estimated_value_dkk,
+            "strategy_key": "test:starter",
+            "strategy_role": "starter"
+        }))
+        .unwrap()
+    }
+
+    fn markov_evidence(signed_signal: f64, direction: &str, run_date: &str) -> JsonValue {
+        json!({
+            "status": "ok",
+            "run_date": run_date,
+            "current_state": "Bull",
+            "signed_signal": signed_signal,
+            "direction": direction,
+            "conviction": signed_signal
+        })
+    }
+
+    #[test]
+    fn markov_gate_approves_fresh_long_signal() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let mut order = buy_order(5.0, 10_000.0);
+        let evidence = markov_evidence(0.60, "long", "2026-06-08");
+        let gate = markov_buy_gate(
+            &mut order,
+            Some(&evidence),
+            markov_test_config(),
+            266_000.0,
+            today,
+        );
+        assert!(gate.approved, "{}", gate.reason);
+        // 10k is below the 13.3k cap: quantity untouched.
+        assert_eq!(order.quantity, 5.0);
+        let recorded = order.raw["strategy_metadata"]["markov_gate"].clone();
+        assert_eq!(recorded["verified_from_db"], json!(true));
+        assert_eq!(recorded["size_capped"], json!(false));
+    }
+
+    #[test]
+    fn markov_gate_rejects_weak_or_short_signals() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let config = markov_test_config();
+        let weak = markov_evidence(0.10, "long", "2026-06-08");
+        let short = markov_evidence(0.40, "short", "2026-06-08");
+        assert!(
+            !markov_buy_gate(
+                &mut buy_order(5.0, 10_000.0),
+                Some(&weak),
+                config,
+                266_000.0,
+                today
+            )
+            .approved
+        );
+        assert!(
+            !markov_buy_gate(
+                &mut buy_order(5.0, 10_000.0),
+                Some(&short),
+                config,
+                266_000.0,
+                today
+            )
+            .approved
+        );
+        assert!(
+            !markov_buy_gate(
+                &mut buy_order(5.0, 10_000.0),
+                None,
+                config,
+                266_000.0,
+                today
+            )
+            .approved
+        );
+    }
+
+    #[test]
+    fn markov_gate_rejects_stale_signal() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let stale = markov_evidence(0.60, "long", "2026-06-01");
+        let gate = markov_buy_gate(
+            &mut buy_order(5.0, 10_000.0),
+            Some(&stale),
+            markov_test_config(),
+            266_000.0,
+            today,
+        );
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("days old"), "{}", gate.reason);
+    }
+
+    #[test]
+    fn markov_gate_scales_oversized_orders_to_cap() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        // 40k requested vs 13.3k cap (5% of 266k): expect quantity scaled from 20 to 6.
+        let mut order = buy_order(20.0, 40_000.0);
+        let evidence = markov_evidence(0.60, "long", "2026-06-08");
+        let gate = markov_buy_gate(
+            &mut order,
+            Some(&evidence),
+            markov_test_config(),
+            266_000.0,
+            today,
+        );
+        assert!(gate.approved, "{}", gate.reason);
+        assert_eq!(order.quantity, 6.0);
+        let estimated = order.estimated_value_dkk.unwrap();
+        assert!((estimated - 12_000.0).abs() < 1.0, "estimated {estimated}");
+        assert_eq!(
+            order.raw["strategy_metadata"]["markov_gate"]["size_capped"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn markov_gate_rejects_when_one_share_exceeds_cap() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        // Single share worth 20k against a 13.3k cap cannot be scaled down.
+        let mut order = buy_order(1.0, 20_000.0);
+        let evidence = markov_evidence(0.60, "long", "2026-06-08");
+        let gate = markov_buy_gate(
+            &mut order,
+            Some(&evidence),
+            markov_test_config(),
+            266_000.0,
+            today,
+        );
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("single share"), "{}", gate.reason);
     }
 
     #[test]
@@ -1144,15 +1927,42 @@ mod tests {
             "settings": {
                 "cash_buffer": {
                     "min_cash_buffer_pct": 0.10,
-                    "max_deployment_pct": 0.90
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
                 }
             }
         });
         let mut budget = capital_budget_from_overview(&overview, None);
         assert_eq!(budget.required_cash_buffer_dkk, 30000.0);
         assert_eq!(budget.available_buy_budget_dkk, 20000.0);
+        assert!(budget.reinvestment_pressure_active);
         budget.reserve_buy(7500.0);
         assert_eq!(budget.available_buy_budget_dkk, 12500.0);
+    }
+
+    #[test]
+    fn reinvestment_diagnostics_flags_missing_buy_candidates() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 220000.0,
+                "cash_balance_dkk": 80000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            }
+        });
+        let budget = capital_budget_from_overview(&overview, None);
+        let diagnostics = reinvestment_diagnostics(&budget, 1, 0, 1, 0, 1, 0, 0);
+        assert_eq!(
+            diagnostics["status"],
+            JsonValue::from("excess_cash_without_buy_candidates")
+        );
+        assert_eq!(diagnostics["active"], JsonValue::from(true));
     }
 
     #[test]

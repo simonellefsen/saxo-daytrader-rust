@@ -93,7 +93,7 @@ rtk qmd search "Hermes baseline experiment" -c daytrader-wiki -n 10
 
 ## Safety Rules
 
-- Never store Saxo tokens, refresh tokens, `ClientKey`, `AccountKey`, client secrets, xAI keys, ngrok keys, database credentials, TradingView credentials, or TOTP seeds in the wiki.
+- Never store Saxo tokens, refresh tokens, `ClientKey`, `AccountKey`, client secrets, OpenRouter/xAI keys, ngrok keys, database credentials, TradingView credentials, or TOTP seeds in the wiki.
 - Broker behavior claims must point to code, docs, source notes, or audited records.
 - Strategy learning pages must distinguish hypothesis, evidence, result, and active baseline.
 - Hermes may propose changes; only approved code/config/database flows may activate changes.

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, sync::OnceLock, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::http::{HeaderMap, header};
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use url::Url;
 
@@ -18,6 +19,8 @@ use crate::config::{
 };
 
 const TOKEN_SAFETY_MARGIN_SECONDS: i64 = 15 * 60;
+
+static SAXO_REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SsoSession {
@@ -325,6 +328,25 @@ async fn ensure_access_token(
         bail!("No valid Saxo refresh token is available. Re-authentication is required.");
     }
 
+    let _refresh_guard = saxo_refresh_lock().lock().await;
+    session = load_session(&path)?;
+    if access_token_valid(&session) {
+        info!(
+            environment = %session.environment,
+            session_path = %path.display(),
+            "Saxo access token was refreshed by another task"
+        );
+        return Ok(session);
+    }
+    if !refresh_token_valid(&session) {
+        warn!(
+            environment = %session.environment,
+            session_path = %path.display(),
+            "Saxo refresh token became unavailable while waiting for refresh lock"
+        );
+        bail!("No valid Saxo refresh token is available. Re-authentication is required.");
+    }
+
     info!(
         environment = %session.environment,
         auth_mode = %session.auth_mode,
@@ -363,6 +385,10 @@ async fn ensure_access_token(
             Err(err)
         }
     }
+}
+
+fn saxo_refresh_lock() -> &'static Mutex<()> {
+    SAXO_REFRESH_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 async fn refresh_access_token(
@@ -490,7 +516,10 @@ async fn fetch_initial_session_context(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("Saxo client context request failed with HTTP {status}: {body}");
+        bail!(
+            "Saxo client context request failed with HTTP {status}: {}",
+            compact_http_error_body(&body)
+        );
     }
     Ok(response.json::<ClientMeResponse>().await?)
 }
@@ -505,9 +534,37 @@ async fn send_token_request(request: reqwest::RequestBuilder) -> Result<TokenRes
         } else {
             status.to_string()
         };
-        bail!("Saxo token request failed with {marker}: {body}");
+        bail!(
+            "Saxo token request failed with {marker}: {}",
+            compact_http_error_body(&body)
+        );
     }
     Ok(response.json::<TokenResponse>().await?)
+}
+
+/// Error bodies end up in UI status text; raw HTML error pages are useless
+/// there and megabyte-long unbreakable strings destroy the page layout.
+fn compact_http_error_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.starts_with('<') {
+        // HTML error page: the <title> carries the only useful sentence.
+        let title = trimmed
+            .split("<title>")
+            .nth(1)
+            .and_then(|rest| rest.split("</title>").next())
+            .map(str::trim)
+            .filter(|title| !title.is_empty());
+        return match title {
+            Some(title) => format!("{title} (HTML error page)"),
+            None => "(HTML error page)".to_string(),
+        };
+    }
+    let compact = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut result: String = compact.chars().take(300).collect();
+    if compact.chars().count() > 300 {
+        result.push('…');
+    }
+    result
 }
 
 fn session_status(config: &YamlValue, path: &PathBuf, session: &SaxoSessionCache) -> JsonValue {

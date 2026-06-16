@@ -88,10 +88,11 @@ pub fn parse_positioner_csv(bytes: &[u8]) -> Result<Vec<ParsedPosition>> {
             continue;
         }
 
-        let cost_basis_local =
-            parse_dk_number(row.cost_price.as_deref().unwrap_or("")).unwrap_or(0.0) * quantity;
+        let cost_price_local =
+            parse_positioner_number(row.cost_price.as_deref().unwrap_or("")).unwrap_or(0.0);
+        let cost_basis_local = cost_price_local * quantity;
         let cost_basis_dkk =
-            parse_dk_number(row.original_value_dkk.as_deref().unwrap_or("")).unwrap_or(0.0);
+            parse_positioner_number(row.original_value_dkk.as_deref().unwrap_or("")).unwrap_or(0.0);
 
         let symbol = row.symbol.as_deref().unwrap_or("").trim().to_string();
         if symbol.is_empty() {
@@ -120,6 +121,23 @@ fn parse_dk_number(s: &str) -> Option<f64> {
         .replace(".", "") // thousand separator in DK
         .replace(",", "."); // decimal separator
 
+    cleaned.parse::<f64>().ok()
+}
+
+fn parse_positioner_number(s: &str) -> Option<f64> {
+    let mut cleaned = s.trim().replace(" ", "").replace("\u{a0}", "");
+    if cleaned.is_empty() {
+        return None;
+    }
+    if cleaned.contains(',') && cleaned.contains('.') {
+        if cleaned.rfind(',') > cleaned.rfind('.') {
+            cleaned = cleaned.replace('.', "").replace(',', ".");
+        } else {
+            cleaned = cleaned.replace(',', "");
+        }
+    } else if cleaned.contains(',') {
+        cleaned = cleaned.replace('.', "").replace(',', ".");
+    }
     cleaned.parse::<f64>().ok()
 }
 
@@ -405,5 +423,35 @@ impl AppState {
         also_sync_sim_broker: bool,
     ) -> Result<SimResetResult> {
         reset_sim_portfolio(self, csv_bytes, cash_dkk, filename, also_sync_sim_broker).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positioner_number_parser_preserves_dot_decimals() {
+        assert_eq!(
+            parse_positioner_number("195.75833333333333"),
+            Some(195.75833333333333)
+        );
+        assert_eq!(parse_positioner_number("60,205.23"), Some(60205.23));
+        assert_eq!(parse_positioner_number("60.205,23"), Some(60205.23));
+    }
+
+    #[test]
+    fn parses_positioner_cost_price_as_unit_price() {
+        let csv = concat!(
+            "\"Instrument\",\"L/K\",\"Valuta\",\"Antal\",\"Åbningskurs\",\"Aktuel kurs\",\"% Total afkast\",\"% 1D afk.\",\"Gevinst/Tab i alt (DKK)\",\"Markedsværdi (DKK)\",\"1-dags gevinst/tab\",\"Status\",\"Optjent rente siden sidste kupondato\",\"Udløb\",\"Oprindelig værdi (DKK)\",\"Kostpris\",\"Handels G/T (DKK)\",\"Handelsgevinst/-tab\",\"Symbol\",\"Nettoafkast %\",\"Bruttoafkast %\",\"Konto\",\"Aktivklasse\",\"Bud/Udbud\",\"Senest opdateret\",\"Markedsstatus\",\"Markedsværdi\",\"Morningstar™\",\"Åbningstidspunkt\",\"Gevinst/tab i alt\",\"Pips/ticks\",\"% af portefølje\",\"Bæredygtighed\",\"Valørdato\",\"ISIN\",\"Udsteder\",\"Aktivtype\",\"1-dags gevinst/tab (DKK)\",\"Accrued Interest (DKK)\"\n",
+            "\"Strategy Inc. \",\"Lang\",\"USD\",\"48\",\"195.421875\",\"176.74\",\"-9,56%\",\"-5,47%\",\"-5951.32\",\"54402.21\",\"-33 USD\",\"Åben\",\"\",\"\",\"60205.23\",\"195.75833333333333\",\"-5800.86\",\"-897 USD\",\"MSTR:xnas\",\"-0.09885054836598083\",\"-0.0963873072156689\",\"Hovedkonto\",\"–\",\"177,35 x 177,42\",\"13:39:33\",\"NASDAQ\",\"8.484 USD\",\"\",\"\",\"-920 USD\",\"-1.868\",\"0.06605929232885707\",\"\",\"\",\"US5949724083\",\"Strategy\",\"Aktie\",\"-209.310302\",\"\"\n"
+        );
+        let positions = parse_positioner_csv(csv.as_bytes()).unwrap();
+
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].symbol, "MSTR:xnas");
+        assert_eq!(positions[0].quantity, 48.0);
+        assert!((positions[0].cost_basis_local - 9396.4).abs() < 1e-6);
+        assert!((positions[0].cost_basis_dkk - 60205.23).abs() < 1e-6);
     }
 }

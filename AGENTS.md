@@ -13,8 +13,8 @@ The active runtime is a single Rust binary named `saxo-rust`.
 - Database access: `sqlx::AnyPool` so local SQLite and Kubernetes PostgreSQL can both be used
 - Local database fallback: `ledger.db`
 - Kubernetes database: existing CloudNativePG cluster in namespace `saxo`
-- Kubernetes app namespace: `saxo-rust`
-- Public endpoint: ngrok operator `AgentEndpoint` targeting the Rust frontend service
+- Kubernetes app namespace: `saxo`
+- Public endpoint: shared ngrok gateway in `/Users/lindau/codex/shared-ngrok-gateway`, routing `/saxo-daytrader` to this repo's internal `saxo-daytrader.internal` AgentEndpoint
 
 Trading-critical mutation paths are being ported incrementally. Saxo OAuth/session handling, scheduled decision reports, Trading Manager queue creation, and Saxo order precheck/placement now run in Rust. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption still use the legacy Python code as the behavior reference and should remain gated until each path has Rust audit/status tests.
 
@@ -82,7 +82,7 @@ Target these files for future Rust work:
 - `src/scheduler.rs`
   - Rust scheduler entry point.
   - Maintains the Saxo session cache on each heartbeat; successful refreshes are persisted back to the database by `AppState`.
-  - Runs scheduled xAI decision reports, the Rust Trading Manager, Saxo execution queue processing, and the EOD journal cycle.
+  - Runs scheduled OpenRouter decision reports, the Rust Trading Manager, Saxo execution queue processing, and the EOD journal cycle.
 
 - `src/trading_manager.rs`
   - Turns fresh scheduled decision reports into local `execution_orders`.
@@ -190,18 +190,18 @@ rtk bash -n scripts/deploy_k8s_docker_desktop.sh
 
 ## Kubernetes Deployment
 
-App resources run in namespace `saxo-rust`.
+App resources run in namespace `saxo`.
 
 Database resources remain in namespace `saxo`.
 
 Important files:
 
 - `deploy/k8s/base/namespace.yaml`
-  - Creates namespace `saxo-rust`.
+  - Creates namespace `saxo`.
 
 - `deploy/k8s/base/kustomization.yaml`
   - Base app kustomization.
-  - Namespace is `saxo-rust`.
+  - Namespace is `saxo`.
   - Includes app deployments, app services, PVCs, and config map.
 
 - `deploy/k8s/base/api.yaml`
@@ -221,10 +221,12 @@ Important files:
   - Saxo session path is `/tmp/daytrader/saxo_session.json`.
   - The durable session is stored in the `saxo_sessions` database table at runtime.
 
-- `deploy/k8s/ngrok/ingress.template.yaml`
-  - ngrok traffic policy and `AgentEndpoint`.
-  - Namespace: `saxo-rust`.
-  - Target: `http://daytrader-frontend.saxo-rust:8000`.
+- `deploy/k8s/base/ngrok-internal-agentendpoint.yaml`
+  - App-owned internal ngrok `AgentEndpoint`.
+  - Namespace: `saxo`.
+  - Internal URL: `http://saxo-daytrader.internal:80`.
+  - Target: `http://daytrader-frontend.saxo:8000`.
+  - The shared public `AgentEndpoint/daytrader-frontend`, `NgrokTrafficPolicy/daytrader-oauth`, OAuth allow-list, and `/saxo-daytrader` route are owned by `/Users/lindau/codex/shared-ngrok-gateway`.
 
 - `deploy/k8s/postgres/postgres-stack.template.yaml`
   - CloudNativePG cluster resources.
@@ -239,15 +241,15 @@ Important files:
   - Main Docker Desktop deployment script.
   - Builds the Rust image.
   - Applies/keeps CNPG resources in `DB_NAMESPACE`, default `saxo`.
-  - Applies app resources in `NAMESPACE`, default `saxo-rust`.
-  - Creates a `daytrader-postgres-app` secret in `saxo-rust` containing a cross-namespace `DATABASE_URL`.
-  - Renders ngrok endpoint to `saxo-rust/daytrader-frontend`.
+  - Applies app resources in `NAMESPACE`, default `saxo`.
+  - Creates a `daytrader-postgres-app` secret in `saxo` containing a cross-namespace `DATABASE_URL`.
+  - Applies only the app-owned internal `saxo-daytrader.internal` AgentEndpoint.
 
 ## Namespace And DNS Rules
 
-Kubernetes secrets cannot be referenced across namespaces. Because the database is in `saxo` and the app is in `saxo-rust`, the deploy script creates an app-local secret:
+Kubernetes secrets cannot be referenced across namespaces. Because the database is in `saxo` and the app is in `saxo`, the deploy script creates an app-local secret:
 
-- Secret in app namespace: `saxo-rust/daytrader-postgres-app`
+- Secret in app namespace: `saxo/daytrader-postgres-app`
 - Key: `database-url`
 - Value points at cross-namespace service DNS:
   - `daytrader-postgres-rw.saxo.svc.cluster.local:5432`
@@ -260,27 +262,37 @@ The Rust runtime stores the rollout-safe Saxo OAuth cache in `saxo_sessions` in 
 
 ## ngrok
 
-The ngrok operator resources live in `saxo-rust`:
+Shared public ngrok routing is owned by `/Users/lindau/codex/shared-ngrok-gateway`.
+This repo must not apply the public `AgentEndpoint/daytrader-frontend` or `NgrokTrafficPolicy/daytrader-oauth`.
 
-- `NgrokTrafficPolicy/daytrader-oauth`
-- `AgentEndpoint/daytrader-frontend`
+This repo owns only:
 
-The endpoint target is the app service:
+- `AgentEndpoint/saxo/saxo-daytrader-internal`
+- internal URL: `http://saxo-daytrader.internal:80`
+- upstream: `http://daytrader-frontend.saxo:8000`
 
-```text
-http://daytrader-frontend.saxo-rust:8000
-```
+The shared gateway owns:
 
-Required `.env` values for deployment:
+- public endpoint domain
+- Google OAuth provider and allow-list
+- `/saxo-daytrader` path route
+- route rewrite to `/`
+- `forward-internal` to `http://saxo-daytrader.internal:80`
+
+Required app `.env` value:
 
 ```bash
-NGROK_API_KEY=
-NGROK_AUTHTOKEN=
 NGROK_DOMAIN=
-NGROK_ALLOWED_EMAILS=
 ```
 
-`NGROK_OAUTH_PROVIDER` defaults to `google`.
+`NGROK_DOMAIN` is used only to derive `DAYTRADER_PUBLIC_BASE_URL=https://$NGROK_DOMAIN/saxo-daytrader` when `DAYTRADER_PUBLIC_BASE_URL` is not set. Keep `NGROK_API_KEY`, `NGROK_AUTHTOKEN`, `NGROK_ALLOWED_EMAILS`, and `NGROK_OAUTH_PROVIDER` in the shared gateway env.
+
+Useful shared gateway commands:
+
+```bash
+rtk make shared-ngrok-status
+rtk make shared-ngrok-apply
+```
 
 ## CloudNativePG
 
@@ -292,14 +304,14 @@ Primary cluster:
 - writable service: `daytrader-postgres-rw.saxo.svc.cluster.local`
 - app database: `daytrader`
 
-The app receives `DATABASE_URL` from `saxo-rust/daytrader-postgres-app`, not directly from the CNPG secret.
+The app receives `DATABASE_URL` from `saxo/daytrader-postgres-app`, not directly from the CNPG secret.
 
 Useful checks:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo get cluster,svc,pvc
 rtk kubectl --context docker-desktop -n saxo get pods -l cnpg.io/cluster=daytrader-postgres
-rtk kubectl --context docker-desktop -n saxo-rust get pods,svc,agentendpoint,ngroktrafficpolicy,pvc
+rtk kubectl --context docker-desktop -n saxo get pods,svc,agentendpoint,pvc
 ```
 
 ## Docker
@@ -343,7 +355,7 @@ Stop app resources:
 rtk make k8s-stop
 ```
 
-`k8s-stop` removes app resources from `saxo-rust`. It should not delete the CNPG database in `saxo`.
+`k8s-stop` removes app resources from `saxo`. It should not delete the CNPG database in `saxo`.
 
 ## Saxo Safety Notes
 

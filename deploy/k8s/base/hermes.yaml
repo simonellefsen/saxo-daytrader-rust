@@ -21,8 +21,8 @@ data:
   DAYTRADER_CAPABILITIES.md: |
     # Daytrader Capabilities
 
-    Hermes is running beside the `saxo-rust` day/swing trading app in the
-    `saxo-rust` Kubernetes namespace.
+    Hermes is running beside the `saxo` day/swing trading app in the
+    `saxo` Kubernetes namespace.
 
     Hermes may observe, reflect, summarize, and propose changes. It must not
     directly place Saxo orders, approve live orders, read Saxo session tokens,
@@ -32,7 +32,7 @@ data:
     Current app capabilities:
 
     - Rust Axum HTTP/API server and Dioxus SSR dashboard.
-    - Rust scheduler heartbeat and xAI decision report polling.
+    - Rust scheduler heartbeat and OpenRouter decision report submission.
     - Two scheduled decision-report pulses when markets are open: Nordic/EU
       open +1h15 and US open +1h15.
     - Daily end-of-day strategy journal reports after the configured local
@@ -47,19 +47,19 @@ data:
 
     Useful internal endpoints:
 
-    - `http://daytrader-api.saxo-rust:8000/api/health`
-    - `http://daytrader-mcp.saxo-rust:8610/mcp`
-    - `http://daytrader-api.saxo-rust:8000/api/overview`
-    - `http://daytrader-api.saxo-rust:8000/api/hermes/capabilities`
-    - `http://daytrader-api.saxo-rust:8000/api/hermes/context`
-    - `http://daytrader-api.saxo-rust:8000/api/hermes/reflections`
-    - `http://daytrader-api.saxo-rust:8000/api/hermes/experiments`
-    - `http://daytrader-api.saxo-rust:8000/api/decision/latest`
-    - `http://daytrader-api.saxo-rust:8000/api/decision/reports`
-    - `http://daytrader-api.saxo-rust:8000/api/markov/signals`
-    - `http://daytrader-api.saxo-rust:8000/api/scheduler`
-    - `http://daytrader-api.saxo-rust:8000/api/execution`
-    - `http://daytrader-api.saxo-rust:8000/api/strategy-journal`
+    - `http://daytrader-api.saxo:8000/api/health`
+    - `http://daytrader-mcp.saxo:8610/mcp`
+    - `http://daytrader-api.saxo:8000/api/overview`
+    - `http://daytrader-api.saxo:8000/api/hermes/capabilities`
+    - `http://daytrader-api.saxo:8000/api/hermes/context`
+    - `http://daytrader-api.saxo:8000/api/hermes/reflections`
+    - `http://daytrader-api.saxo:8000/api/hermes/experiments`
+    - `http://daytrader-api.saxo:8000/api/decision/latest`
+    - `http://daytrader-api.saxo:8000/api/decision/reports`
+    - `http://daytrader-api.saxo:8000/api/markov/signals`
+    - `http://daytrader-api.saxo:8000/api/scheduler`
+    - `http://daytrader-api.saxo:8000/api/execution`
+    - `http://daytrader-api.saxo:8000/api/strategy-journal`
 
     The `/api/hermes/*` endpoints require `x-hermes-api-key` or
     `Authorization: Bearer ...` using `HERMES_DAYTRADER_API_KEY`.
@@ -117,6 +117,14 @@ spec:
       labels:
         app: daytrader-mcp
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mcp
           image: daytrader-api:local
@@ -143,6 +151,13 @@ spec:
           ports:
             - name: mcp
               containerPort: 8610
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -212,6 +227,7 @@ spec:
       labels:
         app: hermes-agent
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsGroup: 10000
         runAsNonRoot: true
@@ -228,7 +244,7 @@ spec:
             - -ec
             - |
               for attempt in $(seq 1 60); do
-                if curl -fsS http://daytrader-mcp.saxo-rust:8610/health >/dev/null; then
+                if curl -fsS http://daytrader-mcp.saxo:8610/health >/dev/null; then
                   exit 0
                 fi
                 sleep 2
@@ -240,13 +256,74 @@ spec:
             capabilities:
               drop:
                 - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 10000
+            runAsNonRoot: true
+            runAsUser: 10000
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
       containers:
         - name: hermes
-          image: nousresearch/hermes-agent:latest
+          image: docker.io/nousresearch/hermes-agent@sha256:b6e41c155d6bfce5ad83c5d0fec670086db8a43250e4511c9474134be5482d33
           imagePullPolicy: IfNotPresent
-          args:
-            - gateway
-            - run
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              if [ -n "${HERMES_MODEL:-}" ]; then
+                /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
+              fi
+              if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
+                /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
+              fi
+              if [ -n "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                /opt/hermes/.venv/bin/python - <<'PY' || true
+              import os
+              from pathlib import Path
+
+              import yaml
+
+              path = Path("/opt/data/config.yaml")
+              data = {}
+              if path.exists():
+                  data = yaml.safe_load(path.read_text()) or {}
+              servers = data.setdefault("mcp_servers", {})
+              servers["daytrader"] = {
+                  "url": os.environ.get("DAYTRADER_MCP_URL", "http://daytrader-mcp.saxo:8610/mcp"),
+                  "headers": {
+                      "Authorization": f"Bearer {os.environ['HERMES_DAYTRADER_API_KEY']}"
+                  },
+                  "timeout": 30,
+                  "connect_timeout": 5,
+                  "supports_parallel_tool_calls": False,
+                  "tools": {
+                      "include": [
+                          "get_app_capabilities",
+                          "get_goal_contract",
+                          "get_context",
+                          "get_decision_reports",
+                          "get_end_of_day_reports",
+                          "get_markov_signals",
+                          "list_reflections",
+                          "create_reflection",
+                          "list_experiments",
+                          "create_experiment_proposal",
+                      ],
+                      "resources": False,
+                      "prompts": False,
+                  },
+              }
+              path.write_text(yaml.safe_dump(data, sort_keys=False))
+              PY
+              fi
+              exec /opt/hermes/.venv/bin/python /opt/hermes/hermes gateway run
           envFrom:
             - secretRef:
                 name: hermes-env
@@ -268,59 +345,12 @@ spec:
             capabilities:
               drop:
                 - ALL
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                  - /bin/sh
-                  - -lc
-                  - |
-                    if [ -n "${HERMES_MODEL:-}" ]; then
-                      /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
-                    fi
-                    if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
-                      /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
-                    fi
-                    if [ -n "${HERMES_DAYTRADER_API_KEY:-}" ]; then
-                      /opt/hermes/.venv/bin/python - <<'PY' || true
-                    import os
-                    from pathlib import Path
-
-                    import yaml
-
-                    path = Path("/opt/data/config.yaml")
-                    data = {}
-                    if path.exists():
-                        data = yaml.safe_load(path.read_text()) or {}
-                    servers = data.setdefault("mcp_servers", {})
-                    servers["daytrader"] = {
-                        "url": os.environ.get("DAYTRADER_MCP_URL", "http://daytrader-mcp.saxo-rust:8610/mcp"),
-                        "headers": {
-                            "Authorization": f"Bearer {os.environ['HERMES_DAYTRADER_API_KEY']}"
-                        },
-                        "timeout": 30,
-                        "connect_timeout": 5,
-                        "supports_parallel_tool_calls": False,
-                        "tools": {
-                            "include": [
-                                "get_app_capabilities",
-                                "get_goal_contract",
-                                "get_context",
-                                "get_decision_reports",
-                                "get_end_of_day_reports",
-                                "get_markov_signals",
-                                "list_reflections",
-                                "create_reflection",
-                                "list_experiments",
-                                "create_experiment_proposal",
-                            ],
-                            "resources": False,
-                            "prompts": False,
-                        },
-                    }
-                    path.write_text(yaml.safe_dump(data, sort_keys=False))
-                    PY
-                    fi
+            readOnlyRootFilesystem: true
+            runAsGroup: 10000
+            runAsNonRoot: true
+            runAsUser: 10000
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
             - name: data
               mountPath: /opt/data
@@ -373,7 +403,7 @@ metadata:
 spec:
   schedule: "45 23 * * 1-5"
   timeZone: Europe/Copenhagen
-  suspend: true
+  suspend: false
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 5
   failedJobsHistoryLimit: 3
@@ -387,6 +417,14 @@ spec:
             component: reflection
             cadence: daily
         spec:
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
           restartPolicy: Never
           containers:
             - name: submit-reflection
@@ -396,6 +434,27 @@ spec:
                 - secretRef:
                     name: hermes-env
                     optional: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                runAsGroup: 65532
+                seccompProfile:
+                  type: RuntimeDefault
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
               command:
                 - /bin/sh
                 - -ec
@@ -408,10 +467,15 @@ spec:
                     echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
                     exit 1
                   fi
+                  DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo:8000}"
+                  RUN_DATE="$(date -u +%Y-%m-%d)"
+                  RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  SOURCE_SESSION_ID="daily-eod-reflection-${RUN_DATE}"
+                  WAIT_SECONDS="${HERMES_REFLECTION_WAIT_SECONDS:-90}"
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-daily-eod-reflection",
-                    "input": "Run the saxo daytrader daily end-of-day reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, and create_reflection. Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract. Create exactly one concise daily reflection record. Do not create experiment proposals from the daily job; reserve one-variable experiment proposals for the weekly reflection. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                    "input": "Run the saxo daytrader daily end-of-day reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, and create_reflection. Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract. Create exactly one concise daily reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. Do not create experiment proposals from the daily job; reserve one-variable experiment proposals for the weekly reflection. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
                     "instructions": "You are Hermes Agent acting as a daily EOD reflection agent for the saxo-rust day/swing trading system. You may observe and write a reflection only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
@@ -424,7 +488,38 @@ spec:
                     -H "Authorization: Bearer ${API_SERVER_KEY}" \
                     -H "Content-Type: application/json" \
                     --data @/tmp/hermes-run.json \
-                    http://hermes-gateway.saxo-rust:8642/v1/runs
+                    http://hermes-gateway.saxo:8642/v1/runs
+                  echo
+                  sleep "${WAIT_SECONDS}"
+                  if curl -fsS \
+                    -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                    "${DAYTRADER_API_BASE_URL}/api/hermes/reflections?limit=20" \
+                    | grep -F "\"source_session_id\":\"${SOURCE_SESSION_ID}\"" >/dev/null; then
+                    echo "Hermes daily reflection recorded with source_session_id=${SOURCE_SESSION_ID}."
+                    exit 0
+                  fi
+                  echo "Hermes daily run did not record source_session_id=${SOURCE_SESSION_ID}; writing watchdog reflection." >&2
+                  cat > /tmp/hermes-watchdog-reflection.json <<EOF
+                  {
+                    "period_start": "${RUN_DATE}",
+                    "period_end": "${RUN_DATE}",
+                    "goal_version": 1,
+                    "summary": "Daily reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the daily reflection loop.",
+                    "findings": [{"severity": "warning", "topic": "hermes_daily_reflection", "detail": "Scheduled Hermes run did not persist a daily reflection within the watchdog window."}],
+                    "proposed_actions": [],
+                    "source_session_id": "${SOURCE_SESSION_ID}",
+                    "raw_payload": {"source": "kubernetes-cronjob-watchdog", "job": "hermes-daily-reflection", "submitted_at": "${RUN_STARTED_AT}"}
+                  }
+                  EOF
+                  curl -fsS \
+                    -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                    -H "Content-Type: application/json" \
+                    --data @/tmp/hermes-watchdog-reflection.json \
+                    "${DAYTRADER_API_BASE_URL}/api/hermes/reflections"
+          volumes:
+            - name: tmp
+              emptyDir:
+                medium: Memory
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -437,7 +532,7 @@ metadata:
 spec:
   schedule: "15 22 * * 5"
   timeZone: Europe/Copenhagen
-  suspend: true
+  suspend: false
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -451,6 +546,14 @@ spec:
             component: reflection
             cadence: weekly
         spec:
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
           restartPolicy: Never
           containers:
             - name: submit-reflection
@@ -460,6 +563,27 @@ spec:
                 - secretRef:
                     name: hermes-env
                     optional: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                runAsGroup: 65532
+                seccompProfile:
+                  type: RuntimeDefault
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
               command:
                 - /bin/sh
                 - -ec
@@ -472,11 +596,15 @@ spec:
                     echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
                     exit 1
                   fi
-                  DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo-rust:8000}"
+                  DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo:8000}"
+                  RUN_DATE="$(date -u +%Y-%m-%d)"
+                  RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  SOURCE_SESSION_ID="weekly-reflection-${RUN_DATE}"
+                  WAIT_SECONDS="${HERMES_REFLECTION_WAIT_SECONDS:-120}"
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-weekly-reflection",
-                    "input": "Run the saxo daytrader weekly self-improvement reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, the two daily decision-report pulses, daily end-of-day reports, Markov regime signals, execution outcomes, failures, active baseline context, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. If evidence is sufficient, create at most one experiment proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
+                    "input": "Run the saxo daytrader weekly self-improvement reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, the two daily decision-report pulses, daily end-of-day reports, Markov regime signals, execution outcomes, failures, active baseline context, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. If evidence is sufficient, create at most one experiment proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
                     "instructions": "You are Hermes Agent acting as a research/reflection agent for the saxo-rust day/swing trading system. You may observe and propose only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
@@ -488,4 +616,35 @@ spec:
                     -H "Authorization: Bearer ${API_SERVER_KEY}" \
                     -H "Content-Type: application/json" \
                     --data @/tmp/hermes-run.json \
-                    http://hermes-gateway.saxo-rust:8642/v1/runs
+                    http://hermes-gateway.saxo:8642/v1/runs
+                  echo
+                  sleep "${WAIT_SECONDS}"
+                  if curl -fsS \
+                    -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                    "${DAYTRADER_API_BASE_URL}/api/hermes/reflections?limit=20" \
+                    | grep -F "\"source_session_id\":\"${SOURCE_SESSION_ID}\"" >/dev/null; then
+                    echo "Hermes weekly reflection recorded with source_session_id=${SOURCE_SESSION_ID}."
+                    exit 0
+                  fi
+                  echo "Hermes weekly run did not record source_session_id=${SOURCE_SESSION_ID}; writing watchdog reflection." >&2
+                  cat > /tmp/hermes-watchdog-reflection.json <<EOF
+                  {
+                    "period_start": "",
+                    "period_end": "${RUN_DATE}",
+                    "goal_version": 1,
+                    "summary": "Weekly reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the weekly self-improvement loop.",
+                    "findings": [{"severity": "warning", "topic": "hermes_weekly_reflection", "detail": "Scheduled Hermes run did not persist a weekly reflection within the watchdog window."}],
+                    "proposed_actions": [],
+                    "source_session_id": "${SOURCE_SESSION_ID}",
+                    "raw_payload": {"source": "kubernetes-cronjob-watchdog", "job": "hermes-weekly-reflection", "submitted_at": "${RUN_STARTED_AT}"}
+                  }
+                  EOF
+                  curl -fsS \
+                    -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                    -H "Content-Type: application/json" \
+                    --data @/tmp/hermes-watchdog-reflection.json \
+                    "${DAYTRADER_API_BASE_URL}/api/hermes/reflections"
+          volumes:
+            - name: tmp
+              emptyDir:
+                medium: Memory

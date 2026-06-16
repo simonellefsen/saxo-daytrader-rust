@@ -25,6 +25,7 @@ pub struct DashboardView {
     pub saxo_status: String,
     pub saxo_auth: JsonValue,
     pub sso_session: JsonValue,
+    pub ai_settings: JsonValue,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -114,6 +115,12 @@ pub struct LocalizationSettingsRequest {
     pub group_separator: Option<String>,
     pub decimal_separator: Option<String>,
     pub measurement_system: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AiSettingsRequest {
+    pub model: Option<String>,
     pub return_to: Option<String>,
 }
 

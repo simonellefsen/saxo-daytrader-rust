@@ -18,12 +18,13 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        CashBufferRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
-        HermesReflectionRequest, LimitParams, LocalizationSettingsRequest, PerformanceParams,
-        SaxoCallbackParams, ViewParams,
+        AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
+        HermesExperimentTransitionRequest, HermesReflectionRequest, LimitParams,
+        LocalizationSettingsRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
+    trading_manager::run_trading_manager_cycle,
     ui::render_index,
     xai_decision,
 };
@@ -68,6 +69,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             "/api/settings/localization",
             post(update_localization_settings),
         )
+        .route("/api/settings/ai", post(update_ai_settings))
         .route("/api/saxo/auth/status", get(saxo_auth_status))
         .route(
             "/api/saxo/auth/start",
@@ -117,6 +119,10 @@ fn app_routes() -> Router<Arc<AppState>> {
             post(action_generate_decision_report),
         )
         .route("/api/actions/queue-process", post(action_process_queue))
+        .route(
+            "/api/actions/daily-indicators",
+            post(action_run_daily_indicators),
+        )
         .route("/api/actions/sync-broker", post(action_not_ported))
         .route("/api/actions/retry-failed", post(action_not_ported))
         .route("/api/actions/reconcile-broker", post(action_not_ported))
@@ -257,10 +263,32 @@ async fn update_localization_settings(
     match state.save_localization_settings(&sso_session, value).await {
         Ok(_) => {
             info!("localization settings updated");
-            Redirect::to(safe_return_to(request.return_to.as_deref())).into_response()
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
         }
         Err(err) => {
             warn!("localization settings update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn update_ai_settings(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<AiSettingsRequest>,
+) -> Response {
+    match state
+        .save_ai_settings(&clean_setting(request.model, "openai/gpt-5.5"))
+        .await
+    {
+        Ok(settings) => {
+            info!(
+                model = %settings.get("model").and_then(JsonValue::as_str).unwrap_or(""),
+                "AI settings updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("AI settings update failed: {err:#}");
             json_result(Err(err))
         }
     }
@@ -776,19 +804,65 @@ async fn action_not_ported() -> Response {
     )
 }
 
+async fn action_run_daily_indicators(State(state): State<Arc<AppState>>) -> Response {
+    match crate::daily_indicators::run_daily_indicators_now(&state).await {
+        Ok(summary) => {
+            info!(
+                status = summary
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("unknown"),
+                "manual daily indicators run completed"
+            );
+            json_result(Ok(summary))
+        }
+        Err(err) => {
+            error!("manual daily indicators run failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
 async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> Response {
     match xai_decision::submit_manual_decision_report(&state).await {
         Ok(report) => {
             let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
+            let mut immediate = json!({"status": "not_run"});
+            if report.get("status").and_then(JsonValue::as_str) == Some("completed") {
+                let manager = run_trading_manager_cycle(&state).await;
+                let execution = match &manager {
+                    Ok(_) => run_saxo_execution_queue(&state).await,
+                    Err(err) => Err(anyhow::anyhow!(
+                        "Trading Manager failed before execution: {err:#}"
+                    )),
+                };
+                immediate = json!({
+                    "trading_manager": manager.as_ref().map(|value| value.clone()).unwrap_or_else(|err| json!({"status": "error", "error": err.to_string()})),
+                    "execution_queue": execution.as_ref().map(|value| value.clone()).unwrap_or_else(|err| json!({"status": "error", "error": err.to_string()})),
+                });
+                if let Err(err) = manager {
+                    warn!(
+                        report_id = id,
+                        "manual report immediate Trading Manager run failed: {err:#}"
+                    );
+                }
+                if let Err(err) = execution {
+                    warn!(
+                        report_id = id,
+                        "manual report immediate execution queue run failed: {err:#}"
+                    );
+                }
+            }
             info!(
                 report_id = id,
                 status = report
                     .get("status")
                     .and_then(JsonValue::as_str)
                     .unwrap_or("unknown"),
+                immediate = %immediate,
                 "manual deferred xAI decision report submitted"
             );
-            Redirect::to(&format!("/?view=decisions&report_id={id}")).into_response()
+            redirect_to_app(&state, &format!("/?view=decisions&report_id={id}")).into_response()
         }
         Err(err) => {
             error!("manual decision report generation failed: {err:#}");
@@ -1007,5 +1081,16 @@ fn safe_return_to(value: Option<&str>) -> &str {
         value
     } else {
         "/"
+    }
+}
+
+fn redirect_to_app(state: &AppState, path: &str) -> Redirect {
+    let base = public_base_path(&state.config);
+    if base.is_empty() {
+        Redirect::to(path)
+    } else if path == "/" {
+        Redirect::to(&base)
+    } else {
+        Redirect::to(&format!("{}{}", base.trim_end_matches('/'), path))
     }
 }

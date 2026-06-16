@@ -7,10 +7,10 @@ use chrono_tz::Tz;
 use reqwest::header;
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
+use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    auth,
     config::{yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, row_to_json, sql_escape},
     state::AppState,
@@ -19,6 +19,8 @@ use crate::{
 const STATES: [Regime; 3] = [Regime::Bull, Regime::Sideways, Regime::Bear];
 const DEFAULT_DAILY_TIME: &str = "23:30";
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
+const SAXO_MARKOV_REQUEST_DELAY_MS: u64 = 500;
+const SAXO_MARKOV_MAX_ATTEMPTS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Regime {
@@ -58,17 +60,17 @@ struct MarkovConfig {
 }
 
 #[derive(Clone, Debug)]
-struct MarkovAsset {
-    symbol: String,
-    instrument_name: String,
-    source: String,
+pub(crate) struct MarkovAsset {
+    pub(crate) symbol: String,
+    pub(crate) instrument_name: String,
+    pub(crate) source: String,
 }
 
 #[derive(Clone, Debug)]
-struct SaxoInstrument {
-    uic: i64,
-    asset_type: String,
-    description: String,
+pub(crate) struct SaxoInstrument {
+    pub(crate) uic: i64,
+    pub(crate) asset_type: String,
+    pub(crate) description: String,
 }
 
 #[derive(Clone, Debug)]
@@ -148,11 +150,8 @@ async fn run_markov_method_for_date(
     config: &MarkovConfig,
     run_date: NaiveDate,
 ) -> Result<JsonValue> {
-    state
-        .refresh_saxo_session()
-        .await
-        .context("refreshing Saxo session before Markov method run")?;
-    let session = auth::ensure_session_json(&state.config, &state.config_path)
+    let session = state
+        .ensure_saxo_session_json("markov_method")
         .await
         .context("loading Saxo session for Markov method run")?;
     let assets = markov_assets(state, config.max_symbols).await?;
@@ -194,7 +193,7 @@ async fn run_markov_method_for_date(
                     None,
                     None,
                     None,
-                    Some(&err.to_string()),
+                    Some(&format!("{err:#}")),
                 )
             }
         };
@@ -438,7 +437,10 @@ fn normalize_distribution(mut distribution: [f64; 3]) -> [f64; 3] {
     }
 }
 
-async fn markov_assets(state: &AppState, max_symbols: usize) -> Result<Vec<MarkovAsset>> {
+pub(crate) async fn markov_assets(
+    state: &AppState,
+    max_symbols: usize,
+) -> Result<Vec<MarkovAsset>> {
     let mut seen = HashSet::new();
     let mut assets = Vec::new();
     for row in state.position_items(250).await.unwrap_or_default() {
@@ -492,7 +494,7 @@ fn push_asset(
     });
 }
 
-async fn resolve_instrument(
+pub(crate) async fn resolve_instrument(
     state: &AppState,
     session: &JsonValue,
     symbol: &str,
@@ -710,7 +712,7 @@ async fn fetch_chart_bars(
     Ok(bars)
 }
 
-async fn saxo_get_json(
+pub(crate) async fn saxo_get_json(
     state: &AppState,
     session: &JsonValue,
     path: &str,
@@ -721,21 +723,42 @@ async fn saxo_get_json(
     let client = reqwest::Client::builder()
         .timeout(StdDuration::from_secs(30))
         .build()?;
-    let response = client
-        .get(format!("{}{}", openapi_base_url(state, session)?, path))
-        .bearer_auth(access_token)
-        .header(header::ACCEPT, "application/json")
-        .query(query)
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
-    if !status.is_success() {
+    let url = format!("{}{}", openapi_base_url(state, session)?, path);
+    let mut last_error = String::new();
+    for attempt in 1..=SAXO_MARKOV_MAX_ATTEMPTS {
+        sleep(StdDuration::from_millis(SAXO_MARKOV_REQUEST_DELAY_MS)).await;
+        let response = client
+            .get(&url)
+            .bearer_auth(&access_token)
+            .header(header::ACCEPT, "application/json")
+            .query(query)
+            .send()
+            .await?;
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let body = response.text().await.unwrap_or_default();
+        let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
+        if status.is_success() {
+            return Ok(payload);
+        }
         let snippet = body.chars().take(300).collect::<String>();
-        bail!("Saxo GET failed: HTTP {}: {}", status.as_u16(), snippet);
+        last_error = format!("Saxo GET failed: HTTP {}: {}", status.as_u16(), snippet);
+        if status.as_u16() == 429 && attempt < SAXO_MARKOV_MAX_ATTEMPTS {
+            let delay_secs = retry_after.unwrap_or_else(|| 2_u64.pow(attempt as u32).min(30));
+            warn!(
+                path,
+                attempt, delay_secs, "Saxo Markov GET rate-limited; backing off before retry"
+            );
+            sleep(StdDuration::from_secs(delay_secs)).await;
+            continue;
+        }
+        bail!("{last_error}");
     }
-    Ok(payload)
+    bail!("{last_error}")
 }
 
 fn signal_row_json(
@@ -952,10 +975,22 @@ pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<Json
         .into_iter()
         .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
         .map(|row| {
+            let symbol_text = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");
+            let currency = symbol_text
+                .split_once(':')
+                .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
+            let close_dkk = currency.and_then(|currency| {
+                row.get("current_close")
+                    .and_then(JsonValue::as_f64)
+                    .map(|close| close * crate::saxo_order::fx_rate_to_dkk(currency))
+            });
             json!({
                 "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
                 "run_date": row.get("run_date").cloned().unwrap_or(JsonValue::Null),
                 "state": row.get("current_state").cloned().unwrap_or(JsonValue::Null),
+                "close": row.get("current_close").cloned().unwrap_or(JsonValue::Null),
+                "currency": currency,
+                "close_dkk": close_dkk,
                 "horizon_days": row.get("signal_horizon_days").cloned().unwrap_or(JsonValue::Null),
                 "bull_prob": row.get("bull_prob").cloned().unwrap_or(JsonValue::Null),
                 "bear_prob": row.get("bear_prob").cloned().unwrap_or(JsonValue::Null),
@@ -1073,7 +1108,7 @@ fn openapi_base_url(state: &AppState, session: &JsonValue) -> Result<&'static st
     }
 }
 
-fn account_key(state: &AppState, session: &JsonValue) -> Result<String> {
+pub(crate) fn account_key(state: &AppState, session: &JsonValue) -> Result<String> {
     yaml_string(&state.config, &["saxo", "account_key"])
         .or_else(|| session_text(session, "account_key"))
         .filter(|value| !value.trim().is_empty())

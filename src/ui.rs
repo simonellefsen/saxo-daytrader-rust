@@ -10,7 +10,7 @@ use crate::{
 
 pub const CSS: &str = include_str!("../assets/app.css");
 pub const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
-const CHART_SCRIPT: &str = r#"
+const APP_SCRIPT: &str = r#"
 <script>
 (() => {
   const bindPerformanceCharts = () => {
@@ -24,10 +24,62 @@ const CHART_SCRIPT: &str = r#"
       chart.addEventListener("pointerleave", () => chart.classList.remove("is-hovering"));
     });
   };
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bindPerformanceCharts, { once: true });
-  } else {
+  const appBasePath = () => {
+    const configured = document.body?.dataset?.publicBasePath || "";
+    if (configured) return configured.replace(/\/$/, "");
+    const stylesheet = document.querySelector('link[rel="stylesheet"][href$="/assets/app.css"]');
+    if (!stylesheet) {
+      const path = window.location.pathname;
+      return path.startsWith("/saxo-daytrader") ? "/saxo-daytrader" : "";
+    }
+    const path = new URL(stylesheet.href, window.location.href).pathname;
+    return path.replace(/\/assets\/app\.css$/, "");
+  };
+  const bindDecisionReportForms = () => {
+    document.querySelectorAll("form[data-decision-report-form]").forEach((form) => {
+      if (form.dataset.bound === "true") return;
+      form.dataset.bound = "true";
+      form.addEventListener("submit", () => {
+        const button = form.querySelector("button[type='submit']");
+        if (!button) return;
+        button.disabled = true;
+        button.dataset.originalLabel = button.textContent || "";
+        button.textContent = button.dataset.pendingLabel || "Generating Report...";
+        form.classList.add("is-submitting");
+      });
+    });
+  };
+  const bindDecisionReportPendingRefresh = () => {
+    const pending = document.querySelector("[data-decision-report-pending='true']");
+    if (!pending || pending.dataset.bound === "true") return;
+    pending.dataset.bound = "true";
+    const base = appBasePath();
+    const poll = async () => {
+      try {
+        const response = await fetch(`${base}/api/decision/latest`, { headers: { "Accept": "application/json" } });
+        if (!response.ok) return;
+        const payload = await response.json();
+        const report = payload.report || {};
+        const status = report.status || "";
+        if (status && status !== "xai_deferred" && status !== "pending") {
+          const id = report.id ? `&report_id=${encodeURIComponent(report.id)}` : "";
+          window.location.href = `${base}/?view=decisions${id}`;
+        }
+      } catch (_) {
+      }
+    };
+    window.setTimeout(poll, 4000);
+    window.setInterval(poll, 10000);
+  };
+  const bindApp = () => {
     bindPerformanceCharts();
+    bindDecisionReportForms();
+    bindDecisionReportPendingRefresh();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindApp, { once: true });
+  } else {
+    bindApp();
   }
 })();
 </script>
@@ -52,7 +104,7 @@ pub fn render_index(data: DashboardView, public_base_path: &str) -> String {
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
-  <body>{body}{CHART_SCRIPT}</body>
+  <body data-public-base-path="{public_base_path}">{body}{APP_SCRIPT}</body>
 </html>"#
     );
     prefix_root_relative_urls(&html, public_base_path)
@@ -106,6 +158,8 @@ fn Dashboard(props: DashboardProps) -> Element {
         .and_then(JsonValue::as_str)
         .unwrap_or("n/a")
         .to_uppercase();
+    let (decision_health_class, decision_health_label) = decision_health(&data.latest_decision);
+    let saxo_status_display = truncate_chars(&data.saxo_status, 90);
     let week_start = week_start_label(&prefs);
     let hour_cycle = hour_cycle_label(&prefs);
     rsx! {
@@ -121,10 +175,13 @@ fn Dashboard(props: DashboardProps) -> Element {
                         span { class: "pill", "Execution: {data.execution_mode.to_uppercase()}" }
                         span { class: "pill", "Adapter: {data.execution_adapter}" }
                         span { class: "pill", "Environment: {data.environment}" }
-                        span { class: saxo_status_class, span { class: "dot" } "{saxo_environment} · {data.saxo_status}" }
+                    }
+                    div { class: "pill-row right",
+                        span { class: decision_health_class, span { class: "dot" } "{decision_health_label}" }
+                        span { class: saxo_status_class, span { class: "dot" } "{saxo_environment} · {saxo_status_display}" }
                     }
                     div { class: "user-row",
-                        UserMenu { sso_session: data.sso_session.clone(), prefs: prefs.clone(), active_view: data.active_view.clone(), range: data.performance_range.clone() }
+                        UserMenu { sso_session: data.sso_session.clone(), prefs: prefs.clone(), active_view: data.active_view.clone(), range: data.performance_range.clone(), ai_settings: data.ai_settings.clone() }
                         a { class: "button secondary", href: "/api/saxo/auth/start", "Saxo Login" }
                         a { class: "button", href: "/api/health", "Health" }
                     }
@@ -176,6 +233,7 @@ fn UserMenu(
     prefs: LocalizationPrefs,
     active_view: String,
     range: String,
+    ai_settings: JsonValue,
 ) -> Element {
     let user = sso_session
         .get("user")
@@ -202,6 +260,9 @@ fn UserMenu(
     } else {
         format!("/?view={active_view}")
     };
+    let ai_model = fallback_text(&ai_settings, "model", "openai/gpt-5.5");
+    let ai_source = fallback_text(&ai_settings, "source", "config");
+    let ai_config_model = fallback_text(&ai_settings, "config_model", "openai/gpt-5.5");
     rsx! {
         details { class: "user-menu",
             summary {
@@ -219,6 +280,20 @@ fn UserMenu(
             }
             div { class: "user-dropdown",
                 h3 { "Settings" }
+                form { method: "post", action: "/api/settings/ai", class: "settings-form settings-form-wide",
+                    input { r#type: "hidden", name: "return_to", value: "{return_to}" }
+                    label { "OpenRouter model"
+                        input { name: "model", value: "{ai_model}", list: "ai-model-options" }
+                        datalist { id: "ai-model-options",
+                            option { value: "openrouter/fusion" }
+                            option { value: "openai/gpt-5.5" }
+                            option { value: "openai/gpt-5" }
+                            option { value: "anthropic/claude-sonnet-4.5" }
+                        }
+                    }
+                    div { class: "settings-hint", "Active: {ai_model} · source: {ai_source} · config: {ai_config_model}" }
+                    button { class: "button", r#type: "submit", "Save AI model" }
+                }
                 form { method: "post", action: "/api/settings/localization", class: "settings-form",
                     input { r#type: "hidden", name: "return_to", value: "{return_to}" }
                     label { "Locale" input { name: "locale", value: "{prefs.locale}" } }
@@ -774,6 +849,21 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             "No strategy status was stored for this report.",
         ),
     );
+    let pending_report = data
+        .reports
+        .iter()
+        .find(|row| matches!(text(row, "status").as_str(), "xai_deferred" | "pending"))
+        .cloned();
+    let report_generation_pending = pending_report.is_some();
+    let pending_report_id = pending_report
+        .as_ref()
+        .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
+        .unwrap_or(0);
+    let generate_label = if report_generation_pending {
+        "Generating Report..."
+    } else {
+        "Generate Report"
+    };
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -781,8 +871,22 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     h2 { "Decision Report" }
                     p { class: "muted", "Latest xAI report plus deterministic strategy selection output. Select any recent report to inspect its outcome." }
                 }
-                form { method: "post", action: "/api/actions/decision-report",
-                    button { class: "button primary", r#type: "submit", "Generate Report" }
+                form { method: "post", action: "/api/actions/decision-report", "data-decision-report-form": "true",
+                    button {
+                        class: "button primary",
+                        r#type: "submit",
+                        disabled: report_generation_pending,
+                        "data-pending-label": "Generating Report...",
+                        "{generate_label}"
+                    }
+                }
+            }
+            if report_generation_pending {
+                div {
+                    class: "notice-banner",
+                    "data-decision-report-pending": "true",
+                    strong { "Decision report is running" }
+                    span { "Report #{pending_report_id} is still pending. The page will refresh when it completes or fails." }
                 }
             }
             if report.is_null() {
@@ -1672,6 +1776,16 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&row, "status");
+    let detail = execution_status_detail(&row);
+    let reason = execution_status_reason(&row);
+    let status_class = execution_status_class(&status);
+    let detail_preview = if detail.is_empty() {
+        String::new()
+    } else {
+        truncate_chars(&detail, 120)
+    };
+    let detail_block = execution_detail_block(&row, &detail);
     rsx! {
         tr {
             td { "{text(&row, \"id\")}" }
@@ -1681,12 +1795,24 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{fallback_text(&row, \"strategy_type\", \"manual\")}" }
             td { "{fallback_text(&row, \"strategy_role\", \"primary\")}" }
             td { "{fallback_text(&row, \"order_type\", \"Market\")}" }
-            td { span { class: "status", "{text(&row, \"status\")}" } }
+            td { class: "execution-status-cell",
+                span { class: "{status_class}", title: "{detail}", "{status}" }
+                if !reason.is_empty() {
+                    span { class: "status detail-status", title: "{detail}", "{reason}" }
+                }
+            }
             td { "{format_quantity(value_f64(&row, \"quantity\"), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"price_local\"), &text(&row, \"currency\"), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &text(&row, \"currency\"), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &text(&row, \"currency\"), &prefs)}" }
-            td { class: "muted", "{text(&row, \"error_text\")}" }
+            td { class: "muted error-cell",
+                if !detail.is_empty() {
+                    details { class: "error-details",
+                        summary { "{detail_preview}" }
+                        pre { "{detail_block}" }
+                    }
+                }
+            }
         }
     }
 }
@@ -1783,7 +1909,12 @@ fn DecisionCard(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 fn value_f64(value: &JsonValue, key: &str) -> f64 {
     value
         .get(key)
-        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|v| v as f64))
+                .or_else(|| value.as_str()?.parse().ok())
+        })
         .unwrap_or(0.0)
 }
 
@@ -1907,6 +2038,144 @@ fn fallback_text(value: &JsonValue, key: &str, fallback: &str) -> String {
     } else {
         value
     }
+}
+
+fn execution_status_class(status: &str) -> &'static str {
+    let lower = status.to_ascii_lowercase();
+    if lower.contains("failed")
+        || lower.contains("rejected")
+        || lower.contains("invalid")
+        || lower.contains("cancelled")
+    {
+        "status bad-status"
+    } else if matches!(
+        status,
+        "executed" | "submitted_to_broker" | "broker_working"
+    ) {
+        "status good-status"
+    } else {
+        "status"
+    }
+}
+
+fn execution_status_detail(row: &JsonValue) -> String {
+    let error = text(row, "error_text");
+    if !error.is_empty() {
+        return error;
+    }
+    row.get("execution_result_json")
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(JsonValue::as_str)
+                .or_else(|| value.get("message").and_then(JsonValue::as_str))
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn execution_status_reason(row: &JsonValue) -> String {
+    let status = text(row, "status");
+    let detail = execution_status_detail(row);
+    if detail.is_empty() && !status.contains("failed") {
+        return String::new();
+    }
+    if let Some(reason) = saxo_precheck_reason(&detail) {
+        return reason;
+    }
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("sell blocked before saxo precheck") {
+        "Sell guard".to_string()
+    } else if lower.contains("no tradable saxo instrument")
+        || lower.contains("looking up saxo instrument")
+        || lower.contains("instrument match")
+    {
+        "Resolve failed".to_string()
+    } else if lower.contains("exchange closed") || status == "waiting_for_market_open" {
+        "Market closed".to_string()
+    } else if lower.contains("rate limited") {
+        "Rate limited".to_string()
+    } else if lower.contains("unauthorized") || lower.contains("access token") {
+        "Saxo auth".to_string()
+    } else if status == "invalid_quantity" {
+        "Invalid quantity".to_string()
+    } else if status.contains("failed") {
+        "Broker rejected".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn saxo_precheck_reason(detail: &str) -> Option<String> {
+    let marker = "Order precheck failed:";
+    let after_marker = detail.split_once(marker)?.1.trim();
+    let reason = after_marker
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches('.');
+    if reason.is_empty() {
+        None
+    } else {
+        Some(reason.to_string())
+    }
+}
+
+fn execution_detail_block(row: &JsonValue, detail: &str) -> String {
+    let mut lines = Vec::new();
+    if !detail.is_empty() {
+        lines.push(format!("error: {detail}"));
+    }
+    if let Some(payload) = row.get("execution_result_json") {
+        let sanitized = sanitize_diagnostic_json(payload);
+        if !sanitized.is_null() && sanitized != json_empty_object() {
+            let pretty =
+                serde_json::to_string_pretty(&sanitized).unwrap_or_else(|_| sanitized.to_string());
+            lines.push(format!("diagnostics:\n{pretty}"));
+        }
+    }
+    lines.join("\n\n")
+}
+
+fn sanitize_diagnostic_json(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in map {
+                if is_sensitive_diagnostic_key(key) {
+                    continue;
+                }
+                sanitized.insert(key.clone(), sanitize_diagnostic_json(value));
+            }
+            JsonValue::Object(sanitized)
+        }
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .iter()
+                .map(sanitize_diagnostic_json)
+                .collect::<Vec<_>>(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn is_sensitive_diagnostic_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "accountkey"
+            | "clientkey"
+            | "access_token"
+            | "refresh_token"
+            | "authorization"
+            | "token"
+            | "client_secret"
+            | "api_key"
+    )
+}
+
+fn json_empty_object() -> JsonValue {
+    JsonValue::Object(serde_json::Map::new())
 }
 
 fn format_local_money(value: f64, currency: &str, prefs: &LocalizationPrefs) -> String {
@@ -2295,6 +2564,45 @@ fn hour_cycle_label(prefs: &LocalizationPrefs) -> &'static str {
     }
 }
 
+/// UTF-8-safe prefix truncation for status text rendered in layout-sensitive
+/// places like the topbar pills.
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut result: String = value.chars().take(max_chars).collect();
+    result.push('…');
+    result
+}
+
+/// Health pill for the decision engine derived from the latest report.
+/// Credit/spending-limit failures get their own label because they need
+/// operator action (top up xAI credits) rather than a code fix.
+fn decision_health(latest_decision: &JsonValue) -> (&'static str, String) {
+    let status = latest_decision
+        .get("status")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
+    match status {
+        "completed" => ("pill good", "Decisions: OK".to_string()),
+        "pending" | "xai_deferred" => ("pill", "Decisions: Pending".to_string()),
+        "xai_error" => {
+            let error_text = latest_decision
+                .get("error_text")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("")
+                .to_lowercase();
+            if error_text.contains("credits") || error_text.contains("spending limit") {
+                ("pill bad", "Decisions: xAI out of credits".to_string())
+            } else {
+                ("pill bad", "Decisions: xAI error".to_string())
+            }
+        }
+        "" => ("pill", "Decisions: None yet".to_string()),
+        other => ("pill bad", format!("Decisions: {other}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2306,6 +2614,39 @@ mod tests {
         assert_eq!(format_dkk(1234.4, &prefs), "1,234 DKK");
         assert_eq!(format_pct(0.125, &prefs), "12.5%");
         assert_eq!(format_pct(12.5, &prefs), "12.5%");
+    }
+
+    #[test]
+    fn derives_decision_health_pill_from_latest_report() {
+        let (class, label) = decision_health(&json!({"status": "completed"}));
+        assert_eq!(class, "pill good");
+        assert_eq!(label, "Decisions: OK");
+
+        let (class, label) = decision_health(&json!({
+            "status": "xai_error",
+            "error_text": "xAI deferred submit failed with HTTP 403 Forbidden: {\"code\":\"permission-denied\",\"error\":\"Your team has either used all available credits or reached its monthly spending limit.\"}"
+        }));
+        assert_eq!(class, "pill bad");
+        assert_eq!(label, "Decisions: xAI out of credits");
+
+        let (class, label) = decision_health(&json!({
+            "status": "xai_error",
+            "error_text": "xAI deferred submit failed with HTTP 500"
+        }));
+        assert_eq!(class, "pill bad");
+        assert_eq!(label, "Decisions: xAI error");
+
+        let (class, label) = decision_health(&json!({"status": "pending"}));
+        assert_eq!(class, "pill");
+        assert_eq!(label, "Decisions: Pending");
+
+        let (class, label) = decision_health(&json!({"status": "xai_deferred"}));
+        assert_eq!(class, "pill");
+        assert_eq!(label, "Decisions: Pending");
+
+        let (class, label) = decision_health(&JsonValue::Null);
+        assert_eq!(class, "pill");
+        assert_eq!(label, "Decisions: None yet");
     }
 
     #[test]

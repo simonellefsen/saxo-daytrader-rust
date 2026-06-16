@@ -31,5 +31,5 @@ Project adaptation:
 - Uses Saxo chart samples instead of yfinance.
 - Runs over portfolio and watchlist assets.
 - Stores audited rows in `markov_signal_runs` and `markov_asset_signals`.
-- Feeds the dashboard, API, Hermes context/MCP, and xAI prompt context.
+- Feeds the dashboard, API, Hermes context/MCP, and AI decision prompt context.
 - Does not mutate orders or bypass existing approval gates.
