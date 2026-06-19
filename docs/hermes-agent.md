@@ -157,8 +157,8 @@ Implemented initial Kubernetes support:
 - Set `HERMES_DAYTRADER_API_KEY` and send it as `x-hermes-api-key` or `Authorization: Bearer ...` when calling those adapter endpoints. The MCP adapter uses the same bearer key.
 - The Hermes pod waits for `daytrader-mcp` health before starting so MCP discovery does not race the adapter rollout.
 - The Rust dashboard includes a `Hermes` tab that reads `hermes_reflections`, `strategy_experiments`, and the active `strategy_baselines` audit record so operators can review reflections, move one-variable proposals through the lifecycle, and see the promoted baseline context.
-- `CronJob/hermes-daily-reflection` submits a weekday end-of-day reflection run after the EOD journal and Markov skill runs. It writes one concise reflection record only.
-- `CronJob/hermes-weekly-reflection` submits a scheduled self-improvement run to Hermes' `/v1/runs` API. It may create at most one one-variable experiment proposal when evidence is sufficient.
+- `CronJob/hermes-daily-reflection` submits a weekday end-of-day learning run after the EOD journal and Markov skill runs. It writes one concise reflection record and may create at most one pending-review one-variable experiment proposal when same-day evidence is concrete and safe to test.
+- `CronJob/hermes-weekly-reflection` submits a scheduled self-improvement run to Hermes' `/v1/runs` API. It should create one pending-review one-variable experiment proposal when the week contains sufficient evidence and no duplicate active/pending proposal already covers the same variable.
 - Both CronJobs are created suspended by default and can be enabled once `HERMES_API_SERVER_ENABLED=true`, `HERMES_API_SERVER_KEY`, and `HERMES_DAYTRADER_API_KEY` are configured.
 
 Current limitations:
@@ -204,6 +204,7 @@ The internal MCP adapter is implemented by the same Rust binary in `--mcp-http` 
 - `create_reflection`
 - `list_experiments`
 - `create_experiment_proposal`
+- `create_decision_advice`
 
 The MCP adapter has no Saxo tools, no Kubernetes tools, no secret reads, and no live-order tools.
 
@@ -250,6 +251,47 @@ Supported one-variable overlay paths:
 
 Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or activate live broker behavior.
 
+## Trading Manager Decision Advice
+
+The Rust Trading Manager can ask Hermes for a per-decision-report preflight advisory record before it queues candidate orders from a completed decision report.
+
+```mermaid
+sequenceDiagram
+  participant S as Scheduler
+  participant TM as Trading Manager
+  participant H as Hermes Gateway
+  participant MCP as daytrader MCP
+  participant DB as Audit DB
+
+  S->>TM: Fresh completed decision report
+  TM->>H: Submit advisory run with report id, candidates, Markov/capital metadata
+  H->>MCP: Pull latest reports, Markov, EOD, reflections, experiments
+  H->>MCP: create_decision_advice
+  MCP->>DB: Insert hermes_decision_advice
+  TM->>DB: Poll source_session_id briefly
+  TM->>DB: Record advice in trading_manager_runs.manager_json
+  TM->>DB: Queue orders after local gates
+```
+
+The advice schema is intentionally conservative:
+
+- `overall_recommendation`: `proceed`, `stand_down`, or `review`.
+- Per-candidate `action`: `allow`, `reduce`, `stand_down`, or `review`.
+- Candidate matching uses `strategy_key` first, then `symbol` plus `side`.
+
+Runtime knobs:
+
+```bash
+HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
+HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
+HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
+```
+
+`record_only` is the default. It asks Hermes, audits the response, and includes the advice in `trading_manager_runs.manager_json`, but it does not alter queued orders.
+
+`conservative` mode can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is disabled, not configured, fails, or times out, the Trading Manager records that degraded status and continues with local gates.
+
 ## Reflection Jobs
 
 The Kubernetes base includes suspended daily and weekly reflection jobs:
@@ -270,6 +312,10 @@ HERMES_INFERENCE_PROVIDER=openrouter
 HERMES_MODEL=openai/gpt-5.5
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
+HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
+HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
+HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
 ```
 
 Then redeploy and unsuspend:
@@ -282,20 +328,22 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflect
 
 `CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-gateway.saxo:8642/v1/runs` with a prompt that instructs Hermes to:
 
-- Prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes.
+- Prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, recent experiment state, reflection writes, and proposal writes.
 - Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
 - Write exactly one concise reflection.
-- Create no experiment proposals.
+- Create at most one pending-review experiment proposal when the day produced a concrete learning that can be tested safely with exactly one changed variable.
+- Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.cash_buffer_pct`, and `strategy.swing.daily_indicators.min_confluences`.
+- Avoid duplicate proposals for the same `changed_variable_path`; if evidence is insufficient or a duplicate exists, record the candidate in `proposed_actions` instead of creating an experiment.
 
 After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.
 
 `CronJob/hermes-weekly-reflection` runs Friday at `22:15` Europe/Copenhagen. It calls the same Hermes API with a prompt that instructs Hermes to:
 
-- Prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals.
+- Prefer the configured `daytrader` MCP tools for context, recent experiment state, reflection writes, and experiment proposals.
 - Read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing strategy changes.
 - Analyze the last week against the goal contract.
 - Write exactly one reflection.
-- Create at most one experiment proposal.
+- Create one pending-review experiment proposal when the week contains enough evidence and no duplicate active/pending proposal already covers the same variable.
 - Change exactly one variable when proposing an experiment.
 - Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
 
@@ -320,6 +368,7 @@ Restricted write tools:
 
 - `create_reflection`
 - `create_experiment_proposal`
+- `create_decision_advice`
 
 Forbidden tools:
 
@@ -522,30 +571,36 @@ For short windows, label the metric as estimated and avoid promoting solely from
 
 Recommended jobs:
 
-- Daily EOD: summarize decisions, executions, failures, and risk gate skips.
-- Weekly: run the Hermes reflection loop and create at most one new experiment.
+- Daily EOD: summarize decisions, executions, failures, risk gate skips, and create at most one pending-review proposal when a same-day learning is safe to test.
+- Weekly: run the Hermes learning loop and create one pending-review proposal when evidence supports it and no duplicate proposal exists.
 - Monthly: compare active baseline vs goal contract and decide whether to keep, rollback, or propose a new baseline.
 
-Hermes daily EOD reflection prompt:
+Hermes daily EOD learning prompt:
 
 ```text
 Review today's two decision-report pulses, end-of-day report, Markov regime
 signals, scheduler status, execution outcomes, failures, and goal-contract
 status.
 
-Write exactly one concise reflection. Do not create experiment proposals.
+Write exactly one concise reflection. If today's evidence contains a concrete
+safe-to-test learning, create at most one pending-review one-variable experiment
+proposal. If evidence is insufficient or a duplicate proposal already exists,
+put the candidate in proposed_actions.
 Do not request Saxo tokens or secrets. Do not propose live order mutations.
 ```
 
-Hermes weekly reflection prompt:
+Hermes weekly learning prompt:
 
 ```text
 Review the last 7 days of daytrader decisions, strategy journals, execution orders,
 fills, skipped trades, precheck failures, and portfolio metrics.
 
-Use the goal contract exactly. Propose at most one strategy or prompt variable change.
+Use the goal contract exactly. Create one pending-review strategy or prompt
+variable proposal when evidence supports it and no duplicate active/pending
+proposal exists.
 Do not request Saxo tokens or secrets. Do not propose live order mutations.
-If evidence is insufficient, create a reflection with no experiment.
+If evidence is insufficient, create a reflection with no experiment and record
+the strongest candidate in proposed_actions.
 ```
 
 ## Rollout Plan

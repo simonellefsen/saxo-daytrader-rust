@@ -1,7 +1,10 @@
+use std::{collections::HashMap, env, time::Duration as StdDuration};
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
+use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
@@ -125,6 +128,138 @@ struct StrategyExperimentOverlay {
     hypothesis: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct HermesDecisionAdvice {
+    status: String,
+    mode: String,
+    source_session_id: String,
+    overall_recommendation: String,
+    summary: String,
+    raw: JsonValue,
+    order_advice: HashMap<String, HermesOrderAdvice>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct HermesOrderAdvice {
+    action: String,
+    reason: String,
+    max_quantity: Option<f64>,
+    raw: JsonValue,
+}
+
+impl HermesDecisionAdvice {
+    fn fallback(status: &str, mode: String, summary: String, report_id: i64) -> Self {
+        let raw = json!({
+            "status": status,
+            "decision_report_id": report_id,
+            "overall_recommendation": "proceed",
+            "summary": summary,
+            "order_advice_json": [],
+            "learning_notes_json": []
+        });
+        Self {
+            status: status.to_string(),
+            mode,
+            source_session_id: String::new(),
+            overall_recommendation: "proceed".to_string(),
+            summary,
+            raw,
+            order_advice: HashMap::new(),
+        }
+    }
+
+    fn from_row(row: JsonValue, mode: String, source_session_id: String) -> Self {
+        let order_advice_json = row
+            .get("order_advice_json")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let mut order_advice = HashMap::new();
+        if let Some(items) = order_advice_json.as_array() {
+            for item in items {
+                let advice = HermesOrderAdvice {
+                    action: text(item, "action").trim().to_lowercase(),
+                    reason: text(item, "reason"),
+                    max_quantity: item.get("max_quantity").and_then(JsonValue::as_f64),
+                    raw: item.clone(),
+                };
+                if !matches!(
+                    advice.action.as_str(),
+                    "allow" | "reduce" | "stand_down" | "review"
+                ) {
+                    continue;
+                }
+                let strategy_key = text(item, "strategy_key");
+                if !strategy_key.trim().is_empty() {
+                    order_advice.insert(format!("strategy:{strategy_key}"), advice.clone());
+                }
+                let symbol = text(item, "symbol");
+                let side = text(item, "side").to_uppercase();
+                if !symbol.trim().is_empty() && !side.trim().is_empty() {
+                    order_advice.insert(format!("symbol_side:{symbol}:{side}"), advice.clone());
+                }
+                if !symbol.trim().is_empty() {
+                    order_advice.insert(format!("symbol:{symbol}"), advice);
+                }
+            }
+        }
+
+        Self {
+            status: text(&row, "status"),
+            mode,
+            source_session_id,
+            overall_recommendation: text(&row, "overall_recommendation").trim().to_lowercase(),
+            summary: text(&row, "summary"),
+            raw: row,
+            order_advice,
+        }
+    }
+
+    fn for_order(&self, order: &CandidateOrder) -> Option<&HermesOrderAdvice> {
+        self.order_advice
+            .get(&format!("strategy:{}", order.strategy_key))
+            .or_else(|| {
+                self.order_advice
+                    .get(&format!("symbol_side:{}:{}", order.symbol, order.action))
+            })
+            .or_else(|| self.order_advice.get(&format!("symbol:{}", order.symbol)))
+    }
+
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "status": self.status,
+            "mode": self.mode,
+            "source_session_id": self.source_session_id,
+            "overall_recommendation": self.overall_recommendation,
+            "summary": self.summary,
+            "raw": self.raw
+        })
+    }
+}
+
+fn attach_hermes_advice(
+    order: &mut CandidateOrder,
+    advice: &HermesOrderAdvice,
+    decision_advice: &HermesDecisionAdvice,
+) {
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "hermes_advice".to_string(),
+            json!({
+                "mode": decision_advice.mode,
+                "status": decision_advice.status,
+                "source_session_id": decision_advice.source_session_id,
+                "overall_recommendation": decision_advice.overall_recommendation,
+                "order_advice": advice.raw,
+            }),
+        );
+    }
+}
+
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     let reports = fresh_unmanaged_reports(state).await?;
     if reports.is_empty() {
@@ -223,6 +358,33 @@ async fn run_for_report(
         .map(|overlay| overlay.clone().to_json())
         .unwrap_or(JsonValue::Null);
     let initial_capital_budget = *capital_budget;
+    let hermes_advice = request_hermes_decision_advice(
+        state,
+        report,
+        &candidates,
+        open_codes,
+        &initial_capital_budget,
+        &overlay_json,
+    )
+    .await
+    .unwrap_or_else(|err| {
+        warn!(
+            report_id = report.id,
+            "Hermes decision advice degraded: {err:#}"
+        );
+        HermesDecisionAdvice::fallback(
+            "error",
+            hermes_advisory_mode(),
+            format!("Hermes decision advice failed: {err:#}"),
+            report.id,
+        )
+    });
+    let hermes_conservative = hermes_advice.mode == "conservative";
+    let hermes_global_block = hermes_conservative
+        && matches!(
+            hermes_advice.overall_recommendation.as_str(),
+            "stand_down" | "review"
+        );
 
     let min_trade_value_dkk = overlay
         .and_then(|overlay| overlay.f64_value("execution.min_trade_value_dkk"))
@@ -251,6 +413,47 @@ async fn run_for_report(
     let mut approved = Vec::new();
     let mut skipped = Vec::new();
     for mut order in candidates {
+        if let Some(advice) = hermes_advice.for_order(&order) {
+            attach_hermes_advice(&mut order, advice, &hermes_advice);
+            if hermes_conservative && matches!(advice.action.as_str(), "stand_down" | "review") {
+                skipped.push(skip_order(
+                    &order,
+                    &format!("Hermes advisory {}: {}", advice.action, advice.reason),
+                ));
+                continue;
+            }
+            if hermes_conservative && advice.action == "reduce" {
+                match advice.max_quantity {
+                    Some(max_quantity) if max_quantity >= 1.0 && max_quantity < order.quantity => {
+                        let original_quantity = order.quantity;
+                        let new_quantity = max_quantity.floor();
+                        let factor = new_quantity / original_quantity;
+                        order.quantity = new_quantity;
+                        if let Some(value) = order.estimated_value_dkk {
+                            order.estimated_value_dkk = Some(value * factor);
+                        }
+                    }
+                    Some(max_quantity) if max_quantity < 1.0 => {
+                        skipped.push(skip_order(
+                            &order,
+                            &format!("Hermes advisory reduce below one share: {}", advice.reason),
+                        ));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if hermes_global_block {
+            skipped.push(skip_order(
+                &order,
+                &format!(
+                    "Hermes advisory {} for report: {}",
+                    hermes_advice.overall_recommendation, hermes_advice.summary
+                ),
+            ));
+            continue;
+        }
         let exchange = exchange_code(&order.symbol);
         if !open_codes.iter().any(|code| code == &exchange) {
             skipped.push(skip_order(
@@ -456,8 +659,10 @@ async fn run_for_report(
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
         "strategy_experiment_overlay": overlay_json,
+        "hermes_decision_advice": hermes_advice.to_json(),
         "execution_notes": [
             "Approved Hermes experiment overlays are loaded only in paper/simulation mode or Saxo SIM.",
+            "Hermes decision advice is audited for every fresh report when configured; by default it is record-only. In conservative mode it can only block, reduce, or require review.",
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
@@ -499,6 +704,193 @@ async fn run_for_report(
         "approved_orders": approved.len(),
         "queued_orders": queue_result.get("orders").cloned().unwrap_or_else(|| json!([])),
     }))
+}
+
+async fn request_hermes_decision_advice(
+    state: &AppState,
+    report: &DecisionReport,
+    candidates: &[CandidateOrder],
+    open_codes: &[String],
+    capital_budget: &CapitalBudget,
+    overlay_json: &JsonValue,
+) -> Result<HermesDecisionAdvice> {
+    let mode = hermes_advisory_mode();
+    let source_session_id = format!("decision-advice-{}", report.id);
+    if !hermes_advisory_enabled() {
+        return Ok(HermesDecisionAdvice::fallback(
+            "disabled",
+            mode,
+            "Hermes Trading Manager advisory is disabled.".to_string(),
+            report.id,
+        ));
+    }
+    if let Some(existing) = state
+        .hermes_decision_advice_by_session(&source_session_id)
+        .await?
+    {
+        return Ok(HermesDecisionAdvice::from_row(
+            existing,
+            mode,
+            source_session_id,
+        ));
+    }
+
+    let Some(api_key) = hermes_gateway_api_key() else {
+        return Ok(HermesDecisionAdvice::fallback(
+            "not_configured",
+            mode,
+            "Hermes gateway API key is not configured for Trading Manager advisory.".to_string(),
+            report.id,
+        ));
+    };
+
+    let gateway_url = env::var("HERMES_GATEWAY_URL")
+        .or_else(|_| env::var("HERMES_API_BASE_URL"))
+        .unwrap_or_else(|_| "http://hermes-gateway.saxo:8642".to_string());
+    let run_url = format!("{}/v1/runs", gateway_url.trim_end_matches('/'));
+    let wait_seconds = env::var("HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(45)
+        .min(180);
+    let http_timeout_seconds = env::var("HERMES_TRADING_MANAGER_ADVISORY_HTTP_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(10)
+        .min(60);
+
+    let candidate_payload = candidates
+        .iter()
+        .map(|order| {
+            json!({
+                "strategy_key": &order.strategy_key,
+                "symbol": &order.symbol,
+                "action": &order.action,
+                "quantity": order.quantity,
+                "order_type": &order.order_type,
+                "estimated_value_dkk": order.estimated_value_dkk,
+                "strategy_role": &order.strategy_role,
+                "strategy_metadata": order.raw.get("strategy_metadata").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = format!(
+        "Review decision report {} before the Rust Trading Manager queues orders. Use the configured daytrader MCP tools, especially get_decision_reports, get_markov_signals, get_end_of_day_reports, list_reflections, list_experiments, and create_decision_advice. Pull the latest decision report, Markov signals, EOD reports, and Hermes learnings. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        report.id, report.id, source_session_id
+    );
+    let payload = json!({
+        "session_id": "saxo-daytrader-trading-manager-advice",
+        "input": input,
+        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Be specific, use current Markov and learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate.",
+        "metadata": {
+            "source": "rust_trading_manager",
+            "decision_report_id": report.id,
+            "decision_pulse_key": report.pulse_key,
+            "source_session_id": source_session_id,
+            "open_exchange_codes": open_codes,
+            "advisory_mode": mode,
+            "capital_budget": capital_budget.to_json(),
+            "strategy_experiment_overlay": overlay_json,
+            "candidate_orders": candidate_payload,
+        }
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_secs(http_timeout_seconds))
+        .build()
+        .context("building Hermes advisory HTTP client")?;
+    let submit = client
+        .post(&run_url)
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await;
+    match submit {
+        Ok(response) if response.status().is_success() => {
+            info!(
+                report_id = report.id,
+                source_session_id, "Hermes decision advice run submitted"
+            );
+        }
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            warn!(
+                report_id = report.id,
+                %status,
+                "Hermes decision advice submit failed: {body}"
+            );
+            return Ok(HermesDecisionAdvice::fallback(
+                "submit_failed",
+                mode,
+                format!("Hermes advisory submit failed with {status}: {body}"),
+                report.id,
+            ));
+        }
+        Err(err) => {
+            warn!(
+                report_id = report.id,
+                "Hermes decision advice submit error: {err:#}"
+            );
+            return Ok(HermesDecisionAdvice::fallback(
+                "submit_failed",
+                mode,
+                format!("Hermes advisory submit error: {err:#}"),
+                report.id,
+            ));
+        }
+    }
+
+    let deadline = Utc::now() + Duration::seconds(wait_seconds as i64);
+    while Utc::now() < deadline {
+        if let Some(row) = state
+            .hermes_decision_advice_by_session(&source_session_id)
+            .await?
+        {
+            return Ok(HermesDecisionAdvice::from_row(row, mode, source_session_id));
+        }
+        sleep(StdDuration::from_secs(3)).await;
+    }
+
+    Ok(HermesDecisionAdvice::fallback(
+        "timeout",
+        mode,
+        format!("Hermes did not record decision advice within {wait_seconds}s."),
+        report.id,
+    ))
+}
+
+fn hermes_advisory_enabled() -> bool {
+    env::var("HERMES_TRADING_MANAGER_ADVISORY_ENABLED")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn hermes_advisory_mode() -> String {
+    match env::var("HERMES_TRADING_MANAGER_ADVISORY_MODE")
+        .unwrap_or_else(|_| "record_only".to_string())
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
+        "conservative" => "conservative".to_string(),
+        _ => "record_only".to_string(),
+    }
+}
+
+fn hermes_gateway_api_key() -> Option<String> {
+    env::var("HERMES_API_SERVER_KEY")
+        .or_else(|_| env::var("API_SERVER_KEY"))
+        .ok()
+        .or_else(|| env::var("HERMES_DAYTRADER_API_KEY").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 async fn fresh_unmanaged_reports(state: &AppState) -> Result<Vec<DecisionReport>> {
@@ -1663,6 +2055,44 @@ mod tests {
         let orders = candidate_orders_from_report(&report);
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].strategy_key, "swing:test:NVDA:xnas:BUY");
+    }
+
+    #[test]
+    fn hermes_decision_advice_matches_strategy_key_before_symbol_side() {
+        let row = json!({
+            "status": "received",
+            "overall_recommendation": "proceed",
+            "summary": "Proceed with one reduction.",
+            "order_advice_json": [
+                {
+                    "symbol": "NVDA:xnas",
+                    "side": "BUY",
+                    "action": "stand_down",
+                    "reason": "Symbol fallback"
+                },
+                {
+                    "strategy_key": "test:BUY",
+                    "symbol": "NVDA:xnas",
+                    "side": "BUY",
+                    "action": "reduce",
+                    "max_quantity": 2,
+                    "reason": "Strategy-specific reduction"
+                }
+            ],
+            "learning_notes_json": []
+        });
+        let advice = HermesDecisionAdvice::from_row(
+            row,
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+        let matched = advice
+            .for_order(&order("BUY", "BUY", "bullish", 4))
+            .unwrap();
+
+        assert_eq!(matched.action, "reduce");
+        assert_eq!(matched.max_quantity, Some(2.0));
+        assert_eq!(matched.reason, "Strategy-specific reduction");
     }
 
     #[test]

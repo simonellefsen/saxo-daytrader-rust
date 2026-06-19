@@ -3,12 +3,20 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-06-16
+updated: 2026-06-18
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-06-18] improvement | Hermes Trading Manager advice
+
+- Added an audited `hermes_decision_advice` store for per-decision-report Hermes advisory records.
+- Added the Hermes-safe MCP write tool `create_decision_advice`.
+- Wired the Rust Trading Manager to submit a bounded Hermes advisory run before queueing orders from a fresh decision report.
+- Default mode is `record_only`; optional `conservative` mode can only block, reduce, or require review and cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints.
+- Updated Hermes docs, README env examples, and the build/test/deploy runbook.
 
 ## [2026-06-16] operations | Kubernetes namespace and backup helper cleanup
 
@@ -234,3 +242,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Confirmed the latest persisted Hermes reflection was still from 2026-05-23 before a manual weekly run on 2026-06-16.
 - Triggered a manual weekly reflection after the OpenRouter/Hermes configuration fixes; Hermes wrote a current 2026-06-16 weekly reflection.
 - Updated both reflection CronJobs to instruct Hermes to write a deterministic `source_session_id`, wait for that row, and write a watchdog reflection through the protected daytrader adapter if Hermes starts a run but does not persist a reflection inside the watchdog window.
+
+## [2026-06-18] improvement | Hermes proposal loop
+
+- Changed the Hermes goal contract from disabled reflection-only posture to enabled `recommend_only` learning mode.
+- Updated daily and weekly Hermes CronJob prompts so Hermes may create pending-review one-variable experiment proposals from concrete learnings, while still writing exactly one reflection.
+- Kept the safety boundary: proposals must use the audited experiment table, avoid duplicate active/pending variables, prefer the supported overlay variable allowlist, and never place or approve Saxo orders.
+- Updated Hermes documentation, wiki concept notes, and build/test/deploy runbooks to describe daily and weekly learning/proposal behavior.

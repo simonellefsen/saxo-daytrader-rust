@@ -20,7 +20,10 @@ use crate::{
     config::{database_url, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     localization::LocalizationPrefs,
-    models::{DashboardView, HermesExperimentRequest, HermesReflectionRequest},
+    models::{
+        DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest,
+    },
 };
 
 #[derive(Clone)]
@@ -1464,7 +1467,7 @@ impl AppState {
 
     pub fn hermes_goal_contract_value(&self) -> JsonValue {
         json!({
-            "enabled": false,
+            "enabled": true,
             "mode": "recommend_only",
             "goal_version": 1,
             "objective": {
@@ -1487,8 +1490,18 @@ impl AppState {
                 "require_paper_or_sim_observation": true
             },
             "experiment_policy": {
+                "proposal_cadence": {
+                    "daily": "May create at most one pending-review proposal when a same-day learning is specific, evidence-backed, and safe to test in paper/SIM.",
+                    "weekly": "Should create one pending-review proposal when the week contains enough evidence and no duplicate active proposal already covers the same variable."
+                },
+                "proposal_requirement": "Hermes should turn concrete learnings into reviewable one-variable proposals instead of stopping at narrative reflection.",
                 "min_observation_days": 7,
                 "min_closed_trades": 5,
+                "daily_exception": {
+                    "allowed": true,
+                    "reason": "A daily proposal is allowed for operational learnings such as repeated execution failures, stale signals, missed scheduled reports, or clear risk-budget/cash-buffer friction.",
+                    "still_requires_review": true
+                },
                 "promote_only_if": {
                     "return_30d_gte": 0.47,
                     "drawdown_lte": 0.20,
@@ -1539,8 +1552,16 @@ impl AppState {
             ],
             "restricted_writes": [
                 "hermes_reflections",
-                "strategy_experiments"
+                "strategy_experiments",
+                "hermes_decision_advice"
             ],
+            "decision_advice": {
+                "scope": "per_decision_report_trading_manager_preflight",
+                "write_tool": "create_decision_advice",
+                "allowed_recommendations": ["proceed", "stand_down", "review"],
+                "allowed_order_actions": ["allow", "reduce", "stand_down", "review"],
+                "safety": "advisory only; cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints"
+            },
             "supported_experiment_overlays": {
                 "scope": "paper_or_saxo_sim_only",
                 "statuses": ["approved_sim", "active_sim", "approved_paper", "active_paper"],
@@ -1808,6 +1829,79 @@ impl AppState {
             .first_json(&format!(
                 "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
                  FROM strategy_experiments WHERE id = '{}' LIMIT 1",
+                sql_escape(&id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null))
+    }
+
+    pub async fn hermes_decision_advice_by_session(
+        &self,
+        source_session_id: &str,
+    ) -> Result<Option<JsonValue>> {
+        if source_session_id.trim().is_empty() {
+            return Ok(None);
+        }
+        self.first_json(&format!(
+            "SELECT id, created_at, decision_report_id, status, source_session_id,
+                    overall_recommendation, summary, order_advice_json,
+                    learning_notes_json, raw_payload_json
+             FROM hermes_decision_advice
+             WHERE source_session_id = '{}'
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            sql_escape(source_session_id)
+        ))
+        .await
+    }
+
+    pub async fn record_hermes_decision_advice(
+        &self,
+        request: &HermesDecisionAdviceRequest,
+    ) -> Result<JsonValue> {
+        let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let id = runtime_id("hermes-decision-advice");
+        let source_session_id = request
+            .source_session_id
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let recommendation = request.overall_recommendation.trim().to_lowercase();
+        if !matches!(recommendation.as_str(), "proceed" | "stand_down" | "review") {
+            bail!("invalid Hermes decision advice recommendation: {recommendation}");
+        }
+        let order_advice = request.order_advice.clone().unwrap_or_else(|| json!([]));
+        let learning_notes = request.learning_notes.clone().unwrap_or_else(|| json!([]));
+        let raw_payload = request.raw_payload.clone().unwrap_or_else(|| json!({}));
+        let sql = format!(
+            "INSERT INTO hermes_decision_advice (
+                id, created_at, decision_report_id, status, source_session_id,
+                overall_recommendation, summary, order_advice_json,
+                learning_notes_json, raw_payload_json
+            ) VALUES (
+                '{}', '{}', {}, 'received', {}, '{}', '{}', '{}', '{}', '{}'
+            )",
+            sql_escape(&id),
+            sql_escape(&created_at),
+            request.decision_report_id,
+            sql_optional_text(Some(&source_session_id)),
+            sql_escape(&recommendation),
+            sql_escape(request.summary.trim()),
+            sql_escape(&serde_json::to_string(&order_advice)?),
+            sql_escape(&serde_json::to_string(&learning_notes)?),
+            sql_escape(&serde_json::to_string(&raw_payload)?)
+        );
+        sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .context("recording Hermes decision advice")?;
+        Ok(self
+            .first_json(&format!(
+                "SELECT id, created_at, decision_report_id, status, source_session_id,
+                        overall_recommendation, summary, order_advice_json,
+                        learning_notes_json, raw_payload_json
+                 FROM hermes_decision_advice WHERE id = '{}' LIMIT 1",
                 sql_escape(&id)
             ))
             .await?
@@ -2786,6 +2880,23 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating strategy experiments table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS hermes_decision_advice (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                decision_report_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                source_session_id TEXT,
+                overall_recommendation TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                order_advice_json TEXT NOT NULL,
+                learning_notes_json TEXT NOT NULL,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes decision advice table")?;
         for sql in crate::markov_method::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -2812,6 +2923,20 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating strategy experiments status index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_decision_advice_report
+             ON hermes_decision_advice(decision_report_id, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes decision advice report index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_decision_advice_session
+             ON hermes_decision_advice(source_session_id)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes decision advice session index")?;
         Ok(())
     }
 
@@ -3447,7 +3572,7 @@ fn saxo_trading_session_for_date(
     let sessions = calendar
         .sessions
         .iter()
-        .filter(|session| is_saxo_trading_state(&session.state))
+        .filter(|session| is_saxo_continuous_trading_state(&session.state))
         .filter(|session| session_overlaps_local_date(session, tz, local_date))
         .collect::<Vec<_>>();
     let open_at = sessions.iter().map(|session| session.start_at).min()?;
@@ -3462,7 +3587,7 @@ fn next_saxo_open_time(
     calendar
         .sessions
         .iter()
-        .filter(|session| is_saxo_trading_state(&session.state))
+        .filter(|session| is_saxo_continuous_trading_state(&session.state))
         .filter(|session| session.start_at > now_utc)
         .map(|session| session.start_at)
         .min()
@@ -3481,14 +3606,13 @@ fn session_overlaps_local_date(
 }
 
 fn is_saxo_trading_state(state: &str) -> bool {
+    is_saxo_continuous_trading_state(state)
+}
+
+fn is_saxo_continuous_trading_state(state: &str) -> bool {
     matches!(
         state.to_ascii_lowercase().as_str(),
-        "automatedtrading"
-            | "pittrading"
-            | "callauctiontrading"
-            | "auction"
-            | "openingauction"
-            | "tradingatlast"
+        "automatedtrading" | "pittrading"
     )
 }
 
@@ -4051,6 +4175,92 @@ mod tests {
                 Some(false)
             );
         }
+    }
+
+    #[test]
+    fn saxo_opening_auction_does_not_anchor_decision_window() {
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+analysis_windows:
+  offset_minutes_after_open: 75
+  pre_sync_minutes_before_analysis: 5
+  end_buffer_minutes_before_close: 15
+"#,
+        )
+        .unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-06-18T06:40:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut exchanges = HashMap::new();
+        exchanges.insert(
+            "XCSE".to_string(),
+            SaxoExchangeCalendar {
+                exchange_id: "XCSE".to_string(),
+                name: Some("Copenhagen".to_string()),
+                timezone_id: Some("Europe/Copenhagen".to_string()),
+                sessions: vec![
+                    SaxoExchangeSession {
+                        start_at: DateTime::parse_from_rfc3339("2026-06-18T05:30:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                        end_at: DateTime::parse_from_rfc3339("2026-06-18T07:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                        state: "OpeningAuction".to_string(),
+                    },
+                    SaxoExchangeSession {
+                        start_at: DateTime::parse_from_rfc3339("2026-06-18T07:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                        end_at: DateTime::parse_from_rfc3339("2026-06-18T15:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                        state: "AutomatedTrading".to_string(),
+                    },
+                ],
+            },
+        );
+        let cache = SaxoExchangeCalendarCache {
+            checked_date: now.date_naive(),
+            checked_at: now,
+            exchanges,
+            source: "test".to_string(),
+        };
+
+        let rows = market_exchange_rows_for_config(&config, now, Some(&cache));
+        let copenhagen = rows
+            .iter()
+            .find(|row| row.get("code").and_then(JsonValue::as_str) == Some("XCSE"))
+            .unwrap();
+
+        assert_eq!(
+            copenhagen
+                .get("session_open_at_utc")
+                .and_then(JsonValue::as_str),
+            Some("2026-06-18T07:00:00Z")
+        );
+        assert_eq!(
+            copenhagen
+                .get("open_analysis_window_start_at_utc")
+                .and_then(JsonValue::as_str),
+            Some("2026-06-18T08:15:00Z")
+        );
+        assert_eq!(
+            copenhagen
+                .get("session_open_local")
+                .and_then(JsonValue::as_str),
+            Some("2026-06-18 09:00")
+        );
+        assert_eq!(
+            copenhagen
+                .get("open_analysis_window_active")
+                .and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            copenhagen.get("is_tradable").and_then(JsonValue::as_bool),
+            Some(false)
+        );
     }
 
     #[test]

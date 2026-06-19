@@ -83,6 +83,17 @@ pub struct HermesExperimentRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HermesDecisionAdviceRequest {
+    pub decision_report_id: i64,
+    pub source_session_id: Option<String>,
+    pub overall_recommendation: String,
+    pub summary: String,
+    pub order_advice: Option<JsonValue>,
+    pub learning_notes: Option<JsonValue>,
+    pub raw_payload: Option<JsonValue>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct HermesExperimentTransitionRequest {
     pub action: String,
     pub notes: Option<String>,

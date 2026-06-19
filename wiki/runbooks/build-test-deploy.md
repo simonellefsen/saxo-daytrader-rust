@@ -187,6 +187,10 @@ HERMES_INFERENCE_PROVIDER=openrouter
 HERMES_MODEL=openai/gpt-5.5
 HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
+HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
+HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
+HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
 ```
 
 Do not place Saxo credentials in `hermes-env`.
@@ -213,35 +217,37 @@ rtk kubectl --context docker-desktop -n saxo run daytrader-mcp-smoke --rm -i --r
   curl -fsS http://daytrader-mcp.saxo:8610/health
 ```
 
-Trigger one manual daily EOD reflection run while keeping the CronJob suspended:
+Trigger one manual daily EOD learning run while keeping the CronJob suspended:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-daily-reflection hermes-daily-reflection-manual
 rtk kubectl --context docker-desktop -n saxo logs job/hermes-daily-reflection-manual
 ```
 
-Trigger one manual weekly self-improvement reflection run while keeping the CronJob suspended:
+Trigger one manual weekly self-improvement learning run while keeping the CronJob suspended:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
 rtk kubectl --context docker-desktop -n saxo logs job/hermes-weekly-reflection-manual
 ```
 
-The reflection CronJobs submit asynchronous Hermes `/v1/runs` requests and then wait for a matching `source_session_id` reflection in the daytrader database. If no row appears inside the watchdog window, the job writes a watchdog reflection through `/api/hermes/reflections` so the dashboard records the missed run instead of leaving the latest reflection stale.
+The Hermes CronJobs submit asynchronous `/v1/runs` requests and then wait for a matching `source_session_id` reflection in the daytrader database. If no row appears inside the watchdog window, the job writes a watchdog reflection through `/api/hermes/reflections` so the dashboard records the missed run instead of leaving the latest reflection stale. Experiment proposals are optional audited side effects and remain `pending_review` until an operator acts in the dashboard.
 
-Only unsuspend the daily recurring schedule after the manual job writes one daily reflection and no experiment proposal:
+Trading Manager decision advice uses the same Hermes gateway. A fresh decision report submits an advisory run with `source_session_id=decision-advice-<report_id>` and waits briefly for Hermes to call the MCP `create_decision_advice` tool. The response is stored in `hermes_decision_advice` and copied into `trading_manager_runs.manager_json`. Keep `HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only` until the advice rows are consistently useful. `conservative` mode can only block, reduce, or require review; it cannot add or enlarge trades.
+
+Only unsuspend the daily recurring schedule after the manual job writes one daily reflection and creates at most one pending-review proposal when evidence supports it:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-daily-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-Only unsuspend the weekly recurring schedule after the manual job writes one reflection and, when evidence is sufficient, at most one experiment proposal:
+Only unsuspend the weekly recurring schedule after the manual job writes one reflection and creates one pending-review proposal when evidence is sufficient and no duplicate proposal exists:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-The daily job should prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, and reflection writes. The weekly job should prefer the configured `daytrader` MCP tools for context, reflection writes, and experiment proposals. The protected HTTP adapter remains available for manual inspection and fallback.
+The daily job should prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, recent experiments, reflection writes, and proposal writes. The weekly job should prefer the same tool surface and should convert clear weekly learnings into one-variable proposals. The protected HTTP adapter remains available for manual inspection and fallback.
 
 ## Saxo SIM Testing
 

@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::{
-    models::{HermesExperimentRequest, HermesReflectionRequest},
+    models::{HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest},
     state::AppState,
 };
 
@@ -198,6 +198,11 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .context("parsing create_experiment_proposal arguments")?;
             state.record_hermes_experiment(&request).await?
         }
+        "create_decision_advice" => {
+            let request = serde_json::from_value::<HermesDecisionAdviceRequest>(arguments)
+                .context("parsing create_decision_advice arguments")?;
+            state.record_hermes_decision_advice(&request).await?
+        }
         _ => {
             warn!(tool = name, "unsupported daytrader MCP tool requested");
             return Ok(tool_error(&format!("unsupported tool: {name}")));
@@ -360,6 +365,43 @@ fn mcp_tools() -> Vec<JsonValue> {
                 "additionalProperties": false
             }),
         ),
+        tool_schema(
+            "create_decision_advice",
+            "Record advisory Hermes input for one decision report. This is an audited advisory artifact only; it cannot place, approve, add, or execute orders.",
+            json!({
+                "type": "object",
+                "required": [
+                    "decision_report_id",
+                    "overall_recommendation",
+                    "summary"
+                ],
+                "properties": {
+                    "decision_report_id": {"type": "integer"},
+                    "source_session_id": {"type": "string"},
+                    "overall_recommendation": {"type": "string", "enum": ["proceed", "stand_down", "review"]},
+                    "summary": {"type": "string"},
+                    "order_advice": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["action", "reason"],
+                            "properties": {
+                                "strategy_key": {"type": "string"},
+                                "symbol": {"type": "string"},
+                                "side": {"type": "string", "enum": ["BUY", "SELL"]},
+                                "action": {"type": "string", "enum": ["allow", "reduce", "stand_down", "review"]},
+                                "max_quantity": {"type": "number"},
+                                "reason": {"type": "string"}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "learning_notes": {},
+                    "raw_payload": {}
+                },
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 
@@ -446,6 +488,7 @@ mod tests {
         assert!(names.contains(&"get_markov_signals".to_string()));
         assert!(names.contains(&"create_reflection".to_string()));
         assert!(names.contains(&"create_experiment_proposal".to_string()));
+        assert!(names.contains(&"create_decision_advice".to_string()));
         assert!(!names.iter().any(|name| name.contains("saxo")));
         assert!(!names.iter().any(|name| name.contains("order")));
         assert!(!names.iter().any(|name| name.contains("secret")));

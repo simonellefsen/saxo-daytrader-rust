@@ -193,7 +193,7 @@ async fn submit_deferred_report(
             "created_at": created_at,
             "analysis_pulse": pulse_to_json(pulse)
         });
-        let report_json = completed_report_json_from_parts(
+        let report_json = match completed_report_json_from_parts(
             &outbound_request,
             &seed_report,
             &response_json,
@@ -203,7 +203,32 @@ async fn submit_deferred_report(
                 "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 "mode": "chat_completion"
             }),
-        )?;
+        ) {
+            Ok(report_json) => report_json,
+            Err(err) => {
+                let content_excerpt = completion_content_excerpt(&response_json, 2_000);
+                let report = insert_xai_error_report_with_response(
+                    state,
+                    &created_at,
+                    pulse,
+                    &model,
+                    &prompt,
+                    &outbound_request,
+                    Some(&response_json),
+                    &format!(
+                        "{provider} decision report response could not be normalized into strict JSON: {err:#}; message content excerpt: {content_excerpt}"
+                    ),
+                )
+                .await?;
+                warn!(
+                    pulse_key = %pulse.key,
+                    provider = %provider,
+                    response_id = %response_id,
+                    "AI decision report response could not be normalized into strict JSON"
+                );
+                return Ok(report);
+            }
+        };
         let row = insert_decision_report(
             state,
             &created_at,
@@ -366,7 +391,22 @@ async fn poll_one_deferred_report(
     }
     let response_json: JsonValue =
         serde_json::from_str(&response_body).context("parsing xAI deferred completion response")?;
-    let report_json = completed_report_json(pending, &response_json)?;
+    let report_json = match completed_report_json(pending, &response_json) {
+        Ok(report_json) => report_json,
+        Err(err) => {
+            let content_excerpt = completion_content_excerpt(&response_json, 2_000);
+            let error_text = format!(
+                "xAI deferred completion response could not be normalized into strict JSON: {err:#}; message content excerpt: {content_excerpt}"
+            );
+            mark_deferred_report_error(state, pending.id, &error_text).await?;
+            return Ok(json!({
+                "status": "error",
+                "report_id": pending.id,
+                "request_id": pending.request_id,
+                "error": error_text
+            }));
+        }
+    };
     update_completed_report(state, pending.id, &response_json, &report_json).await?;
     info!(
         report_id = pending.id,
@@ -549,7 +589,65 @@ fn parse_json_content(content: &str) -> Result<JsonValue> {
         .and_then(|value| value.strip_suffix("```"))
         .map(str::trim)
         .unwrap_or(trimmed);
+    if let Ok(value) = serde_json::from_str::<JsonValue>(without_fence) {
+        return Ok(value);
+    }
+    if let Some(extracted) = first_balanced_json_value(without_fence) {
+        return Ok(serde_json::from_str::<JsonValue>(extracted)?);
+    }
     Ok(serde_json::from_str::<JsonValue>(without_fence)?)
+}
+
+fn first_balanced_json_value(content: &str) -> Option<&str> {
+    let mut start = None;
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in content.char_indices() {
+        if start.is_none() {
+            match ch {
+                '{' => {
+                    start = Some(idx);
+                    stack.push('}');
+                }
+                '[' => {
+                    start = Some(idx);
+                    stack.push(']');
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' => {
+                if stack.pop() != Some(ch) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    let end = idx + ch.len_utf8();
+                    return start.map(|start| &content[start..end]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 async fn build_decision_prompt(
@@ -812,9 +910,18 @@ fn build_chat_request(state: &AppState, prompt: &JsonValue, model: &str) -> Resu
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
-        "response_format": {"type": "json_object"},
+        "response_format": decision_report_response_format(&ai_provider(state)),
         "max_tokens": max_tokens
     });
+    if ai_provider(state) == "openrouter" {
+        let mut plugins = vec![json!({"id": "response-healing"})];
+        if model == "openrouter/fusion" {
+            plugins.insert(0, json!({"id": "fusion", "preset": "general-high"}));
+        }
+        if let Some(obj) = request.as_object_mut() {
+            obj.insert("plugins".to_string(), JsonValue::from(plugins));
+        }
+    }
     if let Some(reasoning_effort) = yaml_string(&state.config, &["xai", "reasoning_effort"]) {
         if let Some(obj) = request.as_object_mut() {
             obj.insert(
@@ -824,6 +931,215 @@ fn build_chat_request(state: &AppState, prompt: &JsonValue, model: &str) -> Resu
         }
     }
     Ok(request)
+}
+
+fn decision_report_response_format(provider: &str) -> JsonValue {
+    if provider != "openrouter" {
+        return json!({"type": "json_object"});
+    }
+    json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "daytrader_decision_report",
+            "strict": true,
+            "schema": decision_report_json_schema()
+        }
+    })
+}
+
+fn decision_report_json_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": [
+            "report_title",
+            "market_view",
+            "reasoning_steps",
+            "capital_plan",
+            "selected_assets",
+            "symbol_sentiment",
+            "suggested_trades",
+            "strategy_status",
+            "strategy_flow"
+        ],
+        "additionalProperties": true,
+        "properties": {
+            "report_title": {"type": "string"},
+            "strategy_status": {"type": "string"},
+            "strategy_baseline_id": {"type": ["string", "null"]},
+            "strategy_flow": strategy_flow_schema(),
+            "market_view": market_view_schema(),
+            "reasoning_steps": {"type": "array", "items": {"type": "string"}},
+            "capital_plan": capital_plan_schema(),
+            "selected_assets": selected_assets_schema(),
+            "symbol_sentiment": symbol_sentiment_schema(),
+            "suggested_trades": suggested_trades_schema()
+        }
+    })
+}
+
+fn strategy_flow_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": ["portfolio", "selected", "trades"],
+        "additionalProperties": true,
+        "properties": {
+            "portfolio": {"type": "number"},
+            "selected": {"type": "number"},
+            "trades": {"type": "number"}
+        }
+    })
+}
+
+fn market_view_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": ["bias", "summary"],
+        "additionalProperties": true,
+        "properties": {
+            "bias": {"type": "string"},
+            "summary": {"type": "string"}
+        }
+    })
+}
+
+fn capital_plan_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": [
+            "cash_balance_dkk",
+            "available_buy_budget_dkk",
+            "cash_policy",
+            "reinvestment_decision",
+            "near_term_opportunities",
+            "medium_term_watchlist"
+        ],
+        "additionalProperties": true,
+        "properties": {
+            "cash_balance_dkk": {"type": "number"},
+            "available_buy_budget_dkk": {"type": "number"},
+            "cash_policy": {"type": "string"},
+            "reinvestment_decision": {"type": "string", "enum": ["redeploy", "wait", "risk_reduce"]},
+            "near_term_opportunities": {"type": "array", "items": {"type": "string"}},
+            "medium_term_watchlist": {"type": "array", "items": {"type": "string"}}
+        }
+    })
+}
+
+fn selected_assets_schema() -> JsonValue {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["symbol", "score", "notes"],
+            "additionalProperties": true,
+            "properties": {
+                "symbol": {"type": "string"},
+                "score": {"type": "number"},
+                "notes": {"type": "string"}
+            }
+        }
+    })
+}
+
+fn symbol_sentiment_schema() -> JsonValue {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["symbol", "sentiment", "confidence", "rationale"],
+            "additionalProperties": true,
+            "properties": {
+                "symbol": {"type": "string"},
+                "sentiment": {"type": "string", "enum": ["SELL", "UNDERWEIGHT", "HOLD", "OVERWEIGHT", "BUY"]},
+                "confidence": {"type": "number"},
+                "rationale": {"type": "string"}
+            }
+        }
+    })
+}
+
+fn suggested_trades_schema() -> JsonValue {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": [
+                "symbol",
+                "action",
+                "quantity",
+                "order_type",
+                "limit_price_local",
+                "estimated_value_dkk",
+                "strategy_key",
+                "strategy_role",
+                "strategy_metadata"
+            ],
+            "additionalProperties": true,
+            "properties": {
+                "symbol": {"type": "string"},
+                "action": {"type": "string", "enum": ["BUY", "SELL"]},
+                "quantity": {"type": "number"},
+                "order_type": {"type": "string", "enum": ["Market", "Limit"]},
+                "limit_price_local": {"type": ["number", "null"]},
+                "estimated_value_dkk": {"type": "number"},
+                "strategy_key": {"type": "string"},
+                "strategy_role": {"type": "string"},
+                "strategy_metadata": strategy_metadata_schema()
+            }
+        }
+    })
+}
+
+fn strategy_metadata_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": ["technical", "markov"],
+        "additionalProperties": true,
+        "properties": {
+            "technical": technical_metadata_schema(),
+            "markov": markov_metadata_schema()
+        }
+    })
+}
+
+fn technical_metadata_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": [
+            "status",
+            "sentiment",
+            "trend_bias",
+            "confluence_count",
+            "min_confluences"
+        ],
+        "additionalProperties": true,
+        "properties": {
+            "status": {"type": "string"},
+            "sentiment": {"type": "string"},
+            "trend_bias": {"type": "string", "enum": ["bullish", "neutral", "bearish"]},
+            "confluence_count": {"type": "number"},
+            "min_confluences": {"type": "number"}
+        }
+    })
+}
+
+fn markov_metadata_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "required": [
+            "signed_signal",
+            "direction",
+            "state",
+            "run_date"
+        ],
+        "additionalProperties": true,
+        "properties": {
+            "signed_signal": {"type": "number"},
+            "direction": {"type": "string", "enum": ["long", "short"]},
+            "state": {"type": "string"},
+            "run_date": {"type": "string"}
+        }
+    })
 }
 
 fn active_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
@@ -1038,6 +1354,29 @@ async fn insert_xai_error_report(
     request_json: &JsonValue,
     error_text: &str,
 ) -> Result<JsonValue> {
+    insert_xai_error_report_with_response(
+        state,
+        created_at,
+        pulse,
+        model,
+        prompt,
+        request_json,
+        None,
+        error_text,
+    )
+    .await
+}
+
+async fn insert_xai_error_report_with_response(
+    state: &AppState,
+    created_at: &str,
+    pulse: &DecisionPulse,
+    model: &str,
+    prompt: &JsonValue,
+    request_json: &JsonValue,
+    response_json: Option<&JsonValue>,
+    error_text: &str,
+) -> Result<JsonValue> {
     let report_json = json!({
         "status": "xai_error",
         "created_at": created_at,
@@ -1056,7 +1395,7 @@ async fn insert_xai_error_report(
         None,
         prompt,
         request_json,
-        None,
+        response_json,
         &report_json,
         Some(error_text),
     )
@@ -1069,6 +1408,23 @@ fn truncate_error_text(value: &str, max_chars: usize) -> String {
         text.push_str("...");
     }
     text
+}
+
+fn completion_content_excerpt(response_json: &JsonValue, max_chars: usize) -> String {
+    let Some(content) = response_json
+        .get("choices")
+        .and_then(JsonValue::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(JsonValue::as_str)
+    else {
+        return "message.content missing".to_string();
+    };
+    if content.trim().is_empty() {
+        return "message.content empty".to_string();
+    }
+    truncate_error_text(content, max_chars)
 }
 
 async fn insert_decision_report(
@@ -1364,6 +1720,61 @@ mod tests {
         assert_eq!(
             parse_json_content("```json\n{\"status\":\"ok\"}\n```").unwrap()["status"],
             "ok"
+        );
+        assert_eq!(
+            parse_json_content(
+                "Here is the report: {\"status\":\"ok\",\"note\":\"brace } in string\"}"
+            )
+            .unwrap()["status"],
+            "ok"
+        );
+    }
+
+    #[test]
+    fn summarizes_completion_content_for_error_reports() {
+        let missing = json!({"choices": [{"message": {}}]});
+        assert_eq!(
+            completion_content_excerpt(&missing, 20),
+            "message.content missing"
+        );
+
+        let empty = json!({"choices": [{"message": {"content": "  "}}]});
+        assert_eq!(
+            completion_content_excerpt(&empty, 20),
+            "message.content empty"
+        );
+
+        let long = json!({"choices": [{"message": {"content": "abcdefghijklmnopqrstuvwxyz"}}]});
+        assert_eq!(completion_content_excerpt(&long, 5), "abcde...");
+    }
+
+    #[test]
+    fn openrouter_response_format_uses_strict_decision_schema() {
+        let response_format = decision_report_response_format("openrouter");
+        assert_eq!(response_format["type"], "json_schema");
+        assert_eq!(
+            response_format["json_schema"]["name"],
+            "daytrader_decision_report"
+        );
+        assert_eq!(response_format["json_schema"]["strict"], true);
+        assert!(
+            response_format["json_schema"]["schema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&JsonValue::from("suggested_trades"))
+        );
+        assert_eq!(
+            response_format["json_schema"]["schema"]["properties"]["suggested_trades"]["items"]["properties"]
+                ["strategy_metadata"]["properties"]["markov"]["type"],
+            "object"
+        );
+    }
+
+    #[test]
+    fn non_openrouter_response_format_stays_json_object() {
+        assert_eq!(
+            decision_report_response_format("xai"),
+            json!({"type": "json_object"})
         );
     }
 

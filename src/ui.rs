@@ -1760,7 +1760,8 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let action = text(&row, "action");
     let status = text(&row, "status");
     let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
-    let limit = format_dkk(value_f64(&row, "limit_price_local"), &prefs);
+    let currency = execution_order_price_currency(&row);
+    let limit = format_local_money(value_f64(&row, "limit_price_local"), &currency, &prefs);
     rsx! {
         tr {
             td { "{id}" }
@@ -1802,9 +1803,9 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 }
             }
             td { "{format_quantity(value_f64(&row, \"quantity\"), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"price_local\"), &text(&row, \"currency\"), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &text(&row, \"currency\"), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &text(&row, \"currency\"), &prefs)}" }
+            td { "{format_local_money(value_f64(&row, \"price_local\"), &execution_order_price_currency(&row), &prefs)}" }
+            td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
+            td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { class: "muted error-cell",
                 if !detail.is_empty() {
                     details { class: "error-details",
@@ -2183,6 +2184,42 @@ fn format_local_money(value: f64, currency: &str, prefs: &LocalizationPrefs) -> 
         "n/a".to_string()
     } else {
         format_money(value, currency, prefs)
+    }
+}
+
+fn execution_order_price_currency(row: &JsonValue) -> String {
+    let currency = text(row, "currency");
+    if !currency.trim().is_empty() {
+        return currency;
+    }
+    if let Some(currency) = row
+        .get("execution_result_json")
+        .and_then(|value| value.get("broker_sync"))
+        .and_then(|value| value.get("broker_payload"))
+        .and_then(|value| value.get("DisplayAndFormat"))
+        .and_then(|value| value.get("Currency"))
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return currency.to_string();
+    }
+    currency_for_symbol(&text(row, "symbol")).to_string()
+}
+
+fn currency_for_symbol(symbol: &str) -> &'static str {
+    match symbol
+        .split_once(':')
+        .map(|(_, exchange)| exchange.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xnas") | Some("xnys") | Some("arcx") | Some("bats") => "USD",
+        Some("xcse") => "DKK",
+        Some("xmil") | Some("xetr") | Some("xams") | Some("xpar") => "EUR",
+        Some("xlon") | Some("xlse") => "GBP",
+        Some("xsto") => "SEK",
+        Some("xosl") => "NOK",
+        Some("xswx") => "CHF",
+        _ => "DKK",
     }
 }
 
@@ -2614,6 +2651,34 @@ mod tests {
         assert_eq!(format_dkk(1234.4, &prefs), "1,234 DKK");
         assert_eq!(format_pct(0.125, &prefs), "12.5%");
         assert_eq!(format_pct(12.5, &prefs), "12.5%");
+    }
+
+    #[test]
+    fn execution_order_price_currency_uses_broker_payload_before_symbol_fallback() {
+        let row = json!({
+            "symbol": "AMD:xnas",
+            "currency": "",
+            "execution_result_json": {
+                "broker_sync": {
+                    "broker_payload": {
+                        "DisplayAndFormat": {"Currency": "USD"}
+                    }
+                }
+            }
+        });
+        assert_eq!(execution_order_price_currency(&row), "USD");
+    }
+
+    #[test]
+    fn execution_order_price_currency_falls_back_to_symbol_exchange() {
+        assert_eq!(
+            execution_order_price_currency(&json!({"symbol": "AMD:xnas", "currency": ""})),
+            "USD"
+        );
+        assert_eq!(
+            execution_order_price_currency(&json!({"symbol": "ORSTED:xcse", "currency": ""})),
+            "DKK"
+        );
     }
 
     #[test]

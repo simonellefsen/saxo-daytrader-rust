@@ -39,6 +39,10 @@ data:
       journal time.
     - Daily Markov method regime signals for portfolio and watchlist assets.
     - Trading Manager queue creation from completed decision reports.
+    - Trading Manager can request per-decision-report Hermes advice through
+      the MCP `create_decision_advice` tool before queueing orders. Default
+      mode is record-only; conservative mode can only block, reduce, or require
+      review.
     - Saxo order precheck and placement for approved queued orders.
     - Strategy journal entries, scheduler cycles, execution orders, events, and
       fills persisted in the daytrader database.
@@ -74,7 +78,7 @@ data:
     - `docs/project-wiki.md`
   SELF_IMPROVEMENT_GOAL.yaml: |
     hermes_self_improvement:
-      enabled: false
+      enabled: true
       mode: recommend_only
       goal_version: 1
       objective:
@@ -89,11 +93,20 @@ data:
         max_positions: 25
         slippage_tolerance: 0.02
         gas_reserve: 0.05
-        min_cash_buffer_pct: 0.10
+        min_cash_buffer_pct: 0.02
         allow_shorting: false
         require_human_approval: true
         require_backtest_before_activation: true
         require_paper_or_sim_observation: true
+      experiment_policy:
+        proposal_requirement: "Turn concrete learnings into pending-review one-variable proposals instead of stopping at narrative reflection."
+        daily: "Create at most one proposal when same-day evidence is specific, safe to test, and not a duplicate."
+        weekly: "Create one proposal when weekly evidence is sufficient and no duplicate active/pending proposal exists."
+        supported_variables:
+          - execution.min_trade_value_dkk
+          - strategy.capital.min_cash_buffer_pct
+          - strategy.swing.cash_buffer_pct
+          - strategy.swing.daily_indicators.min_confluences
       forbidden:
         - read_saxo_sessions
         - expose_tokens_or_account_keys
@@ -315,6 +328,7 @@ spec:
                           "create_reflection",
                           "list_experiments",
                           "create_experiment_proposal",
+                          "create_decision_advice",
                       ],
                       "resources": False,
                       "prompts": False,
@@ -475,8 +489,8 @@ spec:
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-daily-eod-reflection",
-                    "input": "Run the saxo daytrader daily end-of-day reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, and create_reflection. Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract. Create exactly one concise daily reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. Do not create experiment proposals from the daily job; reserve one-variable experiment proposals for the weekly reflection. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
-                    "instructions": "You are Hermes Agent acting as a daily EOD reflection agent for the saxo-rust day/swing trading system. You may observe and write a reflection only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
+                    "input": "Run the saxo daytrader daily end-of-day learning and proposal loop. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, list_experiments, create_reflection, and create_experiment_proposal. Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, current performance, and recent active/pending experiments against the goal contract. Create exactly one concise daily reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. If today's evidence contains a concrete learning that can be tested safely, create at most one pending-review one-variable experiment proposal with the same source_session_id. Prefer proposal variables from the supported overlay list: execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.cash_buffer_pct, strategy.swing.daily_indicators.min_confluences. Do not duplicate an existing pending/active experiment for the same changed_variable_path. If evidence is insufficient, record proposed_actions in the reflection instead of an experiment. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                    "instructions": "You are Hermes Agent acting as a daily EOD learning agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create at most one pending-review experiment proposal. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
                       "job": "hermes-daily-reflection",
@@ -604,8 +618,8 @@ spec:
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-weekly-reflection",
-                    "input": "Run the saxo daytrader weekly self-improvement reflection. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, the two daily decision-report pulses, daily end-of-day reports, Markov regime signals, execution outcomes, failures, active baseline context, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. If evidence is sufficient, create at most one experiment proposal and change exactly one variable. If evidence is insufficient, record no experiment. Keep all outputs concise and auditable.",
-                    "instructions": "You are Hermes Agent acting as a research/reflection agent for the saxo-rust day/swing trading system. You may observe and propose only. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
+                    "input": "Run the saxo daytrader weekly self-improvement learning and proposal loop. Prefer the configured daytrader MCP tools: get_context, get_decision_reports, get_end_of_day_reports, get_markov_signals, list_experiments, create_reflection, and create_experiment_proposal. Analyze scheduler cycles, the two daily decision-report pulses, daily end-of-day reports, Markov regime signals, execution outcomes, failures, active baseline context, recent pending/active experiments, and 1M performance against the goal contract. Do not request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints. Create exactly one reflection record. When calling create_reflection, set source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. Create one pending-review experiment proposal when the week contains a concrete evidence-backed learning and no duplicate pending/active proposal already covers the same changed_variable_path; otherwise record the best candidate as proposed_actions and explain the blocker. Every experiment proposal must change exactly one variable and prefer supported overlay variables: execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.cash_buffer_pct, strategy.swing.daily_indicators.min_confluences. Keep all outputs concise and auditable.",
+                    "instructions": "You are Hermes Agent acting as a research and proposal agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create one pending-review experiment proposal when evidence supports it. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
                       "job": "hermes-weekly-reflection"

@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - hermes
   - strategy-learning
-updated: 2026-05-25
+updated: 2026-06-18
 sources:
   - /Users/lindau/codex/rust_daytrader/docs/hermes-agent.md
   - /Users/lindau/codex/rust_daytrader/wiki/sources/llm-wiki.md
@@ -27,6 +27,8 @@ sequenceDiagram
   D->>DB: Decision reports, EOD journals, Markov signals, executions
   H->>DB: Read sanitized context through MCP/API
   H->>DB: Write reflection or experiment proposal
+  TM->>H: Ask for per-report advisory input before queueing orders
+  H->>DB: Write hermes_decision_advice
   D->>U: Display Hermes review and lifecycle tab
   H->>W: Write summarized learning and cross-links
   U->>W: Review narrative and evidence
@@ -35,12 +37,13 @@ sequenceDiagram
 
 ## What Belongs In The Wiki
 
-- Daily Hermes end-of-day reflection summaries for evidence capture only.
-- Weekly Hermes reflection summaries for self-improvement decisions.
+- Daily Hermes end-of-day learning summaries, including at most one pending-review experiment proposal when a same-day learning is concrete and safe to test.
+- Weekly Hermes learning summaries for self-improvement decisions and evidence-backed one-variable experiment proposals.
 - One-variable experiment hypotheses.
 - Why a strategy change was approved, rejected, or rolled back.
 - Links to relevant source files, reports, and audited records.
 - Lessons that should influence future prompts or implementation work.
+- Per-decision-report Hermes advice summaries when they reveal a repeated pattern in candidate quality, Markov confirmation, execution failures, or cash deployment.
 
 ## What Does Not Belong In The Wiki
 
@@ -60,9 +63,10 @@ sequenceDiagram
 - Promoted baseline audit records are visible in the dashboard `Hermes` tab, included in `/api/hermes/context`, and included in AI decision prompt payloads as advisory context.
 - Hermes should prefer the `daytrader` MCP adapter for scheduled reflections because its tool allowlist is narrower than generic HTTP access.
 - Hermes should read `get_decision_reports`, `get_end_of_day_reports`, and `get_markov_signals` before proposing a strategy experiment.
-- Daily Hermes reflections should summarize the day and preserve evidence from decision reports, EOD reports, Markov regime signals, scheduler status, executions, and failures. They should not create experiment proposals.
-- Weekly Hermes reflections remain the cadence for one-variable experiment proposals because they have enough context to compare several sessions against the goal contract.
+- Daily Hermes learning runs should summarize the day and preserve evidence from decision reports, EOD reports, Markov regime signals, scheduler status, executions, and failures. They may create at most one pending-review one-variable experiment proposal when the learning is specific, safe to test, and not a duplicate of an active or pending proposal.
+- Weekly Hermes learning runs should create one pending-review one-variable experiment proposal when the week contains enough evidence and no duplicate proposal already covers the same variable. If evidence is insufficient, the strongest candidate belongs in `proposed_actions`.
 - Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
+- Trading Manager can ask Hermes for per-decision-report advice through the `create_decision_advice` MCP tool. Default mode is `record_only`; `conservative` mode may only block, reduce, or require review and must never add trades, increase size, approve live orders, or call Saxo mutation endpoints.
 
 ## Related
 
