@@ -3,12 +3,30 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-06-18
+updated: 2026-06-23
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-06-23] planning | Project roadmap
+
+- Added [wiki/roadmap.md](/Users/lindau/codex/rust_daytrader/wiki/roadmap.md) as a forward-looking improvement map for reliability, decision reports, Hermes, Trading Manager, execution, strategy, UX, architecture, operations, security, and documentation.
+- Linked the roadmap from [wiki/index.md](/Users/lindau/codex/rust_daytrader/wiki/index.md).
+- Expanded the roadmap with high-leverage trading, Hermes, decision-report, and Saxo API workflow improvements.
+
+## [2026-06-23] fix | OpenRouter decision schema strictness
+
+- Fixed the Rust OpenRouter decision-report JSON schema so every object uses `additionalProperties: false`.
+- Made nullable optional-looking fields required where strict structured outputs need all declared properties listed in `required`.
+- Added a recursive schema regression test so future nested object additions cannot reintroduce provider-side `invalid_json_schema` failures.
+
+## [2026-06-22] improvement | Hermes conservative advice enforcement
+
+- Hardened Hermes decision-advice attachment so Trading Manager looks up advice by both `source_session_id` and `decision_report_id`.
+- Switched Kubernetes Trading Manager advisory mode to `conservative` with a longer wait window.
+- Documented that conservative advice may only block, reduce, or require review, and missing/timed-out advice fails closed to review.
 
 ## [2026-06-18] improvement | Hermes Trading Manager advice
 

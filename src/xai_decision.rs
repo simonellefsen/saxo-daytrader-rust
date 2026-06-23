@@ -959,9 +959,10 @@ fn decision_report_json_schema() -> JsonValue {
             "symbol_sentiment",
             "suggested_trades",
             "strategy_status",
+            "strategy_baseline_id",
             "strategy_flow"
         ],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "report_title": {"type": "string"},
             "strategy_status": {"type": "string"},
@@ -981,7 +982,7 @@ fn strategy_flow_schema() -> JsonValue {
     json!({
         "type": "object",
         "required": ["portfolio", "selected", "trades"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "portfolio": {"type": "number"},
             "selected": {"type": "number"},
@@ -994,7 +995,7 @@ fn market_view_schema() -> JsonValue {
     json!({
         "type": "object",
         "required": ["bias", "summary"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "bias": {"type": "string"},
             "summary": {"type": "string"}
@@ -1013,7 +1014,7 @@ fn capital_plan_schema() -> JsonValue {
             "near_term_opportunities",
             "medium_term_watchlist"
         ],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "cash_balance_dkk": {"type": "number"},
             "available_buy_budget_dkk": {"type": "number"},
@@ -1031,7 +1032,7 @@ fn selected_assets_schema() -> JsonValue {
         "items": {
             "type": "object",
             "required": ["symbol", "score", "notes"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "symbol": {"type": "string"},
                 "score": {"type": "number"},
@@ -1047,7 +1048,7 @@ fn symbol_sentiment_schema() -> JsonValue {
         "items": {
             "type": "object",
             "required": ["symbol", "sentiment", "confidence", "rationale"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "symbol": {"type": "string"},
                 "sentiment": {"type": "string", "enum": ["SELL", "UNDERWEIGHT", "HOLD", "OVERWEIGHT", "BUY"]},
@@ -1074,7 +1075,7 @@ fn suggested_trades_schema() -> JsonValue {
                 "strategy_role",
                 "strategy_metadata"
             ],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
                 "symbol": {"type": "string"},
                 "action": {"type": "string", "enum": ["BUY", "SELL"]},
@@ -1094,7 +1095,7 @@ fn strategy_metadata_schema() -> JsonValue {
     json!({
         "type": "object",
         "required": ["technical", "markov"],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "technical": technical_metadata_schema(),
             "markov": markov_metadata_schema()
@@ -1112,7 +1113,7 @@ fn technical_metadata_schema() -> JsonValue {
             "confluence_count",
             "min_confluences"
         ],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "status": {"type": "string"},
             "sentiment": {"type": "string"},
@@ -1132,7 +1133,7 @@ fn markov_metadata_schema() -> JsonValue {
             "state",
             "run_date"
         ],
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
             "signed_signal": {"type": "number"},
             "direction": {"type": "string", "enum": ["long", "short"]},
@@ -1768,6 +1769,53 @@ mod tests {
                 ["strategy_metadata"]["properties"]["markov"]["type"],
             "object"
         );
+    }
+
+    #[test]
+    fn openrouter_decision_schema_is_strict_at_every_object() {
+        let response_format = decision_report_response_format("openrouter");
+        assert_strict_object_schema(
+            &response_format["json_schema"]["schema"],
+            "daytrader_decision_report",
+        );
+    }
+
+    fn assert_strict_object_schema(schema: &JsonValue, path: &str) {
+        if schema.get("type") == Some(&JsonValue::from("object")) {
+            assert_eq!(
+                schema.get("additionalProperties"),
+                Some(&JsonValue::from(false)),
+                "{path} must set additionalProperties=false"
+            );
+
+            let properties = schema
+                .get("properties")
+                .and_then(JsonValue::as_object)
+                .unwrap_or_else(|| panic!("{path} object schema must define properties"));
+            let required = schema
+                .get("required")
+                .and_then(JsonValue::as_array)
+                .unwrap_or_else(|| panic!("{path} object schema must define required"));
+
+            for property in properties.keys() {
+                assert!(
+                    required
+                        .iter()
+                        .any(|value| value.as_str() == Some(property)),
+                    "{path}.{property} must be required for strict structured outputs"
+                );
+            }
+        }
+
+        if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
+            for (name, child) in properties {
+                assert_strict_object_schema(child, &format!("{path}.{name}"));
+            }
+        }
+
+        if let Some(items) = schema.get("items") {
+            assert_strict_object_schema(items, &format!("{path}[]"));
+        }
     }
 
     #[test]

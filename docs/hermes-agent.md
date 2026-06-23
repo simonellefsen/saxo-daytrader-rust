@@ -284,13 +284,13 @@ Runtime knobs:
 ```bash
 HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
 HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
-HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
-HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
+HERMES_TRADING_MANAGER_ADVISORY_MODE=conservative
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=90
 ```
 
-`record_only` is the default. It asks Hermes, audits the response, and includes the advice in `trading_manager_runs.manager_json`, but it does not alter queued orders.
+`record_only` asks Hermes, audits the response, and includes the advice in `trading_manager_runs.manager_json`, but it does not alter queued orders. It is useful for bring-up and regression checks.
 
-`conservative` mode can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is disabled, not configured, fails, or times out, the Trading Manager records that degraded status and continues with local gates.
+Kubernetes runs `conservative` mode. It can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is not configured, fails, or times out in conservative mode, the Trading Manager treats the report as requiring review and does not silently proceed.
 
 ## Reflection Jobs
 
@@ -314,8 +314,8 @@ HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
 HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
 HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
-HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
-HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
+HERMES_TRADING_MANAGER_ADVISORY_MODE=conservative
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=90
 ```
 
 Then redeploy and unsuspend:

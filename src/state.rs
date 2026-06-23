@@ -1855,6 +1855,26 @@ impl AppState {
         .await
     }
 
+    pub async fn hermes_decision_advice_by_report(
+        &self,
+        decision_report_id: i64,
+    ) -> Result<Option<JsonValue>> {
+        if decision_report_id <= 0 {
+            return Ok(None);
+        }
+        self.first_json(&format!(
+            "SELECT id, created_at, decision_report_id, status, source_session_id,
+                    overall_recommendation, summary, order_advice_json,
+                    learning_notes_json, raw_payload_json
+             FROM hermes_decision_advice
+             WHERE decision_report_id = {}
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            decision_report_id
+        ))
+        .await
+    }
+
     pub async fn record_hermes_decision_advice(
         &self,
         request: &HermesDecisionAdviceRequest,
@@ -2032,7 +2052,7 @@ impl AppState {
     }
 
     pub async fn latest_trading_manager_run(&self) -> Result<JsonValue> {
-        Ok(self
+        let mut run = self
             .first_json(
                 "SELECT id, created_at, manager_key, manager_kind, manager_label, target_at_utc, report_id, status, open_exchange_codes_json, technical_json, manager_json, queue_result_json, error_text
                  FROM trading_manager_runs
@@ -2040,7 +2060,50 @@ impl AppState {
                  LIMIT 1",
             )
             .await?
-            .unwrap_or(JsonValue::Null))
+            .unwrap_or(JsonValue::Null);
+
+        let report_id = run
+            .get("report_id")
+            .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+            .unwrap_or(0);
+        let current_advice_status = run
+            .get("manager_json")
+            .and_then(|value| value.get("hermes_decision_advice"))
+            .and_then(|value| value.get("status"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let should_repair_advice =
+            report_id > 0 && matches!(current_advice_status, "" | "timeout" | "error");
+        if should_repair_advice {
+            if let Some(advice) = self.hermes_decision_advice_by_report(report_id).await? {
+                let existing_mode = run
+                    .get("manager_json")
+                    .and_then(|value| value.get("hermes_decision_advice"))
+                    .and_then(|value| value.get("mode"))
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("record_only")
+                    .to_string();
+                if let Some(manager_json) = run
+                    .get_mut("manager_json")
+                    .and_then(JsonValue::as_object_mut)
+                {
+                    manager_json.insert(
+                        "hermes_decision_advice".to_string(),
+                        json!({
+                            "status": json_text(&advice, "status"),
+                            "mode": existing_mode,
+                            "source_session_id": json_text(&advice, "source_session_id"),
+                            "overall_recommendation": json_text(&advice, "overall_recommendation"),
+                            "summary": json_text(&advice, "summary"),
+                            "attached_from": "report_fallback",
+                            "raw": advice,
+                        }),
+                    );
+                }
+            }
+        }
+
+        Ok(run)
     }
 
     pub async fn record_scheduler_cycle(

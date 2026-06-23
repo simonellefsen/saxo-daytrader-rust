@@ -3,7 +3,7 @@ type: wiki-index
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-05-23
+updated: 2026-06-23
 ---
 
 # Daytrader Knowledge Wiki
@@ -14,6 +14,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 - [schema](schema.md) - Maintenance rules, page conventions, and workflows.
 - [log](log.md) - Append-only timeline of wiki operations.
+- [roadmap](roadmap.md) - Potential improvements across reliability, Hermes, strategy, execution, UX, and architecture.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning and strategy experiments connect to the wiki.
 
@@ -24,6 +25,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 ## Concepts
 
+- [roadmap](roadmap.md) - Forward-looking improvement map for product, operations, strategy, AI, and refactoring work.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - Persistent, compounding project knowledge layer maintained by agents.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - Safe loop for Hermes reflections, experiments, and strategy learning.
 

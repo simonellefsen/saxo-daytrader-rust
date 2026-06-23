@@ -189,8 +189,8 @@ HERMES_DAYTRADER_API_KEY=<strong app adapter key>
 HERMES_DAYTRADER_MCP_URL=http://daytrader-mcp.saxo:8610/mcp
 HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
 HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
-HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only
-HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=45
+HERMES_TRADING_MANAGER_ADVISORY_MODE=conservative
+HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=90
 ```
 
 Do not place Saxo credentials in `hermes-env`.
@@ -233,7 +233,7 @@ rtk kubectl --context docker-desktop -n saxo logs job/hermes-weekly-reflection-m
 
 The Hermes CronJobs submit asynchronous `/v1/runs` requests and then wait for a matching `source_session_id` reflection in the daytrader database. If no row appears inside the watchdog window, the job writes a watchdog reflection through `/api/hermes/reflections` so the dashboard records the missed run instead of leaving the latest reflection stale. Experiment proposals are optional audited side effects and remain `pending_review` until an operator acts in the dashboard.
 
-Trading Manager decision advice uses the same Hermes gateway. A fresh decision report submits an advisory run with `source_session_id=decision-advice-<report_id>` and waits briefly for Hermes to call the MCP `create_decision_advice` tool. The response is stored in `hermes_decision_advice` and copied into `trading_manager_runs.manager_json`. Keep `HERMES_TRADING_MANAGER_ADVISORY_MODE=record_only` until the advice rows are consistently useful. `conservative` mode can only block, reduce, or require review; it cannot add or enlarge trades.
+Trading Manager decision advice uses the same Hermes gateway. A fresh decision report submits an advisory run with `source_session_id=decision-advice-<report_id>` and waits for Hermes to call the MCP `create_decision_advice` tool. The response is stored in `hermes_decision_advice` and copied into `trading_manager_runs.manager_json`. Kubernetes runs `HERMES_TRADING_MANAGER_ADVISORY_MODE=conservative`, so Hermes can only block, reduce, or require review; it cannot add or enlarge trades. If conservative advice is missing or times out, the manager records a review-required advisory state instead of silently proceeding.
 
 Only unsuspend the daily recurring schedule after the manual job writes one daily reflection and creates at most one pending-review proposal when evidence supports it:
 

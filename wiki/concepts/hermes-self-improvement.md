@@ -66,7 +66,7 @@ sequenceDiagram
 - Daily Hermes learning runs should summarize the day and preserve evidence from decision reports, EOD reports, Markov regime signals, scheduler status, executions, and failures. They may create at most one pending-review one-variable experiment proposal when the learning is specific, safe to test, and not a duplicate of an active or pending proposal.
 - Weekly Hermes learning runs should create one pending-review one-variable experiment proposal when the week contains enough evidence and no duplicate proposal already covers the same variable. If evidence is insufficient, the strongest candidate belongs in `proposed_actions`.
 - Trading Manager experiment overlays currently apply only in paper/simulation or Saxo SIM, and only for the allowlisted variables documented in [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md).
-- Trading Manager can ask Hermes for per-decision-report advice through the `create_decision_advice` MCP tool. Default mode is `record_only`; `conservative` mode may only block, reduce, or require review and must never add trades, increase size, approve live orders, or call Saxo mutation endpoints.
+- Trading Manager asks Hermes for per-decision-report advice through the `create_decision_advice` MCP tool. Kubernetes runs this in `conservative` mode: Hermes may only block, reduce, or require review and must never add trades, increase size, approve live orders, or call Saxo mutation endpoints. Missing or timed-out conservative advice requires review rather than silently allowing orders.
 
 ## Related
 

@@ -38,6 +38,12 @@ spec:
               value: /tmp/daytrader/saxo_session.json
             - name: SCHEDULER_INTERVAL_MINUTES
               value: "10"
+            - name: HERMES_TRADING_MANAGER_ADVISORY_ENABLED
+              value: "true"
+            - name: HERMES_TRADING_MANAGER_ADVISORY_MODE
+              value: conservative
+            - name: HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS
+              value: "90"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

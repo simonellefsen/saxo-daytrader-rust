@@ -149,10 +149,19 @@ struct HermesOrderAdvice {
 
 impl HermesDecisionAdvice {
     fn fallback(status: &str, mode: String, summary: String, report_id: i64) -> Self {
+        let overall_recommendation = if mode == "conservative"
+            && matches!(
+                status,
+                "error" | "timeout" | "not_configured" | "submit_failed"
+            ) {
+            "review"
+        } else {
+            "proceed"
+        };
         let raw = json!({
             "status": status,
             "decision_report_id": report_id,
-            "overall_recommendation": "proceed",
+            "overall_recommendation": overall_recommendation,
             "summary": summary,
             "order_advice_json": [],
             "learning_notes_json": []
@@ -161,7 +170,7 @@ impl HermesDecisionAdvice {
             status: status.to_string(),
             mode,
             source_session_id: String::new(),
-            overall_recommendation: "proceed".to_string(),
+            overall_recommendation: overall_recommendation.to_string(),
             summary,
             raw,
             order_advice: HashMap::new(),
@@ -380,11 +389,10 @@ async fn run_for_report(
         )
     });
     let hermes_conservative = hermes_advice.mode == "conservative";
-    let hermes_global_block = hermes_conservative
-        && matches!(
-            hermes_advice.overall_recommendation.as_str(),
-            "stand_down" | "review"
-        );
+    let hermes_global_block =
+        hermes_conservative && hermes_advice.overall_recommendation == "stand_down";
+    let hermes_global_review =
+        hermes_conservative && hermes_advice.overall_recommendation == "review";
 
     let min_trade_value_dkk = overlay
         .and_then(|overlay| overlay.f64_value("execution.min_trade_value_dkk"))
@@ -413,6 +421,7 @@ async fn run_for_report(
     let mut approved = Vec::new();
     let mut skipped = Vec::new();
     for mut order in candidates {
+        let mut has_order_specific_hermes_allow = false;
         if let Some(advice) = hermes_advice.for_order(&order) {
             attach_hermes_advice(&mut order, advice, &hermes_advice);
             if hermes_conservative && matches!(advice.action.as_str(), "stand_down" | "review") {
@@ -423,6 +432,7 @@ async fn run_for_report(
                 continue;
             }
             if hermes_conservative && advice.action == "reduce" {
+                has_order_specific_hermes_allow = true;
                 match advice.max_quantity {
                     Some(max_quantity) if max_quantity >= 1.0 && max_quantity < order.quantity => {
                         let original_quantity = order.quantity;
@@ -442,6 +452,8 @@ async fn run_for_report(
                     }
                     _ => {}
                 }
+            } else if hermes_conservative && advice.action == "allow" {
+                has_order_specific_hermes_allow = true;
             }
         }
         if hermes_global_block {
@@ -450,6 +462,16 @@ async fn run_for_report(
                 &format!(
                     "Hermes advisory {} for report: {}",
                     hermes_advice.overall_recommendation, hermes_advice.summary
+                ),
+            ));
+            continue;
+        }
+        if hermes_global_review && !has_order_specific_hermes_allow {
+            skipped.push(skip_order(
+                &order,
+                &format!(
+                    "Hermes advisory review for report requires explicit order allow/reduce: {}",
+                    hermes_advice.summary
                 ),
             ));
             continue;
@@ -734,6 +756,18 @@ async fn request_hermes_decision_advice(
             source_session_id,
         ));
     }
+    if let Some(existing) = state.hermes_decision_advice_by_report(report.id).await? {
+        let source = text(&existing, "source_session_id");
+        return Ok(HermesDecisionAdvice::from_row(
+            existing,
+            mode,
+            if source.trim().is_empty() {
+                source_session_id
+            } else {
+                source
+            },
+        ));
+    }
 
     let Some(api_key) = hermes_gateway_api_key() else {
         return Ok(HermesDecisionAdvice::fallback(
@@ -751,7 +785,7 @@ async fn request_hermes_decision_advice(
     let wait_seconds = env::var("HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(45)
+        .unwrap_or(90)
         .min(180);
     let http_timeout_seconds = env::var("HERMES_TRADING_MANAGER_ADVISORY_HTTP_TIMEOUT_SECONDS")
         .ok()
@@ -849,7 +883,39 @@ async fn request_hermes_decision_advice(
         {
             return Ok(HermesDecisionAdvice::from_row(row, mode, source_session_id));
         }
+        if let Some(row) = state.hermes_decision_advice_by_report(report.id).await? {
+            let source = text(&row, "source_session_id");
+            return Ok(HermesDecisionAdvice::from_row(
+                row,
+                mode,
+                if source.trim().is_empty() {
+                    source_session_id.clone()
+                } else {
+                    source
+                },
+            ));
+        }
         sleep(StdDuration::from_secs(3)).await;
+    }
+
+    // One last read after the deadline catches advice written during the final
+    // sleep interval or through the report-id fallback when the session id is
+    // malformed by a model/tool call.
+    if let Some(row) = state
+        .hermes_decision_advice_by_session(&source_session_id)
+        .await?
+        .or(state.hermes_decision_advice_by_report(report.id).await?)
+    {
+        let source = text(&row, "source_session_id");
+        return Ok(HermesDecisionAdvice::from_row(
+            row,
+            mode,
+            if source.trim().is_empty() {
+                source_session_id
+            } else {
+                source
+            },
+        ));
     }
 
     Ok(HermesDecisionAdvice::fallback(
@@ -2093,6 +2159,70 @@ mod tests {
         assert_eq!(matched.action, "reduce");
         assert_eq!(matched.max_quantity, Some(2.0));
         assert_eq!(matched.reason, "Strategy-specific reduction");
+    }
+
+    #[test]
+    fn hermes_conservative_timeout_requires_review() {
+        let advice = HermesDecisionAdvice::fallback(
+            "timeout",
+            "conservative".to_string(),
+            "Hermes timed out.".to_string(),
+            42,
+        );
+
+        assert_eq!(advice.overall_recommendation, "review");
+        assert_eq!(
+            advice
+                .raw
+                .get("overall_recommendation")
+                .and_then(JsonValue::as_str),
+            Some("review")
+        );
+    }
+
+    #[test]
+    fn hermes_record_only_timeout_proceeds_for_audit_only() {
+        let advice = HermesDecisionAdvice::fallback(
+            "timeout",
+            "record_only".to_string(),
+            "Hermes timed out.".to_string(),
+            42,
+        );
+
+        assert_eq!(advice.overall_recommendation, "proceed");
+    }
+
+    #[test]
+    fn hermes_review_allows_explicit_order_advice_to_drive_decision() {
+        let row = json!({
+            "status": "received",
+            "overall_recommendation": "review",
+            "summary": "Review report, but allow NVDA.",
+            "order_advice_json": [
+                {
+                    "strategy_key": "test:BUY",
+                    "symbol": "NVDA:xnas",
+                    "side": "BUY",
+                    "action": "allow",
+                    "reason": "Covered by Hermes."
+                }
+            ],
+            "learning_notes_json": []
+        });
+        let advice = HermesDecisionAdvice::from_row(
+            row,
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+
+        assert_eq!(advice.overall_recommendation, "review");
+        assert_eq!(
+            advice
+                .for_order(&order("BUY", "BUY", "bullish", 4))
+                .unwrap()
+                .action,
+            "allow"
+        );
     }
 
     #[test]
