@@ -262,6 +262,13 @@ impl AppState {
             warn!("dashboard Hermes experiments degraded: {err:#}");
             Vec::new()
         });
+        let hermes_decision_advice_audit = self
+            .hermes_decision_advice_audit(20)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("dashboard Hermes decision advice audit degraded: {err:#}");
+                Vec::new()
+            });
         let active_strategy_baseline =
             self.active_strategy_baseline().await.unwrap_or_else(|err| {
                 warn!("dashboard active strategy baseline degraded: {err:#}");
@@ -275,6 +282,13 @@ impl AppState {
             warn!("dashboard latest Markov run degraded: {err:#}");
             JsonValue::Null
         });
+        let latest_daily_indicator_run =
+            self.latest_daily_indicator_run()
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard latest daily indicator run degraded: {err:#}");
+                    JsonValue::Null
+                });
         let performance_history = self
             .performance_history_with_current(&performance_range, 5000)
             .await
@@ -363,12 +377,18 @@ impl AppState {
             scheduler_cycles,
             hermes_reflections,
             hermes_experiments,
+            hermes_decision_advice_audit,
             active_strategy_baseline,
             markov_signals,
             latest_markov_run,
+            latest_daily_indicator_run,
             performance_history,
             performance_summary,
             market_status,
+            trading_manager: overview
+                .get("trading_manager")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
             watchlists,
             latest_decision,
             selected_decision,
@@ -1344,6 +1364,14 @@ impl AppState {
         crate::markov_method::latest_markov_run(self).await
     }
 
+    pub async fn latest_daily_indicator_run(&self) -> Result<JsonValue> {
+        let sql = "SELECT id, created_at, run_date, status, asset_count, success_count, error_count, config_json, summary_json
+                   FROM daily_indicator_runs
+                   ORDER BY run_date DESC, created_at DESC
+                   LIMIT 1";
+        Ok(self.first_json(sql).await?.unwrap_or(JsonValue::Null))
+    }
+
     #[allow(dead_code)]
     pub async fn generate_decision_report_fallback(&self) -> Result<JsonValue> {
         // This is a conservative Rust-side generator used by the manual button.
@@ -1677,6 +1705,115 @@ impl AppState {
             "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label
              FROM decision_reports
              ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn hermes_decision_advice_audit(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT
+                dr.id AS report_id,
+                dr.created_at AS report_created_at,
+                dr.status AS report_status,
+                dr.analysis_pulse_key,
+                dr.analysis_pulse_label,
+                dr.model,
+                (
+                    SELECT h.id
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_id,
+                (
+                    SELECT h.created_at
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_created_at,
+                (
+                    SELECT h.status
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_status,
+                (
+                    SELECT h.source_session_id
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_source_session_id,
+                (
+                    SELECT h.overall_recommendation
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_recommendation,
+                (
+                    SELECT h.summary
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_summary,
+                (
+                    SELECT h.order_advice_json
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS order_advice_json,
+                (
+                    SELECT tm.status
+                    FROM trading_manager_runs tm
+                    WHERE tm.report_id = dr.id
+                    ORDER BY tm.created_at DESC, tm.id DESC
+                    LIMIT 1
+                ) AS manager_status,
+                (
+                    SELECT tm.created_at
+                    FROM trading_manager_runs tm
+                    WHERE tm.report_id = dr.id
+                    ORDER BY tm.created_at DESC, tm.id DESC
+                    LIMIT 1
+                ) AS manager_created_at,
+                (
+                    SELECT tm.manager_json
+                    FROM trading_manager_runs tm
+                    WHERE tm.report_id = dr.id
+                    ORDER BY tm.created_at DESC, tm.id DESC
+                    LIMIT 1
+                ) AS manager_json,
+                (
+                    SELECT tm.queue_result_json
+                    FROM trading_manager_runs tm
+                    WHERE tm.report_id = dr.id
+                    ORDER BY tm.created_at DESC, tm.id DESC
+                    LIMIT 1
+                ) AS queue_result_json,
+                (
+                    SELECT COUNT(*)
+                    FROM execution_orders eo
+                    WHERE eo.report_id = dr.id
+                ) AS queued_order_count,
+                (
+                    SELECT COUNT(*)
+                    FROM execution_orders eo
+                    WHERE eo.report_id = dr.id AND eo.status = 'executed'
+                ) AS executed_order_count,
+                (
+                    SELECT COUNT(*)
+                    FROM execution_orders eo
+                    WHERE eo.report_id = dr.id AND eo.status IN ('execution_failed', 'broker_rejected', 'local_rejected')
+                ) AS failed_order_count
+             FROM decision_reports dr
+             ORDER BY dr.created_at DESC, dr.id DESC
              LIMIT {}",
             clamp_limit(limit, 1, 100)
         );

@@ -3,12 +3,76 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-06-23
+updated: 2026-06-29
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-06-29] fix | Broker-authoritative Trading Manager sell caps
+
+- Investigated `ORSTED:xcse` and `NNIT:xcse` SELL failures from decision report `116`.
+- Found that the imported May 18 `position_snapshots` batch still showed ORSTED 108 and NNIT 100, while later executed broker orders had already sold those quantities down to zero.
+- Changed Trading Manager SELL sizing to prefer current `broker_position_snapshots` when available, using broker-authoritative sellable quantity before creating execution queue rows; imported snapshots remain only a fallback when no broker read model exists.
+- Kept the Saxo execution guard as a second safety net before precheck/place.
+
+## [2026-06-27] implementation | OpenRouter schema validation registry
+
+- Continued the roadmap by adding a reusable Rust validator for OpenRouter strict structured-output schemas.
+- Added a current-schema registry test for the active daytrader decision-report response schema.
+- The validator reports actionable paths for missing `additionalProperties: false`, incomplete `required` arrays, stale required entries, and nested object issues across properties, arrays, unions, and definitions.
+
+## [2026-06-26] improvement | Saxo tick-size and expired-order diagnostics
+
+- Continued the roadmap by porting broker-aware Saxo limit-price normalization into the Rust order payload path.
+- The Rust Saxo order path now prefers configured tick overrides, then Saxo instrument details and tick-size schemes, before falling back to exchange defaults.
+- Changed Saxo `Expired` and `DoneForDay` broker sync states into explicit local terminal statuses instead of generic `execution_failed`, so unfilled DayOrders are visible as broker expiry cases.
+- Added Rust and UI regression tests for DEMANT-like tick-size normalization and broker-expired execution classification.
+
+## [2026-06-25] implementation | Sanitized decision-report debug payloads
+
+- Continued the roadmap by adding expandable sanitized prompt, request, provider-response, and normalized-report payloads to the Decisions view.
+- Added recursive redaction for token-like fields and common secret/account/session keys before debug payloads are rendered.
+- Added UI unit tests that verify OpenRouter/Saxo-style sensitive fields are redacted while non-sensitive model/report context remains visible.
+
+## [2026-06-25] implementation | Cash deployment diagnostics
+
+- Continued the roadmap by exposing the latest Trading Manager `reinvestment_diagnostics` in a read-only Cash Deployment panel on the Overview tab.
+- The panel explains whether cash is being held by policy, blocked BUY candidates, missing BUY candidates, or approved reinvestment candidates.
+- Added UI unit tests for cash deployment status/tone classification and summary extraction from the latest manager run.
+
+## [2026-06-25] implementation | Decision report quality panel
+
+- Continued the roadmap by adding a read-only Decision Report Quality panel to the Decisions tab.
+- The quality score checks report completion, strict provider schema, normalized section presence, suggested-trade order shape, and market-scope enforcement metadata.
+- Added UI unit tests for a clean report and a schema-valid report that still needs review because of bad trade shape and filtered market-scope symbols.
+
+## [2026-06-24] implementation | Hermes decision advice audit
+
+- Continued the roadmap by adding a read-only Hermes Decision Advice Audit table to the Hermes dashboard tab.
+- Added a dashboard read model that joins recent decision reports with persisted Hermes advice, latest Trading Manager run status, and queued/executed/failed order counts.
+- Added UI classification helpers and tests for received advice, order-specific conservative restrictions, and conservative timeout review fallback.
+
+## [2026-06-24] implementation | Decision report dry-run action
+
+- Started implementing the roadmap by adding a non-mutating decision report dry-run action.
+- The dry-run path submits/parses/persists a manual decision report without running the Trading Manager or Saxo execution queue.
+
+## [2026-06-24] implementation | Decision pulse health cards
+
+- Added Decisions view pulse-health cards for Nordic/EU, US, and Manual/Dry Run reports.
+- Cards show the latest report status and latest successful report per pulse from recent decision report history.
+
+## [2026-06-24] fix | OpenRouter schema self-hardening
+
+- Added a defensive OpenRouter schema sanitizer before request submission so every object schema is strict even if a nested helper omits strict fields.
+- Extended decision-report schema tests to cover the `capital_plan` failure path and union branches.
+
+## [2026-06-24] implementation | Decision report diagnostics panel
+
+- Replaced the raw decision prompt/request preview in the Decisions view with compact provider diagnostics.
+- The panel shows model, response format, schema strictness, payload size, response id/presence, and categorized error details without rendering the full prompt context.
 
 ## [2026-06-23] planning | Project roadmap
 
@@ -267,3 +331,16 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Updated daily and weekly Hermes CronJob prompts so Hermes may create pending-review one-variable experiment proposals from concrete learnings, while still writing exactly one reflection.
 - Kept the safety boundary: proposals must use the audited experiment table, avoid duplicate active/pending variables, prefer the supported overlay variable allowlist, and never place or approve Saxo orders.
 - Updated Hermes documentation, wiki concept notes, and build/test/deploy runbooks to describe daily and weekly learning/proposal behavior.
+
+## [2026-06-24] improvement | Execution diagnostics visibility
+
+- Continued the roadmap by improving Execution page diagnostics for broker order failures and pending Saxo states.
+- Added UI classification for precheck rejection, market closed, Saxo auth, rate limits, instrument resolution, insufficient cash, tick-size/price-shape issues, invalid quantity, broker rejection, and broker-working waits.
+- Changed recent execution events to use the same diagnostic formatter instead of concatenating message and error text.
+- Kept sanitized raw execution payloads available in collapsible order diagnostics without exposing token-like keys or broker account/client/user identifiers.
+
+## [2026-06-24] improvement | Operations health banner
+
+- Continued the roadmap by adding a compact dashboard operations banner for Saxo session, scheduler heartbeat, decision-report, Markov, daily-indicator, and quote freshness health.
+- Added a latest daily-indicator run read model so the UI can flag missing, stale, failed, or partial technical-indicator runs beside Markov freshness.
+- Added UI tests for Saxo reauth status, stale scheduler heartbeats, partial/stale runtime runs, and quote freshness thresholds.

@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-06-23
+updated: 2026-06-29
 ---
 
 # Daytrader Roadmap
@@ -19,6 +19,20 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 - Let Hermes propose, but keep activation gated through explicit code/config/database controls.
 - Keep the wiki as the durable memory for operational lessons, experiments, and strategy behavior.
 
+## Recently Landed
+
+- 2026-06-29: Changed Trading Manager SELL sizing to prefer current Saxo broker snapshots over stale imported position snapshots, preventing already-flattened holdings such as ORSTED and NNIT from being queued again.
+- 2026-06-27: Added an OpenRouter structured-output schema registry and reusable strict-schema validator so all current response schemas are checked for `additionalProperties: false`, complete `required` lists, union branches, arrays, and stale required entries.
+- 2026-06-26: Improved Saxo limit-price handling by using configured overrides, Saxo instrument-details tick schemes, and explicit broker-expired status mapping for unfilled DayOrders.
+- 2026-06-25: Added a Decision Report Quality panel that scores completion, schema strictness, normalized section presence, order shape, and market-scope enforcement warnings.
+- 2026-06-25: Added an Overview Cash Deployment panel that explains latest Trading Manager reinvestment pressure, buy budget, BUY candidates, approved BUYs, and blocked BUYs.
+- 2026-06-25: Added a sanitized decision-report debug panel with expandable prompt, request, provider response, and normalized report payloads plus redaction tests.
+- 2026-06-24: Added a dry-run decision report action so provider/schema changes can be tested without Trading Manager or execution side effects.
+- 2026-06-24: Added EU/US/manual decision pulse health cards to make missed or failed scheduled reports visible.
+- 2026-06-24: Added Execution page broker diagnostics that classify common Saxo failures and render recent order events through the same tooltip/detail formatter.
+- 2026-06-24: Added a compact operations banner for Saxo session, scheduler heartbeat, report, Markov, daily indicator, and quote freshness health.
+- 2026-06-24: Added a Hermes Decision Advice Audit table that shows whether recent reports received advice, the recommendation, order-advice counts, manager status, queued/executed/failed order counts, and conservative impact.
+
 ## Immediate Stabilization
 
 These items reduce operational risk and make the existing system easier to trust.
@@ -26,11 +40,9 @@ These items reduce operational risk and make the existing system easier to trust
 | Priority | Area | Improvement | Why It Matters |
 | --- | --- | --- | --- |
 | P0 | Decision reports | Add a non-mutating "dry run report" endpoint that submits and parses a decision report without Trading Manager or execution queue side effects. | Makes schema/provider fixes testable without risking new orders. |
-| P0 | Decision reports | Add provider schema validation tests for every OpenRouter structured-output schema, including Hermes prompts if they use strict schemas later. | Prevents repeat `invalid_json_schema` outages. |
+| P0 | Decision reports | Keep the OpenRouter structured-output schema registry current whenever new strict schemas are added, including Hermes prompts if they use strict schemas later. | Prevents repeat `invalid_json_schema` outages. |
 | P0 | Execution safety | Show broker precheck and placement failure details consistently in Execution Queue tooltips and order event views. | Reduces guesswork when orders fail. |
 | P0 | Scheduler | Add explicit "last successful scheduled report by pulse" status cards. | Makes missed EU/US pulses visible immediately. |
-| P1 | Hermes | Record whether each completed report was seen by Hermes, whether advice arrived in time, and whether conservative mode changed queued orders. | Separates "Hermes observed" from "Hermes affected behavior." |
-| P1 | Observability | Add a compact operations banner for stale Markov, stale daily indicators, stale broker snapshot, expired Saxo session, and failed report generation. | Turns hidden degradation into obvious UI state. |
 | P1 | Testing | Add integration tests for manual report, scheduled report, Hermes advice, Trading Manager queueing, and execution queue dry-run paths. | Protects the most critical cross-module workflows. |
 
 ## High-Leverage Workflow Improvements

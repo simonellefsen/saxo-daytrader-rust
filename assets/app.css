@@ -141,6 +141,81 @@ h2 {
   margin: 16px 0;
 }
 
+.operations-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  margin: 16px 0 0;
+  box-shadow: var(--shadow-soft);
+}
+
+.operations-banner.good {
+  border-color: #bde8cc;
+}
+
+.operations-banner.warn {
+  border-color: #f6d786;
+  background: #fffaf0;
+}
+
+.operations-banner.bad {
+  border-color: #efb1ad;
+  background: #fff5f4;
+}
+
+.operations-banner-title {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.operations-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.operation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--text);
+  padding: 5px 9px;
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.operation-chip.good {
+  border-color: #c7ead1;
+  background: #edf9f1;
+  color: #27633d;
+}
+
+.operation-chip.warn {
+  border-color: #efd18b;
+  background: #fff7df;
+  color: #8a5a09;
+}
+
+.operation-chip.bad {
+  border-color: #efb1ad;
+  background: #fff0ef;
+  color: #a4312b;
+}
+
+.operation-chip strong {
+  color: inherit;
+}
+
 .good-banner {
   border-color: #bde8cc;
   background: #e1f6e9;
@@ -337,8 +412,16 @@ form.is-submitting .button {
   color: var(--good);
 }
 
+.warn-text {
+  color: #9a6700;
+}
+
 .bad-text {
   color: var(--bad);
+}
+
+.block {
+  display: block;
 }
 
 .layout {
@@ -351,6 +434,129 @@ form.is-submitting .button {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(340px, 0.8fr);
   gap: 14px;
+}
+
+.report-diagnostics-panel {
+  white-space: normal;
+}
+
+.report-debug-panel {
+  white-space: normal;
+}
+
+.report-debug-panel p {
+  margin-top: 6px;
+  line-height: 1.35;
+}
+
+.report-quality-panel {
+  white-space: normal;
+}
+
+.quality-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quality-score {
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.quality-warning-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.quality-warning-list li + li {
+  margin-top: 5px;
+}
+
+.debug-payload-details {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafb;
+}
+
+.debug-payload-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.debug-payload-details pre {
+  max-height: 340px;
+  overflow: auto;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--text);
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  margin-top: 12px;
+}
+
+.diagnostic-grid > div {
+  min-width: 0;
+}
+
+.diagnostic-value {
+  display: block;
+  margin-top: 3px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-error {
+  margin-top: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cash-deployment-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.cash-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cash-diagnostic-grid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafb;
+  padding: 8px 9px;
+}
+
+.cash-diagnostic-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.cash-diagnostic-reason {
+  line-height: 1.4;
 }
 
 .section {
@@ -443,6 +649,11 @@ tr:last-child td {
   background: #e8f7ee;
 }
 
+.warn-status {
+  color: #9a6700;
+  background: #fff7df;
+}
+
 .bad-status {
   color: var(--bad);
   background: #fdebea;
@@ -492,6 +703,12 @@ tr:last-child td {
   overflow-wrap: anywhere;
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.event-message {
+  display: inline-block;
+  max-width: 520px;
+  overflow-wrap: anywhere;
 }
 
 .legend-row {

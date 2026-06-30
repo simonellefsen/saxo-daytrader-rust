@@ -118,6 +118,10 @@ fn app_routes() -> Router<Arc<AppState>> {
             "/api/actions/decision-report",
             post(action_generate_decision_report),
         )
+        .route(
+            "/api/actions/decision-report-dry-run",
+            post(action_generate_decision_report_dry_run),
+        )
         .route("/api/actions/queue-process", post(action_process_queue))
         .route(
             "/api/actions/daily-indicators",
@@ -866,6 +870,27 @@ async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> 
         }
         Err(err) => {
             error!("manual decision report generation failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn action_generate_decision_report_dry_run(State(state): State<Arc<AppState>>) -> Response {
+    match xai_decision::submit_manual_decision_report(&state).await {
+        Ok(report) => {
+            let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
+            info!(
+                report_id = id,
+                status = report
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("unknown"),
+                "manual dry-run decision report submitted without Trading Manager or execution queue"
+            );
+            redirect_to_app(&state, &format!("/?view=decisions&report_id={id}")).into_response()
+        }
+        Err(err) => {
+            error!("manual dry-run decision report generation failed: {err:#}");
             json_result(Err(err))
         }
     }

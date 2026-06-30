@@ -563,13 +563,13 @@ async fn run_for_report(
             continue;
         }
         if order.action == "SELL" {
-            let available = latest_position_quantity(state, &order.symbol)
+            let available = latest_sellable_position_quantity(state, &order.symbol)
                 .await
                 .unwrap_or(0.0);
             if available <= 0.0 {
                 skipped.push(skip_order(
                     &order,
-                    "No local holding is available for this SELL.",
+                    "No broker-authoritative sellable holding is available for this SELL.",
                 ));
                 continue;
             }
@@ -1707,6 +1707,20 @@ async fn insert_order_event(
 }
 
 async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64> {
+    if broker_position_snapshots_available(state).await? {
+        let row = sqlx::query(&format!(
+            "SELECT COALESCE(SUM(quantity), 0) AS quantity
+             FROM broker_position_snapshots
+             WHERE symbol = '{}'",
+            sql_escape(symbol)
+        ))
+        .fetch_optional(&state.pool)
+        .await?;
+        return Ok(row
+            .and_then(|row| row.try_get::<f64, _>("quantity").ok())
+            .unwrap_or(0.0));
+    }
+
     let latest_batch = sqlx::query(
         "SELECT batch_id FROM import_batches ORDER BY imported_at DESC, batch_id DESC LIMIT 1",
     )
@@ -1727,6 +1741,34 @@ async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64>
     Ok(row
         .and_then(|row| row.try_get::<f64, _>("quantity").ok())
         .unwrap_or(0.0))
+}
+
+async fn latest_sellable_position_quantity(state: &AppState, symbol: &str) -> Result<f64> {
+    if broker_position_snapshots_available(state).await? {
+        let row = sqlx::query(&format!(
+            "SELECT COALESCE(SUM(quantity), 0) AS quantity
+             FROM broker_position_snapshots
+             WHERE symbol = '{}'
+               AND COALESCE(can_be_closed, 1) <> 0",
+            sql_escape(symbol)
+        ))
+        .fetch_optional(&state.pool)
+        .await?;
+        return Ok(row
+            .and_then(|row| row.try_get::<f64, _>("quantity").ok())
+            .unwrap_or(0.0));
+    }
+    latest_position_quantity(state, symbol).await
+}
+
+async fn broker_position_snapshots_available(state: &AppState) -> Result<bool> {
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM broker_position_snapshots")
+        .fetch_optional(&state.pool)
+        .await?;
+    Ok(row
+        .and_then(|row| row.try_get::<i64, _>("count").ok())
+        .unwrap_or(0)
+        > 0)
 }
 
 fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {

@@ -1,5 +1,6 @@
+use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
-use serde_json::Value as JsonValue;
+use serde_json::{Map, Value as JsonValue};
 
 use crate::{
     localization::{
@@ -159,6 +160,7 @@ fn Dashboard(props: DashboardProps) -> Element {
         .unwrap_or("n/a")
         .to_uppercase();
     let (decision_health_class, decision_health_label) = decision_health(&data.latest_decision);
+    let operation_items = operations_health(&data);
     let saxo_status_display = truncate_chars(&data.saxo_status, 90);
     let week_start = week_start_label(&prefs);
     let hour_cycle = hour_cycle_label(&prefs);
@@ -187,6 +189,7 @@ fn Dashboard(props: DashboardProps) -> Element {
                     }
                 }
             }
+            OperationsHealthBanner { items: operation_items }
             div { class: "notice-banner", "Analysis window inactive right now." }
             section { class: "grid",
                 SummaryMetricCard {
@@ -327,6 +330,38 @@ fn UserMenu(
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct OperationHealthItem {
+    label: String,
+    status: String,
+    tone: &'static str,
+    detail: String,
+}
+
+#[component]
+fn OperationsHealthBanner(items: Vec<OperationHealthItem>) -> Element {
+    let banner_class = if items.iter().any(|item| item.tone == "bad") {
+        "operations-banner bad"
+    } else if items.iter().any(|item| item.tone == "warn") {
+        "operations-banner warn"
+    } else {
+        "operations-banner good"
+    };
+    rsx! {
+        section { class: "{banner_class}", "aria-label": "Operations health",
+            div { class: "operations-banner-title", "Operations" }
+            div { class: "operations-chip-row",
+                for item in items {
+                    span { class: "operation-chip {item.tone}", title: "{item.detail}",
+                        strong { "{item.label}" }
+                        span { "{item.status}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn TabNav(active_view: String) -> Element {
     rsx! {
@@ -442,12 +477,122 @@ fn OverviewView(
                             div { class: "event mono", strong { "Database" } span { "{data.db_label}" } }
                         }
                     }
+                    CashDeploymentPanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
                     section { class: "section",
                         h2 { "Recent Decisions" }
                         div { class: "stack", for row in data.reports.iter() { DecisionCard { row: row.clone(), prefs: prefs.clone() } } }
                     }
                 }
             }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CashDeploymentSummary {
+    status: String,
+    tone: &'static str,
+    run_label: String,
+    available_buy_budget_dkk: f64,
+    excess_cash_pct: f64,
+    approved_buy_count: i64,
+    skipped_buy_count: i64,
+    candidate_buy_count: i64,
+    description: String,
+}
+
+#[component]
+fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let latest = trading_manager
+        .get("latest_run")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let summary = cash_deployment_summary(&latest, &prefs);
+    rsx! {
+        section { class: "section",
+            h2 { "Cash Deployment" }
+            if latest.is_null() {
+                div { class: "event",
+                    strong { "No Trading Manager run yet." }
+                    span { class: "muted", "Cash deployment diagnostics will appear after the next decision report is processed." }
+                }
+            } else {
+                div { class: "cash-deployment-panel",
+                    div { class: "event",
+                        strong { "Latest manager run" }
+                        span { "{summary.run_label}" }
+                        span { class: "status {summary.tone}", "{summary.status}" }
+                    }
+                    div { class: "cash-diagnostic-grid",
+                        div { span { class: "label", "Buy budget" } strong { "{format_dkk(summary.available_buy_budget_dkk, &prefs)}" } }
+                        div { span { class: "label", "Excess cash" } strong { "{format_pct(summary.excess_cash_pct, &prefs)}" } }
+                        div { span { class: "label", "BUY candidates" } strong { "{summary.candidate_buy_count}" } }
+                        div { span { class: "label", "Approved / blocked" } strong { "{summary.approved_buy_count} / {summary.skipped_buy_count}" } }
+                    }
+                    div { class: "event cash-diagnostic-reason",
+                        strong { "Reason" }
+                        span { "{summary.description}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn cash_deployment_summary(
+    latest_run: &JsonValue,
+    prefs: &LocalizationPrefs,
+) -> CashDeploymentSummary {
+    let manager = latest_run
+        .get("manager_json")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let diagnostics = manager
+        .get("reinvestment_diagnostics")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let budget = diagnostics
+        .get("capital_budget")
+        .or_else(|| manager.get("capital_budget"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let status = fallback_text(
+        &diagnostics,
+        "status",
+        &fallback_text(latest_run, "status", "unknown"),
+    );
+    let tone = cash_deployment_tone(&status);
+    let created_at = format_timestamp(&text(latest_run, "created_at"), prefs);
+    let report_id = text(latest_run, "report_id");
+    let run_label = if report_id.is_empty() {
+        created_at
+    } else {
+        format!("Report #{report_id} · {created_at}")
+    };
+    CashDeploymentSummary {
+        status,
+        tone,
+        run_label,
+        available_buy_budget_dkk: value_f64(&budget, "available_buy_budget_dkk"),
+        excess_cash_pct: value_f64(&budget, "excess_cash_pct"),
+        approved_buy_count: value_i64(&diagnostics, "approved_buy_count"),
+        skipped_buy_count: value_i64(&diagnostics, "skipped_buy_count"),
+        candidate_buy_count: value_i64(&diagnostics, "buy_candidate_count"),
+        description: fallback_text(
+            &diagnostics,
+            "description",
+            "No reinvestment diagnostic was recorded for this Trading Manager run.",
+        ),
+    }
+}
+
+fn cash_deployment_tone(status: &str) -> &'static str {
+    match status {
+        "reinvestment_candidates_approved" => "good-status",
+        "no_reinvestment_pressure" | "no_cash_budget_available" => "",
+        "excess_cash_without_buy_candidates" | "excess_cash_with_blocked_buy_candidates" => {
+            "warn-status"
+        }
+        _ => "",
     }
 }
 
@@ -864,6 +1009,20 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     } else {
         "Generate Report"
     };
+    let dry_run_label = if report_generation_pending {
+        "Generating..."
+    } else {
+        "Dry Run Report"
+    };
+    let europe_pulse = decision_pulse_health(
+        &data.reports,
+        "europe_open_followup:",
+        "Nordic/EU Open +1h15",
+    );
+    let us_pulse = decision_pulse_health(&data.reports, "us_open_followup:", "US Open +1h15");
+    let manual_pulse = decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run");
+    let diagnostics = decision_report_diagnostics(&report);
+    let quality = decision_report_quality(&report, &report_json, &diagnostics);
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -871,13 +1030,24 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     h2 { "Decision Report" }
                     p { class: "muted", "Latest xAI report plus deterministic strategy selection output. Select any recent report to inspect its outcome." }
                 }
-                form { method: "post", action: "/api/actions/decision-report", "data-decision-report-form": "true",
-                    button {
-                        class: "button primary",
-                        r#type: "submit",
-                        disabled: report_generation_pending,
-                        "data-pending-label": "Generating Report...",
-                        "{generate_label}"
+                div { class: "button-row",
+                    form { method: "post", action: "/api/actions/decision-report-dry-run", "data-decision-report-form": "true",
+                        button {
+                            class: "button secondary",
+                            r#type: "submit",
+                            disabled: report_generation_pending,
+                            "data-pending-label": "Generating Dry Run...",
+                            "{dry_run_label}"
+                        }
+                    }
+                    form { method: "post", action: "/api/actions/decision-report", "data-decision-report-form": "true",
+                        button {
+                            class: "button primary",
+                            r#type: "submit",
+                            disabled: report_generation_pending,
+                            "data-pending-label": "Generating Report...",
+                            "{generate_label}"
+                        }
                     }
                 }
             }
@@ -888,6 +1058,11 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     strong { "Decision report is running" }
                     span { "Report #{pending_report_id} is still pending. The page will refresh when it completes or fails." }
                 }
+            }
+            div { class: "mini-grid decision-summary-grid",
+                DecisionPulseHealthCard { health: europe_pulse, prefs: prefs.clone() }
+                DecisionPulseHealthCard { health: us_pulse, prefs: prefs.clone() }
+                DecisionPulseHealthCard { health: manual_pulse, prefs: prefs.clone() }
             }
             if report.is_null() {
                 div { class: "event",
@@ -961,10 +1136,9 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             strong { "Report JSON" }
                             span { "{compact_json(Some(&report_json))}" }
                         }
-                        div { class: "event prewrap",
-                            strong { "Prompt" }
-                            span { "{compact_json(report.get(\"request_json\"))}" }
-                        }
+                        DecisionReportQualityPanel { quality }
+                        DecisionReportDiagnosticsPanel { diagnostics: diagnostics.clone() }
+                        DecisionReportDebugPanel { debug: decision_report_debug_payload(&report, &report_json) }
                     }
                 }
                 div { class: "table-wrap",
@@ -978,6 +1152,442 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecisionPulseHealth {
+    label: String,
+    latest_status: String,
+    latest_created_at: String,
+    latest_id: i64,
+    latest_tone: &'static str,
+    last_success_at: String,
+    last_success_id: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecisionReportDiagnostics {
+    provider: String,
+    model: String,
+    response_format: String,
+    strict_schema: String,
+    root_object: String,
+    capital_plan_object: String,
+    schema_status: String,
+    schema_tone: &'static str,
+    request_bytes: usize,
+    response_id: String,
+    response_present: String,
+    error_category: String,
+    error_excerpt: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecisionReportQuality {
+    score: i64,
+    tone: &'static str,
+    status_label: String,
+    warning_count: usize,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DecisionReportDebugPayload {
+    prompt: String,
+    request: String,
+    response: String,
+    normalized: String,
+}
+
+fn decision_pulse_health(
+    reports: &[JsonValue],
+    pulse_key_prefix: &str,
+    label: &str,
+) -> DecisionPulseHealth {
+    let latest = reports.iter().find(|row| {
+        text(row, "analysis_pulse_key")
+            .to_lowercase()
+            .starts_with(pulse_key_prefix)
+    });
+    let last_success = reports.iter().find(|row| {
+        text(row, "analysis_pulse_key")
+            .to_lowercase()
+            .starts_with(pulse_key_prefix)
+            && text(row, "status") == "completed"
+    });
+    let latest_status = latest
+        .map(|row| fallback_text(row, "status", "missing"))
+        .unwrap_or_else(|| "missing".to_string());
+
+    DecisionPulseHealth {
+        label: label.to_string(),
+        latest_tone: decision_status_text_tone(&latest_status),
+        latest_status,
+        latest_created_at: latest
+            .map(|row| text(row, "created_at"))
+            .unwrap_or_default(),
+        latest_id: latest
+            .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
+            .unwrap_or(0),
+        last_success_at: last_success
+            .map(|row| text(row, "created_at"))
+            .unwrap_or_default(),
+        last_success_id: last_success
+            .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
+            .unwrap_or(0),
+    }
+}
+
+fn decision_status_text_tone(status: &str) -> &'static str {
+    match status {
+        "completed" => "good-text",
+        "xai_error" | "error" | "failed" | "missing" => "bad-text",
+        "pending" | "xai_deferred" => "",
+        _ => "",
+    }
+}
+
+fn decision_report_diagnostics(report: &JsonValue) -> DecisionReportDiagnostics {
+    let request = report.get("request_json").unwrap_or(&JsonValue::Null);
+    let response = report.get("response_json").unwrap_or(&JsonValue::Null);
+    let response_format = request.get("response_format").unwrap_or(&JsonValue::Null);
+    let schema = response_format
+        .get("json_schema")
+        .and_then(|json_schema| json_schema.get("schema"))
+        .unwrap_or(&JsonValue::Null);
+    let root_object = additional_properties_label(schema);
+    let capital_plan_object = additional_properties_label(
+        schema
+            .get("properties")
+            .and_then(|properties| properties.get("capital_plan"))
+            .unwrap_or(&JsonValue::Null),
+    );
+    let strict_schema = response_format
+        .get("json_schema")
+        .and_then(|json_schema| json_schema.get("strict"))
+        .and_then(JsonValue::as_bool)
+        .map(|flag| if flag { "true" } else { "false" })
+        .unwrap_or("n/a")
+        .to_string();
+    let schema_ok =
+        root_object == "strict" && capital_plan_object == "strict" && strict_schema == "true";
+    let error_text = text(report, "error_text");
+
+    DecisionReportDiagnostics {
+        provider: decision_report_provider_label(request),
+        model: fallback_text(report, "model", &text(request, "model")),
+        response_format: fallback_text(response_format, "type", "n/a"),
+        strict_schema,
+        root_object,
+        capital_plan_object,
+        schema_status: if schema_ok {
+            "strict".to_string()
+        } else {
+            "needs review".to_string()
+        },
+        schema_tone: if schema_ok { "good-text" } else { "bad-text" },
+        request_bytes: serde_json::to_string(request)
+            .map(|rendered| rendered.len())
+            .unwrap_or(0),
+        response_id: fallback_text(report, "response_id", &text(response, "id")),
+        response_present: if response.is_null() {
+            "no".to_string()
+        } else {
+            "yes".to_string()
+        },
+        error_category: decision_error_category(&error_text).to_string(),
+        error_excerpt: if error_text.is_empty() {
+            "No error recorded.".to_string()
+        } else {
+            truncate_chars(&error_text, 420)
+        },
+    }
+}
+
+fn decision_report_provider_label(request: &JsonValue) -> String {
+    match text(
+        request.get("response_format").unwrap_or(&JsonValue::Null),
+        "type",
+    )
+    .as_str()
+    {
+        "json_schema" => "openrouter/json_schema".to_string(),
+        "json_object" => "json_object".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn additional_properties_label(schema: &JsonValue) -> String {
+    match schema
+        .get("additionalProperties")
+        .and_then(JsonValue::as_bool)
+    {
+        Some(false) => "strict".to_string(),
+        Some(true) => "open".to_string(),
+        None => "missing".to_string(),
+    }
+}
+
+fn decision_error_category(error_text: &str) -> &'static str {
+    let lower = error_text.to_lowercase();
+    if lower.is_empty() {
+        "none"
+    } else if lower.contains("invalid_json_schema") || lower.contains("invalid schema") {
+        "schema"
+    } else if lower.contains("credit") || lower.contains("spending limit") {
+        "provider credits"
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        "timeout"
+    } else if lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("401")
+        || lower.contains("403")
+    {
+        "auth"
+    } else if lower.contains("parse") || lower.contains("normalized into strict json") {
+        "parse"
+    } else if lower.contains("http 400") || lower.contains("provider returned error") {
+        "provider"
+    } else {
+        "unknown"
+    }
+}
+
+fn decision_report_quality(
+    report: &JsonValue,
+    report_json: &JsonValue,
+    diagnostics: &DecisionReportDiagnostics,
+) -> DecisionReportQuality {
+    let mut score = 0_i64;
+    let mut warnings = Vec::new();
+    let status = text(report, "status");
+    if status == "completed" {
+        score += 20;
+    } else {
+        warnings.push(format!("Report status is {status}; expected completed."));
+    }
+
+    if diagnostics.schema_status == "strict" {
+        score += 20;
+    } else {
+        warnings.push("Provider response schema is not fully strict.".to_string());
+    }
+
+    if report_json.is_object() {
+        score += 10;
+    } else {
+        warnings.push("Normalized report payload is missing or not an object.".to_string());
+    }
+
+    let required_sections = [
+        "market_view",
+        "capital_plan",
+        "selected_assets",
+        "symbol_sentiment",
+        "suggested_trades",
+    ];
+    let mut section_score = 0_i64;
+    for section in required_sections {
+        if report_json.get(section).is_some() {
+            section_score += 6;
+        } else {
+            warnings.push(format!("Missing normalized section: {section}."));
+        }
+    }
+    score += section_score.min(30);
+
+    let trades = json_array(report_json, "suggested_trades");
+    let invalid_trade_count = trades
+        .iter()
+        .filter(|trade| !decision_trade_shape_ok(trade))
+        .count();
+    if invalid_trade_count == 0 {
+        score += 10;
+    } else {
+        warnings.push(format!(
+            "{invalid_trade_count} suggested trade(s) have incomplete order shape."
+        ));
+    }
+
+    let scope = report_json
+        .get("market_scope_enforcement")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let scope_status = text(&scope, "status");
+    if scope_status.is_empty() {
+        warnings.push("Market-scope enforcement metadata is missing.".to_string());
+    } else {
+        score += 10;
+        let filtered = json_array(&scope, "filtered_out_symbols");
+        if !filtered.is_empty() {
+            warnings.push(format!(
+                "Market-scope enforcement filtered {} symbol(s) out of the model response.",
+                filtered.len()
+            ));
+        }
+    }
+
+    let score = score.clamp(0, 100);
+    let tone = if score >= 80 {
+        "good-text"
+    } else if score >= 60 {
+        "warn-text"
+    } else {
+        "bad-text"
+    };
+    let status_label = if warnings.is_empty() {
+        "ready".to_string()
+    } else if score >= 80 {
+        "ready with notes".to_string()
+    } else if score >= 60 {
+        "review".to_string()
+    } else {
+        "poor".to_string()
+    };
+    DecisionReportQuality {
+        score,
+        tone,
+        status_label,
+        warning_count: warnings.len(),
+        warnings,
+    }
+}
+
+fn decision_trade_shape_ok(trade: &JsonValue) -> bool {
+    let order_type = text(trade, "order_type");
+    let action = text(trade, "action");
+    let has_basic_shape = !text(trade, "symbol").is_empty()
+        && matches!(action.as_str(), "BUY" | "SELL")
+        && value_f64(trade, "quantity") > 0.0
+        && matches!(order_type.as_str(), "Market" | "Limit")
+        && value_f64(trade, "estimated_value_dkk") > 0.0
+        && !text(trade, "strategy_key").is_empty();
+    if !has_basic_shape {
+        return false;
+    }
+    order_type != "Limit"
+        || trade
+            .get("limit_price_local")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or(0.0)
+            > 0.0
+}
+
+#[component]
+fn DecisionReportQualityPanel(quality: DecisionReportQuality) -> Element {
+    rsx! {
+        div { class: "event report-quality-panel",
+            strong { "Report Quality" }
+            div { class: "quality-score-row",
+                span { class: "quality-score {quality.tone}", "{quality.score}/100" }
+                span { class: "status", "{quality.status_label}" }
+                span { class: "muted", "{quality.warning_count} warning(s)" }
+            }
+            if quality.warnings.is_empty() {
+                p { class: "muted", "No quality warnings for the selected report." }
+            } else {
+                ul { class: "quality-warning-list",
+                    for warning in quality.warnings.iter() {
+                        li { "{warning}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DecisionReportDiagnosticsPanel(diagnostics: DecisionReportDiagnostics) -> Element {
+    let request_kb = format!("{:.1} KB", diagnostics.request_bytes as f64 / 1024.0);
+    let schema_class = format!("diagnostic-value {}", diagnostics.schema_tone);
+    rsx! {
+        div { class: "event report-diagnostics-panel",
+            strong { "Provider Diagnostics" }
+            div { class: "diagnostic-grid",
+                div { span { class: "label", "Provider" } span { class: "diagnostic-value", "{diagnostics.provider}" } }
+                div { span { class: "label", "Model" } span { class: "diagnostic-value", "{diagnostics.model}" } }
+                div { span { class: "label", "Format" } span { class: "diagnostic-value", "{diagnostics.response_format}" } }
+                div { span { class: "label", "Strict" } span { class: "diagnostic-value", "{diagnostics.strict_schema}" } }
+                div { span { class: "label", "Root Object" } span { class: "diagnostic-value", "{diagnostics.root_object}" } }
+                div { span { class: "label", "Capital Plan" } span { class: "diagnostic-value", "{diagnostics.capital_plan_object}" } }
+                div { span { class: "label", "Schema" } span { class: schema_class, "{diagnostics.schema_status}" } }
+                div { span { class: "label", "Request Size" } span { class: "diagnostic-value", "{request_kb}" } }
+                div { span { class: "label", "Response" } span { class: "diagnostic-value", "{diagnostics.response_present}" } }
+                div { span { class: "label", "Response ID" } span { class: "diagnostic-value", "{diagnostics.response_id}" } }
+                div { span { class: "label", "Error Type" } span { class: "diagnostic-value", "{diagnostics.error_category}" } }
+            }
+            if diagnostics.error_category != "none" {
+                div { class: "muted diagnostic-error", "{diagnostics.error_excerpt}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn DecisionReportDebugPanel(debug: DecisionReportDebugPayload) -> Element {
+    rsx! {
+        div { class: "event report-debug-panel",
+            strong { "Sanitized Debug Payloads" }
+            p { class: "muted", "Expandable prompt, request, provider response, and normalized report payloads. Secret-like fields are redacted before rendering." }
+            DebugPayloadDetails { label: "Prompt", body: debug.prompt }
+            DebugPayloadDetails { label: "Request", body: debug.request }
+            DebugPayloadDetails { label: "Provider Response", body: debug.response }
+            DebugPayloadDetails { label: "Normalized Report", body: debug.normalized }
+        }
+    }
+}
+
+#[component]
+fn DebugPayloadDetails(label: &'static str, body: String) -> Element {
+    rsx! {
+        details { class: "debug-payload-details",
+            summary { "{label}" }
+            pre { "{body}" }
+        }
+    }
+}
+
+fn decision_report_debug_payload(
+    report: &JsonValue,
+    normalized_report: &JsonValue,
+) -> DecisionReportDebugPayload {
+    DecisionReportDebugPayload {
+        prompt: compact_debug_text(&text(report, "prompt_text"), 4_000),
+        request: compact_json_redacted(report.get("request_json"), 4_000),
+        response: compact_json_redacted(report.get("response_json"), 4_000),
+        normalized: compact_json_redacted(Some(normalized_report), 4_000),
+    }
+}
+
+#[component]
+fn DecisionPulseHealthCard(health: DecisionPulseHealth, prefs: LocalizationPrefs) -> Element {
+    let latest = if health.latest_id > 0 {
+        format!(
+            "#{} · {}",
+            health.latest_id,
+            format_timestamp(&health.latest_created_at, &prefs)
+        )
+    } else {
+        "No report yet".to_string()
+    };
+    let last_success = if health.last_success_id > 0 {
+        format!(
+            "Last OK #{} · {}",
+            health.last_success_id,
+            format_timestamp(&health.last_success_at, &prefs)
+        )
+    } else {
+        "No successful report in recent history".to_string()
+    };
+    rsx! {
+        div { class: "card",
+            div { class: "label", "{health.label}" }
+            div { class: "value {health.latest_tone}", "{health.latest_status}" }
+            div { class: "muted summary-subtitle", "{latest}" }
+            div { class: "muted summary-subtitle", "{last_success}" }
         }
     }
 }
@@ -1114,6 +1724,16 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .iter()
         .filter(|row| text_or(row, "status", "pending_review") == "pending_review")
         .count();
+    let advised_reports = data
+        .hermes_decision_advice_audit
+        .iter()
+        .filter(|row| !text(row, "advice_id").is_empty())
+        .count();
+    let changed_reports = data
+        .hermes_decision_advice_audit
+        .iter()
+        .filter(|row| hermes_advice_impact(row).0 != "no-op")
+        .count();
     let latest_created = if latest_reflection.is_null() {
         "None".to_string()
     } else {
@@ -1130,6 +1750,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "pill-row right",
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
+                    span { class: "pill", "Advised reports: {advised_reports}" }
+                    span { class: "pill", "Changed: {changed_reports}" }
                     span { class: "pill", "Pending: {pending_experiments}" }
                 }
             }
@@ -1156,6 +1778,28 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Goal Version", value: text_or(&latest_reflection, "goal_version", "n/a"), tone: "" }
                 MetricCard { label: "Findings", value: json_item_count(&latest_reflection, "findings_json").to_string(), tone: "" }
                 MetricCard { label: "Actions", value: json_item_count(&latest_reflection, "proposed_actions_json").to_string(), tone: "" }
+            }
+            div { class: "table-wrap",
+                h3 { "Decision Advice Audit" }
+                table {
+                    thead {
+                        tr {
+                            th { "Report" }
+                            th { "Pulse" }
+                            th { "Advice" }
+                            th { "Recommendation" }
+                            th { "Orders" }
+                            th { "Impact" }
+                            th { "Manager" }
+                            th { "Summary" }
+                        }
+                    }
+                    tbody {
+                        for row in data.hermes_decision_advice_audit.iter() {
+                            HermesAdviceAuditRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
             }
             if latest_reflection.is_null() {
                 div { class: "event",
@@ -1429,13 +2073,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         thead { tr { th { "Created" } th { "Order" } th { "Type" } th { "Status" } th { "Message" } } }
                         tbody {
                             for row in data.execution_events.iter().take(20) {
-                                tr {
-                                    td { "{format_timestamp(&text(row, \"created_at\"), &prefs)}" }
-                                    td { "{text(row, \"execution_order_id\")}" }
-                                    td { "{text(row, \"event_type\")}" }
-                                    td { "{text(row, \"status\")}" }
-                                    td { "{text(row, \"message\")}{text(row, \"error_text\")}" }
-                                }
+                                ExecutionEventRow { row: row.clone(), prefs: prefs.clone() }
                             }
                         }
                     }
@@ -1780,6 +2418,8 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = text(&row, "status");
     let detail = execution_status_detail(&row);
     let reason = execution_status_reason(&row);
+    let tooltip = execution_status_tooltip(&row, &reason, &detail);
+    let reason_class = execution_reason_class(&reason);
     let status_class = execution_status_class(&status);
     let detail_preview = if detail.is_empty() {
         String::new()
@@ -1797,9 +2437,9 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{fallback_text(&row, \"strategy_role\", \"primary\")}" }
             td { "{fallback_text(&row, \"order_type\", \"Market\")}" }
             td { class: "execution-status-cell",
-                span { class: "{status_class}", title: "{detail}", "{status}" }
+                span { class: "{status_class}", title: "{tooltip}", "{status}" }
                 if !reason.is_empty() {
-                    span { class: "status detail-status", title: "{detail}", "{reason}" }
+                    span { class: "{reason_class}", title: "{tooltip}", "{reason}" }
                 }
             }
             td { "{format_quantity(value_f64(&row, \"quantity\"), &prefs)}" }
@@ -1808,10 +2448,42 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { class: "muted error-cell",
                 if !detail.is_empty() {
-                    details { class: "error-details",
+                    details { class: "error-details", title: "{tooltip}",
                         summary { "{detail_preview}" }
                         pre { "{detail_block}" }
                     }
+                } else if !reason.is_empty() {
+                    span { class: "{reason_class}", title: "{tooltip}", "{reason}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = fallback_text(&row, "broker_status", &text(&row, "status"));
+    let detail = execution_event_detail(&row);
+    let reason = execution_event_reason(&row);
+    let status_class = execution_status_class(&status);
+    let reason_class = execution_reason_class(&reason);
+    let tooltip = execution_event_tooltip(&row, &status, &reason, &detail);
+    rsx! {
+        tr {
+            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { "{text(&row, \"execution_order_id\")}" }
+            td { "{text(&row, \"event_type\")}" }
+            td { class: "execution-status-cell",
+                span { class: "{status_class}", title: "{tooltip}", "{status}" }
+                if !reason.is_empty() {
+                    span { class: "{reason_class}", title: "{tooltip}", "{reason}" }
+                }
+            }
+            td { class: "muted error-cell",
+                if !detail.is_empty() {
+                    span { class: "event-message", title: "{tooltip}", "{truncate_chars(&detail, 180)}" }
+                } else {
+                    span { class: "muted", "n/a" }
                 }
             }
         }
@@ -1919,6 +2591,18 @@ fn value_f64(value: &JsonValue, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+fn value_i64(value: &JsonValue, key: &str) -> i64 {
+    value
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_f64().map(|v| v as i64))
+                .or_else(|| value.as_str()?.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
 fn text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -1960,6 +2644,192 @@ fn json_item_count(value: &JsonValue, key: &str) -> usize {
         Some(value) if !value.is_null() => 1,
         _ => 0,
     }
+}
+
+#[component]
+fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let advice_status = hermes_advice_status_label(&row);
+    let (impact, impact_tone) = hermes_advice_impact(&row);
+    let (order_counts, order_detail) = hermes_advice_order_counts(&row);
+    let summary = fallback_text(&row, "advice_summary", "No advice summary recorded.");
+    let pulse = fallback_text(&row, "analysis_pulse_label", "n/a");
+    let recommendation = fallback_text(&row, "advice_recommendation", "n/a");
+    let manager_status = fallback_text(&row, "manager_status", "not run");
+    rsx! {
+        tr {
+            td {
+                span { "#{text(&row, \"report_id\")}" }
+                small { class: "muted block", "{format_timestamp(&text(&row, \"report_created_at\"), &prefs)}" }
+            }
+            td { "{pulse}" }
+            td {
+                span { class: "status {hermes_advice_status_tone(&advice_status)}", title: "{hermes_advice_detail(&row)}", "{advice_status}" }
+            }
+            td { "{recommendation}" }
+            td { title: "{order_detail}", "{order_counts}" }
+            td {
+                span { class: "{impact_tone}", title: "{hermes_advice_impact_detail(&row)}", "{impact}" }
+            }
+            td { "{manager_status}" }
+            td { class: "muted error-cell",
+                span { class: "event-message", title: "{summary}", "{truncate_chars(&summary, 180)}" }
+            }
+        }
+    }
+}
+
+fn hermes_advice_status_label(row: &JsonValue) -> String {
+    let advice_status = text(row, "advice_status");
+    if !advice_status.is_empty() {
+        return advice_status;
+    }
+    let manager_status = row
+        .get("manager_json")
+        .and_then(|value| value.get("hermes_decision_advice"))
+        .and_then(|value| value.get("status"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
+    if !manager_status.is_empty() {
+        return manager_status.to_string();
+    }
+    "not_seen".to_string()
+}
+
+fn hermes_advice_status_tone(status: &str) -> &'static str {
+    match status {
+        "received" => "good-status",
+        "not_seen" | "timeout" | "not_configured" | "submit_failed" => "warn-status",
+        "error" => "bad-status",
+        _ => "",
+    }
+}
+
+fn hermes_advice_detail(row: &JsonValue) -> String {
+    let advice_id = text(row, "advice_id");
+    let source_session_id = text(row, "advice_source_session_id");
+    let created_at = text(row, "advice_created_at");
+    if advice_id.is_empty() {
+        return format!(
+            "No persisted Hermes decision advice row. Manager advisory status: {}.",
+            hermes_advice_status_label(row)
+        );
+    }
+    format!(
+        "Advice {} recorded at {} from session {}.",
+        advice_id,
+        if created_at.is_empty() {
+            "unknown time".to_string()
+        } else {
+            created_at
+        },
+        if source_session_id.is_empty() {
+            "n/a".to_string()
+        } else {
+            source_session_id
+        }
+    )
+}
+
+fn hermes_advice_order_counts(row: &JsonValue) -> (String, String) {
+    let items = row
+        .get("order_advice_json")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut allow = 0usize;
+    let mut reduce = 0usize;
+    let mut stand_down = 0usize;
+    let mut review = 0usize;
+    for item in &items {
+        match text(item, "action").trim().to_lowercase().as_str() {
+            "allow" => allow += 1,
+            "reduce" => reduce += 1,
+            "stand_down" => stand_down += 1,
+            "review" => review += 1,
+            _ => {}
+        }
+    }
+    let label = if items.is_empty() {
+        "none".to_string()
+    } else {
+        format!("{} items", items.len())
+    };
+    let detail = format!(
+        "allow: {allow}, reduce: {reduce}, stand_down: {stand_down}, review: {review}; queued: {}, executed: {}, failed: {}",
+        text_or(row, "queued_order_count", "0"),
+        text_or(row, "executed_order_count", "0"),
+        text_or(row, "failed_order_count", "0")
+    );
+    (label, detail)
+}
+
+fn hermes_advice_impact(row: &JsonValue) -> (String, &'static str) {
+    let recommendation = text(row, "advice_recommendation").trim().to_lowercase();
+    let status = hermes_advice_status_label(row);
+    let mode = row
+        .get("manager_json")
+        .and_then(|value| value.get("hermes_decision_advice"))
+        .and_then(|value| value.get("mode"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("");
+    let items = row
+        .get("order_advice_json")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let conservative_actions = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                text(item, "action").trim().to_lowercase().as_str(),
+                "reduce" | "stand_down" | "review"
+            )
+        })
+        .count();
+    if conservative_actions > 0 {
+        return (
+            format!("restricted {conservative_actions}"),
+            if items.iter().any(|item| {
+                text(item, "action")
+                    .trim()
+                    .eq_ignore_ascii_case("stand_down")
+            }) {
+                "bad-text"
+            } else {
+                "warn-text"
+            },
+        );
+    }
+    if recommendation == "stand_down" {
+        return ("global block".to_string(), "bad-text");
+    }
+    if recommendation == "review" {
+        return ("review gate".to_string(), "warn-text");
+    }
+    if mode == "conservative"
+        && matches!(
+            status.as_str(),
+            "timeout" | "error" | "not_configured" | "submit_failed"
+        )
+    {
+        return ("review fallback".to_string(), "warn-text");
+    }
+    ("no-op".to_string(), "")
+}
+
+fn hermes_advice_impact_detail(row: &JsonValue) -> String {
+    let (orders, order_detail) = hermes_advice_order_counts(row);
+    let manager = row
+        .get("manager_json")
+        .and_then(|value| value.get("hermes_decision_advice"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    format!(
+        "Recommendation: {}. Order advice: {} ({order_detail}). Manager advice: {}",
+        fallback_text(row, "advice_recommendation", "n/a"),
+        orders,
+        compact_json(Some(&manager))
+    )
 }
 
 fn hermes_transition_actions(status: &str) -> Vec<(&'static str, &'static str, &'static str)> {
@@ -2041,12 +2911,216 @@ fn fallback_text(value: &JsonValue, key: &str, fallback: &str) -> String {
     }
 }
 
+fn operations_health(data: &DashboardView) -> Vec<OperationHealthItem> {
+    operations_health_at(data, Utc::now())
+}
+
+fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<OperationHealthItem> {
+    vec![
+        saxo_operation_health(&data.saxo_auth),
+        scheduler_operation_health(&data.market_status, now),
+        decision_operation_health(&data.latest_decision),
+        run_operation_health("Markov", &data.latest_markov_run, now),
+        run_operation_health("Indicators", &data.latest_daily_indicator_run, now),
+        quote_operation_health(&data.positions, now),
+    ]
+}
+
+fn saxo_operation_health(auth: &JsonValue) -> OperationHealthItem {
+    let connected = auth
+        .get("connected")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let status = text_or(auth, "status", "unknown");
+    let detail = text_or(auth, "status_text", "No Saxo session status is available.");
+    if !connected {
+        return OperationHealthItem {
+            label: "Saxo".to_string(),
+            status: if status == "needs_reauth" || status == "missing_session" {
+                "reauth".to_string()
+            } else {
+                status
+            },
+            tone: "bad",
+            detail,
+        };
+    }
+
+    let expires_in = value_f64(auth, "expires_in_minutes");
+    if expires_in > 0.0 && expires_in <= 10.0 {
+        OperationHealthItem {
+            label: "Saxo".to_string(),
+            status: "expiring".to_string(),
+            tone: "warn",
+            detail: format!("{detail} Access token expires in {:.0} min.", expires_in),
+        }
+    } else {
+        OperationHealthItem {
+            label: "Saxo".to_string(),
+            status: "ok".to_string(),
+            tone: "good",
+            detail,
+        }
+    }
+}
+
+fn scheduler_operation_health(
+    market_status: &JsonValue,
+    now: DateTime<Utc>,
+) -> OperationHealthItem {
+    let summary = market_status.get("summary").unwrap_or(&JsonValue::Null);
+    let heartbeat = text(summary, "last_heartbeat_at");
+    let last_cycle_status = text_or(summary, "last_cycle_status", "unknown");
+    let Some(age_minutes) = age_minutes(&heartbeat, now) else {
+        return OperationHealthItem {
+            label: "Scheduler".to_string(),
+            status: "unknown".to_string(),
+            tone: "warn",
+            detail: "No scheduler heartbeat timestamp is available.".to_string(),
+        };
+    };
+    let (tone, status) = if age_minutes > 60.0 {
+        ("bad", "stale")
+    } else if age_minutes > 20.0 {
+        ("warn", "delayed")
+    } else if last_cycle_status == "ok" || last_cycle_status.is_empty() {
+        ("good", "ok")
+    } else {
+        ("warn", "check")
+    };
+    OperationHealthItem {
+        label: "Scheduler".to_string(),
+        status: status.to_string(),
+        tone,
+        detail: format!(
+            "Last heartbeat {} ago. Last cycle status: {}.",
+            age_label(age_minutes),
+            last_cycle_status
+        ),
+    }
+}
+
+fn decision_operation_health(report: &JsonValue) -> OperationHealthItem {
+    let status = text(report, "status");
+    if status.is_empty() {
+        return OperationHealthItem {
+            label: "Reports".to_string(),
+            status: "missing".to_string(),
+            tone: "warn",
+            detail: "No decision report has been recorded yet.".to_string(),
+        };
+    }
+    let tone = match status.as_str() {
+        "completed" => "good",
+        "pending" | "xai_deferred" => "warn",
+        "xai_error" | "error" | "failed" => "bad",
+        _ => "warn",
+    };
+    let display = match status.as_str() {
+        "completed" => "ok",
+        "xai_error" => "failed",
+        "xai_deferred" => "pending",
+        other => other,
+    };
+    let mut detail = format!(
+        "Latest report #{} from {} is {}.",
+        fallback_text(report, "id", "n/a"),
+        fallback_text(report, "created_at", "unknown time"),
+        status
+    );
+    let error = text(report, "error_text");
+    if !error.is_empty() {
+        detail.push(' ');
+        detail.push_str(&truncate_chars(&error, 180));
+    }
+    OperationHealthItem {
+        label: "Reports".to_string(),
+        status: display.to_string(),
+        tone,
+        detail,
+    }
+}
+
+fn run_operation_health(label: &str, run: &JsonValue, now: DateTime<Utc>) -> OperationHealthItem {
+    if run.is_null() {
+        return OperationHealthItem {
+            label: label.to_string(),
+            status: "missing".to_string(),
+            tone: "warn",
+            detail: format!("No {label} run has been recorded yet."),
+        };
+    }
+    let status = text_or(run, "status", "unknown");
+    let run_date = text(run, "run_date");
+    let error_count = value_f64(run, "error_count");
+    let today = now.date_naive().to_string();
+    let stale = !run_date.is_empty() && run_date < today;
+    let lower_status = status.to_ascii_lowercase();
+    let (tone, display) = if lower_status.contains("error") || lower_status.contains("failed") {
+        ("bad", "failed")
+    } else if error_count > 0.0 {
+        ("warn", "partial")
+    } else if stale {
+        ("warn", "stale")
+    } else {
+        ("good", "fresh")
+    };
+    OperationHealthItem {
+        label: label.to_string(),
+        status: display.to_string(),
+        tone,
+        detail: format!(
+            "{} run date {}. Status: {}. Succeeded: {}. Failed: {}.",
+            label,
+            if run_date.is_empty() {
+                "unknown".to_string()
+            } else {
+                run_date
+            },
+            status,
+            fallback_text(run, "success_count", "0"),
+            fallback_text(run, "error_count", "0")
+        ),
+    }
+}
+
+fn quote_operation_health(positions: &[JsonValue], now: DateTime<Utc>) -> OperationHealthItem {
+    let latest = positions
+        .iter()
+        .filter_map(|row| parse_utc_timestamp(&text(row, "latest_quote_updated_at")))
+        .max();
+    let Some(latest) = latest else {
+        return OperationHealthItem {
+            label: "Quotes".to_string(),
+            status: "unknown".to_string(),
+            tone: "warn",
+            detail: "No quote freshness timestamp is available for current positions.".to_string(),
+        };
+    };
+    let age_minutes = (now - latest).num_seconds().max(0) as f64 / 60.0;
+    let (tone, status) = if age_minutes > 36.0 * 60.0 {
+        ("bad", "stale")
+    } else if age_minutes > 12.0 * 60.0 {
+        ("warn", "old")
+    } else {
+        ("good", "fresh")
+    };
+    OperationHealthItem {
+        label: "Quotes".to_string(),
+        status: status.to_string(),
+        tone,
+        detail: format!("Newest quote snapshot is {} old.", age_label(age_minutes)),
+    }
+}
+
 fn execution_status_class(status: &str) -> &'static str {
     let lower = status.to_ascii_lowercase();
     if lower.contains("failed")
         || lower.contains("rejected")
         || lower.contains("invalid")
         || lower.contains("cancelled")
+        || lower.contains("expired")
+        || lower.contains("done_for_day")
     {
         "status bad-status"
     } else if matches!(
@@ -2059,48 +3133,144 @@ fn execution_status_class(status: &str) -> &'static str {
     }
 }
 
+fn execution_reason_class(reason: &str) -> &'static str {
+    if reason == "Broker working" {
+        "status good-status"
+    } else {
+        "status detail-status"
+    }
+}
+
 fn execution_status_detail(row: &JsonValue) -> String {
     let error = text(row, "error_text");
     if !error.is_empty() {
         return error;
     }
-    row.get("execution_result_json")
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(JsonValue::as_str)
-                .or_else(|| value.get("message").and_then(JsonValue::as_str))
-        })
-        .unwrap_or("")
-        .to_string()
+    diagnostic_payload(row, "execution_result_json")
+        .and_then(|payload| diagnostic_detail_from_json(&payload))
+        .unwrap_or_default()
 }
 
 fn execution_status_reason(row: &JsonValue) -> String {
     let status = text(row, "status");
     let detail = execution_status_detail(row);
-    if detail.is_empty() && !status.contains("failed") {
-        return String::new();
+    classify_execution_detail(&status, &detail)
+}
+
+fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> String {
+    let mut lines = Vec::new();
+    let status = text(row, "status");
+    if !status.is_empty() {
+        lines.push(format!("status: {status}"));
     }
-    if let Some(reason) = saxo_precheck_reason(&detail) {
-        return reason;
+    let broker_order_id = text(row, "broker_order_id");
+    if !broker_order_id.is_empty() {
+        lines.push(format!("broker order: {broker_order_id}"));
     }
-    let lower = detail.to_ascii_lowercase();
-    if lower.contains("sell blocked before saxo precheck") {
+    if !reason.is_empty() {
+        lines.push(format!("reason: {reason}"));
+    }
+    if !detail.is_empty() {
+        lines.push(format!("detail: {detail}"));
+    } else if status == "broker_working" {
+        lines.push(
+            "detail: order accepted by Saxo; waiting for broker status/fill sync".to_string(),
+        );
+    }
+    lines.join("\n")
+}
+
+fn execution_event_detail(row: &JsonValue) -> String {
+    let message = text(row, "message");
+    let error = text(row, "error_text");
+    match (message.is_empty(), error.is_empty()) {
+        (false, false) => format!("{message}: {error}"),
+        (false, true) => message,
+        (true, false) => error,
+        (true, true) => diagnostic_payload(row, "raw_payload_json")
+            .and_then(|payload| diagnostic_detail_from_json(&payload))
+            .unwrap_or_default(),
+    }
+}
+
+fn execution_event_reason(row: &JsonValue) -> String {
+    let status = fallback_text(row, "broker_status", &text(row, "status"));
+    let detail = execution_event_detail(row);
+    classify_execution_detail(&status, &detail)
+}
+
+fn execution_event_tooltip(row: &JsonValue, status: &str, reason: &str, detail: &str) -> String {
+    let mut lines = Vec::new();
+    if !status.is_empty() {
+        lines.push(format!("status: {status}"));
+    }
+    let event_type = text(row, "event_type");
+    if !event_type.is_empty() {
+        lines.push(format!("event: {event_type}"));
+    }
+    let order_id = text(row, "execution_order_id");
+    if !order_id.is_empty() {
+        lines.push(format!("order: {order_id}"));
+    }
+    if !reason.is_empty() {
+        lines.push(format!("reason: {reason}"));
+    }
+    if !detail.is_empty() {
+        lines.push(format!("detail: {detail}"));
+    }
+    lines.join("\n")
+}
+
+fn classify_execution_detail(status: &str, detail: &str) -> String {
+    let lower_status = status.to_ascii_lowercase();
+    let lower_detail = detail.to_ascii_lowercase();
+    if let Some(reason) = saxo_precheck_reason(detail) {
+        reason
+    } else if lower_detail.contains("sell blocked before saxo precheck") {
         "Sell guard".to_string()
-    } else if lower.contains("no tradable saxo instrument")
-        || lower.contains("looking up saxo instrument")
-        || lower.contains("instrument match")
+    } else if lower_detail.contains("no tradable saxo instrument")
+        || lower_detail.contains("looking up saxo instrument")
+        || lower_detail.contains("instrument match")
+        || lower_detail.contains("instrument is not tradable")
     {
         "Resolve failed".to_string()
-    } else if lower.contains("exchange closed") || status == "waiting_for_market_open" {
+    } else if lower_detail.contains("exchange closed")
+        || lower_detail.contains("market is closed")
+        || lower_status == "waiting_for_market_open"
+    {
         "Market closed".to_string()
-    } else if lower.contains("rate limited") {
+    } else if lower_detail.contains("rate limited") || lower_detail.contains("http 429") {
         "Rate limited".to_string()
-    } else if lower.contains("unauthorized") || lower.contains("access token") {
+    } else if lower_detail.contains("unauthorized")
+        || lower_detail.contains("access token")
+        || lower_detail.contains("http 401")
+        || lower_detail.contains("http 403")
+    {
         "Saxo auth".to_string()
-    } else if status == "invalid_quantity" {
+    } else if lower_detail.contains("insufficient")
+        || lower_detail.contains("not enough cash")
+        || lower_detail.contains("buying power")
+    {
+        "Insufficient cash".to_string()
+    } else if lower_detail.contains("tick")
+        || lower_detail.contains("increment")
+        || lower_detail.contains("price step")
+    {
+        "Tick size".to_string()
+    } else if lower_status == "invalid_quantity"
+        || lower_detail.contains("quantity")
+        || lower_detail.contains("amount")
+    {
         "Invalid quantity".to_string()
-    } else if status.contains("failed") {
+    } else if lower_detail.contains("limit price") || lower_detail.contains("stop price") {
+        "Invalid price".to_string()
+    } else if lower_status == "broker_working" {
+        "Broker working".to_string()
+    } else if lower_status == "broker_expired" || lower_detail.contains("expired") {
+        "Expired unfilled".to_string()
+    } else if lower_status == "broker_done_for_day" || lower_detail.contains("doneforday") {
+        "Done for day".to_string()
+    } else if lower_status.contains("failed") || lower_status.contains("rejected") {
         "Broker rejected".to_string()
     } else {
         String::new()
@@ -2128,8 +3298,8 @@ fn execution_detail_block(row: &JsonValue, detail: &str) -> String {
     if !detail.is_empty() {
         lines.push(format!("error: {detail}"));
     }
-    if let Some(payload) = row.get("execution_result_json") {
-        let sanitized = sanitize_diagnostic_json(payload);
+    if let Some(payload) = diagnostic_payload(row, "execution_result_json") {
+        let sanitized = sanitize_diagnostic_json(&payload);
         if !sanitized.is_null() && sanitized != json_empty_object() {
             let pretty =
                 serde_json::to_string_pretty(&sanitized).unwrap_or_else(|_| sanitized.to_string());
@@ -2137,6 +3307,61 @@ fn execution_detail_block(row: &JsonValue, detail: &str) -> String {
         }
     }
     lines.join("\n\n")
+}
+
+fn diagnostic_payload(row: &JsonValue, key: &str) -> Option<JsonValue> {
+    match row.get(key)? {
+        JsonValue::String(value) => serde_json::from_str(value)
+            .ok()
+            .or_else(|| Some(JsonValue::String(value.clone()))),
+        JsonValue::Null => None,
+        value => Some(value.clone()),
+    }
+}
+
+fn diagnostic_detail_from_json(value: &JsonValue) -> Option<String> {
+    diagnostic_detail_from_json_inner(value, true)
+}
+
+fn diagnostic_detail_from_json_inner(
+    value: &JsonValue,
+    allow_direct_string: bool,
+) -> Option<String> {
+    match value {
+        JsonValue::String(text) => {
+            (allow_direct_string && !text.trim().is_empty()).then(|| text.clone())
+        }
+        JsonValue::Object(map) => {
+            for key in [
+                "error_text",
+                "error",
+                "message",
+                "Message",
+                "reason",
+                "Reason",
+                "description",
+                "Description",
+            ] {
+                if let Some(value) = map.get(key) {
+                    if let Some(text) = diagnostic_detail_from_json_inner(value, true) {
+                        return Some(text);
+                    }
+                }
+            }
+            for value in map.values() {
+                if matches!(value, JsonValue::Object(_) | JsonValue::Array(_)) {
+                    if let Some(text) = diagnostic_detail_from_json_inner(value, false) {
+                        return Some(text);
+                    }
+                }
+            }
+            None
+        }
+        JsonValue::Array(items) => items
+            .iter()
+            .find_map(|item| diagnostic_detail_from_json_inner(item, allow_direct_string)),
+        _ => None,
+    }
 }
 
 fn sanitize_diagnostic_json(value: &JsonValue) -> JsonValue {
@@ -2165,7 +3390,15 @@ fn is_sensitive_diagnostic_key(key: &str) -> bool {
     matches!(
         key.to_ascii_lowercase().as_str(),
         "accountkey"
+            | "accountid"
+            | "account_id"
             | "clientkey"
+            | "clientid"
+            | "client_id"
+            | "userid"
+            | "user_id"
+            | "handledby"
+            | "correlationkey"
             | "access_token"
             | "refresh_token"
             | "authorization"
@@ -2184,6 +3417,36 @@ fn format_local_money(value: f64, currency: &str, prefs: &LocalizationPrefs) -> 
         "n/a".to_string()
     } else {
         format_money(value, currency, prefs)
+    }
+}
+
+fn age_minutes(value: &str, now: DateTime<Utc>) -> Option<f64> {
+    let timestamp = parse_utc_timestamp(value)?;
+    Some((now - timestamp).num_seconds().max(0) as f64 / 60.0)
+}
+
+fn parse_utc_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(trimmed)
+        .map(|value| value.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|value| value.and_utc())
+        })
+}
+
+fn age_label(minutes: f64) -> String {
+    if minutes < 90.0 {
+        format!("{:.0} min", minutes.max(0.0))
+    } else if minutes < 36.0 * 60.0 {
+        format!("{:.1} h", minutes / 60.0)
+    } else {
+        format!("{:.1} d", minutes / 60.0 / 24.0)
     }
 }
 
@@ -2497,6 +3760,100 @@ fn compact_json(value: Option<&JsonValue>) -> String {
     }
 }
 
+fn compact_json_redacted(value: Option<&JsonValue>, max_len: usize) -> String {
+    let Some(value) = value else {
+        return "No payload available.".to_string();
+    };
+    let redacted = redact_debug_json(value);
+    let rendered = serde_json::to_string_pretty(&redacted).unwrap_or_else(|_| redacted.to_string());
+    compact_debug_text(&rendered, max_len)
+}
+
+fn compact_debug_text(value: &str, max_len: usize) -> String {
+    let redacted = redact_debug_text(value);
+    if redacted.len() > max_len {
+        format!("{}...", &redacted[..max_len])
+    } else if redacted.trim().is_empty() {
+        "No payload available.".to_string()
+    } else {
+        redacted
+    }
+}
+
+fn redact_debug_json(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(object) => JsonValue::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    if is_sensitive_debug_key(key) {
+                        (key.clone(), JsonValue::String("[redacted]".to_string()))
+                    } else {
+                        (key.clone(), redact_debug_json(value))
+                    }
+                })
+                .collect::<Map<String, JsonValue>>(),
+        ),
+        JsonValue::Array(values) => {
+            JsonValue::Array(values.iter().map(redact_debug_json).collect())
+        }
+        JsonValue::String(value) => JsonValue::String(redact_debug_text(value)),
+        _ => value.clone(),
+    }
+}
+
+fn is_sensitive_debug_key(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    [
+        "api_key",
+        "authorization",
+        "bearer",
+        "token",
+        "refresh",
+        "secret",
+        "password",
+        "accountkey",
+        "account_key",
+        "clientkey",
+        "client_key",
+        "database_url",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn redact_debug_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|word| {
+            let trimmed = word.trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}'
+                )
+            });
+            if looks_like_secret_token(trimmed) {
+                word.replace(trimmed, "[redacted]")
+            } else {
+                word.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn looks_like_secret_token(value: &str) -> bool {
+    if value.starts_with("sk-") || value.starts_with("Bearer") {
+        return true;
+    }
+    value.len() >= 32
+        && value.chars().any(char::is_alphabetic)
+        && value.chars().any(char::is_numeric)
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
+}
+
 fn short_json(value: Option<&JsonValue>) -> String {
     let Some(value) = value else {
         return "n/a".to_string();
@@ -2682,6 +4039,329 @@ mod tests {
     }
 
     #[test]
+    fn classifies_execution_precheck_errors_from_order_detail() {
+        let row = json!({
+            "status": "execution_failed",
+            "error_text": "Order precheck failed: Limit price is outside allowed range: Saxo refused the order"
+        });
+
+        assert_eq!(
+            execution_status_reason(&row),
+            "Limit price is outside allowed range"
+        );
+        assert!(
+            execution_status_tooltip(
+                &row,
+                &execution_status_reason(&row),
+                &execution_status_detail(&row)
+            )
+            .contains("Limit price")
+        );
+    }
+
+    #[test]
+    fn classifies_execution_broker_working_as_pending_broker_state() {
+        let row = json!({
+            "status": "broker_working",
+            "broker_order_id": "5038883136",
+            "execution_result_json": {
+                "broker_sync": {
+                    "broker_payload": {
+                        "OrderId": "5038883136"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(execution_status_reason(&row), "Broker working");
+        assert_eq!(
+            execution_reason_class("Broker working"),
+            "status good-status"
+        );
+        assert!(
+            execution_status_tooltip(&row, &execution_status_reason(&row), "")
+                .contains("waiting for broker status")
+        );
+    }
+
+    #[test]
+    fn classifies_broker_expired_as_unfilled_day_order() {
+        let row = json!({
+            "status": "broker_expired",
+            "broker_order_id": "5038961909",
+            "error_text": "Expired"
+        });
+
+        assert_eq!(execution_status_reason(&row), "Expired unfilled");
+        assert_eq!(
+            execution_status_class("broker_expired"),
+            "status bad-status"
+        );
+        assert!(
+            execution_status_tooltip(
+                &row,
+                &execution_status_reason(&row),
+                &execution_status_detail(&row)
+            )
+            .contains("Expired unfilled")
+        );
+    }
+
+    #[test]
+    fn extracts_execution_error_detail_from_nested_payload() {
+        let row = json!({
+            "status": "execution_failed",
+            "execution_result_json": {
+                "precheck": {
+                    "ErrorInfo": {
+                        "Message": "Insufficient cash for requested buy order"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            execution_status_detail(&row),
+            "Insufficient cash for requested buy order"
+        );
+        assert_eq!(execution_status_reason(&row), "Insufficient cash");
+    }
+
+    #[test]
+    fn classifies_execution_event_errors() {
+        let row = json!({
+            "execution_order_id": 119,
+            "event_type": "broker_sync",
+            "status": "execution_failed",
+            "message": "Saxo placement failed",
+            "error_text": "HTTP 401 Unauthorized while placing order"
+        });
+
+        assert_eq!(execution_event_reason(&row), "Saxo auth");
+        assert!(
+            execution_event_tooltip(
+                &row,
+                "execution_failed",
+                "Saxo auth",
+                &execution_event_detail(&row)
+            )
+            .contains("order: 119")
+        );
+    }
+
+    #[test]
+    fn execution_event_detail_does_not_surface_broker_identifiers() {
+        let row = json!({
+            "execution_order_id": 137,
+            "event_type": "broker_final_fill",
+            "status": "FinalFill",
+            "raw_payload_json": {
+                "AccountId": "22109870",
+                "ClientId": "22109870",
+                "UserId": "22109870",
+                "Status": "FinalFill"
+            }
+        });
+
+        assert_eq!(execution_event_detail(&row), "");
+
+        let sanitized = sanitize_diagnostic_json(row.get("raw_payload_json").unwrap());
+        assert!(sanitized.get("AccountId").is_none());
+        assert!(sanitized.get("ClientId").is_none());
+        assert!(sanitized.get("UserId").is_none());
+        assert_eq!(
+            sanitized.get("Status").and_then(JsonValue::as_str),
+            Some("FinalFill")
+        );
+    }
+
+    #[test]
+    fn derives_saxo_operation_health_from_reauth_state() {
+        let item = saxo_operation_health(&json!({
+            "connected": false,
+            "status": "needs_reauth",
+            "status_text": "Saxo session expired. Re-authentication is required."
+        }));
+
+        assert_eq!(item.label, "Saxo");
+        assert_eq!(item.status, "reauth");
+        assert_eq!(item.tone, "bad");
+        assert!(item.detail.contains("Re-authentication"));
+    }
+
+    #[test]
+    fn flags_stale_scheduler_heartbeat() {
+        let now = DateTime::parse_from_rfc3339("2026-06-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let item = scheduler_operation_health(
+            &json!({
+                "summary": {
+                    "last_heartbeat_at": "2026-06-24T10:45:00Z",
+                    "last_cycle_status": "ok"
+                }
+            }),
+            now,
+        );
+
+        assert_eq!(item.status, "stale");
+        assert_eq!(item.tone, "bad");
+        assert!(item.detail.contains("75 min"));
+    }
+
+    #[test]
+    fn flags_partial_and_stale_runtime_runs() {
+        let now = DateTime::parse_from_rfc3339("2026-06-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let partial = run_operation_health(
+            "Markov",
+            &json!({
+                "run_date": "2026-06-24",
+                "status": "completed",
+                "success_count": 10,
+                "error_count": 2
+            }),
+            now,
+        );
+        assert_eq!(partial.status, "partial");
+        assert_eq!(partial.tone, "warn");
+
+        let stale = run_operation_health(
+            "Indicators",
+            &json!({
+                "run_date": "2026-06-23",
+                "status": "completed",
+                "success_count": 12,
+                "error_count": 0
+            }),
+            now,
+        );
+        assert_eq!(stale.status, "stale");
+        assert_eq!(stale.tone, "warn");
+    }
+
+    #[test]
+    fn derives_quote_operation_health_from_latest_position_quote() {
+        let now = DateTime::parse_from_rfc3339("2026-06-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let positions = vec![
+            json!({"symbol": "AMD:xnas", "latest_quote_updated_at": "2026-06-22T12:00:00Z"}),
+            json!({"symbol": "BAC:xnys", "latest_quote_updated_at": "2026-06-24T11:55:00Z"}),
+        ];
+
+        let item = quote_operation_health(&positions, now);
+        assert_eq!(item.status, "fresh");
+        assert_eq!(item.tone, "good");
+        assert!(item.detail.contains("5 min"));
+    }
+
+    #[test]
+    fn summarizes_received_hermes_advice_actions() {
+        let row = json!({
+            "advice_id": "hermes-decision-advice-1",
+            "advice_status": "received",
+            "advice_recommendation": "proceed",
+            "order_advice_json": [
+                {"symbol": "AMD:xnas", "action": "allow", "reason": "fresh Markov"},
+                {"symbol": "ARM:xnas", "action": "reduce", "reason": "volatile"}
+            ],
+            "queued_order_count": 2,
+            "executed_order_count": 1,
+            "failed_order_count": 0,
+            "manager_json": {
+                "hermes_decision_advice": {
+                    "mode": "conservative",
+                    "status": "received"
+                }
+            }
+        });
+
+        assert_eq!(hermes_advice_status_label(&row), "received");
+        assert_eq!(hermes_advice_status_tone("received"), "good-status");
+        assert_eq!(
+            hermes_advice_order_counts(&row),
+            (
+                "2 items".to_string(),
+                "allow: 1, reduce: 1, stand_down: 0, review: 0; queued: 2, executed: 1, failed: 0"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            hermes_advice_impact(&row),
+            ("restricted 1".to_string(), "warn-text")
+        );
+    }
+
+    #[test]
+    fn flags_conservative_hermes_timeout_as_review_fallback() {
+        let row = json!({
+            "advice_recommendation": "",
+            "order_advice_json": [],
+            "manager_json": {
+                "hermes_decision_advice": {
+                    "mode": "conservative",
+                    "status": "timeout"
+                }
+            }
+        });
+
+        assert_eq!(hermes_advice_status_label(&row), "timeout");
+        assert_eq!(
+            hermes_advice_impact(&row),
+            ("review fallback".to_string(), "warn-text")
+        );
+        assert!(hermes_advice_detail(&row).contains("No persisted"));
+    }
+
+    #[test]
+    fn summarizes_cash_deployment_from_latest_manager_run() {
+        let latest_run = json!({
+            "created_at": "2026-06-25T14:50:00Z",
+            "report_id": 123,
+            "status": "completed",
+            "manager_json": {
+                "reinvestment_diagnostics": {
+                    "status": "excess_cash_with_blocked_buy_candidates",
+                    "description": "Cash is above policy, but BUY candidates were blocked.",
+                    "buy_candidate_count": 4,
+                    "approved_buy_count": 0,
+                    "skipped_buy_count": 4,
+                    "capital_budget": {
+                        "available_buy_budget_dkk": 12500.0,
+                        "excess_cash_pct": 0.08
+                    }
+                }
+            }
+        });
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert_eq!(summary.status, "excess_cash_with_blocked_buy_candidates");
+        assert_eq!(summary.tone, "warn-status");
+        assert!(summary.run_label.contains("Report #123"));
+        assert_eq!(summary.available_buy_budget_dkk, 12500.0);
+        assert_eq!(summary.excess_cash_pct, 0.08);
+        assert_eq!(summary.candidate_buy_count, 4);
+        assert_eq!(summary.approved_buy_count, 0);
+        assert_eq!(summary.skipped_buy_count, 4);
+        assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn cash_deployment_tone_marks_approved_reinvestment_good() {
+        assert_eq!(
+            cash_deployment_tone("reinvestment_candidates_approved"),
+            "good-status"
+        );
+        assert_eq!(cash_deployment_tone("no_reinvestment_pressure"), "");
+        assert_eq!(
+            cash_deployment_tone("excess_cash_without_buy_candidates"),
+            "warn-status"
+        );
+    }
+
+    #[test]
     fn derives_decision_health_pill_from_latest_report() {
         let (class, label) = decision_health(&json!({"status": "completed"}));
         assert_eq!(class, "pill good");
@@ -2715,6 +4395,262 @@ mod tests {
     }
 
     #[test]
+    fn derives_decision_pulse_health_from_recent_reports() {
+        let reports = vec![
+            json!({
+                "id": 12,
+                "created_at": "2026-06-24T14:45:00Z",
+                "status": "xai_error",
+                "analysis_pulse_key": "us_open_followup:2026-06-24",
+            }),
+            json!({
+                "id": 11,
+                "created_at": "2026-06-23T14:45:00Z",
+                "status": "completed",
+                "analysis_pulse_key": "us_open_followup:2026-06-23",
+            }),
+            json!({
+                "id": 10,
+                "created_at": "2026-06-24T08:15:00Z",
+                "status": "completed",
+                "analysis_pulse_key": "europe_open_followup:2026-06-24",
+            }),
+        ];
+
+        let us = decision_pulse_health(&reports, "us_open_followup:", "US Open +1h15");
+        assert_eq!(us.latest_id, 12);
+        assert_eq!(us.latest_status, "xai_error");
+        assert_eq!(us.latest_tone, "bad-text");
+        assert_eq!(us.last_success_id, 11);
+
+        let europe =
+            decision_pulse_health(&reports, "europe_open_followup:", "Nordic/EU Open +1h15");
+        assert_eq!(europe.latest_id, 10);
+        assert_eq!(europe.latest_status, "completed");
+        assert_eq!(europe.latest_tone, "good-text");
+        assert_eq!(europe.last_success_id, 10);
+
+        let manual = decision_pulse_health(&reports, "manual:", "Manual / Dry Run");
+        assert_eq!(manual.latest_status, "missing");
+        assert_eq!(manual.latest_tone, "bad-text");
+        assert_eq!(manual.last_success_id, 0);
+    }
+
+    #[test]
+    fn derives_decision_report_diagnostics_from_schema_and_error() {
+        let report = json!({
+            "model": "openai/gpt-5.5",
+            "response_id": "gen-123",
+            "error_text": null,
+            "request_json": {
+                "model": "openai/gpt-5.5",
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "strict": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "capital_plan": {
+                                    "type": "object",
+                                    "additionalProperties": false
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "response_json": {"id": "gen-123"}
+        });
+
+        let diagnostics = decision_report_diagnostics(&report);
+        assert_eq!(diagnostics.provider, "openrouter/json_schema");
+        assert_eq!(diagnostics.response_format, "json_schema");
+        assert_eq!(diagnostics.strict_schema, "true");
+        assert_eq!(diagnostics.root_object, "strict");
+        assert_eq!(diagnostics.capital_plan_object, "strict");
+        assert_eq!(diagnostics.schema_status, "strict");
+        assert_eq!(diagnostics.schema_tone, "good-text");
+        assert_eq!(diagnostics.response_present, "yes");
+        assert_eq!(diagnostics.error_category, "none");
+    }
+
+    #[test]
+    fn flags_decision_report_diagnostics_schema_errors() {
+        let report = json!({
+            "model": "openai/gpt-5.5",
+            "error_text": "Invalid schema for response_format 'daytrader_decision_report': In context=('properties', 'capital_plan'), 'additionalProperties' is required to be supplied and to be false.",
+            "request_json": {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "strict": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "properties": {
+                                "capital_plan": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let diagnostics = decision_report_diagnostics(&report);
+        assert_eq!(diagnostics.root_object, "open");
+        assert_eq!(diagnostics.capital_plan_object, "open");
+        assert_eq!(diagnostics.schema_status, "needs review");
+        assert_eq!(diagnostics.schema_tone, "bad-text");
+        assert_eq!(diagnostics.response_present, "no");
+        assert_eq!(diagnostics.error_category, "schema");
+        assert!(diagnostics.error_excerpt.contains("Invalid schema"));
+    }
+
+    #[test]
+    fn scores_complete_decision_report_quality_as_ready() {
+        let report = json!({"status": "completed"});
+        let report_json = json!({
+            "market_view": {"bias": "risk-on", "summary": "ok"},
+            "capital_plan": {"available_buy_budget_dkk": 1000},
+            "selected_assets": [{"symbol": "AMD:xnas", "score": 0.8, "notes": "ok"}],
+            "symbol_sentiment": [{"symbol": "AMD:xnas", "sentiment": "BUY", "confidence": 0.7, "rationale": "ok"}],
+            "suggested_trades": [{
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "quantity": 1,
+                "order_type": "Market",
+                "estimated_value_dkk": 900,
+                "strategy_key": "amd-open"
+            }],
+            "market_scope_enforcement": {"status": "not_required"}
+        });
+        let diagnostics = DecisionReportDiagnostics {
+            provider: "openrouter/json_schema".to_string(),
+            model: "openai/gpt-5.5".to_string(),
+            response_format: "json_schema".to_string(),
+            strict_schema: "true".to_string(),
+            root_object: "strict".to_string(),
+            capital_plan_object: "strict".to_string(),
+            schema_status: "strict".to_string(),
+            schema_tone: "good-text",
+            request_bytes: 100,
+            response_id: "gen-1".to_string(),
+            response_present: "yes".to_string(),
+            error_category: "none".to_string(),
+            error_excerpt: "No error recorded.".to_string(),
+        };
+
+        let quality = decision_report_quality(&report, &report_json, &diagnostics);
+        assert_eq!(quality.score, 100);
+        assert_eq!(quality.tone, "good-text");
+        assert_eq!(quality.status_label, "ready");
+        assert!(quality.warnings.is_empty());
+    }
+
+    #[test]
+    fn decision_report_quality_warns_on_bad_shape_and_scope_filtering() {
+        let report = json!({"status": "completed"});
+        let report_json = json!({
+            "market_view": {"bias": "risk-on", "summary": "ok"},
+            "capital_plan": {"available_buy_budget_dkk": 1000},
+            "selected_assets": [],
+            "symbol_sentiment": [],
+            "suggested_trades": [{
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "quantity": 1,
+                "order_type": "Limit",
+                "limit_price_local": null,
+                "estimated_value_dkk": 900,
+                "strategy_key": "amd-open"
+            }],
+            "market_scope_enforcement": {
+                "status": "enforced",
+                "filtered_out_symbols": ["ORSTED:xcse"]
+            }
+        });
+        let diagnostics = DecisionReportDiagnostics {
+            provider: "openrouter/json_schema".to_string(),
+            model: "openai/gpt-5.5".to_string(),
+            response_format: "json_schema".to_string(),
+            strict_schema: "true".to_string(),
+            root_object: "strict".to_string(),
+            capital_plan_object: "strict".to_string(),
+            schema_status: "strict".to_string(),
+            schema_tone: "good-text",
+            request_bytes: 100,
+            response_id: "gen-1".to_string(),
+            response_present: "yes".to_string(),
+            error_category: "none".to_string(),
+            error_excerpt: "No error recorded.".to_string(),
+        };
+
+        let quality = decision_report_quality(&report, &report_json, &diagnostics);
+        assert_eq!(quality.score, 90);
+        assert_eq!(quality.status_label, "ready with notes");
+        assert!(
+            quality
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("incomplete order shape"))
+        );
+        assert!(
+            quality
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("filtered 1 symbol"))
+        );
+    }
+
+    #[test]
+    fn redacts_sensitive_debug_json_fields() {
+        let payload = json!({
+            "model": "openrouter/fusion",
+            "api_key": "sk-test-123456789012345678901234567890",
+            "nested": {
+                "refresh_token": "refresh-123456789012345678901234567890",
+                "messages": [
+                    {"content": "Use bearer token Bearer abcdef1234567890abcdef1234567890abcd"}
+                ]
+            }
+        });
+
+        let rendered = compact_json_redacted(Some(&payload), 8_000);
+        assert!(rendered.contains("openrouter/fusion"));
+        assert!(rendered.contains("\"api_key\": \"[redacted]\""));
+        assert!(rendered.contains("\"refresh_token\": \"[redacted]\""));
+        assert!(!rendered.contains("sk-test-123456789012345678901234567890"));
+        assert!(!rendered.contains("abcdef1234567890abcdef1234567890abcd"));
+    }
+
+    #[test]
+    fn builds_sanitized_decision_report_debug_payload() {
+        let report_json = json!({"suggested_trades": []});
+        let report = json!({
+            "prompt_text": "Prompt with token sk-live-123456789012345678901234567890",
+            "request_json": {
+                "model": "openai/gpt-5.5",
+                "Authorization": "Bearer abcdef1234567890abcdef1234567890abcd"
+            },
+            "response_json": {
+                "id": "gen-123",
+                "client_key": "client-123456789012345678901234567890"
+            }
+        });
+
+        let debug = decision_report_debug_payload(&report, &report_json);
+        assert!(debug.prompt.contains("[redacted]"));
+        assert!(debug.request.contains("\"Authorization\": \"[redacted]\""));
+        assert!(debug.response.contains("\"client_key\": \"[redacted]\""));
+        assert!(debug.normalized.contains("suggested_trades"));
+    }
+
+    #[test]
     fn extracts_display_text_from_json() {
         let value = json!({"symbol": "AAPL:xnas", "quantity": 12});
         assert_eq!(text(&value, "symbol"), "AAPL:xnas");
@@ -2723,11 +4659,14 @@ mod tests {
 
     #[test]
     fn prefixes_root_relative_urls_for_shared_ngrok_base_path() {
-        let html = r#"<a href="/api/health">Health</a><form action="/api/actions/decision-report"><input value="/?view=market" /><img src="/favicon.svg" /><a href="https://example.com">External</a>"#;
+        let html = r#"<a href="/api/health">Health</a><form action="/api/actions/decision-report"><form action="/api/actions/decision-report-dry-run"><input value="/?view=market" /><img src="/favicon.svg" /><a href="https://example.com">External</a>"#;
         let prefixed = prefix_root_relative_urls(html, "/saxo-daytrader");
 
         assert!(prefixed.contains(r#"href="/saxo-daytrader/api/health""#));
         assert!(prefixed.contains(r#"action="/saxo-daytrader/api/actions/decision-report""#));
+        assert!(
+            prefixed.contains(r#"action="/saxo-daytrader/api/actions/decision-report-dry-run""#)
+        );
         assert!(prefixed.contains(r#"value="/saxo-daytrader/?view=market""#));
         assert!(prefixed.contains(r#"src="/saxo-daytrader/favicon.svg""#));
         assert!(prefixed.contains(r#"href="https://example.com""#));

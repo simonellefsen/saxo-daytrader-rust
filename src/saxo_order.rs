@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    config::{yaml_bool, yaml_string},
+    config::{yaml_at, yaml_bool, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
     saxo_portfolio::refresh_broker_snapshots,
     state::AppState,
@@ -409,14 +409,7 @@ async fn sync_one_broker_order(
     }
 
     if is_terminal_failure_status(&broker_status) {
-        let status = if broker_status
-            .as_deref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("Cancelled"))
-        {
-            "broker_cancelled"
-        } else {
-            "execution_failed"
-        };
+        let status = local_terminal_status(&broker_status);
         update_order_broker_status(state, order, status, &enriched_state, None).await?;
         return Ok(json!({
             "status": status,
@@ -716,17 +709,49 @@ async fn build_order_payload(
         if order_type == "Limit" {
             let price =
                 limit_price.ok_or_else(|| anyhow!("Limit orders require limit_price_local"))?;
-            payload["OrderPrice"] = json!(normalize_order_price(&symbol, price, &action, "limit"));
+            payload["OrderPrice"] = json!(
+                normalize_broker_order_price(
+                    state,
+                    session,
+                    &symbol,
+                    &instrument,
+                    price,
+                    &action,
+                    "limit",
+                )
+                .await?
+            );
         } else {
             let price = stop_price
                 .ok_or_else(|| anyhow!("{order_type} orders require stop_price_local"))?;
-            payload["OrderPrice"] = json!(normalize_order_price(&symbol, price, &action, "stop"));
+            payload["OrderPrice"] = json!(
+                normalize_broker_order_price(
+                    state,
+                    session,
+                    &symbol,
+                    &instrument,
+                    price,
+                    &action,
+                    "stop",
+                )
+                .await?
+            );
         }
         if order_type == "StopLimit" {
             let price =
                 limit_price.ok_or_else(|| anyhow!("StopLimit orders require limit_price_local"))?;
-            payload["StopLimitPrice"] =
-                json!(normalize_order_price(&symbol, price, &action, "stop_limit"));
+            payload["StopLimitPrice"] = json!(
+                normalize_broker_order_price(
+                    state,
+                    session,
+                    &symbol,
+                    &instrument,
+                    price,
+                    &action,
+                    "stop_limit",
+                )
+                .await?
+            );
         }
     }
     Ok(payload)
@@ -1554,7 +1579,10 @@ async fn update_order_broker_status(
     let ledger_sql = ledger_id
         .map(|value| format!(", ledger_id = {value}"))
         .unwrap_or_default();
-    let error_sql = if status == "execution_failed" || status == "broker_cancelled" {
+    let error_sql = if matches!(
+        status,
+        "execution_failed" | "broker_cancelled" | "broker_expired" | "broker_done_for_day"
+    ) {
         let broker_payload = broker_payload(broker_state);
         let status_text = broker_status_text(broker_payload).unwrap_or_else(|| status.to_string());
         format!(", error_text = '{}'", sql_escape(&status_text))
@@ -1855,6 +1883,20 @@ fn is_terminal_failure_status(status: &Option<String>) -> bool {
     })
 }
 
+fn local_terminal_status(status: &Option<String>) -> &'static str {
+    match status
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "cancelled" => "broker_cancelled",
+        "expired" => "broker_expired",
+        "doneforday" => "broker_done_for_day",
+        _ => "execution_failed",
+    }
+}
+
 fn extract_broker_quantity(payload: &JsonValue) -> Option<f64> {
     [
         "FilledAmount",
@@ -2012,8 +2054,42 @@ fn normalize_order_type(value: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn normalize_order_price(symbol: &str, price: f64, action: &str, role: &str) -> f64 {
     let tick = default_tick(symbol);
+    normalize_order_price_with_tick(price, tick, action, role)
+}
+
+async fn normalize_broker_order_price(
+    state: &AppState,
+    session: &JsonValue,
+    symbol: &str,
+    instrument: &SaxoInstrument,
+    price: f64,
+    action: &str,
+    role: &str,
+) -> Result<f64> {
+    let tick = if let Some(tick) = configured_price_tick_override(&state.config, symbol) {
+        tick
+    } else {
+        match instrument_tick_size(state, session, instrument, price).await {
+            Ok(Some(tick)) => tick,
+            Ok(None) => default_tick(symbol),
+            Err(err) => {
+                warn!(
+                    symbol,
+                    uic = instrument.uic,
+                    asset_type = %instrument.asset_type,
+                    "Falling back to configured/default tick after Saxo instrument details lookup failed: {err:#}"
+                );
+                default_tick(symbol)
+            }
+        }
+    };
+    Ok(normalize_order_price_with_tick(price, tick, action, role))
+}
+
+fn normalize_order_price_with_tick(price: f64, tick: f64, action: &str, role: &str) -> f64 {
     if tick <= 0.0 {
         return price;
     }
@@ -2025,6 +2101,141 @@ fn normalize_order_price(symbol: &str, price: f64, action: &str, role: &str) -> 
     };
     let decimals = tick_decimals(tick);
     round_to_decimals(rounded * tick, decimals)
+}
+
+async fn instrument_tick_size(
+    state: &AppState,
+    session: &JsonValue,
+    instrument: &SaxoInstrument,
+    price: f64,
+) -> Result<Option<f64>> {
+    let details_path = format!(
+        "/ref/v1/instruments/details/{}/{}",
+        instrument.uic,
+        percent_encode_path_segment(&instrument.asset_type)
+    );
+    let details = saxo_get_json_optional(
+        state,
+        session,
+        &details_path,
+        &[("AccountKey", account_key(state, session)?)],
+        "Saxo instrument details lookup",
+    )
+    .await?;
+    Ok(details
+        .as_ref()
+        .and_then(|details| tick_from_instrument_details(price, details)))
+}
+
+fn configured_price_tick_override(config: &serde_yaml::Value, symbol: &str) -> Option<f64> {
+    let parts = symbol_parts(symbol);
+    let overrides = yaml_at(config, &["execution", "price_tick_overrides"])?;
+    let symbol_keys = [
+        symbol.to_string(),
+        symbol.to_uppercase(),
+        symbol.to_lowercase(),
+    ];
+    for key in symbol_keys {
+        if let Some(tick) = yaml_number_at_key(overrides, &key) {
+            return Some(tick);
+        }
+    }
+    let exchange_id = exchange_id_for_suffix(&parts.exchange);
+    let exchange_keys = [
+        parts.exchange.clone(),
+        parts.exchange.to_uppercase(),
+        exchange_id.to_string(),
+    ];
+    for key in exchange_keys {
+        if let Some(tick) = yaml_number_at_key(overrides, &key) {
+            return Some(tick);
+        }
+    }
+    None
+}
+
+fn yaml_number_at_key(value: &serde_yaml::Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_i64().map(|value| value as f64))
+            .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+    })
+}
+
+fn tick_from_instrument_details(price: f64, details: &JsonValue) -> Option<f64> {
+    numeric_from_keys(
+        details,
+        &["TickSize", "tickSize", "PriceTickSize", "priceTickSize"],
+    )
+    .or_else(|| tick_from_scheme_keys(price, details))
+    .or_else(|| {
+        details.get("DisplayAndFormat").and_then(|display| {
+            numeric_from_keys(
+                display,
+                &["TickSize", "tickSize", "PriceTickSize", "priceTickSize"],
+            )
+            .or_else(|| tick_from_scheme_keys(price, display))
+        })
+    })
+}
+
+fn tick_from_scheme_keys(price: f64, value: &JsonValue) -> Option<f64> {
+    [
+        "TickSizeScheme",
+        "tickSizeScheme",
+        "PriceTickSizeScheme",
+        "priceTickSizeScheme",
+    ]
+    .iter()
+    .find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|scheme| tick_from_scheme(price, scheme))
+    })
+}
+
+fn tick_from_scheme(price: f64, scheme: &JsonValue) -> Option<f64> {
+    let mut elements = scheme
+        .get("Elements")
+        .or_else(|| scheme.get("elements"))
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let tick = numeric_from_keys(item, &["TickSize", "tickSize", "Size", "size"])?;
+                    let high = numeric_from_keys(
+                        item,
+                        &[
+                            "HighPrice",
+                            "highPrice",
+                            "UpperBound",
+                            "upperBound",
+                            "Price",
+                            "price",
+                        ],
+                    )?;
+                    Some((high, tick))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    elements.sort_by(|left, right| left.0.total_cmp(&right.0));
+    for (high, tick) in elements {
+        if price <= high + 1e-9 {
+            return Some(tick);
+        }
+    }
+    numeric_from_keys(
+        scheme,
+        &["DefaultTickSize", "defaultTickSize", "TickSize", "tickSize"],
+    )
+}
+
+fn numeric_from_keys(value: &JsonValue, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| json_number(value, key).filter(|tick| tick.is_finite() && *tick > 0.0))
 }
 
 fn default_tick(symbol: &str) -> f64 {
@@ -2364,6 +2575,64 @@ mod tests {
         assert_eq!(
             normalize_order_price("MSTR:xnas", 187.591, "SELL", "limit"),
             187.6
+        );
+    }
+
+    #[test]
+    fn normalizes_demant_like_limit_with_broker_tick_scheme() {
+        let details = json!({
+            "TickSizeScheme": {
+                "Elements": [
+                    {"HighPrice": 200.0, "TickSize": 0.05},
+                    {"HighPrice": 500.0, "TickSize": 0.10}
+                ],
+                "DefaultTickSize": 0.01
+            }
+        });
+        let tick = tick_from_instrument_details(261.3999938964844, &details);
+
+        assert_eq!(tick, Some(0.10));
+        assert_eq!(
+            normalize_order_price_with_tick(261.3999938964844, tick.unwrap(), "BUY", "limit"),
+            261.3
+        );
+    }
+
+    #[test]
+    fn configured_price_tick_override_accepts_symbol_and_exchange_keys() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+execution:
+  price_tick_overrides:
+    DEMANT:xcse: 0.1
+    XETR: 0.01
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            configured_price_tick_override(&config, "DEMANT:xcse"),
+            Some(0.1)
+        );
+        assert_eq!(
+            configured_price_tick_override(&config, "ADS:xetr"),
+            Some(0.01)
+        );
+    }
+
+    #[test]
+    fn maps_broker_expired_to_explicit_terminal_status() {
+        assert_eq!(
+            local_terminal_status(&Some("Expired".to_string())),
+            "broker_expired"
+        );
+        assert_eq!(
+            local_terminal_status(&Some("DoneForDay".to_string())),
+            "broker_done_for_day"
+        );
+        assert_eq!(
+            local_terminal_status(&Some("Rejected".to_string())),
+            "execution_failed"
         );
     }
 
