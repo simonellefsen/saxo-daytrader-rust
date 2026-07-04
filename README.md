@@ -182,6 +182,8 @@ make deps-dry-run
 make security-scan
 make k8s-status
 make k8s-db-status
+make post-deploy-smoke
+make post-deploy-guard
 make shared-ngrok-status
 make k8s-stop
 ```

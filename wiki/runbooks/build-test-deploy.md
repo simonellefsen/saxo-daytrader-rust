@@ -232,6 +232,14 @@ rtk env EXPECTED_DAYTRADER_IMAGE=daytrader-api:local make post-deploy-smoke
 rtk env EXPECTED_API_IMAGE=daytrader-api:local EXPECTED_SCHEDULER_IMAGE=daytrader-api:local EXPECTED_MCP_IMAGE=daytrader-api:local EXPECTED_HERMES_IMAGE=docker.io/nousresearch/hermes-agent@sha256:<digest> make post-deploy-smoke
 ```
 
+After `make k8s-deploy`, prefer the guard target. The deploy script writes
+non-secret image metadata to `.run/last_deploy.env`; the guard reads it and
+runs the smoke check with expected API, scheduler, MCP, and Hermes image values:
+
+```bash
+rtk make post-deploy-guard
+```
+
 For a narrower in-cluster service check, verify the app from inside the cluster:
 
 ```bash

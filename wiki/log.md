@@ -35,6 +35,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Linked the new runbook from the runbook index and main wiki index.
 - Kept restore instructions non-destructive by default and explicitly warned against restoring over the live `saxo/daytrader-postgres` cluster.
 
+## [2026-07-04] improvement | Post-deploy image guard
+
+- Added `scripts/post_deploy_guard.sh` and `make post-deploy-guard`.
+- Updated the deploy script to write non-secret image/context metadata to `.run/last_deploy.env` after successful rollouts.
+- The guard reuses the post-deploy smoke checks and verifies API, scheduler, MCP, and Hermes deployment images against the last deploy metadata unless overridden by `EXPECTED_*_IMAGE` environment variables.
+
 ## [2026-07-04] verification | QuiverQuant live subscription
 
 - Verified the QuiverQuant subscription is active in the deployed `saxo` Kubernetes runtime.

@@ -276,5 +276,21 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-scheduler --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
 
+mkdir -p "$ROOT/.run"
+HERMES_IMAGE="$(
+  kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment/hermes-agent \
+    -o 'jsonpath={.spec.template.spec.containers[0].image}' 2>/dev/null || true
+)"
+cat > "$ROOT/.run/last_deploy.env" <<EOF
+LAST_DEPLOY_KUBE_CONTEXT=$CONTEXT
+LAST_DEPLOY_APP_NAMESPACE=$NAMESPACE
+LAST_DEPLOY_DB_NAMESPACE=$DB_NAMESPACE
+LAST_DEPLOY_IMAGE_TAG=$IMAGE_TAG
+LAST_DEPLOY_API_IMAGE=$API_IMAGE
+LAST_DEPLOY_BACKUP_IMAGE=$BACKUP_IMAGE
+LAST_DEPLOY_HERMES_IMAGE=$HERMES_IMAGE
+EOF
+printf "Wrote non-secret deploy metadata to %s\n" "$ROOT/.run/last_deploy.env"
+
 printf "Deployment complete.\n"
 printf "Rust app: %s\n" "$DAYTRADER_PUBLIC_BASE_URL"
