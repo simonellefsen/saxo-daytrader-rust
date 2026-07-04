@@ -8,7 +8,7 @@ DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
 SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
 
-.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke diagnostics shared-ngrok-status shared-ngrok-apply
+.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke diagnostics diagnostics-artifact shared-ngrok-status shared-ngrok-apply
 
 help:
 	@printf "%s\n" \
@@ -33,6 +33,7 @@ help:
 		"  make k8s-port-forward     Forward daytrader-frontend to localhost:$(API_PORT)" \
 		"  make post-deploy-smoke    Read-only rollout and API smoke check" \
 		"  make diagnostics          Collect a read-only operations and trading diagnostic bundle" \
+		"  make diagnostics-artifact Collect diagnostics and save a timestamped .diagnostics artifact" \
 		"  make shared-ngrok-status  Show shared public ngrok gateway status" \
 		"  make shared-ngrok-apply   Apply shared public ngrok gateway from $(SHARED_NGROK_GATEWAY_DIR)" \
 		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)"
@@ -96,6 +97,9 @@ post-deploy-smoke:
 
 diagnostics:
 	KUBE_CONTEXT=$(KUBE_CONTEXT) APP_NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) SHARED_NGROK_GATEWAY_DIR=$(SHARED_NGROK_GATEWAY_DIR) bash scripts/diagnostics_bundle.sh
+
+diagnostics-artifact:
+	KUBE_CONTEXT=$(KUBE_CONTEXT) APP_NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) SHARED_NGROK_GATEWAY_DIR=$(SHARED_NGROK_GATEWAY_DIR) DIAGNOSTICS_CAPTURE=1 bash scripts/diagnostics_bundle.sh
 
 shared-ngrok-status:
 	$(MAKE) -C $(SHARED_NGROK_GATEWAY_DIR) KUBE_CONTEXT=$(KUBE_CONTEXT) status

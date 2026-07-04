@@ -953,6 +953,34 @@ fn decision_report_response_format(provider: &str) -> JsonValue {
     })
 }
 
+pub fn decision_report_schema_health() -> JsonValue {
+    let response_format = decision_report_response_format("openrouter");
+    let schema = response_format
+        .get("json_schema")
+        .and_then(|json_schema| json_schema.get("schema"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let issues = validate_openrouter_strict_schema(&schema);
+    json!({
+        "status": if issues.is_empty() { "ok" } else { "error" },
+        "schema_name": response_format
+            .get("json_schema")
+            .and_then(|json_schema| json_schema.get("name"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or("unknown"),
+        "strict": response_format
+            .get("json_schema")
+            .and_then(|json_schema| json_schema.get("strict"))
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        "issue_count": issues.len(),
+        "issues": issues
+            .iter()
+            .map(|issue| json!({"path": issue.path, "message": issue.message}))
+            .collect::<Vec<_>>()
+    })
+}
+
 fn openrouter_strict_schema(mut schema: JsonValue) -> JsonValue {
     enforce_openrouter_strict_schema(&mut schema);
     schema
@@ -1964,6 +1992,15 @@ mod tests {
         for (name, schema) in openrouter_structured_output_schemas() {
             assert_strict_object_schema(&schema, name);
         }
+    }
+
+    #[test]
+    fn decision_report_schema_health_is_ok() {
+        let health = decision_report_schema_health();
+        assert_eq!(health["status"], "ok");
+        assert_eq!(health["schema_name"], "daytrader_decision_report");
+        assert_eq!(health["strict"], true);
+        assert_eq!(health["issue_count"], 0);
     }
 
     #[test]

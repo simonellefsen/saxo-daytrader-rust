@@ -17,6 +17,18 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Confirmed a production-style `Dockerfile.api` image build completes after the context change; only the pre-existing `xai_decision.rs` dead-code warnings remain.
 - Added `make post-deploy-smoke` for read-only rollout, internal endpoint, health, overview, scheduler, Saxo-session, MCP tool-discovery, and Hermes gateway health checks after deployment.
 
+## [2026-07-04] improvement | Diagnostics artifact capture
+
+- Continued the operations roadmap by adding an opt-in diagnostics artifact mode.
+- Added `make diagnostics-artifact`, which runs the existing read-only diagnostics bundle and saves the output to `.diagnostics/daytrader-diagnostics-<utc timestamp>.log`.
+- Ignored `.diagnostics/` in git and Docker build context so captured incident bundles remain local by default.
+
+## [2026-07-04] improvement | Post-deploy smoke schema and image checks
+
+- Added a read-only `/api/decision/schema` endpoint that reports strict OpenRouter decision-report schema health from the active Rust schema registry.
+- Expanded `make post-deploy-smoke` to fail when decision-report schema health is not ok.
+- Added optional image drift checks for API, scheduler, MCP, and Hermes deployments through `EXPECTED_DAYTRADER_IMAGE` or per-deployment `EXPECTED_*_IMAGE` environment variables.
+
 ## [2026-07-04] verification | QuiverQuant live subscription
 
 - Verified the QuiverQuant subscription is active in the deployed `saxo` Kubernetes runtime.

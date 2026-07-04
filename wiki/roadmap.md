@@ -21,6 +21,8 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-04: Expanded `make post-deploy-smoke` with decision-report schema health validation and optional expected-image checks for API, scheduler, MCP, and Hermes deployments.
+- 2026-07-04: Added `make diagnostics-artifact` so read-only diagnostics can be captured to timestamped `.diagnostics/` logs for Slack/GitHub issue sharing without changing the default diagnostic behavior.
 - 2026-07-04: Added dependency and CVE hygiene workflow with `make deps-dry-run`, `make security-scan`, RustSec advisory scanning, Trivy filesystem/image CVE scanning, and Trivy secret scanning.
 - 2026-07-04: Tightened Docker build-context hygiene so local RustFS object-store data is excluded, then added `make post-deploy-smoke` for read-only rollout, health, overview, scheduler, Saxo-session, MCP tool-discovery, and Hermes gateway checks after deploy.
 - 2026-07-02: Added a read-only `make diagnostics` bundle for pod status, rollouts, scheduler/API/Hermes logs, resource usage, CNPG health, RustFS backup state, shared ngrok routing, and sanitized app performance/execution summaries.
@@ -191,8 +193,6 @@ The Rust runtime should keep moving away from generic JSON and legacy Python beh
 
 Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
-- Expand the diagnostics bundle with optional artifact capture to a timestamped file for Slack/GitHub issue sharing.
-- Expand post-deploy smoke with decision schema validation and optional image-tag drift checks.
 - Add a post-deploy guard that confirms the live image tag changed on API, scheduler, MCP, and Hermes where expected.
 - Add backup/restore rehearsal docs for CNPG + RustFS.
 - Add alerting for repeated decision-report failures, repeated broker execution failures, stale scheduler heartbeat, and missed EOD reflection.

@@ -7,11 +7,24 @@ APP_NAMESPACE="${APP_NAMESPACE:-saxo}"
 DB_NAMESPACE="${DB_NAMESPACE:-saxo}"
 API_SERVICE="${API_SERVICE:-daytrader-api}"
 API_LOCAL_PORT="${API_LOCAL_PORT:-18080}"
+DIAGNOSTICS_CAPTURE="${DIAGNOSTICS_CAPTURE:-0}"
+DIAGNOSTICS_OUTPUT_DIR="${DIAGNOSTICS_OUTPUT_DIR:-$ROOT/.diagnostics}"
+DIAGNOSTICS_ARTIFACT="${DIAGNOSTICS_ARTIFACT:-}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
 if [[ -z "$PUBLIC_BASE_URL" && -n "${NGROK_DOMAIN:-}" ]]; then
   PUBLIC_BASE_URL="https://${NGROK_DOMAIN}/saxo-daytrader"
 fi
 SHARED_NGROK_GATEWAY_DIR="${SHARED_NGROK_GATEWAY_DIR:-$ROOT/../shared-ngrok-gateway}"
+
+if [[ "$DIAGNOSTICS_CAPTURE" == "1" || -n "$DIAGNOSTICS_ARTIFACT" ]]; then
+  if [[ -z "$DIAGNOSTICS_ARTIFACT" ]]; then
+    mkdir -p "$DIAGNOSTICS_OUTPUT_DIR"
+    DIAGNOSTICS_ARTIFACT="$DIAGNOSTICS_OUTPUT_DIR/daytrader-diagnostics-$(date -u +"%Y%m%dT%H%M%SZ").log"
+  else
+    mkdir -p "$(dirname "$DIAGNOSTICS_ARTIFACT")"
+  fi
+  exec > >(tee "$DIAGNOSTICS_ARTIFACT") 2>&1
+fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/daytrader-diagnostics.XXXXXX")"
 PORT_FORWARD_PID=""
@@ -177,6 +190,9 @@ printf -- "- kube_context: %s\n" "$KUBE_CONTEXT"
 printf -- "- app_namespace: %s\n" "$APP_NAMESPACE"
 printf -- "- db_namespace: %s\n" "$DB_NAMESPACE"
 printf -- "- public_base_url: %s\n" "${PUBLIC_BASE_URL:-not configured}"
+if [[ -n "$DIAGNOSTICS_ARTIFACT" ]]; then
+  printf -- "- artifact: %s\n" "$DIAGNOSTICS_ARTIFACT"
+fi
 
 section "Repository"
 optional git -C "$ROOT" rev-parse --short HEAD

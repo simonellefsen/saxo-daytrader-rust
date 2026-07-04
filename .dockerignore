@@ -15,6 +15,7 @@ frontend/.next
 frontend/tsconfig.tsbuildinfo
 logs
 tmp
+.diagnostics
 __pycache__/
 *.py[cod]
 *.pyo

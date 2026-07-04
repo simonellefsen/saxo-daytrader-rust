@@ -217,11 +217,20 @@ rtk make post-deploy-smoke
 
 This checks deployment rollouts, the internal ngrok AgentEndpoint, the health
 endpoint, overview/scheduler reachability, Saxo session status, authenticated
-MCP `tools/list` discovery for Hermes-safe tools, and Hermes gateway health. A
-broken rollout, missing health endpoint, missing expected MCP tool, or unhealthy
-Hermes gateway fails the smoke. A Saxo SIM session that needs reauth is
+decision-report schema health, MCP `tools/list` discovery for Hermes-safe tools,
+and Hermes gateway health. A broken rollout, missing health endpoint, invalid
+decision-report schema, missing expected MCP tool, or unhealthy Hermes gateway
+fails the smoke. A Saxo SIM session that needs reauth is
 reported as a warning because it blocks broker refresh/execution but does not
 mean the Rust web runtime failed to deploy.
+
+To also fail the smoke check when a deployed image differs from the expected
+image, pass one shared daytrader image or per-deployment images:
+
+```bash
+rtk env EXPECTED_DAYTRADER_IMAGE=daytrader-api:local make post-deploy-smoke
+rtk env EXPECTED_API_IMAGE=daytrader-api:local EXPECTED_SCHEDULER_IMAGE=daytrader-api:local EXPECTED_MCP_IMAGE=daytrader-api:local EXPECTED_HERMES_IMAGE=docker.io/nousresearch/hermes-agent@sha256:<digest> make post-deploy-smoke
+```
 
 For a narrower in-cluster service check, verify the app from inside the cluster:
 

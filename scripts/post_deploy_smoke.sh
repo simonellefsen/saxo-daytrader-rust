@@ -8,6 +8,11 @@ API_LOCAL_PORT="${API_LOCAL_PORT:-18080}"
 MCP_LOCAL_PORT="${MCP_LOCAL_PORT:-18610}"
 HERMES_LOCAL_PORT="${HERMES_LOCAL_PORT:-18642}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+EXPECTED_DAYTRADER_IMAGE="${EXPECTED_DAYTRADER_IMAGE:-}"
+EXPECTED_API_IMAGE="${EXPECTED_API_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
+EXPECTED_SCHEDULER_IMAGE="${EXPECTED_SCHEDULER_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
+EXPECTED_MCP_IMAGE="${EXPECTED_MCP_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
+EXPECTED_HERMES_IMAGE="${EXPECTED_HERMES_IMAGE:-}"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/daytrader-smoke.XXXXXX")"
 PORT_FORWARD_PIDS=()
@@ -54,6 +59,29 @@ start_port_forward() {
   PORT_FORWARD_PIDS+=("$!")
 }
 
+check_expected_image() {
+  local deployment="$1"
+  local expected="$2"
+
+  if [[ -z "$expected" ]]; then
+    info "image check skipped for deployment/${deployment}; no expected image configured"
+    return
+  fi
+
+  local actual
+  actual="$(
+    kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" get "deployment/${deployment}" \
+      -o 'jsonpath={.spec.template.spec.containers[0].image}' 2>/dev/null || true
+  )"
+  if [[ -z "$actual" ]]; then
+    fail "could not read image for deployment/${deployment}"
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    fail "deployment/${deployment} image mismatch: expected ${expected}, got ${actual}"
+  fi
+  info "deployment/${deployment} image matches ${expected}"
+}
+
 wait_for_url() {
   local url="$1"
   local out="$2"
@@ -82,6 +110,11 @@ for deployment in daytrader-api daytrader-scheduler daytrader-mcp hermes-agent; 
   kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" rollout status \
     "deployment/${deployment}" --timeout="$ROLLOUT_TIMEOUT"
 done
+
+check_expected_image daytrader-api "$EXPECTED_API_IMAGE"
+check_expected_image daytrader-scheduler "$EXPECTED_SCHEDULER_IMAGE"
+check_expected_image daytrader-mcp "$EXPECTED_MCP_IMAGE"
+check_expected_image hermes-agent "$EXPECTED_HERMES_IMAGE"
 
 endpoint_ready="$(
   kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" get agentendpoint saxo-daytrader-internal \
@@ -126,6 +159,15 @@ fi
 if [[ "$overview" != *'"latest_decision"'* ]]; then
   warn "overview did not include latest_decision"
 fi
+
+curl -fsS "http://127.0.0.1:${API_LOCAL_PORT}/api/decision/schema" -o "$TMP_DIR/decision-schema.json"
+decision_schema="$(cat "$TMP_DIR/decision-schema.json")"
+if [[ "$decision_schema" != *'"status":"ok"'* ]] \
+  || [[ "$decision_schema" != *'"schema_name":"daytrader_decision_report"'* ]] \
+  || [[ "$decision_schema" != *'"strict":true'* ]]; then
+  fail "decision-report schema health is not ok: ${decision_schema}"
+fi
+info "decision-report schema health ok"
 
 info "checking MCP adapter health and tool discovery"
 start_port_forward daytrader-mcp "$MCP_LOCAL_PORT" 8610 "mcp-port-forward"

@@ -5,7 +5,7 @@ tags:
   - runbooks
   - kubernetes
   - diagnostics
-updated: 2026-07-02
+updated: 2026-07-04
 ---
 
 # Kubernetes Diagnostics One-Liners
@@ -21,6 +21,18 @@ rtk make diagnostics
 ```
 
 The bundle collects pod/service/job status, rollout state, resource usage, recent events, scheduler/API/Hermes logs, RustFS backup status, shared ngrok status, and sanitized app summaries for portfolio performance, Saxo session health, scheduler state, latest decision report, latest Trading Manager run, Hermes advice, Markov freshness, integrity, and recent execution rows. It starts a temporary local port-forward to the API service and cleans it up automatically. It does not trigger reports, process the execution queue, mutate broker state, or print raw Saxo token/account payloads.
+
+To save the same output to a timestamped local artifact for Slack or issue sharing:
+
+```bash
+rtk make diagnostics-artifact
+```
+
+Artifacts are written to `.diagnostics/daytrader-diagnostics-<utc timestamp>.log` and are ignored by git and Docker builds. To choose an explicit path:
+
+```bash
+rtk env DIAGNOSTICS_ARTIFACT=/tmp/daytrader-diagnostics.log make diagnostics
+```
 
 To include the public ngrok health check, pass the public base URL or the shared gateway domain:
 
@@ -120,6 +132,13 @@ rtk kubectl --context docker-desktop -n saxo rollout status deployment/daytrader
 rtk kubectl --context docker-desktop -n saxo rollout status deployment/daytrader-scheduler --timeout=180s
 rtk kubectl --context docker-desktop -n saxo rollout status deployment/daytrader-mcp --timeout=180s
 rtk kubectl --context docker-desktop -n saxo rollout status deployment/hermes-agent --timeout=180s
+```
+
+Run the read-only post-deploy smoke check, including decision-report schema
+health and Hermes-safe MCP tool discovery:
+
+```bash
+rtk make post-deploy-smoke
 ```
 
 Restart app workloads:

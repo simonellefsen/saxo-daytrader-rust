@@ -27,6 +27,7 @@ __pycache__/
 
 logs/
 tmp/
+.diagnostics/
 .secrets/
 .run/
 

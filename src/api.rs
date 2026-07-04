@@ -98,6 +98,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/prompts", get(prompts))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
+        .route("/api/decision/schema", get(decision_schema))
         .route("/api/strategy-journal", get(strategy_journal))
         .route("/api/execution", get(execution))
         .route("/api/scheduler", get(scheduler))
@@ -613,6 +614,10 @@ async fn decision_reports(
             .await
             .map(|items| json!({"items": items})),
     )
+}
+
+async fn decision_schema() -> Response {
+    Json(xai_decision::decision_report_schema_health()).into_response()
 }
 
 async fn strategy_journal(
