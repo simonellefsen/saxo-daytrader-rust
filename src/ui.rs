@@ -2192,7 +2192,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "table-wrap",
                     h3 { "Scheduler Cycles" }
                     table {
-                        thead { tr { th { "Started" } th { "Status" } th { "Decision" } th { "Queue" } } }
+                        thead { tr { th { "Started" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } } }
                         tbody {
                             for row in data.scheduler_cycles.iter().take(12) {
                                 tr {
@@ -2200,6 +2200,8 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                                     td { "{text(row, \"status\")}" }
                                     td { "{bool_label(row, \"generated_decision\")}" }
                                     td { "{text(row, \"queue_status\")}" }
+                                    td { "{text_or(row, \"notifications_status\", \"n/a\")}" }
+                                    td { "{scheduler_cycle_json_status(row, \"operational_notifications\")}" }
                                 }
                             }
                         }
@@ -3143,6 +3145,20 @@ fn fallback_text(value: &JsonValue, key: &str, fallback: &str) -> String {
     } else {
         value
     }
+}
+
+fn scheduler_cycle_json_status(row: &JsonValue, key: &str) -> String {
+    row.get("cycle_json")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(|item| item.get("status"))
+                .and_then(JsonValue::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn operations_health(data: &DashboardView) -> Vec<OperationHealthItem> {
@@ -4905,6 +4921,23 @@ mod tests {
         let value = json!({"symbol": "AAPL:xnas", "quantity": 12});
         assert_eq!(text(&value, "symbol"), "AAPL:xnas");
         assert_eq!(number(&value, "quantity", 0), "12");
+    }
+
+    #[test]
+    fn extracts_scheduler_cycle_nested_status() {
+        let row = json!({
+            "cycle_json": "{\"operational_notifications\":{\"status\":\"ok\"}}"
+        });
+        assert_eq!(
+            scheduler_cycle_json_status(&row, "operational_notifications"),
+            "ok"
+        );
+
+        let invalid_row = json!({"cycle_json": "not-json"});
+        assert_eq!(
+            scheduler_cycle_json_status(&invalid_row, "operational_notifications"),
+            "n/a"
+        );
     }
 
     #[test]

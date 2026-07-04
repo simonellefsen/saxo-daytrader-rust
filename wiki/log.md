@@ -15,6 +15,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Continued the operations roadmap by adding scheduler-driven Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection.
 - Reused the existing immutable notification delivery/state tables and added Rust runtime schema creation so fresh Rust deployments do not depend on legacy Python initialization.
 - Documented the new notification alert thresholds and route kind in the README and marked the roadmap item as recently landed.
+- Followed up by exposing execution-notification and operational-notification status in the Scheduler Cycles table, with a UI regression test for nested cycle JSON status extraction.
 
 ## [2026-07-04] fix | Docker build context hygiene
 
