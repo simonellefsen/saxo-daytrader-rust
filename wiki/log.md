@@ -16,6 +16,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Reused the existing immutable notification delivery/state tables and added Rust runtime schema creation so fresh Rust deployments do not depend on legacy Python initialization.
 - Documented the new notification alert thresholds and route kind in the README and marked the roadmap item as recently landed.
 - Followed up by exposing execution-notification and operational-notification status in the Scheduler Cycles table, with a UI regression test for nested cycle JSON status extraction.
+- Continued with backend-backed decision pulse health rows for Nordic/EU, US, and manual reports so the Decision Reports tab shows latest report, last success, last failure, and 7-day attempt count even when recent report history is noisy.
 
 ## [2026-07-04] fix | Docker build context hygiene
 

@@ -311,6 +311,10 @@ impl AppState {
             }
             None => reports.first().cloned().unwrap_or(JsonValue::Null),
         };
+        let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
+            warn!("dashboard decision pulse statuses degraded: {err:#}");
+            Vec::new()
+        });
         let journal_entries = self.strategy_journal_items(20).await.unwrap_or_else(|err| {
             warn!("dashboard end-of-day journal degraded: {err:#}");
             Vec::new()
@@ -446,6 +450,7 @@ impl AppState {
             execution_fills,
             execution_events,
             reports,
+            decision_pulse_statuses,
             journal_entries,
             scheduler_cycles,
             hermes_reflections,
@@ -1593,6 +1598,79 @@ impl AppState {
             report_id.max(0)
         );
         self.first_json(&sql).await
+    }
+
+    pub async fn decision_pulse_statuses(&self) -> Result<Vec<JsonValue>> {
+        let pulses = [
+            (
+                "europe_open_followup",
+                "europe_open_followup:",
+                "Nordic/EU Open +1h15",
+            ),
+            ("us_open_followup", "us_open_followup:", "US Open +1h15"),
+            ("manual", "manual:", "Manual / Dry Run"),
+        ];
+        let attempt_cutoff =
+            (Utc::now() - Duration::days(7)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut statuses = Vec::new();
+        for (key, prefix, label) in pulses {
+            let latest = self
+                .first_json(&format!(
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                     FROM decision_reports
+                     WHERE analysis_pulse_key LIKE '{}%'
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    sql_escape(prefix)
+                ))
+                .await?
+                .unwrap_or(JsonValue::Null);
+            let last_success = self
+                .first_json(&format!(
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                     FROM decision_reports
+                     WHERE analysis_pulse_key LIKE '{}%'
+                       AND status = 'completed'
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    sql_escape(prefix)
+                ))
+                .await?
+                .unwrap_or(JsonValue::Null);
+            let last_failure = self
+                .first_json(&format!(
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                     FROM decision_reports
+                     WHERE analysis_pulse_key LIKE '{}%'
+                       AND status IN ('xai_error', 'error', 'failed', 'parse_error')
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 1",
+                    sql_escape(prefix)
+                ))
+                .await?
+                .unwrap_or(JsonValue::Null);
+            let attempts = self
+                .first_json(&format!(
+                    "SELECT COUNT(*) AS attempts_7d
+                     FROM decision_reports
+                     WHERE analysis_pulse_key LIKE '{}%'
+                       AND created_at >= '{}'",
+                    sql_escape(prefix),
+                    sql_escape(&attempt_cutoff)
+                ))
+                .await?
+                .unwrap_or_else(|| json!({"attempts_7d": 0}));
+            statuses.push(json!({
+                "key": key,
+                "prefix": prefix,
+                "label": label,
+                "latest": latest,
+                "last_success": last_success,
+                "last_failure": last_failure,
+                "attempts_7d": value_i64(&attempts, "attempts_7d"),
+            }));
+        }
+        Ok(statuses)
     }
 
     pub async fn markov_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {

@@ -1125,13 +1125,22 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     } else {
         "Dry Run Report"
     };
-    let europe_pulse = decision_pulse_health(
-        &data.reports,
-        "europe_open_followup:",
-        "Nordic/EU Open +1h15",
-    );
-    let us_pulse = decision_pulse_health(&data.reports, "us_open_followup:", "US Open +1h15");
-    let manual_pulse = decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run");
+    let europe_pulse =
+        decision_pulse_health_from_status(&data.decision_pulse_statuses, "europe_open_followup")
+            .unwrap_or_else(|| {
+                decision_pulse_health(
+                    &data.reports,
+                    "europe_open_followup:",
+                    "Nordic/EU Open +1h15",
+                )
+            });
+    let us_pulse =
+        decision_pulse_health_from_status(&data.decision_pulse_statuses, "us_open_followup")
+            .unwrap_or_else(|| {
+                decision_pulse_health(&data.reports, "us_open_followup:", "US Open +1h15")
+            });
+    let manual_pulse = decision_pulse_health_from_status(&data.decision_pulse_statuses, "manual")
+        .unwrap_or_else(|| decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run"));
     let diagnostics = decision_report_diagnostics(&report);
     let quality = decision_report_quality(&report, &report_json, &diagnostics);
     rsx! {
@@ -1276,6 +1285,10 @@ struct DecisionPulseHealth {
     latest_tone: &'static str,
     last_success_at: String,
     last_success_id: i64,
+    last_failure_at: String,
+    last_failure_id: i64,
+    last_failure_status: String,
+    attempts_7d: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1348,7 +1361,52 @@ fn decision_pulse_health(
         last_success_id: last_success
             .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
             .unwrap_or(0),
+        last_failure_at: String::new(),
+        last_failure_id: 0,
+        last_failure_status: String::new(),
+        attempts_7d: reports
+            .iter()
+            .filter(|row| {
+                text(row, "analysis_pulse_key")
+                    .to_lowercase()
+                    .starts_with(pulse_key_prefix)
+            })
+            .count() as i64,
     }
+}
+
+fn decision_pulse_health_from_status(
+    statuses: &[JsonValue],
+    key: &str,
+) -> Option<DecisionPulseHealth> {
+    let row = statuses.iter().find(|row| text(row, "key") == key)?;
+    let latest = row.get("latest").unwrap_or(&JsonValue::Null);
+    let last_success = row.get("last_success").unwrap_or(&JsonValue::Null);
+    let last_failure = row.get("last_failure").unwrap_or(&JsonValue::Null);
+    let latest_status = if latest.is_null() {
+        "missing".to_string()
+    } else {
+        fallback_text(latest, "status", "missing")
+    };
+    Some(DecisionPulseHealth {
+        label: fallback_text(row, "label", key),
+        latest_tone: decision_status_text_tone(&latest_status),
+        latest_status,
+        latest_created_at: text(latest, "created_at"),
+        latest_id: latest.get("id").and_then(JsonValue::as_i64).unwrap_or(0),
+        last_success_at: text(last_success, "created_at"),
+        last_success_id: last_success
+            .get("id")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
+        last_failure_at: text(last_failure, "created_at"),
+        last_failure_id: last_failure
+            .get("id")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
+        last_failure_status: text(last_failure, "status"),
+        attempts_7d: value_i64(row, "attempts_7d"),
+    })
 }
 
 fn decision_status_text_tone(status: &str) -> &'static str {
@@ -1693,12 +1751,24 @@ fn DecisionPulseHealthCard(health: DecisionPulseHealth, prefs: LocalizationPrefs
     } else {
         "No successful report in recent history".to_string()
     };
+    let last_failure = if health.last_failure_id > 0 {
+        format!(
+            "Last failure #{} · {} · {}",
+            health.last_failure_id,
+            format_timestamp(&health.last_failure_at, &prefs),
+            health.last_failure_status
+        )
+    } else {
+        "No failure recorded".to_string()
+    };
     rsx! {
         div { class: "card",
             div { class: "label", "{health.label}" }
             div { class: "value {health.latest_tone}", "{health.latest_status}" }
             div { class: "muted summary-subtitle", "{latest}" }
             div { class: "muted summary-subtitle", "{last_success}" }
+            div { class: "muted summary-subtitle", "{last_failure}" }
+            div { class: "muted summary-subtitle", "{health.attempts_7d} attempts / 7d" }
         }
     }
 }
@@ -4688,6 +4758,7 @@ mod tests {
         assert_eq!(us.latest_status, "xai_error");
         assert_eq!(us.latest_tone, "bad-text");
         assert_eq!(us.last_success_id, 11);
+        assert_eq!(us.attempts_7d, 2);
 
         let europe =
             decision_pulse_health(&reports, "europe_open_followup:", "Nordic/EU Open +1h15");
@@ -4695,11 +4766,48 @@ mod tests {
         assert_eq!(europe.latest_status, "completed");
         assert_eq!(europe.latest_tone, "good-text");
         assert_eq!(europe.last_success_id, 10);
+        assert_eq!(europe.attempts_7d, 1);
 
         let manual = decision_pulse_health(&reports, "manual:", "Manual / Dry Run");
         assert_eq!(manual.latest_status, "missing");
         assert_eq!(manual.latest_tone, "bad-text");
         assert_eq!(manual.last_success_id, 0);
+        assert_eq!(manual.attempts_7d, 0);
+    }
+
+    #[test]
+    fn derives_decision_pulse_health_from_backend_status() {
+        let statuses = vec![json!({
+            "key": "us_open_followup",
+            "label": "US Open +1h15",
+            "latest": {
+                "id": 12,
+                "created_at": "2026-06-24T14:45:00Z",
+                "status": "xai_error"
+            },
+            "last_success": {
+                "id": 11,
+                "created_at": "2026-06-23T14:45:00Z",
+                "status": "completed"
+            },
+            "last_failure": {
+                "id": 12,
+                "created_at": "2026-06-24T14:45:00Z",
+                "status": "xai_error"
+            },
+            "attempts_7d": 4
+        })];
+
+        let us = decision_pulse_health_from_status(&statuses, "us_open_followup")
+            .expect("backend status exists");
+        assert_eq!(us.latest_id, 12);
+        assert_eq!(us.latest_status, "xai_error");
+        assert_eq!(us.latest_tone, "bad-text");
+        assert_eq!(us.last_success_id, 11);
+        assert_eq!(us.last_failure_id, 12);
+        assert_eq!(us.last_failure_status, "xai_error");
+        assert_eq!(us.attempts_7d, 4);
+        assert!(decision_pulse_health_from_status(&statuses, "manual").is_none());
     }
 
     #[test]

@@ -58,6 +58,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - Weekly and monthly digest generation with independent scheduling and per-kind notification deduplication
 - Quarterly and year-to-date digest generation using the same immutable notification pipeline
 - Broker alert notifications for fills, rejections, and cancel confirmations
+- Backend-backed decision pulse health cards for Nordic/EU, US, and manual reports, including latest report, last success, last failure, and 7-day attempts
 - Per-kind delivery routing so digests and broker alerts can target different Slack webhooks or email recipient lists
 - Severity-based broker alert suppression so repeated low-signal events can be throttled without disabling higher-value alerts
 - Named route profiles so several digest or alert kinds can share one delivery destination without repeated config
