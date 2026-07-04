@@ -3,7 +3,7 @@ type: runbook-index
 tags:
   - daytrader/wiki
   - runbooks
-updated: 2026-05-23
+updated: 2026-07-04
 ---
 
 # Runbooks
@@ -22,4 +22,5 @@ Examples:
 ## Current Runbooks
 
 - [build-test-deploy](build-test-deploy.md) - Build, unit/integration/smoke testing, Saxo SIM testing, Kubernetes deployment, Hermes smoke checks, and wiki maintenance.
+- [backup-restore](backup-restore.md) - CloudNativePG and RustFS backup verification, manual backup rehearsal, and safe restore rehearsal pattern.
 - [k8s-diagnostics](k8s-diagnostics.md) - Docker Desktop Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.

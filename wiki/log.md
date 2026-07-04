@@ -29,6 +29,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Expanded `make post-deploy-smoke` to fail when decision-report schema health is not ok.
 - Added optional image drift checks for API, scheduler, MCP, and Hermes deployments through `EXPECTED_DAYTRADER_IMAGE` or per-deployment `EXPECTED_*_IMAGE` environment variables.
 
+## [2026-07-04] runbook | CNPG and RustFS backup restore rehearsal
+
+- Added `wiki/runbooks/backup-restore.md` for CloudNativePG and RustFS backup verification, manual backup rehearsal, object inspection, and safe restore rehearsal into a throwaway namespace.
+- Linked the new runbook from the runbook index and main wiki index.
+- Kept restore instructions non-destructive by default and explicitly warned against restoring over the live `saxo/daytrader-postgres` cluster.
+
 ## [2026-07-04] verification | QuiverQuant live subscription
 
 - Verified the QuiverQuant subscription is active in the deployed `saxo` Kubernetes runtime.

@@ -35,6 +35,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [runbooks/README](runbooks/README.md) - Landing page for operational procedures.
 - [runbooks/build-test-deploy](runbooks/build-test-deploy.md) - Build, testing, Saxo SIM, deployment, Hermes smoke, and wiki maintenance checklist.
 - [runbooks/k8s-diagnostics](runbooks/k8s-diagnostics.md) - Kubernetes diagnostics, debugging, smoke-test, rollout, CNPG, ngrok, Hermes, and RustFS one-liners.
+- [runbooks/backup-restore](runbooks/backup-restore.md) - CloudNativePG and RustFS backup verification and restore rehearsal.
 
 ## Decisions
 
