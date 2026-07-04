@@ -10,6 +10,12 @@ updated: 2026-07-04
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-04] improvement | Operational scheduler alerts
+
+- Continued the operations roadmap by adding scheduler-driven Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection.
+- Reused the existing immutable notification delivery/state tables and added Rust runtime schema creation so fresh Rust deployments do not depend on legacy Python initialization.
+- Documented the new notification alert thresholds and route kind in the README and marked the roadmap item as recently landed.
+
 ## [2026-07-04] fix | Docker build context hygiene
 
 - Aligned `.dockerignore` with local-only repository ignores, including `rustfs/`, qmd/Obsidian state, Python caches, generated spreadsheet exports, Rust backup files, and mutation-test output.

@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use crate::{
     daily_indicators::run_daily_indicators_cycle,
     markov_method::run_markov_method_cycle,
-    notifications::dispatch_execution_notifications,
+    notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
     quiver::run_quiver_signal_cycle,
     saxo_order::{run_saxo_execution_queue, sync_saxo_broker_orders},
     saxo_portfolio::refresh_broker_snapshots,
@@ -163,6 +163,13 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    let operational_notifications = match dispatch_operational_notifications(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("operational notification dispatch failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     let journal = match run_strategy_journal_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -179,6 +186,10 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             .and_then(JsonValue::as_str)
             == Some("error")
         || notifications.get("status").and_then(JsonValue::as_str) == Some("error")
+        || operational_notifications
+            .get("status")
+            .and_then(JsonValue::as_str)
+            == Some("error")
         || portfolio_value_snapshot
             .get("status")
             .and_then(JsonValue::as_str)
@@ -203,6 +214,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "portfolio_value_snapshot": portfolio_value_snapshot,
         "notifications": notifications,
+        "operational_notifications": operational_notifications,
         "journal": journal,
         "market": state.market_status_payload().await.unwrap_or_else(|err| {
             warn!("scheduler market status snapshot failed: {err:#}");

@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-04: Added scheduler-driven operational Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection, with runtime notification table creation in Rust.
 - 2026-07-04: Added `make post-deploy-guard` backed by non-secret `.run/last_deploy.env` metadata so deploys can verify the cluster is running the expected API, scheduler, MCP, and Hermes images.
 - 2026-07-04: Added a CNPG/RustFS backup and restore rehearsal runbook with manual backup checks, RustFS object inspection, safe restore namespace pattern, and verification queries.
 - 2026-07-04: Expanded `make post-deploy-smoke` with decision-report schema health validation and optional expected-image checks for API, scheduler, MCP, and Hermes deployments.

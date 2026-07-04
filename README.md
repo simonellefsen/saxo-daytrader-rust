@@ -416,6 +416,12 @@ Important limitation: OpenFIGI's official mapping response returns FIGI metadata
 - `alerts.broker_cancel_enabled`: alerts for broker cancels/expirations.
 - `alerts.execution_failure_enabled`: alerts when an execution order fails locally, e.g. session or lookup failure.
 - `alerts.broker_management_failure_enabled`: alerts when a live cancel/replace request fails.
+- `alerts.saxo_session_failure_enabled`: alerts for repeated Saxo session maintenance failures.
+- `alerts.operational_alerts_enabled`: enables scheduler-driven operational Slack alerts.
+- `alerts.decision_failure_threshold` / `alerts.decision_failure_window_hours`: alert when decision-report failures reach the threshold inside the configured lookback window.
+- `alerts.execution_failure_burst_threshold` / `alerts.execution_failure_burst_window_hours`: alert when failed execution orders cluster inside the configured lookback window.
+- `alerts.scheduler_stale_minutes`: alert when the latest recorded scheduler completion is older than this threshold.
+- `alerts.hermes_eod_reflection_missed_enabled` / `alerts.hermes_eod_reflection_due_hour_utc`: alert after the UTC deadline when no Hermes reflection exists for the current day.
 - `alert_suppression.*`: cooldown rules by severity.
 - `alert_grouping.enabled`: group several broker updates for one order into one notification.
 - `alert_grouping.max_items_per_group`: cap on grouped alert preview items.
@@ -424,7 +430,7 @@ Important limitation: OpenFIGI's official mapping response returns FIGI metadata
   - `daily`, `weekly`, `monthly`, `quarterly`, `ytd`
   - `alert_execution_success`, `alert_execution_warning`
   - `alert_broker_fill`, `alert_broker_reject`, `alert_broker_cancel`, `alert_broker_grouped`
-  - `alert_execution_failed`, `alert_broker_management_failed`
+  - `alert_execution_failed`, `alert_broker_management_failed`, `alert_saxo_session_failed`, `alert_operational_issue`
 
 ## Scheduler
 
@@ -450,6 +456,7 @@ The scheduler:
 - queues suggested trades
 - auto-executes queued trades in simulation mode
 - dispatches execution notifications for successes, warnings, and failures
+- dispatches operational alerts for repeated report failures, repeated execution failures, stale scheduler completion, and missed Hermes EOD reflection
 - sends one daily summary per configured channel after the local dispatch time
 - sends optional weekly, monthly, quarterly, and YTD digests after their configured local dispatch windows
 - sends optional broker event alerts when fills, rejections, or confirmed cancellations appear in the local broker sync tables

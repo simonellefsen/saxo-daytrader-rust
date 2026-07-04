@@ -3182,6 +3182,84 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating portfolio value history recorded index")?;
+        if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS notification_deliveries (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    summary_date TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    message_text TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    error_text TEXT,
+                    summary_kind TEXT NOT NULL DEFAULT 'daily'
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating notification deliveries table")?;
+            sqlx::query(
+                "ALTER TABLE notification_deliveries
+                 ADD COLUMN IF NOT EXISTS summary_kind TEXT NOT NULL DEFAULT 'daily'",
+            )
+            .execute(&self.pool)
+            .await
+            .context("ensuring notification deliveries summary_kind column")?;
+        } else {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS notification_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    summary_date TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    message_text TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    error_text TEXT,
+                    summary_kind TEXT NOT NULL DEFAULT 'daily'
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating notification deliveries table")?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_notification_deliveries_summary
+             ON notification_deliveries(summary_date, channel, status, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating notification deliveries summary index")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS notification_channel_state (
+                channel TEXT PRIMARY KEY,
+                summary_date TEXT,
+                last_attempt_at TEXT,
+                next_attempt_after TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_status TEXT,
+                last_error_text TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating notification channel state table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS notification_alert_state (
+                scope_key TEXT PRIMARY KEY,
+                severity TEXT NOT NULL,
+                last_sent_at TEXT,
+                last_alert_key TEXT,
+                last_summary_kind TEXT,
+                last_delivery_id INTEGER
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating notification alert state table")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS saxo_sessions (
                 singleton_key TEXT PRIMARY KEY,

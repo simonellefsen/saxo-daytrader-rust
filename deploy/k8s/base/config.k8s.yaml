@@ -326,6 +326,18 @@ notifications:
     broker_cancel_enabled: false
     execution_failure_enabled: true
     broker_management_failure_enabled: true
+    saxo_session_failure_enabled: true
+    operational_alerts_enabled: true
+    decision_failure_enabled: true
+    decision_failure_threshold: 2
+    decision_failure_window_hours: 24
+    execution_failure_burst_enabled: true
+    execution_failure_burst_threshold: 3
+    execution_failure_burst_window_hours: 24
+    scheduler_stale_enabled: true
+    scheduler_stale_minutes: 30
+    hermes_eod_reflection_missed_enabled: true
+    hermes_eod_reflection_due_hour_utc: 22
   alert_suppression:
     enabled: true
     low_cooldown_minutes: 240
@@ -349,3 +361,5 @@ notifications:
     alert_broker_grouped: {}
     alert_execution_failed: {}
     alert_broker_management_failed: {}
+    alert_saxo_session_failed: {}
+    alert_operational_issue: {}

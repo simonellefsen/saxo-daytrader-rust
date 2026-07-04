@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use serde_json::{Value as JsonValue, json};
+use sqlx::Row;
 
 use crate::{
     config::{yaml_bool, yaml_i64, yaml_string},
@@ -23,11 +24,29 @@ struct SlackAlert {
 }
 
 pub async fn dispatch_execution_notifications(state: &AppState) -> Result<JsonValue> {
+    let alerts = pending_execution_alerts(state).await?;
+    dispatch_slack_alerts(state, alerts).await
+}
+
+pub async fn dispatch_operational_notifications(state: &AppState) -> Result<JsonValue> {
+    if !yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "operational_alerts_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        return Ok(json!({"status": "disabled", "reason": "operational_alerts_disabled"}));
+    }
+
+    let alerts = pending_operational_alerts(state).await?;
+    dispatch_slack_alerts(state, alerts).await
+}
+
+async fn dispatch_slack_alerts(state: &AppState, alerts: Vec<SlackAlert>) -> Result<JsonValue> {
     if !yaml_bool(&state.config, &["notifications", "slack", "enabled"]).unwrap_or(false) {
         return Ok(json!({"status": "disabled", "reason": "slack_disabled"}));
     }
 
-    let alerts = pending_execution_alerts(state).await?;
     if alerts.is_empty() {
         return Ok(json!({"status": "ok", "alerts": [], "sent": []}));
     }
@@ -38,7 +57,7 @@ pub async fn dispatch_execution_notifications(state: &AppState) -> Result<JsonVa
     let mut sent = Vec::new();
     let mut failed = Vec::new();
 
-    for alert in alerts {
+    for alert in &alerts {
         match send_alert_to_slack(state, &client, &webhook_url, &alert).await {
             Ok(delivery_id) => sent.push(json!({
                 "alert_key": alert.alert_key,
@@ -122,6 +141,334 @@ async fn pending_execution_alerts(state: &AppState) -> Result<Vec<SlackAlert>> {
     }
     alerts.reverse();
     Ok(alerts)
+}
+
+async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>> {
+    let mut alerts = Vec::new();
+
+    if yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "decision_failure_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(state, &mut alerts, decision_failure_alert(state).await?).await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "execution_failure_burst_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            execution_failure_burst_alert(state).await?,
+        )
+        .await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "scheduler_stale_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(state, &mut alerts, scheduler_stale_alert(state).await?).await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_eod_reflection_missed_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            hermes_eod_reflection_missed_alert(state).await?,
+        )
+        .await?;
+    }
+
+    Ok(alerts)
+}
+
+async fn maybe_push_unsent(
+    state: &AppState,
+    alerts: &mut Vec<SlackAlert>,
+    alert: Option<SlackAlert>,
+) -> Result<()> {
+    let Some(alert) = alert else {
+        return Ok(());
+    };
+    if !alert_already_sent(state, &alert.scope_key).await? {
+        alerts.push(alert);
+    }
+    Ok(())
+}
+
+async fn decision_failure_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let threshold = yaml_i64(
+        &state.config,
+        &["notifications", "alerts", "decision_failure_threshold"],
+    )
+    .unwrap_or(2)
+    .max(1);
+    let window_hours = yaml_i64(
+        &state.config,
+        &["notifications", "alerts", "decision_failure_window_hours"],
+    )
+    .unwrap_or(24)
+    .max(1);
+    let cutoff = (Utc::now() - Duration::hours(window_hours))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row = sqlx::query(&format!(
+        "SELECT COUNT(*) AS failure_count, MAX(id) AS latest_id, MAX(created_at) AS latest_created_at
+         FROM decision_reports
+         WHERE created_at >= '{}'
+           AND status IN ('xai_error', 'error', 'failed', 'parse_error')",
+        sql_escape(&cutoff)
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .context("checking repeated decision report failures")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let failure_count = row.try_get::<i64, _>("failure_count").unwrap_or(0);
+    let latest_id = row.try_get::<i64, _>("latest_id").unwrap_or(0);
+    if failure_count < threshold || latest_id <= 0 {
+        return Ok(None);
+    }
+    let latest_created_at = row
+        .try_get::<String, _>("latest_created_at")
+        .unwrap_or_else(|_| "unknown".to_string());
+    Ok(Some(operational_alert(
+        "decision_failures",
+        format!("ops:decision_failures:latest:{latest_id}"),
+        "high",
+        "Decision report failures".to_string(),
+        vec![
+            "Repeated decision report failures detected.".to_string(),
+            String::new(),
+            format!("Failures: {failure_count} in the last {window_hours}h"),
+            format!("Threshold: {threshold}"),
+            format!("Latest report ID: {latest_id}"),
+            format!("Latest failure time: {latest_created_at}"),
+        ],
+        json!({
+            "failure_count": failure_count,
+            "threshold": threshold,
+            "window_hours": window_hours,
+            "latest_report_id": latest_id,
+            "latest_created_at": latest_created_at,
+        }),
+    )))
+}
+
+async fn execution_failure_burst_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let threshold = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "execution_failure_burst_threshold",
+        ],
+    )
+    .unwrap_or(3)
+    .max(1);
+    let window_hours = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "execution_failure_burst_window_hours",
+        ],
+    )
+    .unwrap_or(24)
+    .max(1);
+    let cutoff = (Utc::now() - Duration::hours(window_hours))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row = sqlx::query(&format!(
+        "SELECT COUNT(*) AS failure_count, MAX(id) AS latest_id, MAX(created_at) AS latest_created_at
+         FROM execution_orders
+         WHERE created_at >= '{}'
+           AND status = 'execution_failed'",
+        sql_escape(&cutoff)
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .context("checking repeated execution failures")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let failure_count = row.try_get::<i64, _>("failure_count").unwrap_or(0);
+    let latest_id = row.try_get::<i64, _>("latest_id").unwrap_or(0);
+    if failure_count < threshold || latest_id <= 0 {
+        return Ok(None);
+    }
+    let latest_created_at = row
+        .try_get::<String, _>("latest_created_at")
+        .unwrap_or_else(|_| "unknown".to_string());
+    Ok(Some(operational_alert(
+        "execution_failure_burst",
+        format!("ops:execution_failure_burst:latest:{latest_id}"),
+        "high",
+        "Execution failure burst".to_string(),
+        vec![
+            "Repeated broker/local execution failures detected.".to_string(),
+            String::new(),
+            format!("Failures: {failure_count} in the last {window_hours}h"),
+            format!("Threshold: {threshold}"),
+            format!("Latest execution order ID: {latest_id}"),
+            format!("Latest failure time: {latest_created_at}"),
+        ],
+        json!({
+            "failure_count": failure_count,
+            "threshold": threshold,
+            "window_hours": window_hours,
+            "latest_execution_order_id": latest_id,
+            "latest_created_at": latest_created_at,
+        }),
+    )))
+}
+
+async fn scheduler_stale_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let stale_minutes = yaml_i64(
+        &state.config,
+        &["notifications", "alerts", "scheduler_stale_minutes"],
+    )
+    .unwrap_or(30)
+    .max(1);
+    let row = sqlx::query(
+        "SELECT last_heartbeat_at, last_cycle_completed_at, last_cycle_status
+         FROM scheduler_status
+         WHERE singleton_key = 'main'
+         LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .context("checking scheduler freshness")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let last_cycle_completed_at = row.try_get::<String, _>("last_cycle_completed_at").ok();
+    let last_heartbeat_at = row.try_get::<String, _>("last_heartbeat_at").ok();
+    let reference = last_cycle_completed_at
+        .as_deref()
+        .and_then(parse_utc_time)
+        .or_else(|| last_heartbeat_at.as_deref().and_then(parse_utc_time));
+    let Some(reference) = reference else {
+        return Ok(None);
+    };
+    let age_minutes = (Utc::now() - reference).num_minutes();
+    if age_minutes < stale_minutes {
+        return Ok(None);
+    }
+    let last_cycle_status = row
+        .try_get::<String, _>("last_cycle_status")
+        .unwrap_or_else(|_| "unknown".to_string());
+    let reference_text = reference.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    Ok(Some(operational_alert(
+        "scheduler_stale",
+        format!("ops:scheduler_stale:{reference_text}"),
+        "high",
+        "Scheduler stale".to_string(),
+        vec![
+            "The latest recorded scheduler completion is stale.".to_string(),
+            String::new(),
+            format!("Last observed: {reference_text}"),
+            format!("Age: {age_minutes} minutes"),
+            format!("Threshold: {stale_minutes} minutes"),
+            format!("Last cycle status: {last_cycle_status}"),
+        ],
+        json!({
+            "last_observed_at": reference_text,
+            "age_minutes": age_minutes,
+            "threshold_minutes": stale_minutes,
+            "last_cycle_status": last_cycle_status,
+        }),
+    )))
+}
+
+async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let due_hour_utc = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_eod_reflection_due_hour_utc",
+        ],
+    )
+    .unwrap_or(22)
+    .clamp(0, 23);
+    let now = Utc::now();
+    if i64::from(now.hour()) < due_hour_utc {
+        return Ok(None);
+    }
+    let day = now.date_naive();
+    let day_start = format!("{day}T00:00:00Z");
+    let row = sqlx::query(&format!(
+        "SELECT COUNT(*) AS reflection_count, MAX(created_at) AS latest_created_at
+         FROM hermes_reflections
+         WHERE created_at >= '{}'",
+        sql_escape(&day_start)
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .context("checking Hermes EOD reflection freshness")?;
+    let reflection_count = row
+        .as_ref()
+        .and_then(|row| row.try_get::<i64, _>("reflection_count").ok())
+        .unwrap_or(0);
+    if reflection_count > 0 {
+        return Ok(None);
+    }
+    Ok(Some(operational_alert(
+        "hermes_eod_reflection_missed",
+        format!("ops:hermes_eod_reflection_missed:{day}"),
+        "medium",
+        "Hermes EOD reflection missing".to_string(),
+        vec![
+            "No Hermes reflection has been recorded for the current UTC day after the expected EOD deadline.".to_string(),
+            String::new(),
+            format!("Date: {day}"),
+            format!("Due hour UTC: {due_hour_utc:02}:00"),
+        ],
+        json!({
+            "date": day.to_string(),
+            "due_hour_utc": due_hour_utc,
+        }),
+    )))
+}
+
+fn operational_alert(
+    kind: &str,
+    scope_key: String,
+    severity: &str,
+    subject: String,
+    lines: Vec<String>,
+    details: JsonValue,
+) -> SlackAlert {
+    SlackAlert {
+        alert_key: scope_key.clone(),
+        summary_kind: "alert_operational_issue".to_string(),
+        severity: severity.to_string(),
+        scope_key,
+        subject,
+        message_text: lines.join("\n"),
+        payload: json!({
+            "alert_type": "operational_issue",
+            "kind": kind,
+            "details": details,
+        }),
+    }
 }
 
 fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<SlackAlert> {
@@ -427,7 +774,11 @@ fn sql_opt_text(value: Option<&str>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
-use sqlx::Row;
+fn parse_utc_time(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
 
 #[cfg(test)]
 mod tests {
@@ -437,5 +788,15 @@ mod tests {
     fn formats_integer_and_fractional_quantities() {
         assert_eq!(format_quantity(20.0), "20");
         assert_eq!(format_quantity(1.23456), "1.2346");
+    }
+
+    #[test]
+    fn parses_utc_scheduler_timestamps() {
+        let parsed = parse_utc_time("2026-07-04T12:00:00Z").expect("valid timestamp");
+        assert_eq!(
+            parsed.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-07-04T12:00:00Z"
+        );
+        assert!(parse_utc_time("not-a-timestamp").is_none());
     }
 }
