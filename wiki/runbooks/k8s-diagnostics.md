@@ -5,12 +5,29 @@ tags:
   - runbooks
   - kubernetes
   - diagnostics
-updated: 2026-06-16
+updated: 2026-07-02
 ---
 
 # Kubernetes Diagnostics One-Liners
 
 Use these one-liners for quick Docker Desktop Kubernetes diagnostics. App resources run in namespace `saxo`; CloudNativePG database resources run in namespace `saxo`; RustFS runs outside Kubernetes in the Docker context so it can persist objects to the local filesystem.
+
+## One-Command Bundle
+
+Start with the read-only diagnostics bundle when you need an operator snapshot:
+
+```bash
+rtk make diagnostics
+```
+
+The bundle collects pod/service/job status, rollout state, resource usage, recent events, scheduler/API/Hermes logs, RustFS backup status, shared ngrok status, and sanitized app summaries for portfolio performance, Saxo session health, scheduler state, latest decision report, latest Trading Manager run, Hermes advice, Markov freshness, integrity, and recent execution rows. It starts a temporary local port-forward to the API service and cleans it up automatically. It does not trigger reports, process the execution queue, mutate broker state, or print raw Saxo token/account payloads.
+
+To include the public ngrok health check, pass the public base URL or the shared gateway domain:
+
+```bash
+rtk env PUBLIC_BASE_URL=https://<domain>/saxo-daytrader make diagnostics
+rtk env NGROK_DOMAIN=<domain> make diagnostics
+```
 
 ## Cluster Snapshot
 

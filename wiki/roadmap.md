@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-06-29
+updated: 2026-07-04
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,10 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-04: Added dependency and CVE hygiene workflow with `make deps-dry-run`, `make security-scan`, RustSec advisory scanning, Trivy filesystem/image CVE scanning, and Trivy secret scanning.
+- 2026-07-04: Tightened Docker build-context hygiene so local RustFS object-store data is excluded, then added `make post-deploy-smoke` for read-only rollout, health, overview, scheduler, Saxo-session, MCP tool-discovery, and Hermes gateway checks after deploy.
+- 2026-07-02: Added a read-only `make diagnostics` bundle for pod status, rollouts, scheduler/API/Hermes logs, resource usage, CNPG health, RustFS backup state, shared ngrok routing, and sanitized app performance/execution summaries.
+- 2026-07-01: Added execution-order attribution linking orders back to decision report, Trading Manager decision, Hermes advice delta, latest daily indicators, and latest Markov state in the Execution view.
 - 2026-06-29: Changed Trading Manager SELL sizing to prefer current Saxo broker snapshots over stale imported position snapshots, preventing already-flattened holdings such as ORSTED and NNIT from being queued again.
 - 2026-06-27: Added an OpenRouter structured-output schema registry and reusable strict-schema validator so all current response schemas are checked for `additionalProperties: false`, complete `required` lists, union branches, arrays, and stale required entries.
 - 2026-06-26: Improved Saxo limit-price handling by using configured overrides, Saxo instrument-details tick schemes, and explicit broker-expired status mapping for unfilled DayOrders.
@@ -187,8 +191,8 @@ The Rust runtime should keep moving away from generic JSON and legacy Python beh
 
 Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
-- Add a one-command diagnostics bundle that collects pod status, rollouts, recent scheduler cycles, latest report statuses, latest order failures, Hermes jobs, CNPG health, RustFS backup status, and ngrok route health.
-- Add smoke tests after deploy: health, overview, scheduler status, Saxo session status, decision schema validation, Hermes API auth check, and MCP tool list.
+- Expand the diagnostics bundle with optional artifact capture to a timestamped file for Slack/GitHub issue sharing.
+- Expand post-deploy smoke with decision schema validation and optional image-tag drift checks.
 - Add a post-deploy guard that confirms the live image tag changed on API, scheduler, MCP, and Hermes where expected.
 - Add backup/restore rehearsal docs for CNPG + RustFS.
 - Add alerting for repeated decision-report failures, repeated broker execution failures, stale scheduler heartbeat, and missed EOD reflection.
@@ -198,6 +202,7 @@ Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
 Security posture should assume model prompts, broker payloads, and external docs are untrusted.
 
+- Run dependency and CVE hygiene regularly with `make deps-dry-run` and `make security-scan`; treat fixed HIGH/CRITICAL CVEs, RustSec advisories, and secret findings as release blockers unless there is a dated exception with a compensating control.
 - Keep all Saxo tokens, AccountKey, ClientKey, OpenRouter keys, ngrok keys, and database credentials out of wiki pages and normal UI payloads.
 - Add automated redaction tests for logs, report debug views, Hermes context, and MCP tool responses.
 - Make Hermes capabilities explicit and deny broker mutation tools by default.

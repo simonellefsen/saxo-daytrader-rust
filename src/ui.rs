@@ -371,6 +371,7 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=market", label: "Market Status", active: active_view == "market" }
             TabLink { href: "/?view=watchlists", label: "Watchlists", active: active_view == "watchlists" }
             TabLink { href: "/?view=markov", label: "Markov", active: active_view == "markov" }
+            TabLink { href: "/?view=quiver", label: "Quiver", active: active_view == "quiver" }
             TabLink { href: "/?view=decisions", label: "Decision Reports", active: active_view == "decisions" }
             TabLink { href: "/?view=prompts", label: "AI Prompts", active: active_view == "prompts" }
             TabLink { href: "/?view=hermes", label: "Hermes", active: active_view == "hermes" }
@@ -401,6 +402,7 @@ fn DashboardBody(
         "market" => rsx! { MarketView { data, prefs } },
         "watchlists" => rsx! { WatchlistsView { data, prefs } },
         "markov" => rsx! { MarkovView { data, prefs } },
+        "quiver" => rsx! { QuiverView { data, prefs } },
         "decisions" => rsx! { DecisionsView { data, prefs } },
         "prompts" => rsx! { PromptsView { data, prefs } },
         "hermes" => rsx! { HermesView { data, prefs } },
@@ -957,6 +959,115 @@ fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{distribution_label(row.get(\"stationary_json\"), &prefs)}" }
             td { class: if value_f64(&row, "rolling_return") >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_pct(value_f64(&row, \"rolling_return\"), &prefs)}" }
             td { "{text(&row, \"sample_count\")}" }
+            td {
+                span { class: if status == "ok" { "pill good" } else { "pill bad" }, "{status}" }
+                if status != "ok" {
+                    div { class: "muted", "{text(&row, \"error_text\")}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let run = data.latest_quiver_run.clone();
+    let config = run
+        .get("config_json")
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Null);
+    let ok_count = data
+        .quiver_signals
+        .iter()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
+        .count();
+    let error_count = data
+        .quiver_signals
+        .iter()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) != Some("ok"))
+        .count();
+    rsx! {
+        section { class: "section stack loose",
+            div { class: "section-title-row",
+                div {
+                    h2 { "Quiver Signals" }
+                    p { class: "muted", "Daily QuiverQuant alternative-data signals for US portfolio and watchlist assets. Signals are advisory and do not place orders." }
+                }
+                div { class: "pill-row right",
+                    span { class: "pill", "Signals: {ok_count}" }
+                    span { class: if error_count == 0 { "pill" } else { "pill bad" }, "Errors: {error_count}" }
+                }
+            }
+            if run.is_null() {
+                div { class: "event",
+                    strong { "No Quiver run exists yet." }
+                    span { class: "muted", "The scheduler will create the first run after the configured daily time once QUIVERQUANT_API_KEY is available." }
+                }
+            } else {
+                div { class: "mini-grid",
+                    MetricCard { label: "Run Date", value: text(&run, "run_date"), tone: "" }
+                    MetricCard { label: "Status", value: text(&run, "status"), tone: "" }
+                    MetricCard { label: "Assets", value: text(&run, "asset_count"), tone: "" }
+                    MetricCard { label: "Succeeded", value: text(&run, "success_count"), tone: "good-text" }
+                    MetricCard { label: "Failed", value: text(&run, "error_count"), tone: if value_f64(&run, "error_count") > 0.0 { "bad-text" } else { "" } }
+                    MetricCard { label: "Lookback", value: format!("{}d", text(&config, "lookback_days")), tone: "" }
+                }
+                div { class: "event",
+                    strong { "Configuration" }
+                    span { "Sources congress_trading · US symbols only · daily time {text(&config, \"daily_time\")} · max symbols {text(&config, \"max_symbols\")}" }
+                }
+            }
+            div { class: "table-wrap compact-table",
+                table { class: "data-table",
+                    thead {
+                        tr {
+                            th { "Symbol" }
+                            th { "Ticker" }
+                            th { "Signal" }
+                            th { "Direction" }
+                            th { "Confidence" }
+                            th { "Events" }
+                            th { "Purchases" }
+                            th { "Sales" }
+                            th { "Net Amount" }
+                            th { "Latest" }
+                            th { "Status" }
+                        }
+                    }
+                    tbody {
+                        for row in data.quiver_signals.iter() {
+                            QuiverSignalRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn QuiverSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let signal = value_f64(&row, "signal");
+    let tone = if signal > 0.0 {
+        "good-text"
+    } else if signal < 0.0 {
+        "bad-text"
+    } else {
+        ""
+    };
+    let status = text(&row, "status");
+    rsx! {
+        tr {
+            td { SymbolLink { symbol: text(&row, "symbol"), instrument_name: text(&row, "instrument_name") } }
+            td { "{fallback_text(&row, \"ticker\", \"n/a\")}" }
+            td { class: tone, "{format_signed_pct(signal, &prefs)}" }
+            td { "{fallback_text(&row, \"direction\", \"n/a\")}" }
+            td { "{format_pct(value_f64(&row, \"confidence\"), &prefs)}" }
+            td { "{text(&row, \"event_count\")}" }
+            td { "{text(&row, \"congress_purchase_count\")}" }
+            td { "{text(&row, \"congress_sale_count\")}" }
+            td { class: if value_f64(&row, "net_congress_amount") >= 0.0 { "good-text" } else { "bad-text" }, "{format_money(value_f64(&row, \"net_congress_amount\"), \"USD\", &prefs)}" }
+            td { "{fallback_text(&row, \"latest_event_date\", \"n/a\")}" }
             td {
                 span { class: if status == "ok" { "pill good" } else { "pill bad" }, "{status}" }
                 if status != "ok" {
@@ -2047,7 +2158,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "table-wrap",
                 h3 { "Execution Orders" }
                 table {
-                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Error" } } }
+                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Attribution" } th { "Error" } } }
                     tbody {
                         for row in data.orders.iter() {
                             ExecutionOrderRow { row: row.clone(), prefs: prefs.clone() }
@@ -2427,6 +2538,8 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
         truncate_chars(&detail, 120)
     };
     let detail_block = execution_detail_block(&row, &detail);
+    let (attribution_label, attribution_tone) = execution_attribution_label(&row);
+    let attribution_detail = execution_attribution_detail(&row, &prefs);
     rsx! {
         tr {
             td { "{text(&row, \"id\")}" }
@@ -2446,6 +2559,12 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{format_local_money(value_f64(&row, \"price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
+            td { class: "muted attribution-cell",
+                details { class: "error-details attribution-details",
+                    summary { span { class: "{attribution_tone}", "{attribution_label}" } }
+                    pre { "{attribution_detail}" }
+                }
+            }
             td { class: "muted error-cell",
                 if !detail.is_empty() {
                     details { class: "error-details", title: "{tooltip}",
@@ -2458,6 +2577,121 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
         }
     }
+}
+
+fn execution_attribution_label(row: &JsonValue) -> (String, &'static str) {
+    let null = JsonValue::Null;
+    let attribution = row.get("attribution").unwrap_or(&null);
+    match text(attribution, "delta").as_str() {
+        "allowed_executed" => ("Hermes allow".to_string(), "good-text"),
+        "allowed_queued" => ("Hermes allow".to_string(), ""),
+        "reduced_or_capped" => ("Hermes reduce".to_string(), "warn-text"),
+        "manager_overrode_review" => ("Review overrode".to_string(), "bad-text"),
+        "manager_only" => ("Manager only".to_string(), ""),
+        "no_advice" => ("No advice".to_string(), "warn-text"),
+        value if value.ends_with("_skipped") => ("Skipped".to_string(), "warn-text"),
+        value if !value.is_empty() => (value.replace('_', " "), ""),
+        _ => ("No attribution".to_string(), "warn-text"),
+    }
+}
+
+fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
+    let null = JsonValue::Null;
+    let attribution = row.get("attribution").unwrap_or(&null);
+    let report = attribution.get("report").unwrap_or(&null);
+    let manager = attribution.get("trading_manager").unwrap_or(&null);
+    let manager_decision = manager.get("decision").unwrap_or(&null);
+    let hermes = attribution.get("hermes").unwrap_or(&null);
+    let hermes_order = hermes.get("order_advice").unwrap_or(&null);
+    let technical = attribution.get("technical").unwrap_or(&null);
+    let markov = attribution.get("markov").unwrap_or(&null);
+
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Delta: {}",
+        fallback_text(attribution, "delta", "n/a")
+    ));
+    lines.push(format!(
+        "Report: #{} · {} · {} · {}",
+        text_or(report, "id", "n/a"),
+        fallback_text(report, "pulse_label", "n/a"),
+        fallback_text(report, "model", "n/a"),
+        format_timestamp(&text(report, "created_at"), prefs)
+    ));
+    lines.push(format!(
+        "Trading Manager: run #{} · status {} · {} · decision {}",
+        text_or(manager, "run_id", "n/a"),
+        fallback_text(manager, "status", "n/a"),
+        fallback_text(manager, "manager_key", "n/a"),
+        fallback_text(manager_decision, "manager_decision", "n/a")
+    ));
+    let manager_reason = [
+        text(manager_decision, "approval_reason"),
+        text(manager_decision, "skip_reason"),
+        text(manager_decision, "reason"),
+        text(manager_decision, "technical_gate_reason"),
+    ]
+    .into_iter()
+    .find(|value| !value.trim().is_empty())
+    .unwrap_or_default();
+    if !manager_reason.is_empty() {
+        lines.push(format!("Manager reason: {manager_reason}"));
+    }
+    lines.push(format!(
+        "Hermes: advice #{} · status {} · recommendation {} · action {}",
+        text_or(hermes, "advice_id", "n/a"),
+        fallback_text(hermes, "status", "n/a"),
+        fallback_text(hermes, "recommendation", "n/a"),
+        fallback_text(hermes_order, "action", "n/a")
+    ));
+    let hermes_reason = [
+        text(hermes_order, "reason"),
+        text(hermes_order, "rationale"),
+        text(hermes, "summary"),
+    ]
+    .into_iter()
+    .find(|value| !value.trim().is_empty())
+    .unwrap_or_default();
+    if !hermes_reason.is_empty() {
+        lines.push(format!(
+            "Hermes reason: {}",
+            truncate_chars(&hermes_reason, 420)
+        ));
+    }
+    if !technical.is_null() {
+        lines.push(format!(
+            "Daily indicators: {} · {} · trend {} · confluence {}/{} · RR {}",
+            fallback_text(technical, "run_date", "n/a"),
+            fallback_text(technical, "sentiment", "n/a"),
+            fallback_text(technical, "trend_bias", "n/a"),
+            text_or(technical, "confluence_count", "0"),
+            text_or(technical, "min_confluences", "0"),
+            crate::localization::format_number(value_f64(technical, "reward_risk"), 2, prefs)
+        ));
+        let error = text(technical, "error_text");
+        if !error.is_empty() {
+            lines.push(format!(
+                "Daily indicator error: {}",
+                truncate_chars(&error, 260)
+            ));
+        }
+    }
+    if !markov.is_null() {
+        lines.push(format!(
+            "Markov: {} · state {} · direction {} · signal {} · bull {} · bear {}",
+            fallback_text(markov, "run_date", "n/a"),
+            fallback_text(markov, "current_state", "n/a"),
+            fallback_text(markov, "direction", "n/a"),
+            format_signed_pct(value_f64(markov, "signed_signal"), prefs),
+            format_pct(value_f64(markov, "bull_prob"), prefs),
+            format_pct(value_f64(markov, "bear_prob"), prefs)
+        ));
+        let error = text(markov, "error_text");
+        if !error.is_empty() {
+            lines.push(format!("Markov error: {}", truncate_chars(&error, 260)));
+        }
+    }
+    lines.join("\n")
 }
 
 #[component]
@@ -2921,6 +3155,7 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
         scheduler_operation_health(&data.market_status, now),
         decision_operation_health(&data.latest_decision),
         run_operation_health("Markov", &data.latest_markov_run, now),
+        run_operation_health("Quiver", &data.latest_quiver_run, now),
         run_operation_health("Indicators", &data.latest_daily_indicator_run, now),
         quote_operation_health(&data.positions, now),
     ]
@@ -4035,6 +4270,21 @@ mod tests {
         assert_eq!(
             execution_order_price_currency(&json!({"symbol": "ORSTED:xcse", "currency": ""})),
             "DKK"
+        );
+    }
+
+    #[test]
+    fn execution_attribution_label_summarizes_hermes_delta() {
+        let row = json!({"attribution": {"delta": "allowed_executed"}});
+        assert_eq!(
+            execution_attribution_label(&row),
+            ("Hermes allow".to_string(), "good-text")
+        );
+
+        let review_row = json!({"attribution": {"delta": "manager_overrode_review"}});
+        assert_eq!(
+            execution_attribution_label(&review_row),
+            ("Review overrode".to_string(), "bad-text")
         );
     }
 

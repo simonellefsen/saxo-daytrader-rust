@@ -193,6 +193,13 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .unwrap_or(50);
             crate::markov_method::compact_markov_context(&state, limit).await?
         }
+        "get_quiver_signals" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or(50);
+            crate::quiver::compact_quiver_context(&state, limit).await?
+        }
         "create_experiment_proposal" => {
             let request = serde_json::from_value::<HermesExperimentRequest>(arguments)
                 .context("parsing create_experiment_proposal arguments")?;
@@ -329,6 +336,17 @@ fn mcp_tools() -> Vec<JsonValue> {
         tool_schema(
             "get_markov_signals",
             "Return recent advisory Markov regime signals for portfolio and watchlist assets.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                },
+                "additionalProperties": false
+            }),
+        ),
+        tool_schema(
+            "get_quiver_signals",
+            "Return recent advisory QuiverQuant alternative-data signals for US portfolio and watchlist assets.",
             json!({
                 "type": "object",
                 "properties": {
@@ -486,6 +504,7 @@ mod tests {
         assert!(names.contains(&"get_decision_reports".to_string()));
         assert!(names.contains(&"get_end_of_day_reports".to_string()));
         assert!(names.contains(&"get_markov_signals".to_string()));
+        assert!(names.contains(&"get_quiver_signals".to_string()));
         assert!(names.contains(&"create_reflection".to_string()));
         assert!(names.contains(&"create_experiment_proposal".to_string()));
         assert!(names.contains(&"create_decision_advice".to_string()));

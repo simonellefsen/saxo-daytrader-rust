@@ -178,11 +178,20 @@ Useful Kubernetes targets:
 
 ```bash
 make docker-build
+make deps-dry-run
+make security-scan
 make k8s-status
 make k8s-db-status
 make shared-ngrok-status
 make k8s-stop
 ```
+
+`make deps-dry-run` shows available Cargo.lock updates without changing files.
+`make security-scan` runs RustSec advisory checks, Trivy high/critical fixed-CVE
+scans for the repository and local images, and a secret scan. Run it before
+releases, after base-image changes, and after adding dependencies. See
+[wiki/runbooks/build-test-deploy.md](/Users/lindau/codex/rust_daytrader/wiki/runbooks/build-test-deploy.md)
+for the remediation workflow.
 
 `make k8s-deploy` builds a timestamped local Rust image, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades CloudNativePG via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo`, and applies the app-owned internal `saxo-daytrader` AgentEndpoint. It does not apply the shared public ngrok gateway; run `ENV_FILE=../rust_daytrader/.env make apply` from `../shared-ngrok-gateway` when shared edge routing or OAuth config changes. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
 
@@ -312,6 +321,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.98` to preserve a 2% cash buffer.
 - `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.02`.
 - `markov`: daily observable Markov regime skill for portfolio/watchlist assets. Defaults label each daily bar with a 20-trading-day rolling return and a +/-5% threshold, build a 3x3 Bull/Sideways/Bear transition matrix, forecast configured horizons with matrix powers, store the stationary distribution, and emit `bull_prob - bear_prob` as an advisory signed signal.
+- `quiver`: daily QuiverQuant alternative-data advisory signals for US portfolio/watchlist assets. The first source is Congress trading data and requires `QUIVERQUANT_API_KEY`.
 - `swing.min_holdings` / `swing.max_holdings`: hard portfolio count guardrails, default `10` to `25`.
 - `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: hard target weight guardrails, default `5%` to `25%`.
 - `swing.never_trade_symbols`: hard blacklist. Defaults include `NOVOb:xcse` and `TSLA:xnas`.

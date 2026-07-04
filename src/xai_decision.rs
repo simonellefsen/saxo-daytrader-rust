@@ -689,6 +689,9 @@ async fn build_decision_prompt(
     let markov_method = crate::markov_method::compact_markov_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"signals": []}));
+    let quiver_signals = crate::quiver::compact_quiver_context(state, 80)
+        .await
+        .unwrap_or_else(|_| json!({"signals": []}));
     let daily_indicators = crate::daily_indicators::compact_indicator_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
@@ -716,6 +719,7 @@ async fn build_decision_prompt(
         "For BUY trades backed by technical indicator data, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
         "The supplied daily_indicators section contains technical data (SMA trend, RSI, MACD, ATR reward/risk, confluence counts) computed by the runtime from broker chart history. Base technical claims on this data; the manager re-verifies every order against its own indicator database, so fabricated confluence counts are discarded.",
         markov_buy_instruction.as_str(),
+        "The supplied quiver_signals section contains alternative-data context from QuiverQuant, currently Congress trading signals for US portfolio/watchlist tickers. Treat it as corroborating or risk-reducing evidence only. Never create a BUY solely because of Quiver data; use it to strengthen, weaken, or explain a setup that already has technical, Markov, capital, and market-scope support.",
         "For SELL trades, strategy_metadata.technical must support the action with SELL or UNDERWEIGHT sentiment, bearish trend_bias, or an explicit FLATTEN/risk-reduction role justified by portfolio risk.",
         "Markov method regime signals also serve as general directional context: positive bull_prob-minus-bear_prob supports long bias, negative signal supports risk reduction or stand-down.",
         "Each suggested trade must use a unique strategy_key that includes the pulse key, symbol, and action.",
@@ -758,6 +762,7 @@ async fn build_decision_prompt(
         "positions": positions.into_iter().take(80).collect::<Vec<_>>(),
         "watchlists": compact_watchlists(&watchlists, &allowed_codes),
         "markov_method": markov_method,
+        "quiver_signals": quiver_signals,
         "daily_indicators": daily_indicators,
     });
     Ok(json!({"system": system, "user": user_payload}))

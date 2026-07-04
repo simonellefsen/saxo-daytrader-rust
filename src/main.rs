@@ -10,6 +10,7 @@ mod models;
 mod notifications;
 mod portfolio_reset;
 mod price_monitor;
+mod quiver;
 mod saxo_order;
 mod saxo_portfolio;
 mod scheduler;

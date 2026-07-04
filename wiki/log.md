@@ -3,12 +3,43 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-06-29
+updated: 2026-07-04
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-04] fix | Docker build context hygiene
+
+- Aligned `.dockerignore` with local-only repository ignores, including `rustfs/`, qmd/Obsidian state, Python caches, generated spreadsheet exports, Rust backup files, and mutation-test output.
+- Verified Docker now transfers a 4.11 MB build context instead of including local RustFS object-store data.
+- Confirmed a production-style `Dockerfile.api` image build completes after the context change; only the pre-existing `xai_decision.rs` dead-code warnings remain.
+- Added `make post-deploy-smoke` for read-only rollout, internal endpoint, health, overview, scheduler, Saxo-session, MCP tool-discovery, and Hermes gateway health checks after deployment.
+
+## [2026-07-04] verification | QuiverQuant live subscription
+
+- Verified the QuiverQuant subscription is active in the deployed `saxo` Kubernetes runtime.
+- Triggered manual Quiver signal runs through `POST /api/actions/quiver-signals`; the latest verified run completed with 60 assets, 60 successes, and 0 errors.
+- Updated `docs/quiver-signals.md` to record live status and clarified that manual refresh responses are compact summaries while full event details remain available through `GET /api/quiver/signals`.
+
+## [2026-07-03] implementation | QuiverQuant advisory signals
+
+- Added a Rust QuiverQuant advisory signal path for US portfolio/watchlist assets using Congress trading data.
+- Wired Quiver into scheduler runs, API/dashboard surfaces, decision-report context, Hermes context, and MCP tool discovery.
+- Documented the integration in `docs/quiver-signals.md`; signals are advisory only and cannot place or approve Saxo orders.
+
+## [2026-07-02] implementation | Diagnostics bundle
+
+- Continued the roadmap by adding `scripts/diagnostics_bundle.sh` and `make diagnostics`.
+- The bundle collects read-only Kubernetes status, rollouts, resource usage, recent events, scheduler/API/Hermes logs, RustFS backup state, shared ngrok status, and a sanitized app API summary.
+- Kept the bundle non-mutating: it does not trigger reports, process execution queues, place orders, or expose raw Saxo broker payloads.
+
+## [2026-07-01] implementation | Execution-order attribution
+
+- Continued the roadmap by adding per-order attribution for recent execution orders.
+- The attribution connects each order to its source decision report, latest Trading Manager run, matching Hermes decision advice, latest daily indicator summary, and latest Markov signal summary.
+- Added an Execution table disclosure so operators can inspect whether an order was Hermes-allowed, manager-only, reduced, skipped, or review-overridden without opening raw JSON.
 
 ## [2026-06-29] fix | Broker-authoritative Trading Manager sell caps
 
@@ -344,3 +375,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Continued the roadmap by adding a compact dashboard operations banner for Saxo session, scheduler heartbeat, decision-report, Markov, daily-indicator, and quote freshness health.
 - Added a latest daily-indicator run read model so the UI can flag missing, stale, failed, or partial technical-indicator runs beside Markov freshness.
 - Added UI tests for Saxo reauth status, stale scheduler heartbeats, partial/stale runtime runs, and quote freshness thresholds.
+
+## [2026-07-04] improvement | Dependency and CVE hygiene
+
+- Refreshed `Cargo.lock` within existing semver constraints after `cargo update --dry-run` showed safe transitive dependency updates were available.
+- Added `make deps-dry-run` so dependency drift can be reviewed without mutating the lockfile.
+- Added `make security-scan`, backed by `scripts/security_scan.sh`, to run RustSec advisory checks, Trivy filesystem/image CVE scans, and Trivy secret scans.
+- Documented the dependency/CVE operating cadence and remediation policy in the build/test/deploy runbook and linked the workflow from the README.

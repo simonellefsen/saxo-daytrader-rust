@@ -678,6 +678,11 @@ tr:last-child td {
   max-width: 520px;
 }
 
+.attribution-cell {
+  min-width: 180px;
+  max-width: 360px;
+}
+
 .error-details {
   max-width: 520px;
 }
@@ -703,6 +708,14 @@ tr:last-child td {
   overflow-wrap: anywhere;
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.attribution-details summary {
+  color: var(--text);
+}
+
+.attribution-details pre {
+  max-width: min(560px, calc(100vw - 80px));
 }
 
 .event-message {

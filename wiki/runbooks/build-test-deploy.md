@@ -5,7 +5,7 @@ tags:
   - runbooks
   - testing
   - deployment
-updated: 2026-06-16
+updated: 2026-07-04
 ---
 
 # Build, Test, Deploy, And Smoke Runbook
@@ -33,6 +33,56 @@ rtk make docker-build
 ```
 
 Use `cargo check` for normal code edits and `make docker-build` before Kubernetes deployment or Dockerfile/runtime changes.
+
+Before investigating slow Docker builds, check that the build context is still small. Local database, Cargo, qmd, Obsidian, frontend cache, and RustFS object-store directories must stay outside the Docker context. A healthy Docker build should report a context transfer in the low-megabyte range, not gigabytes:
+
+```bash
+rtk env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/sbin:/usr/sbin:/sbin docker build --progress=plain -f Dockerfile.api -t saxo-rust:context-check .
+```
+
+## Dependency And CVE Hygiene
+
+Check for Rust dependency drift without changing files:
+
+```bash
+rtk make deps-dry-run
+```
+
+Apply lockfile-only Rust updates when they stay inside existing semver
+constraints, then run the full Rust validation set:
+
+```bash
+rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo update
+rtk make validate
+```
+
+Run security scans before releases, after base-image changes, and after adding
+new dependencies:
+
+```bash
+rtk make docker-build
+rtk make security-scan
+```
+
+`make security-scan` runs:
+
+- RustSec advisory scan for `Cargo.lock` through `cargo-audit` when installed,
+  or a containerized RustSec scanner when Docker is available.
+- Trivy filesystem vulnerability scan for high/critical fixed CVEs.
+- Trivy image scans for `daytrader-api:local` and `daytrader-backup:local`.
+- Trivy secret scan over the repository.
+
+When a scan fails:
+
+- Patch transitive Rust crates with `cargo update` first.
+- If a top-level crate must move across a major/minor API boundary, isolate it
+  in a focused PR and run trading-critical tests.
+- If a CVE is in a base image, rebuild after pulling the latest base image or
+  move the image tag/digest forward.
+- Do not ignore Saxo token, OpenRouter key, ngrok key, database credential, or
+  broker account/key leaks. Remove and rotate the secret.
+- Only add scanner ignore rules with an expiry date, CVE id, package, reason,
+  and compensating control.
 
 ## Formatting
 
@@ -159,7 +209,21 @@ rtk make k8s-stop
 
 ## Kubernetes Smoke Test
 
-After deployment, verify the app from inside the cluster:
+After deployment, run the read-only smoke target:
+
+```bash
+rtk make post-deploy-smoke
+```
+
+This checks deployment rollouts, the internal ngrok AgentEndpoint, the health
+endpoint, overview/scheduler reachability, Saxo session status, authenticated
+MCP `tools/list` discovery for Hermes-safe tools, and Hermes gateway health. A
+broken rollout, missing health endpoint, missing expected MCP tool, or unhealthy
+Hermes gateway fails the smoke. A Saxo SIM session that needs reauth is
+reported as a warning because it blocks broker refresh/execution but does not
+mean the Rust web runtime failed to deploy.
+
+For a narrower in-cluster service check, verify the app from inside the cluster:
 
 ```bash
 rtk kubectl --context docker-desktop -n saxo run daytrader-smoke --rm -i --restart=Never --image=curlimages/curl:8.17.0 -- \

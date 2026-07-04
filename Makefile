@@ -8,7 +8,7 @@ DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
 SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
 
-.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward shared-ngrok-status shared-ngrok-apply
+.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke diagnostics shared-ngrok-status shared-ngrok-apply
 
 help:
 	@printf "%s\n" \
@@ -21,6 +21,8 @@ help:
 		"  make validate             Run fmt-check, test, and check" \
 		"  make run                  Run Axum/Dioxus on $(BIND_ADDR)" \
 		"  make scheduler            Run the Rust scheduler process" \
+		"  make deps-dry-run         Show available Cargo.lock updates without changing files" \
+		"  make security-scan        Run RustSec, Trivy CVE, image, and secret scans" \
 		"" \
 		"Docker/Kubernetes:" \
 		"  make docker-build         Build $(IMAGE)" \
@@ -29,6 +31,8 @@ help:
 		"  make k8s-db-status        Show CNPG database resources" \
 		"  make k8s-logs             Tail API and scheduler logs" \
 		"  make k8s-port-forward     Forward daytrader-frontend to localhost:$(API_PORT)" \
+		"  make post-deploy-smoke    Read-only rollout and API smoke check" \
+		"  make diagnostics          Collect a read-only operations and trading diagnostic bundle" \
 		"  make shared-ngrok-status  Show shared public ngrok gateway status" \
 		"  make shared-ngrok-apply   Apply shared public ngrok gateway from $(SHARED_NGROK_GATEWAY_DIR)" \
 		"  make k8s-stop             Remove app resources from $(APP_NAMESPACE)"
@@ -61,6 +65,12 @@ scheduler:
 docker-build:
 	docker build -f Dockerfile.api -t $(IMAGE) .
 
+deps-dry-run:
+	CARGO_HOME=$(CARGO_HOME) $(CARGO) update --dry-run
+
+security-scan:
+	CARGO_HOME=$(CARGO_HOME) bash scripts/security_scan.sh
+
 k8s-deploy:
 	KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
 
@@ -80,6 +90,12 @@ k8s-logs:
 
 k8s-port-forward:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) port-forward svc/daytrader-frontend $(API_PORT):8000
+
+post-deploy-smoke:
+	KUBE_CONTEXT=$(KUBE_CONTEXT) APP_NAMESPACE=$(APP_NAMESPACE) bash scripts/post_deploy_smoke.sh
+
+diagnostics:
+	KUBE_CONTEXT=$(KUBE_CONTEXT) APP_NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) SHARED_NGROK_GATEWAY_DIR=$(SHARED_NGROK_GATEWAY_DIR) bash scripts/diagnostics_bundle.sh
 
 shared-ngrok-status:
 	$(MAKE) -C $(SHARED_NGROK_GATEWAY_DIR) KUBE_CONTEXT=$(KUBE_CONTEXT) status

@@ -92,6 +92,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/portfolio/trades", get(portfolio_trades))
         .route("/api/performance", get(performance))
         .route("/api/markov/signals", get(markov_signals))
+        .route("/api/quiver/signals", get(quiver_signals))
         .route("/api/market/status", get(market_status))
         .route("/api/market/watchlists", get(market_watchlists))
         .route("/api/prompts", get(prompts))
@@ -126,6 +127,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/actions/daily-indicators",
             post(action_run_daily_indicators),
+        )
+        .route(
+            "/api/actions/quiver-signals",
+            post(action_run_quiver_signals),
         )
         .route("/api/actions/sync-broker", post(action_not_ported))
         .route("/api/actions/retry-failed", post(action_not_ported))
@@ -539,6 +544,22 @@ async fn markov_signals(
     )
 }
 
+async fn quiver_signals(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    let limit = params.limit.unwrap_or(100);
+    json_result(
+        async {
+            Ok::<JsonValue, anyhow::Error>(json!({
+                "latest_run": state.latest_quiver_run().await.unwrap_or(JsonValue::Null),
+                "items": state.quiver_signals(limit).await?
+            }))
+        }
+        .await,
+    )
+}
+
 async fn market_status(State(state): State<Arc<AppState>>) -> Response {
     json_result(state.market_status_payload().await)
 }
@@ -827,6 +848,25 @@ async fn action_run_daily_indicators(State(state): State<Arc<AppState>>) -> Resp
     }
 }
 
+async fn action_run_quiver_signals(State(state): State<Arc<AppState>>) -> Response {
+    match crate::quiver::run_quiver_signals_now(&state).await {
+        Ok(summary) => {
+            info!(
+                status = summary
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("unknown"),
+                "manual Quiver signal run completed"
+            );
+            json_result(Ok(summary))
+        }
+        Err(err) => {
+            error!("manual Quiver signal run failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
 async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> Response {
     match xai_decision::submit_manual_decision_report(&state).await {
         Ok(report) => {
@@ -1078,8 +1118,8 @@ fn normalize_view(value: Option<&str>) -> String {
     match value.unwrap_or("overview").to_lowercase().as_str() {
         "overview" | "portfolio" => "overview".to_string(),
         "eod" | "end-of-day" => "eod".to_string(),
-        "performance" | "market" | "watchlists" | "markov" | "decisions" | "execution"
-        | "prompts" | "hermes" => value.unwrap_or("overview").to_lowercase(),
+        "performance" | "market" | "watchlists" | "markov" | "quiver" | "decisions"
+        | "execution" | "prompts" | "hermes" => value.unwrap_or("overview").to_lowercase(),
         _ => "overview".to_string(),
     }
 }

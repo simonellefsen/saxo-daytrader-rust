@@ -106,6 +106,71 @@ fn json_text(value: &JsonValue, key: &str) -> String {
     }
 }
 
+fn matching_order_advice(
+    value: Option<&JsonValue>,
+    strategy_key: &str,
+    symbol: &str,
+    action: &str,
+) -> Option<JsonValue> {
+    let items = value?.as_array()?;
+    let strategy_key = strategy_key.trim();
+    let symbol = symbol.trim();
+    let action = action.trim();
+    if !strategy_key.is_empty() {
+        if let Some(item) = items
+            .iter()
+            .find(|item| json_text(item, "strategy_key").trim() == strategy_key)
+        {
+            return Some(item.clone());
+        }
+    }
+    items
+        .iter()
+        .find(|item| {
+            json_text(item, "symbol")
+                .trim()
+                .eq_ignore_ascii_case(symbol)
+                && json_text(item, "action")
+                    .trim()
+                    .eq_ignore_ascii_case(action)
+        })
+        .cloned()
+}
+
+fn attribution_delta_label(
+    hermes_order: &JsonValue,
+    manager_order: &JsonValue,
+    order: &JsonValue,
+) -> String {
+    let hermes_action = json_text(hermes_order, "action").trim().to_lowercase();
+    let manager_decision = json_text(manager_order, "manager_decision");
+    let status = json_text(order, "status").trim().to_lowercase();
+    if hermes_action.is_empty() {
+        return if manager_decision == "approved" {
+            "manager_only".to_string()
+        } else {
+            "no_advice".to_string()
+        };
+    }
+    if matches!(hermes_action.as_str(), "stand_down" | "review") && manager_decision == "approved" {
+        return "manager_overrode_review".to_string();
+    }
+    if hermes_action == "reduce" && manager_decision == "approved" {
+        return "reduced_or_capped".to_string();
+    }
+    if hermes_action == "allow" && manager_decision == "approved" {
+        return if status == "executed" {
+            "allowed_executed".to_string()
+        } else {
+            "allowed_queued".to_string()
+        };
+    }
+    if manager_decision == "skipped" {
+        return format!("{}_skipped", hermes_action);
+    }
+    hermes_action
+}
+
 /// Midnight at the start of a local calendar date, rendered as the UTC
 /// RFC3339 string format used by portfolio_value_history.recorded_at.
 fn local_date_start_to_utc_string(date: NaiveDate, tz: Tz) -> String {
@@ -282,6 +347,14 @@ impl AppState {
             warn!("dashboard latest Markov run degraded: {err:#}");
             JsonValue::Null
         });
+        let quiver_signals = self.quiver_signals(80).await.unwrap_or_else(|err| {
+            warn!("dashboard Quiver signals degraded: {err:#}");
+            Vec::new()
+        });
+        let latest_quiver_run = self.latest_quiver_run().await.unwrap_or_else(|err| {
+            warn!("dashboard latest Quiver run degraded: {err:#}");
+            JsonValue::Null
+        });
         let latest_daily_indicator_run =
             self.latest_daily_indicator_run()
                 .await
@@ -381,6 +454,8 @@ impl AppState {
             active_strategy_baseline,
             markov_signals,
             latest_markov_run,
+            quiver_signals,
+            latest_quiver_run,
             latest_daily_indicator_run,
             performance_history,
             performance_summary,
@@ -483,6 +558,11 @@ impl AppState {
                 "status": "available",
                 "config": crate::markov_method::markov_config_json_for_state(self),
                 "latest_run": self.latest_markov_run().await.unwrap_or(JsonValue::Null),
+            },
+            "quiver_signals": {
+                "status": "available",
+                "config": crate::quiver::quiver_config_json_for_state(self),
+                "latest_run": self.latest_quiver_run().await.unwrap_or(JsonValue::Null),
             },
             "saxo_auth": self.saxo_auth_status_value().await,
             "settings": {
@@ -1321,7 +1401,166 @@ impl AppState {
             "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id, execution_result_json FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {}",
             clamp_limit(limit, 1, 500)
         );
-        Ok(self.select_json(&sql).await.unwrap_or_default())
+        let mut orders = self.select_json(&sql).await.unwrap_or_default();
+        for order in &mut orders {
+            match self.execution_order_attribution(order).await {
+                Ok(attribution) => {
+                    if let Some(object) = order.as_object_mut() {
+                        object.insert("attribution".to_string(), attribution);
+                    }
+                }
+                Err(err) => {
+                    warn!("execution attribution degraded: {err:#}");
+                }
+            }
+        }
+        Ok(orders)
+    }
+
+    async fn execution_order_attribution(&self, order: &JsonValue) -> Result<JsonValue> {
+        let report_id = value_i64(order, "report_id");
+        let symbol = json_text(order, "symbol");
+        let action = json_text(order, "action");
+        let strategy_key = json_text(order, "strategy_key");
+
+        let report = if report_id > 0 {
+            self.first_json(&format!(
+                "SELECT id, created_at, status, model, analysis_pulse_key, analysis_pulse_label
+                 FROM decision_reports WHERE id = {} LIMIT 1",
+                report_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
+
+        let manager_run = if report_id > 0 {
+            self.first_json(&format!(
+                "SELECT id, created_at, status, manager_key, manager_kind, manager_label, manager_json, queue_result_json
+                 FROM trading_manager_runs
+                 WHERE report_id = {}
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                report_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
+
+        let advice = if report_id > 0 {
+            self.hermes_decision_advice_by_report(report_id)
+                .await?
+                .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
+        let hermes_order = matching_order_advice(
+            advice.get("order_advice_json"),
+            &strategy_key,
+            &symbol,
+            &action,
+        )
+        .or_else(|| {
+            manager_run
+                .get("manager_json")
+                .and_then(|value| value.get("hermes_decision_advice"))
+                .and_then(|value| value.get("raw"))
+                .and_then(|value| value.get("order_advice_json"))
+                .and_then(|value| {
+                    matching_order_advice(Some(value), &strategy_key, &symbol, &action)
+                })
+        })
+        .unwrap_or(JsonValue::Null);
+
+        let manager_order = manager_run
+            .get("manager_json")
+            .and_then(|value| value.get("approved_orders"))
+            .and_then(|value| matching_order_advice(Some(value), &strategy_key, &symbol, &action))
+            .map(|mut value| {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("manager_decision".to_string(), JsonValue::from("approved"));
+                }
+                value
+            })
+            .or_else(|| {
+                manager_run
+                    .get("manager_json")
+                    .and_then(|value| value.get("skipped_orders"))
+                    .and_then(|value| {
+                        matching_order_advice(Some(value), &strategy_key, &symbol, &action)
+                    })
+                    .map(|mut value| {
+                        if let Some(object) = value.as_object_mut() {
+                            object
+                                .insert("manager_decision".to_string(), JsonValue::from("skipped"));
+                        }
+                        value
+                    })
+            })
+            .unwrap_or(JsonValue::Null);
+
+        let technical = self.latest_indicator_signal_summary(&symbol).await?;
+        let markov = self.latest_markov_signal_summary(&symbol).await?;
+        let delta = attribution_delta_label(&hermes_order, &manager_order, order);
+
+        Ok(json!({
+            "delta": delta,
+            "report": {
+                "id": report.get("id").cloned().unwrap_or(JsonValue::Null),
+                "created_at": report.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "status": report.get("status").cloned().unwrap_or(JsonValue::Null),
+                "model": report.get("model").cloned().unwrap_or(JsonValue::Null),
+                "pulse_key": report.get("analysis_pulse_key").cloned().unwrap_or(JsonValue::Null),
+                "pulse_label": report.get("analysis_pulse_label").cloned().unwrap_or(JsonValue::Null),
+            },
+            "trading_manager": {
+                "run_id": manager_run.get("id").cloned().unwrap_or(JsonValue::Null),
+                "status": manager_run.get("status").cloned().unwrap_or(JsonValue::Null),
+                "manager_key": manager_run.get("manager_key").cloned().unwrap_or(JsonValue::Null),
+                "decision": manager_order,
+            },
+            "hermes": {
+                "advice_id": advice.get("id").cloned().unwrap_or(JsonValue::Null),
+                "status": advice.get("status").cloned().unwrap_or(JsonValue::Null),
+                "recommendation": advice.get("overall_recommendation").cloned().unwrap_or(JsonValue::Null),
+                "summary": advice.get("summary").cloned().unwrap_or(JsonValue::Null),
+                "order_advice": hermes_order,
+            },
+            "technical": technical,
+            "markov": markov,
+        }))
+    }
+
+    async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
+        let sql = format!(
+            "SELECT run_date, status, close, rsi14, macd_histogram, atr14, reward_risk,
+                    trend_bias, sentiment, confluence_count, min_confluences, error_text
+             FROM daily_indicator_signals
+             WHERE symbol = '{}' AND run_id = (
+                SELECT id FROM daily_indicator_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
+             )
+             LIMIT 1",
+            sql_escape(symbol)
+        );
+        Ok(self.first_json(&sql).await?.unwrap_or(JsonValue::Null))
+    }
+
+    async fn latest_markov_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
+        let sql = format!(
+            "SELECT run_date, status, current_state, current_close, rolling_return,
+                    bull_prob, sideways_prob, bear_prob, signed_signal, direction, conviction,
+                    error_text
+             FROM markov_asset_signals
+             WHERE symbol = '{}' AND run_id = (
+                SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
+             )
+             LIMIT 1",
+            sql_escape(symbol)
+        );
+        Ok(self.first_json(&sql).await?.unwrap_or(JsonValue::Null))
     }
 
     pub async fn execution_fills(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -1362,6 +1601,14 @@ impl AppState {
 
     pub async fn latest_markov_run(&self) -> Result<JsonValue> {
         crate::markov_method::latest_markov_run(self).await
+    }
+
+    pub async fn quiver_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        crate::quiver::latest_quiver_signals(self, limit).await
+    }
+
+    pub async fn latest_quiver_run(&self) -> Result<JsonValue> {
+        crate::quiver::latest_quiver_run(self).await
     }
 
     pub async fn latest_daily_indicator_run(&self) -> Result<JsonValue> {
@@ -1613,6 +1860,7 @@ impl AppState {
                 "Promoted baselines are audit records; they do not activate live broker behavior.",
                 "Strategy experiments must change exactly one variable while one_variable_only is true.",
                 "Markov method signals are advisory analytics and do not place or approve orders.",
+                "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
                 "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
                 "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
                 "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
@@ -1654,6 +1902,12 @@ impl AppState {
                 warn!("Hermes Markov context degraded: {err:#}");
                 json!({"status": "degraded", "detail": err.to_string()})
             });
+        let quiver = crate::quiver::compact_quiver_context(self, limit)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("Hermes Quiver context degraded: {err:#}");
+                json!({"status": "degraded", "detail": err.to_string()})
+            });
 
         Ok(json!({
             "status": "ok",
@@ -1688,6 +1942,7 @@ impl AppState {
                 "history": performance
             },
             "markov_method": markov,
+            "quiver_signals": quiver,
             "hermes": {
                 "experiments": active_experiments,
                 "active_strategy_baseline": active_strategy_baseline
@@ -3103,6 +3358,12 @@ impl AppState {
                 .await
                 .context("creating Markov method runtime tables")?;
         }
+        for sql in crate::quiver::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating Quiver runtime tables")?;
+        }
         for sql in crate::daily_indicators::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -4295,6 +4556,64 @@ fn deterministic_suggested_trades(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_order_advice_prefers_strategy_key_then_symbol_action() {
+        let advice = json!([
+            {
+                "strategy_key": "pulse|AMD:xnas|BUY|primary",
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "reason": "strategy-key match"
+            },
+            {
+                "strategy_key": "other",
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "reason": "symbol-action fallback"
+            }
+        ]);
+
+        let matched = matching_order_advice(
+            Some(&advice),
+            "pulse|AMD:xnas|BUY|primary",
+            "AMD:xnas",
+            "BUY",
+        )
+        .unwrap();
+        assert_eq!(json_text(&matched, "reason"), "strategy-key match");
+
+        let fallback = matching_order_advice(Some(&advice), "", "AMD:XNAS", "buy").unwrap();
+        assert_eq!(json_text(&fallback, "reason"), "strategy-key match");
+    }
+
+    #[test]
+    fn attribution_delta_label_describes_hermes_manager_difference() {
+        assert_eq!(
+            attribution_delta_label(
+                &json!({"action": "allow"}),
+                &json!({"manager_decision": "approved"}),
+                &json!({"status": "executed"})
+            ),
+            "allowed_executed"
+        );
+        assert_eq!(
+            attribution_delta_label(
+                &json!({"action": "review"}),
+                &json!({"manager_decision": "approved"}),
+                &json!({"status": "queued"})
+            ),
+            "manager_overrode_review"
+        );
+        assert_eq!(
+            attribution_delta_label(
+                &json!({}),
+                &json!({"manager_decision": "approved"}),
+                &json!({"status": "queued"})
+            ),
+            "manager_only"
+        );
+    }
 
     #[test]
     fn saxo_session_score_prefers_refreshable_session_over_invalid_recent_session() {

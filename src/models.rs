@@ -43,6 +43,8 @@ pub struct DashboardView {
     pub active_strategy_baseline: JsonValue,
     pub markov_signals: Vec<JsonValue>,
     pub latest_markov_run: JsonValue,
+    pub quiver_signals: Vec<JsonValue>,
+    pub latest_quiver_run: JsonValue,
     pub latest_daily_indicator_run: JsonValue,
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
