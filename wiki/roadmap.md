@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-04
+updated: 2026-07-06
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-06: Added scheduler-cycle duration metrics: each persisted cycle now includes `duration_ms` plus per-step `step_durations`, and the dashboard shows recent cycle runtime in the Scheduler Cycles table.
 - 2026-07-04: Added scheduler-driven operational Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection, with runtime notification table creation in Rust.
 - 2026-07-04: Exposed operational notification status in the Scheduler Cycles table so alert dispatch health is visible without opening raw cycle JSON.
 - 2026-07-04: Added backend-backed decision pulse health rows for Nordic/EU, US, and manual reports, including latest report, last success, last failure, and 7-day attempts.
@@ -200,7 +201,7 @@ The Rust runtime should keep moving away from generic JSON and legacy Python beh
 - Continue removing Python runtime dependencies from active Kubernetes images, while keeping legacy Python files as behavior references until replaced.
 - Add repository-level architecture decision records for major porting choices.
 - ~~Decide the fate of the `frontend/` Next.js app versus the Dioxus SSR dashboard~~ Resolved 2026-07-04: the Next.js app was legacy (never built or deployed) and was removed; the Dioxus SSR dashboard in `src/ui.rs` is the committed UI. Note the `daytrader-frontend` Kubernetes Service is unrelated to that directory — it is a live alias Service selecting the API pods that the shared ngrok AgentEndpoint routes through, and must be kept (or renamed only together with the gateway route).
-- Give the scheduler cycle per-step timeout budgets and record per-step durations in `cycle_json`: the cycle runs its ~10 steps serially, so one hung Saxo call (30s timeout × retries) delays fills sync, notifications, and the snapshot — which matters now that fast polling targets 1-minute cycles.
+- Give the scheduler cycle per-step timeout budgets. The duration-metric half landed 2026-07-06: each persisted cycle records total `duration_ms` plus per-step `step_durations` in `cycle_json`, and the dashboard shows recent cycle runtime. The remaining work is explicit timeout budgets around slow steps.
 
 ## Operations And Deployment
 

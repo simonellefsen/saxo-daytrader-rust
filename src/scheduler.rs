@@ -1,8 +1,11 @@
-use std::{env, time::Duration};
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use chrono::Utc;
-use serde_json::{Value as JsonValue, json};
+use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -73,11 +76,16 @@ async fn next_interval_minutes(state: &AppState, normal: u64, fast: u64) -> u64 
 
 async fn run_cycle(state: &AppState) -> Result<()> {
     let started_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let cycle_started = Instant::now();
+    let mut step_durations = JsonMap::new();
     info!("scheduler cycle started");
     if let Err(err) = state.update_scheduler_heartbeat().await {
         warn!("scheduler heartbeat persistence failed: {err:#}");
     }
+    let step_started = Instant::now();
     let saxo = maintain_saxo_session(state).await;
+    record_step_duration(&mut step_durations, "saxo_session", step_started);
+    let step_started = Instant::now();
     let broker_read_model = match refresh_broker_snapshots(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -85,6 +93,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "broker_read_model", step_started);
+    let step_started = Instant::now();
     let broker_order_sync = match sync_saxo_broker_orders(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -92,6 +102,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "broker_order_sync", step_started);
+    let step_started = Instant::now();
     let decision_reports = match run_xai_decision_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -99,6 +111,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "decision_reports", step_started);
+    let step_started = Instant::now();
     let trading_manager = match run_trading_manager_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -106,6 +120,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "trading_manager", step_started);
+    let step_started = Instant::now();
     let markov_method = match run_markov_method_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -113,6 +129,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "markov_method", step_started);
+    let step_started = Instant::now();
     let quiver_signals = match run_quiver_signal_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -120,6 +138,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "quiver_signals", step_started);
+    let step_started = Instant::now();
     let daily_indicators = match run_daily_indicators_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -127,6 +147,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "daily_indicators", step_started);
+    let step_started = Instant::now();
     let execution_queue = match run_saxo_execution_queue(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -134,6 +156,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "execution_queue", step_started);
+    let step_started = Instant::now();
     let broker_order_sync_after_execution = match sync_saxo_broker_orders(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -141,6 +165,12 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(
+        &mut step_durations,
+        "broker_order_sync_after_execution",
+        step_started,
+    );
+    let step_started = Instant::now();
     let portfolio_value_snapshot = match state
         .record_portfolio_value_snapshot(
             "scheduler_cycle",
@@ -156,6 +186,12 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(
+        &mut step_durations,
+        "portfolio_value_snapshot",
+        step_started,
+    );
+    let step_started = Instant::now();
     let notifications = match dispatch_execution_notifications(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -163,6 +199,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(&mut step_durations, "notifications", step_started);
+    let step_started = Instant::now();
     let operational_notifications = match dispatch_operational_notifications(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -170,6 +208,12 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
+    record_step_duration(
+        &mut step_durations,
+        "operational_notifications",
+        step_started,
+    );
+    let step_started = Instant::now();
     let journal = match run_strategy_journal_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -177,7 +221,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
             json!({"status": "error", "error": err.to_string()})
         }
     };
-    let completed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    record_step_duration(&mut step_durations, "journal", step_started);
     let status = if trading_manager.get("status").and_then(JsonValue::as_str) == Some("error")
         || execution_queue.get("status").and_then(JsonValue::as_str) == Some("error")
         || broker_order_sync.get("status").and_then(JsonValue::as_str) == Some("error")
@@ -200,8 +244,24 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     } else {
         "ok"
     };
+    let step_started = Instant::now();
+    let market = state
+        .market_status_payload()
+        .await
+        .unwrap_or_else(|err| {
+            warn!("scheduler market status snapshot failed: {err:#}");
+            json!({"summary": {"analysis_window_active": false}})
+        })
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| json!({"analysis_window_active": false}));
+    record_step_duration(&mut step_durations, "market", step_started);
+    let completed_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let duration_ms = elapsed_ms(cycle_started.elapsed());
     let cycle_json = json!({
         "runtime": "rust",
+        "duration_ms": duration_ms,
+        "step_durations": step_durations,
         "saxo_session": saxo,
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,
@@ -216,16 +276,26 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "notifications": notifications,
         "operational_notifications": operational_notifications,
         "journal": journal,
-        "market": state.market_status_payload().await.unwrap_or_else(|err| {
-            warn!("scheduler market status snapshot failed: {err:#}");
-            json!({"summary": {"analysis_window_active": false}})
-        }).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false}))
+        "market": market
     });
     state
         .record_scheduler_cycle(&started_at, &completed_at, status, &cycle_json)
         .await?;
     info!(status, "scheduler cycle completed");
     Ok(())
+}
+
+fn elapsed_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn record_step_duration(steps: &mut JsonMap<String, JsonValue>, key: &str, started: Instant) {
+    steps.insert(
+        key.to_string(),
+        json!({
+            "duration_ms": elapsed_ms(started.elapsed())
+        }),
+    );
 }
 
 async fn maintain_saxo_session(state: &AppState) -> JsonValue {

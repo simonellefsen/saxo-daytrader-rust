@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-04
+updated: 2026-07-06
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-06] improvement | Scheduler cycle duration metrics
+
+- Continued the roadmap by recording total scheduler-cycle runtime and per-step duration metrics in each persisted `cycle_json`.
+- Added a compact Runtime column to the Scheduler Cycles table so slow recent cycles are visible without opening raw JSON.
+- Left explicit per-step timeout budgets as the next scheduler-hardening item; this change only measures and displays where cycle time is spent.
 
 ## [2026-07-04] cleanup | Removed legacy Next.js frontend directory
 

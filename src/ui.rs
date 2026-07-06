@@ -2262,11 +2262,12 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "table-wrap",
                     h3 { "Scheduler Cycles" }
                     table {
-                        thead { tr { th { "Started" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } } }
+                        thead { tr { th { "Started" } th { "Runtime" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } } }
                         tbody {
                             for row in data.scheduler_cycles.iter().take(12) {
                                 tr {
                                     td { "{format_timestamp(&text(row, \"started_at\"), &prefs)}" }
+                                    td { "{scheduler_cycle_duration(row)}" }
                                     td { "{text(row, \"status\")}" }
                                     td { "{bool_label(row, \"generated_decision\")}" }
                                     td { "{text(row, \"queue_status\")}" }
@@ -3229,6 +3230,35 @@ fn scheduler_cycle_json_status(row: &JsonValue, key: &str) -> String {
                 .map(ToString::to_string)
         })
         .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn scheduler_cycle_duration(row: &JsonValue) -> String {
+    row.get("cycle_json")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+        .and_then(|value| value.get("duration_ms").and_then(json_duration_ms))
+        .map(format_duration_ms)
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn json_duration_ms(value: &JsonValue) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|duration| duration.is_finite() && *duration >= 0.0)
+            .map(|duration| duration.round() as u64)
+    })
+}
+
+fn format_duration_ms(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        format!("{duration_ms} ms")
+    } else if duration_ms < 60_000 {
+        format!("{:.1}s", duration_ms as f64 / 1_000.0)
+    } else {
+        let total_seconds = duration_ms / 1_000;
+        format!("{}m {}s", total_seconds / 60, total_seconds % 60)
+    }
 }
 
 fn operations_health(data: &DashboardView) -> Vec<OperationHealthItem> {
@@ -5046,6 +5076,19 @@ mod tests {
             scheduler_cycle_json_status(&invalid_row, "operational_notifications"),
             "n/a"
         );
+    }
+
+    #[test]
+    fn extracts_scheduler_cycle_runtime_label() {
+        let row = json!({
+            "cycle_json": "{\"duration_ms\":65123,\"step_durations\":{\"decision_reports\":{\"duration_ms\":60400}}}"
+        });
+        assert_eq!(scheduler_cycle_duration(&row), "1m 5s");
+        assert_eq!(format_duration_ms(950), "950 ms");
+        assert_eq!(format_duration_ms(12_345), "12.3s");
+
+        let invalid_row = json!({"cycle_json": "not-json"});
+        assert_eq!(scheduler_cycle_duration(&invalid_row), "n/a");
     }
 
     #[test]
