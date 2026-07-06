@@ -10,6 +10,19 @@ updated: 2026-07-04
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-04] cleanup | Removed legacy Next.js frontend directory
+
+- Removed the `frontend/` Next.js app: it was never built or deployed by any Makefile target, deploy script, or Kubernetes manifest, and AGENTS.md already documented it as old and inactive. The Dioxus SSR dashboard in `src/ui.rs` is the committed UI.
+- Important distinction preserved: the `daytrader-frontend` Kubernetes Service is NOT related to that directory — it is a live alias Service selecting the `daytrader-api` pods, and the shared ngrok AgentEndpoint routes `http://daytrader-frontend.saxo:8000` through it. The Service, Makefile port-forward target, and gateway route are untouched.
+- Cleaned stale `frontend/` entries from `.gitignore` and `.dockerignore`, removed the AGENTS.md legacy-surface entry, updated the README deployment note, and marked the roadmap architecture decision as resolved.
+
+## [2026-07-04] roadmap | Project review additions
+
+- Reviewed the runtime after the June/July feature wave and added verified gaps to the roadmap.
+- New P0 stabilization rows: cross-pod Saxo token refresh lease (rollouts still burn the single-use refresh token; only an in-process mutex exists today) and a live FX rate service (fx_rate_to_dkk is a hardcoded constant table feeding ledger, order verification, price monitor, and commissions).
+- New P1 rows: real accounting invariants behind the currently hardcoded overview `integrity` field with Slack alerting, and market-hours-aware price-monitor polling.
+- Added a gate replay harness idea (recalibrate Trading Manager thresholds offline against stored reports/contexts), real Danish share-income tax estimation (config brackets are unused; after-tax P/L currently equals pre-tax), a decision item on `frontend/` Next.js vs the Dioxus SSR dashboard, scheduler per-step timeout budgets and duration metrics, and watch-symbol lifecycle alerts for `extra_symbols` activations such as the pending SPCX listing.
+
 ## [2026-07-04] improvement | Operational scheduler alerts
 
 - Continued the operations roadmap by adding scheduler-driven Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection.

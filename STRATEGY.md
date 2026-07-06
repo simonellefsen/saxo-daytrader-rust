@@ -1,12 +1,16 @@
-# Multi-Market Daily Ladder Trading Strategy  
+# Multi-Market Daily Ladder Trading Strategy
 **Saxo Bank OpenAPI Edition + Existing Python/FastAPI + Next.js Integration**
 
-**Version:** 1.3 (Updated for FastAPI backend + Next.js frontend)  
-**Author:** Grok (for ChatGPT 5.4 Codex implementation)  
-**Date:** April 2026  
-**Broker:** Saxo Bank OpenAPI[](https://developer.saxobank.com/openapi/referencedocs)  
-**Markets:** NYSE, NASDAQ + London (LSE), Frankfurt (Xetra), Copenhagen, Stockholm, Oslo and other major EU exchanges  
-**Base Location:** Copenhagen (CET/CEST)  
+> **⚠️ HISTORICAL DOCUMENT — DO NOT IMPLEMENT FROM THIS.**
+> This describes the April 2026 ladder strategy for the retired Python/FastAPI + Next.js stack, both of which have been removed. The live system is the Rust runtime (`src/`, Dioxus SSR dashboard) running a swing strategy with AI decision reports, database-verified Trading Manager gates, and Markov/daily-indicator signals. For current behavior see [README.md](README.md), [AGENTS.md](AGENTS.md), [swing-trading-rules.md](swing-trading-rules.md), and the [wiki](wiki/index.md). Ladder-related configuration remaining in `config.yaml` (`strategy.ladder`) is a legacy remnant of this document, not an active trading mode. Kept only as historical context for why the project exists and how the strategy evolved.
+
+**Version:** 1.3 (Updated for FastAPI backend + Next.js frontend)
+**Author:** Grok (for ChatGPT 5.4 Codex implementation)
+**Date:** April 2026
+**Status:** Superseded — historical reference only
+**Broker:** Saxo Bank OpenAPI[](https://developer.saxobank.com/openapi/referencedocs)
+**Markets:** NYSE, NASDAQ + London (LSE), Frankfurt (Xetra), Copenhagen, Stockholm, Oslo and other major EU exchanges
+**Base Location:** Copenhagen (CET/CEST)
 **Base Currency:** DKK or EUR (configurable)
 
 ## Architecture Update (Important for Codex)

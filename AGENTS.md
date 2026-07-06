@@ -117,9 +117,6 @@ The legacy implementation is still present for reference and staged porting.
 - `scripts/run_scheduler.py`
   - Old scheduler behavior.
 
-- `frontend/`
-  - Old Next.js frontend. Not part of the active Kubernetes base deployment.
-
 ## Local Development
 
 Use a workspace-local Cargo cache so builds do not need to write to the global Cargo cache:

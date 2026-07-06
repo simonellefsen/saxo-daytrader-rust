@@ -54,6 +54,10 @@ These items reduce operational risk and make the existing system easier to trust
 | P0 | Decision reports | Keep the OpenRouter structured-output schema registry current whenever new strict schemas are added, including Hermes prompts if they use strict schemas later. | Prevents repeat `invalid_json_schema` outages. |
 | P0 | Execution safety | Show broker precheck and placement failure details consistently in Execution Queue tooltips and order event views. | Reduces guesswork when orders fail. |
 | P0 | Scheduler | Add explicit "last successful scheduled report by pulse" status cards. | Makes missed EU/US pulses visible immediately. |
+| P0 | Saxo session | Make token refresh single-owner across pods: the in-process mutex in `auth.rs` (`saxo_refresh_lock`) serializes within one pod, but API/scheduler/MCP pods still race the single-use refresh token on every rollout, burning the session and forcing manual re-login. Use a database lease (row lock on the `saxo_sessions` singleton) or scheduler-only refresh with read-only session use elsewhere. | Sessions survive deploys; removes the recurring "Saxo Login again after every rollout" operator chore. |
+| P0 | FX correctness | Replace the hardcoded FX table in `saxo_order.rs::fx_rate_to_dkk` (USD 7.0215, EUR 7.4604, ...) with live rates from Saxo FX spot infoprices, cached in the database with staleness bounds and a startup fallback to the static table. Every DKK figure in the system (ledger amounts, order value verification, price-monitor market values, commissions) currently drifts as real FX moves, and the ledger permanently bakes in whatever the constant was on fill day. | DKK accounting stays honest as rates move; removes silent valuation drift on the ~80% of the portfolio that is not DKK-denominated. |
+| P1 | Accounting integrity | Implement the `integrity` field in the overview payload (currently hardcoded `{"healthy": true, "warnings": []}` in `state.rs`) as a real invariant job: ledger-derived cash vs broker cash balance, position_lots cost basis vs plausible per-share bounds, snapshot totals vs broker exposure sums, orders without fills past expiry. Route violations through the new Slack alert path. | The May position_lots corruption (3.2M DKK cost basis on 31 shares) sat unnoticed for a month; invariants with alerts catch the next one in hours. |
+| P1 | Price monitor | Make polling market-hours aware: poll each instrument only while its exchange is open (exchange calendars are already cached), with a slow off-hours heartbeat, and suppress per-poll work entirely when the Saxo session is invalid. | Cuts ~two-thirds of infoprice calls, stops `updated_at` implying freshness for closed markets, and reduces log churn during reauth gaps. |
 | P1 | Testing | Add integration tests for manual report, scheduled report, Hermes advice, Trading Manager queueing, and execution queue dry-run paths. | Protects the most critical cross-module workflows. |
 
 ## High-Leverage Workflow Improvements
@@ -71,6 +75,7 @@ These are specific changes that could improve the quality of trading decisions w
 | Adaptive cash deployment | Replace fixed "cash above buffer means buy" with tiers based on volatility, drawdown, signal quality, and number of independent qualifying assets. | Improve cash utilization without forcing weak trades. |
 | Position lifecycle state | Track whether each holding is starter, add candidate, hold, trim, exit candidate, or blocked. | Prevent random re-entry/rebuy behavior and make position sizing intentional. |
 | Cooldown and churn guard | Add symbol-level cooldowns after failed orders, recent exits, or conflicting reports. | Reduce repeated attempts in noisy names and failed instruments. |
+| Gate replay harness | Re-run Trading Manager gates offline against stored decision reports and their persisted contexts, with candidate thresholds overridden (e.g. `markov_gate.min_signed_signal` 0.15 vs 0.25, `min_confluences` 3 vs 4). All inputs (reports, manager runs, indicator and Markov signals) are already persisted, so this is pure re-evaluation with no broker or model calls. | Calibrate gate thresholds from evidence instead of intuition: show exactly which historical approvals/blocks would flip under a proposed setting before promoting it as an experiment. |
 
 ### Hermes Advisory Loop
 
@@ -167,6 +172,7 @@ Performance should be explainable at portfolio, report, and position level.
 - Add trade expectancy metrics once enough closed trades exist: win rate, average win/loss, payoff ratio, holding time, and slippage.
 - Add cost tracking: commissions, FX impact, spread assumptions, and slippage versus limit/market price.
 - Add "performance confidence" labels when market data is delayed, approximated, stale, or missing.
+- Implement real Danish share-income tax estimation: the `taxation.share_income` brackets (27%/42%) in config are currently unused — `after_tax_summary` in `state.rs` hardcodes `estimated_tax_dkk: 0.0` and reports after-tax P/L identical to pre-tax. Estimate tax on realized YTD gains via the brackets, mark unrealized gains at the marginal rate, and let goal tracking optionally show net-of-tax progress.
 
 ## UI And UX
 
@@ -193,6 +199,8 @@ The Rust runtime should keep moving away from generic JSON and legacy Python beh
 - Keep `src/main.rs` startup-only and avoid adding business logic there.
 - Continue removing Python runtime dependencies from active Kubernetes images, while keeping legacy Python files as behavior references until replaced.
 - Add repository-level architecture decision records for major porting choices.
+- ~~Decide the fate of the `frontend/` Next.js app versus the Dioxus SSR dashboard~~ Resolved 2026-07-04: the Next.js app was legacy (never built or deployed) and was removed; the Dioxus SSR dashboard in `src/ui.rs` is the committed UI. Note the `daytrader-frontend` Kubernetes Service is unrelated to that directory — it is a live alias Service selecting the API pods that the shared ngrok AgentEndpoint routes through, and must be kept (or renamed only together with the gateway route).
+- Give the scheduler cycle per-step timeout budgets and record per-step durations in `cycle_json`: the cycle runs its ~10 steps serially, so one hung Saxo call (30s timeout × retries) delays fills sync, notifications, and the snapshot — which matters now that fast polling targets 1-minute cycles.
 
 ## Operations And Deployment
 
@@ -200,6 +208,7 @@ Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
 - Add alerting for repeated decision-report failures, repeated broker execution failures, stale scheduler heartbeat, and missed EOD reflection.
 - Keep public ngrok route ownership in the shared gateway and app-owned internal AgentEndpoint ownership in this repo.
+- Add watch-symbol lifecycle alerts: when an `extra_symbols` entry (e.g. SPCX, waiting for Saxo SIM to sync the 2026-06-12 IPO) resolves for the first time, send a Slack notice and record the activation, instead of silently starting quotes. Include the inverse alert when a previously resolvable symbol disappears from reference data.
 
 ## Security And Secrets
 

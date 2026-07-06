@@ -12,8 +12,6 @@ rustfs/
 .obsidian/
 .pnpm-store/
 node_modules/
-frontend/.next/
-frontend/tsconfig.tsbuildinfo
 __pycache__/
 *.py[cod]
 *.pyo

@@ -10,9 +10,6 @@ rustfs/
 .qmd/
 .obsidian/
 node_modules/
-frontend/node_modules
-frontend/.next
-frontend/tsconfig.tsbuildinfo
 logs
 tmp
 .diagnostics
