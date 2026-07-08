@@ -2,7 +2,9 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     path::PathBuf,
+    process,
     sync::{OnceLock, RwLock},
+    time::Duration as StdDuration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,6 +14,7 @@ use reqwest::header;
 use serde_json::{Value as JsonValue, json};
 use serde_yaml::Value as YamlValue;
 use sqlx::{AnyPool, Row, any::AnyPoolOptions};
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 use url::Url;
 
@@ -36,6 +39,9 @@ pub struct AppState {
 
 static SAXO_EXCHANGE_CALENDAR_CACHE: OnceLock<RwLock<Option<SaxoExchangeCalendarCache>>> =
     OnceLock::new();
+
+const SAXO_SESSION_REFRESH_LEASE_SECONDS: i64 = 45;
+const SAXO_SESSION_REFRESH_LEASE_WAIT_ATTEMPTS: usize = 50;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -104,6 +110,62 @@ fn json_text(value: &JsonValue, key: &str) -> String {
         Some(JsonValue::Bool(flag)) => flag.to_string(),
         _ => String::new(),
     }
+}
+
+fn is_duplicate_column_error(err: &sqlx::Error) -> bool {
+    let message = err.to_string().to_lowercase();
+    message.contains("duplicate column")
+        || message.contains("already exists")
+        || message.contains("column exists")
+}
+
+fn saxo_refresh_lease_owner(source: &str) -> String {
+    let host = env::var("HOSTNAME").unwrap_or_else(|_| "local".to_string());
+    let nonce = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| Utc::now().timestamp_micros());
+    format!(
+        "{}:{}:{}:{}",
+        host,
+        process::id(),
+        source.replace(':', "_"),
+        nonce
+    )
+}
+
+fn saxo_session_needs_refresh(session: &JsonValue) -> bool {
+    let access_token = json_text(session, "access_token");
+    if access_token.is_empty() {
+        return saxo_session_refresh_token_usable(session);
+    }
+    let Some(access_expires_at) = parse_rfc3339_utc(session.get("access_token_expires_at")) else {
+        return saxo_session_refresh_token_usable(session);
+    };
+    access_expires_at <= Utc::now() + Duration::seconds(15 * 60)
+        && saxo_session_refresh_token_usable(session)
+}
+
+fn saxo_session_refresh_token_usable(session: &JsonValue) -> bool {
+    if !json_text(session, "refresh_token_invalid_at")
+        .trim()
+        .is_empty()
+    {
+        return false;
+    }
+    if json_text(session, "refresh_token").trim().is_empty() {
+        return false;
+    }
+    let Some(refresh_expires_at) = parse_rfc3339_utc(session.get("refresh_token_expires_at"))
+    else {
+        return false;
+    };
+    refresh_expires_at > Utc::now() + Duration::seconds(15 * 60)
+}
+
+fn parse_rfc3339_utc(value: Option<&JsonValue>) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value?.as_str()?.replace('Z', "+00:00").as_str())
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 fn matching_order_advice(
@@ -1074,7 +1136,8 @@ impl AppState {
             .and_then(|row| row.get("account_currency").cloned())
             .and_then(|value| value.as_str().map(ToString::to_string))
             .unwrap_or_else(|| "DKK".to_string());
-        let account_fx_rate = fx_rate_to_dkk(&account_currency);
+        let account_fx_rate =
+            crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &account_currency).await;
         let cash_summary = self.cash_summary_from_ledger().await?;
         let cash_balance = value_f64(&cash_summary, "cash_balance_dkk");
 
@@ -1111,7 +1174,7 @@ impl AppState {
             let inferred_fx_rate = if base_market_local.abs() > 1e-9 {
                 base_market_dkk / base_market_local
             } else {
-                fx_rate_to_dkk(&currency)
+                crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &currency).await
             };
             let current_price_local = price
                 .map(|row| value_f64(row, "current_price_local"))
@@ -3100,20 +3163,10 @@ impl AppState {
     }
 
     pub async fn saxo_auth_status_value(&self) -> JsonValue {
-        if let Err(err) = self.sync_saxo_session_storage().await {
-            warn!("Saxo session restore before auth status failed: {err:#}");
+        if let Err(err) = self.ensure_saxo_session_json("auth_status").await {
+            warn!("Saxo leased session refresh before auth status skipped: {err:#}");
         }
-        let status = auth::auth_status(&self.config, &self.config_path, true).await;
-        if status
-            .get("connected")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false)
-        {
-            if let Err(err) = self.persist_saxo_session_file_to_db("auth_status").await {
-                warn!("Saxo session database persistence after auth status failed: {err:#}");
-            }
-        }
-        status
+        auth::auth_status(&self.config, &self.config_path, false).await
     }
 
     pub async fn saxo_session_value(&self) -> JsonValue {
@@ -3124,10 +3177,10 @@ impl AppState {
     }
 
     pub async fn refresh_saxo_session(&self) -> Result<JsonValue> {
-        if let Err(err) = self.sync_saxo_session_storage().await {
-            warn!("Saxo session restore before refresh failed: {err:#}");
-        }
-        match auth::refresh_session(&self.config, &self.config_path).await {
+        let lease_owner = self
+            .prepare_saxo_session_refresh_lease_if_needed("refresh")
+            .await?;
+        let result = match auth::refresh_session(&self.config, &self.config_path).await {
             Ok(status) => {
                 self.persist_saxo_session_file_to_db("refresh").await?;
                 Ok(status)
@@ -3141,14 +3194,20 @@ impl AppState {
                 }
                 Err(err)
             }
+        };
+        if let Some(owner) = lease_owner {
+            if let Err(err) = self.release_saxo_session_refresh_lease(&owner).await {
+                warn!("Saxo session refresh lease release failed: {err:#}");
+            }
         }
+        result
     }
 
     pub async fn ensure_saxo_session_json(&self, source: &str) -> Result<JsonValue> {
-        if let Err(err) = self.sync_saxo_session_storage().await {
-            warn!("Saxo session restore before session load failed: {err:#}");
-        }
-        match auth::ensure_session_json(&self.config, &self.config_path).await {
+        let lease_owner = self
+            .prepare_saxo_session_refresh_lease_if_needed(source)
+            .await?;
+        let result = match auth::ensure_session_json(&self.config, &self.config_path).await {
             Ok(session) => {
                 self.persist_saxo_session_file_to_db(source).await?;
                 Ok(session)
@@ -3163,7 +3222,13 @@ impl AppState {
                 }
                 Err(err)
             }
+        };
+        if let Some(owner) = lease_owner {
+            if let Err(err) = self.release_saxo_session_refresh_lease(&owner).await {
+                warn!("Saxo session refresh lease release failed: {err:#}");
+            }
         }
+        result
     }
 
     pub async fn user_logout_saxo_session(&self) -> Result<JsonValue> {
@@ -3172,22 +3237,10 @@ impl AppState {
         // token, because the scheduler keeps renewing that token without any
         // browser session. This endpoint therefore reports the current Saxo
         // status and leaves the durable `saxo_sessions` row untouched.
-        if let Err(err) = self.sync_saxo_session_storage().await {
-            warn!("Saxo session restore during user logout no-op failed: {err:#}");
+        if let Err(err) = self.ensure_saxo_session_json("user_logout_keepalive").await {
+            warn!("Saxo leased session refresh during user logout no-op skipped: {err:#}");
         }
-        let mut status = auth::auth_status(&self.config, &self.config_path, true).await;
-        if status
-            .get("connected")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false)
-        {
-            if let Err(err) = self
-                .persist_saxo_session_file_to_db("user_logout_keepalive")
-                .await
-            {
-                warn!("Saxo session database persistence after user logout no-op failed: {err:#}");
-            }
-        }
+        let mut status = auth::auth_status(&self.config, &self.config_path, false).await;
         if let Some(obj) = status.as_object_mut() {
             obj.insert("logout_scope".to_string(), json!("user"));
             obj.insert(
@@ -3343,12 +3396,21 @@ impl AppState {
                 singleton_key TEXT PRIMARY KEY,
                 session_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                source TEXT NOT NULL
+                source TEXT NOT NULL,
+                refresh_lease_owner TEXT,
+                refresh_lease_expires_at TEXT,
+                refresh_lease_source TEXT
             )",
         )
         .execute(&self.pool)
         .await
         .context("creating Saxo session state table")?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_owner TEXT")
+            .await?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_expires_at TEXT")
+            .await?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_source TEXT")
+            .await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS runtime_settings (
                 key TEXT PRIMARY KEY,
@@ -3359,6 +3421,28 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating runtime settings table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS currency_fx_rates (
+                currency_code TEXT NOT NULL,
+                base_currency TEXT NOT NULL DEFAULT 'DKK',
+                rate_to_dkk REAL NOT NULL,
+                source TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                raw_payload_json TEXT NOT NULL,
+                PRIMARY KEY (currency_code, base_currency)
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating currency FX rates table")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_currency_fx_rates_expires
+             ON currency_fx_rates(expires_at)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating currency FX rates expiry index")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS broker_position_snapshots (
                 symbol TEXT PRIMARY KEY,
@@ -3557,6 +3641,15 @@ impl AppState {
         Ok(())
     }
 
+    async fn ensure_table_column(&self, table: &str, column_spec: &str) -> Result<()> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column_spec}");
+        match sqlx::query(&sql).execute(&self.pool).await {
+            Ok(_) => Ok(()),
+            Err(err) if is_duplicate_column_error(&err) => Ok(()),
+            Err(err) => Err(err).with_context(|| format!("ensuring {table}.{column_spec}")),
+        }
+    }
+
     async fn sync_saxo_session_storage(&self) -> Result<()> {
         let file_session = auth::export_session_json(&self.config, &self.config_path).ok();
         let db_session = self.load_saxo_session_from_db().await?;
@@ -3645,6 +3738,96 @@ impl AppState {
         if saxo_session_refresh_invalid(&session) {
             self.save_saxo_session_to_db(&session, source).await?;
         }
+        Ok(())
+    }
+
+    async fn prepare_saxo_session_refresh_lease_if_needed(
+        &self,
+        source: &str,
+    ) -> Result<Option<String>> {
+        if let Err(err) = self.sync_saxo_session_storage().await {
+            warn!("Saxo session restore before refresh lease check failed: {err:#}");
+        }
+        if !self.current_saxo_session_needs_refresh() {
+            return Ok(None);
+        }
+        if let Some(owner) = self.acquire_saxo_session_refresh_lease(source).await? {
+            return Ok(Some(owner));
+        }
+
+        info!(
+            source,
+            "Saxo session refresh lease is held by another process; waiting for durable session update"
+        );
+        for _ in 0..SAXO_SESSION_REFRESH_LEASE_WAIT_ATTEMPTS {
+            sleep(StdDuration::from_secs(1)).await;
+            if let Err(err) = self.sync_saxo_session_storage().await {
+                warn!("Saxo session restore while waiting for refresh lease failed: {err:#}");
+            }
+            if !self.current_saxo_session_needs_refresh() {
+                return Ok(None);
+            }
+            if let Some(owner) = self.acquire_saxo_session_refresh_lease(source).await? {
+                return Ok(Some(owner));
+            }
+        }
+        bail!("Saxo session refresh lease is still held by another process; refresh not attempted");
+    }
+
+    fn current_saxo_session_needs_refresh(&self) -> bool {
+        auth::export_session_json(&self.config, &self.config_path)
+            .map(|session| saxo_session_needs_refresh(&session))
+            .unwrap_or(false)
+    }
+
+    async fn acquire_saxo_session_refresh_lease(&self, source: &str) -> Result<Option<String>> {
+        let owner = saxo_refresh_lease_owner(source);
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let expires_at = (Utc::now() + Duration::seconds(SAXO_SESSION_REFRESH_LEASE_SECONDS))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let result = sqlx::query(&format!(
+            "UPDATE saxo_sessions
+             SET refresh_lease_owner = '{}',
+                 refresh_lease_expires_at = '{}',
+                 refresh_lease_source = '{}'
+             WHERE singleton_key = 'default'
+               AND (
+                    refresh_lease_owner IS NULL
+                    OR refresh_lease_owner = ''
+                    OR refresh_lease_owner = '{}'
+                    OR refresh_lease_expires_at IS NULL
+                    OR refresh_lease_expires_at <= '{}'
+               )",
+            sql_escape(&owner),
+            sql_escape(&expires_at),
+            sql_escape(source),
+            sql_escape(&owner),
+            sql_escape(&now)
+        ))
+        .execute(&self.pool)
+        .await
+        .context("acquiring Saxo session refresh lease")?;
+        if result.rows_affected() == 1 {
+            info!(source, owner, "acquired Saxo session refresh lease");
+            Ok(Some(owner))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn release_saxo_session_refresh_lease(&self, owner: &str) -> Result<()> {
+        sqlx::query(&format!(
+            "UPDATE saxo_sessions
+             SET refresh_lease_owner = NULL,
+                 refresh_lease_expires_at = NULL,
+                 refresh_lease_source = NULL
+             WHERE singleton_key = 'default'
+               AND refresh_lease_owner = '{}'",
+            sql_escape(owner)
+        ))
+        .execute(&self.pool)
+        .await
+        .context("releasing Saxo session refresh lease")?;
         Ok(())
     }
 
@@ -4459,21 +4642,6 @@ impl BlankStringExt for String {
     }
 }
 
-fn fx_rate_to_dkk(currency: &str) -> f64 {
-    // Static fallback rates mirror the old Python service fallback. Price snapshots
-    // carry fresher per-symbol FX rates when the market data job has populated them.
-    match currency.trim().to_uppercase().as_str() {
-        "DKK" => 1.0,
-        "EUR" => 7.4604,
-        "USD" => 7.0215,
-        "GBP" => 8.70,
-        "NOK" => 0.64,
-        "SEK" => 0.67,
-        "PLN" => 1.75,
-        _ => 1.0,
-    }
-}
-
 fn exchange_code(symbol: &str) -> String {
     symbol
         .split_once(':')
@@ -4788,6 +4956,33 @@ mod tests {
         });
 
         assert!(saxo_session_score(&old_refreshable) > saxo_session_score(&recently_invalid));
+    }
+
+    #[test]
+    fn saxo_session_needs_refresh_only_for_usable_near_expiry_tokens() {
+        let valid = json!({
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "access_token_expires_at": (Utc::now() + Duration::hours(2)).to_rfc3339(),
+            "refresh_token_expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+        });
+        let near_expiry = json!({
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "access_token_expires_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
+            "refresh_token_expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+        });
+        let invalid_refresh = json!({
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "access_token_expires_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
+            "refresh_token_expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+            "refresh_token_invalid_at": Utc::now().to_rfc3339(),
+        });
+
+        assert!(!saxo_session_needs_refresh(&valid));
+        assert!(saxo_session_needs_refresh(&near_expiry));
+        assert!(!saxo_session_needs_refresh(&invalid_refresh));
     }
 
     #[test]

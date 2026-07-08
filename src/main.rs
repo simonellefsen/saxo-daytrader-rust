@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod daily_indicators;
 mod db;
+mod fx;
 mod localization;
 mod markov_method;
 mod mcp;

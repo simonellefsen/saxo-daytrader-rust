@@ -1269,7 +1269,8 @@ async fn verified_close_dkk(state: &AppState, symbol: &str) -> Option<f64> {
         }
     };
     let currency = crate::saxo_order::currency_for_exchange(&exchange_code(symbol).to_lowercase())?;
-    Some(close * crate::saxo_order::fx_rate_to_dkk(currency))
+    let fx_rate = crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, currency).await;
+    Some(close * fx_rate)
 }
 
 /// Overwrite the model-claimed estimated_value_dkk on a BUY with a value

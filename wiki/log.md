@@ -433,3 +433,24 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added `make deps-dry-run` so dependency drift can be reviewed without mutating the lockfile.
 - Added `make security-scan`, backed by `scripts/security_scan.sh`, to run RustSec advisory checks, Trivy filesystem/image CVE scans, and Trivy secret scans.
 - Documented the dependency/CVE operating cadence and remediation policy in the build/test/deploy runbook and linked the workflow from the README.
+
+## [2026-07-07] improvement | FX rate cache for DKK valuation
+
+- Added a Rust `currency_fx_rates` runtime table and `src/fx.rs` cache helper for DKK conversion rates.
+- The cache refreshes from ECB daily reference rates, expires rows after 30 hours, and short-circuits external fetches while the cached ECB row is still fresh.
+- Price-monitor portfolio snapshots and broker-fill ledger rows now use cached FX rates with a static fallback instead of hardcoded active valuation constants.
+- Kept a roadmap follow-up for switching the primary source to Saxo FX spot infoprices while retaining the ECB/static fallback chain.
+
+## [2026-07-08] improvement | Saxo FX spot source parity
+
+- Upgraded the FX refresh path to prefer read-only Saxo `FxSpot` instruments and `/trade/v1/infoprices/list` quotes for common DKK conversion pairs.
+- Kept the fallback chain explicit: fresh Saxo cache, Saxo spot refresh, ECB daily reference refresh, then static constants at individual use sites if all cache reads fail.
+- Converted async DKK conversion paths to the cache: daily-indicator prompt context, Markov context, Trading Manager BUY value verification, overview read models, price snapshots, and broker-fill ledger entries.
+- Left synchronous commission-minimum fallback values static because that path has no async database access and is only a conservative local estimate.
+
+## [2026-07-08] fix | Saxo session refresh lease
+
+- Added nullable lease metadata to the `saxo_sessions` singleton row so token refresh is single-owner across API, scheduler, and MCP pods.
+- Wrapped auth status auto-refresh, explicit refresh, broker session ensure, and user-logout keepalive paths in the lease before they call the Saxo token refresh helper.
+- Waiters now restore the durable DB session and retry until the owner publishes a refreshed token or the lease expires, avoiding concurrent use of Saxo's single-use refresh token during rollouts.
+- Kept `auth.rs` as the token-mechanics owner; the new coordination layer lives in `AppState` and still falls back to reauth when the refresh token is missing, expired, or marked invalid.

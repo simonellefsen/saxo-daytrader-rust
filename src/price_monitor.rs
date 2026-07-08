@@ -22,7 +22,6 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_at, yaml_bool, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64},
-    saxo_order::fx_rate_to_dkk,
     state::AppState,
 };
 
@@ -137,6 +136,13 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     }
     let session_date = session_date_for(Utc::now(), config.timezone, config.reset_hour_local);
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let fx_refresh = match crate::fx::refresh_best_effort_fx_rates(state, &session).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("FX rate refresh failed; using cached/static FX fallback: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
 
     // One infoprices/list call per asset type covers all held instruments.
     let mut by_asset_type: HashMap<String, Vec<&HeldInstrument>> = HashMap::new();
@@ -208,6 +214,7 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
         "updated": updated,
         "instruments": instruments.len(),
         "session_date": session_date.to_string(),
+        "fx_refresh": fx_refresh,
         "errors": errors,
     }))
 }
@@ -443,7 +450,8 @@ async fn upsert_price_snapshot(
     session_date: NaiveDate,
     now: &str,
 ) -> Result<()> {
-    let fx_rate = fx_rate_to_dkk(&instrument.currency);
+    let fx_rate =
+        crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, &instrument.currency).await;
     let existing = sqlx::query(&format!(
         "SELECT baseline_session_date, baseline_price_local, baseline_fx_rate_to_dkk
          FROM portfolio_price_snapshots WHERE symbol = '{}'",

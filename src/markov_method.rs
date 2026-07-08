@@ -970,37 +970,44 @@ pub async fn latest_markov_run(state: &AppState) -> Result<JsonValue> {
 }
 
 pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<JsonValue> {
-    let signals = latest_markov_signals(state, limit)
+    let rows = latest_markov_signals(state, limit)
         .await?
         .into_iter()
         .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
-        .map(|row| {
-            let symbol_text = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");
-            let currency = symbol_text
-                .split_once(':')
-                .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
-            let close_dkk = currency.and_then(|currency| {
-                row.get("current_close")
-                    .and_then(JsonValue::as_f64)
-                    .map(|close| close * crate::saxo_order::fx_rate_to_dkk(currency))
-            });
-            json!({
-                "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
-                "run_date": row.get("run_date").cloned().unwrap_or(JsonValue::Null),
-                "state": row.get("current_state").cloned().unwrap_or(JsonValue::Null),
-                "close": row.get("current_close").cloned().unwrap_or(JsonValue::Null),
-                "currency": currency,
-                "close_dkk": close_dkk,
-                "horizon_days": row.get("signal_horizon_days").cloned().unwrap_or(JsonValue::Null),
-                "bull_prob": row.get("bull_prob").cloned().unwrap_or(JsonValue::Null),
-                "bear_prob": row.get("bear_prob").cloned().unwrap_or(JsonValue::Null),
-                "sideways_prob": row.get("sideways_prob").cloned().unwrap_or(JsonValue::Null),
-                "signed_signal": row.get("signed_signal").cloned().unwrap_or(JsonValue::Null),
-                "direction": row.get("direction").cloned().unwrap_or(JsonValue::Null),
-                "conviction": row.get("conviction").cloned().unwrap_or(JsonValue::Null)
-            })
-        })
         .collect::<Vec<_>>();
+    let mut signals = Vec::new();
+    for row in rows {
+        let symbol_text = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");
+        let currency = symbol_text
+            .split_once(':')
+            .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
+        let close_dkk = match (
+            currency,
+            row.get("current_close").and_then(JsonValue::as_f64),
+        ) {
+            (Some(currency), Some(close)) => {
+                let fx_rate =
+                    crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, currency).await;
+                Some(close * fx_rate)
+            }
+            _ => None,
+        };
+        signals.push(json!({
+            "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+            "run_date": row.get("run_date").cloned().unwrap_or(JsonValue::Null),
+            "state": row.get("current_state").cloned().unwrap_or(JsonValue::Null),
+            "close": row.get("current_close").cloned().unwrap_or(JsonValue::Null),
+            "currency": currency,
+            "close_dkk": close_dkk,
+            "horizon_days": row.get("signal_horizon_days").cloned().unwrap_or(JsonValue::Null),
+            "bull_prob": row.get("bull_prob").cloned().unwrap_or(JsonValue::Null),
+            "bear_prob": row.get("bear_prob").cloned().unwrap_or(JsonValue::Null),
+            "sideways_prob": row.get("sideways_prob").cloned().unwrap_or(JsonValue::Null),
+            "signed_signal": row.get("signed_signal").cloned().unwrap_or(JsonValue::Null),
+            "direction": row.get("direction").cloned().unwrap_or(JsonValue::Null),
+            "conviction": row.get("conviction").cloned().unwrap_or(JsonValue::Null)
+        }));
+    }
     Ok(json!({
         "latest_run": latest_markov_run(state).await.unwrap_or(JsonValue::Null),
         "signals": signals

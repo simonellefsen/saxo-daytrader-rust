@@ -788,42 +788,42 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
     ))
     .fetch_all(&state.pool)
     .await?;
-    let signals = rows
-        .iter()
-        .map(row_to_json)
-        .map(|row| {
-            let symbol = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");
-            let currency = symbol
-                .split_once(':')
-                .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
-            let close_dkk = currency.and_then(|currency| {
-                row.get("close")
-                    .and_then(JsonValue::as_f64)
-                    .map(|close| close * crate::saxo_order::fx_rate_to_dkk(currency))
-            });
-            json!({
-                "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
-                "close": row.get("close").cloned().unwrap_or(JsonValue::Null),
-                "currency": currency,
-                "close_dkk": close_dkk,
-                "sma20": row.get("sma20").cloned().unwrap_or(JsonValue::Null),
-                "sma50": row.get("sma50").cloned().unwrap_or(JsonValue::Null),
-                "sma200": row.get("sma200").cloned().unwrap_or(JsonValue::Null),
-                "rsi14": row.get("rsi14").cloned().unwrap_or(JsonValue::Null),
-                "macd_histogram": row.get("macd_histogram").cloned().unwrap_or(JsonValue::Null),
-                "atr14": row.get("atr14").cloned().unwrap_or(JsonValue::Null),
-                "reward_risk": row.get("reward_risk").cloned().unwrap_or(JsonValue::Null),
-                "trend_bias": row.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
-                "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null),
-                "confluence_count": row.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
-                "min_confluences": row.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
-                "confluences": row.get("confluences_json")
-                    .and_then(JsonValue::as_str)
-                    .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
-                    .unwrap_or(JsonValue::Null),
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut signals = Vec::new();
+    for row in rows.iter().map(row_to_json) {
+        let symbol = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");
+        let currency = symbol
+            .split_once(':')
+            .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
+        let close_dkk = match (currency, row.get("close").and_then(JsonValue::as_f64)) {
+            (Some(currency), Some(close)) => {
+                let fx_rate =
+                    crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, currency).await;
+                Some(close * fx_rate)
+            }
+            _ => None,
+        };
+        signals.push(json!({
+            "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+            "close": row.get("close").cloned().unwrap_or(JsonValue::Null),
+            "currency": currency,
+            "close_dkk": close_dkk,
+            "sma20": row.get("sma20").cloned().unwrap_or(JsonValue::Null),
+            "sma50": row.get("sma50").cloned().unwrap_or(JsonValue::Null),
+            "sma200": row.get("sma200").cloned().unwrap_or(JsonValue::Null),
+            "rsi14": row.get("rsi14").cloned().unwrap_or(JsonValue::Null),
+            "macd_histogram": row.get("macd_histogram").cloned().unwrap_or(JsonValue::Null),
+            "atr14": row.get("atr14").cloned().unwrap_or(JsonValue::Null),
+            "reward_risk": row.get("reward_risk").cloned().unwrap_or(JsonValue::Null),
+            "trend_bias": row.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
+            "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null),
+            "confluence_count": row.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
+            "min_confluences": row.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
+            "confluences": row.get("confluences_json")
+                .and_then(JsonValue::as_str)
+                .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+                .unwrap_or(JsonValue::Null),
+        }));
+    }
     Ok(json!({"latest_run": run, "signals": signals}))
 }
 

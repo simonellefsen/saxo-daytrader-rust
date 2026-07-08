@@ -1444,7 +1444,7 @@ async fn insert_trade_ledger_for_fill(
 ) -> Result<i64> {
     let now = now_iso();
     let symbol = order_text(order, "symbol");
-    let fx_rate = fx_rate_to_dkk(currency);
+    let fx_rate = crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, currency).await;
     let gross_local = price_local * quantity;
     let gross_amount_dkk = gross_local * fx_rate;
     let commission_dkk = commission_dkk_for_fill(order, gross_amount_dkk, currency);
@@ -2397,16 +2397,7 @@ fn default_min_commission_dkk(symbol: &str) -> f64 {
 }
 
 pub(crate) fn fx_rate_to_dkk(currency: &str) -> f64 {
-    match currency.trim().to_uppercase().as_str() {
-        "DKK" => 1.0,
-        "EUR" => 7.4604,
-        "USD" => 7.0215,
-        "GBP" => 8.70,
-        "NOK" => 0.64,
-        "SEK" => 0.67,
-        "PLN" => 1.75,
-        _ => 1.0,
-    }
+    crate::fx::static_fx_rate_to_dkk(currency)
 }
 
 /// Trading currency implied by the exchange suffix of a symbol like

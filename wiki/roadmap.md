@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-06
+updated: 2026-07-08
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,9 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-08: Added a database-backed Saxo session refresh lease on the `saxo_sessions` singleton so API, scheduler, and MCP pods do not race Saxo's single-use refresh token during rollouts; auth status, explicit refresh, user logout keepalive, and broker session ensure paths now route through the lease.
+- 2026-07-08: Upgraded the FX cache to prefer Saxo FX spot infoprices, falling back to ECB daily rates and then static constants; decision-report indicator context, Markov context, Trading Manager BUY value verification, overview read models, price snapshots, and broker-fill ledger rows now use the cached FX path where async DB access is available.
+- 2026-07-07: Added a database-backed `currency_fx_rates` cache fed by ECB daily rates with staleness bounds, static fallback, and cache freshness short-circuiting; price-monitor DKK snapshots and broker-fill ledger rows now use cached FX rates instead of hardcoded active valuation rates.
 - 2026-07-06: Added scheduler-cycle duration metrics: each persisted cycle now includes `duration_ms` plus per-step `step_durations`, and the dashboard shows recent cycle runtime in the Scheduler Cycles table.
 - 2026-07-04: Added scheduler-driven operational Slack alerts for repeated decision-report failures, execution-failure bursts, stale scheduler completion, and missed Hermes EOD reflection, with runtime notification table creation in Rust.
 - 2026-07-04: Exposed operational notification status in the Scheduler Cycles table so alert dispatch health is visible without opening raw cycle JSON.
@@ -55,8 +58,6 @@ These items reduce operational risk and make the existing system easier to trust
 | P0 | Decision reports | Keep the OpenRouter structured-output schema registry current whenever new strict schemas are added, including Hermes prompts if they use strict schemas later. | Prevents repeat `invalid_json_schema` outages. |
 | P0 | Execution safety | Show broker precheck and placement failure details consistently in Execution Queue tooltips and order event views. | Reduces guesswork when orders fail. |
 | P0 | Scheduler | Add explicit "last successful scheduled report by pulse" status cards. | Makes missed EU/US pulses visible immediately. |
-| P0 | Saxo session | Make token refresh single-owner across pods: the in-process mutex in `auth.rs` (`saxo_refresh_lock`) serializes within one pod, but API/scheduler/MCP pods still race the single-use refresh token on every rollout, burning the session and forcing manual re-login. Use a database lease (row lock on the `saxo_sessions` singleton) or scheduler-only refresh with read-only session use elsewhere. | Sessions survive deploys; removes the recurring "Saxo Login again after every rollout" operator chore. |
-| P0 | FX correctness | Replace the hardcoded FX table in `saxo_order.rs::fx_rate_to_dkk` (USD 7.0215, EUR 7.4604, ...) with live rates from Saxo FX spot infoprices, cached in the database with staleness bounds and a startup fallback to the static table. Every DKK figure in the system (ledger amounts, order value verification, price-monitor market values, commissions) currently drifts as real FX moves, and the ledger permanently bakes in whatever the constant was on fill day. | DKK accounting stays honest as rates move; removes silent valuation drift on the ~80% of the portfolio that is not DKK-denominated. |
 | P1 | Accounting integrity | Implement the `integrity` field in the overview payload (currently hardcoded `{"healthy": true, "warnings": []}` in `state.rs`) as a real invariant job: ledger-derived cash vs broker cash balance, position_lots cost basis vs plausible per-share bounds, snapshot totals vs broker exposure sums, orders without fills past expiry. Route violations through the new Slack alert path. | The May position_lots corruption (3.2M DKK cost basis on 31 shares) sat unnoticed for a month; invariants with alerts catch the next one in hours. |
 | P1 | Price monitor | Make polling market-hours aware: poll each instrument only while its exchange is open (exchange calendars are already cached), with a slow off-hours heartbeat, and suppress per-poll work entirely when the Saxo session is invalid. | Cuts ~two-thirds of infoprice calls, stops `updated_at` implying freshness for closed markets, and reduces log churn during reauth gaps. |
 | P1 | Testing | Add integration tests for manual report, scheduled report, Hermes advice, Trading Manager queueing, and execution queue dry-run paths. | Protects the most critical cross-module workflows. |
