@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-08
+updated: 2026-07-09
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-09: Added a derived instrument quarantine in the Trading Manager: repeated identical hard execution failures over the configured lookback window now skip matching symbol/action candidates before queueing, and active quarantines are recorded in manager-run JSON.
 - 2026-07-08: Repaired the May 18 import cost-basis corruption end to end: verified all 18 position_snapshots/position_lots rows against the exact old-parser corruption of the original Positioner CSV, restored true values, and recomputed 22 SELL ledger rows via FIFO replay (import lot + subsequent buys). Corrected realised P/L since the reset is +69,251 DKK; per-symbol expectancy analytics are now trustworthy.
 - 2026-07-08: Added the monthly-loss circuit breaker: when month P/L breaches `strategy.capital.monthly_loss_halt_dkk` (default -10,000), the Trading Manager skips all new BUYs (SELLs unaffected), records breaker state in manager runs, and the decision prompt tells the model buys are suspended. Verified active on deploy with month P/L -28,277.
 - 2026-07-08: Added the commission-efficiency floor for BUYs: `execution.max_commission_pct_per_side` (default 0.3%) turns each exchange's minimum commission into a minimum clip size (XNAS/XNYS ≈ 7,021 DKK, XCSE ≈ 4,667 DKK), enforced in the manager and published per exchange in the decision prompt capital plan.
@@ -66,7 +67,7 @@ These items reduce operational risk and make the existing system easier to trust
 | P1 | Risk guardrail | Extend the monthly-loss circuit breaker (landed 2026-07-08) with a Slack alert on activation/deactivation and an operator acknowledgment path for resuming BUYs before month end. | The breaker currently informs through manager runs and the prompt; activation is exactly the moment an operator should be paged. |
 | P1 | Accounting integrity | Expand the new overview `integrity` checks with broker exposure aggregate reconciliation, UI surfacing, and Slack alert routing for high-severity violations. | The May position_lots corruption (3.2M DKK cost basis on 31 shares) sat unnoticed for a month; invariants with alerts catch the next one in hours. |
 | P1 | Markov coverage | Fix the 38 assets that fail instrument resolution on every daily Markov run (AKRBP:xosl, ALFA:xsto, ALK-B:xcse, ABB:xsto, ...): correct the Saxo symbology mapping for Nordic/EU exchange suffixes where possible, and add persistent negative caching with slow retry (e.g. weekly) for genuinely unresolvable names instead of re-failing daily. | 19% of the universe — concentrated in exactly the Nordic/EU names the EU-open pulse trades — has no regime signal at all, and the failures burn 38 Saxo lookups per day. |
-| P1 | Instrument quarantine | Auto-quarantine instruments after repeated identical precheck failures: ARKK:xmil failed three times in 14 days with "account does not have any commissions configured", DEMANT:xcse rejects on tick size (`price_tick_overrides` missing an entry), and SELLs were queued for NNIT/ORSTED positions already flattened at the broker. Track failure signatures per symbol and skip candidates with an active quarantine, surfacing the list in the UI. | Known-broken instruments waste daily order capacity, pollute execution stats, and re-teach the model nothing; the manual do-not-trade list idea needs an automatic feeder. |
+| P1 | Instrument quarantine | Expand the new derived quarantine with a dashboard panel, Slack alert on new activation, and operator acknowledge/override path. Consider persisting signatures if the derived read model becomes too expensive or needs manual notes. | Known-broken instruments waste daily order capacity, pollute execution stats, and re-teach the model nothing; the manual do-not-trade list idea needs an automatic feeder. |
 | P1 | Price monitor | Make polling market-hours aware: poll each instrument only while its exchange is open (exchange calendars are already cached), with a slow off-hours heartbeat, and suppress per-poll work entirely when the Saxo session is invalid. | Cuts ~two-thirds of infoprice calls, stops `updated_at` implying freshness for closed markets, and reduces log churn during reauth gaps. |
 | P1 | Testing | Add integration tests for manual report, scheduled report, Hermes advice, Trading Manager queueing, and execution queue dry-run paths. | Protects the most critical cross-module workflows. |
 

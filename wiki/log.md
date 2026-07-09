@@ -477,3 +477,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The overview payload now reports portfolio identity mismatch, ledger-vs-history cash drift, broker cash drift, implausible position-lot unit costs, and stale or unreconciled execution orders.
 - Added tolerance coverage so small DKK/FX/settlement noise does not mark the dashboard unhealthy.
 - Left follow-up roadmap work for UI surfacing, Slack alert routing, and deeper broker exposure aggregate reconciliation.
+
+## [2026-07-09] improvement | Derived instrument quarantine
+
+- Continued the roadmap by adding a Trading Manager quarantine gate for instruments with repeated identical hard execution failures.
+- Active quarantines are derived from recent `execution_orders` evidence, grouped by symbol, action, and normalized failure signature.
+- The first signatures cover commission setup failures, tick-size/price increment failures, already-flat SELL attempts, instrument resolution failures, and not-tradable/unsupported instruments.
+- Configured defaults under `risk.instrument_quarantine`: enabled, 14-day lookback, 3 matching failures, and 14 active quarantine days.
+- The manager records active quarantine config and rows in `manager_json`, and skips matching candidates before queue insertion.

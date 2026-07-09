@@ -301,6 +301,39 @@ fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> MonthlyLossB
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InstrumentQuarantineConfig {
+    enabled: bool,
+    lookback_days: i64,
+    min_failures: usize,
+    active_days: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct InstrumentQuarantine {
+    symbol: String,
+    action: String,
+    signature: String,
+    failure_count: usize,
+    latest_failure_at: String,
+    expires_at: String,
+    sample_error: String,
+}
+
+impl InstrumentQuarantine {
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "symbol": self.symbol,
+            "action": self.action,
+            "signature": self.signature,
+            "failure_count": self.failure_count,
+            "latest_failure_at": self.latest_failure_at,
+            "expires_at": self.expires_at,
+            "sample_error": self.sample_error,
+        })
+    }
+}
+
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     let reports = fresh_unmanaged_reports(state).await?;
     if reports.is_empty() {
@@ -350,6 +383,13 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             "monthly-loss circuit breaker active; all BUY candidates will be skipped"
         );
     }
+    let quarantine_cfg = instrument_quarantine_config(state);
+    let active_quarantines = active_instrument_quarantines(state)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("instrument quarantine read degraded: {err:#}");
+            Vec::new()
+        });
 
     let mut runs = Vec::new();
     for report in reports {
@@ -360,6 +400,8 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             overlay.as_ref(),
             &mut capital_budget,
             buy_halt,
+            quarantine_cfg,
+            &active_quarantines,
         )
         .await
         {
@@ -393,6 +435,8 @@ async fn run_for_report(
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
     buy_halt: MonthlyLossBuyHalt,
+    quarantine_cfg: InstrumentQuarantineConfig,
+    active_quarantines: &[InstrumentQuarantine],
 ) -> Result<JsonValue> {
     let candidates = candidate_orders_from_report(&report.report_json);
     let candidate_order_count = candidates.len();
@@ -552,6 +596,22 @@ async fn run_for_report(
             skipped.push(skip_order(
                 &order,
                 "Symbol is excluded by risk configuration.",
+            ));
+            continue;
+        }
+        if let Some(quarantine) = matching_instrument_quarantine(active_quarantines, &order) {
+            skipped.push(skip_order(
+                &order,
+                &format!(
+                    "Instrument quarantine active for {} {} after {} repeated {} failures; latest failure at {}, quarantine expires at {}. Sample: {}",
+                    quarantine.symbol,
+                    quarantine.action,
+                    quarantine.failure_count,
+                    quarantine.signature,
+                    quarantine.latest_failure_at,
+                    quarantine.expires_at,
+                    quarantine.sample_error
+                ),
             ));
             continue;
         }
@@ -760,6 +820,14 @@ async fn run_for_report(
             "month_pnl_dkk": buy_halt.month_pnl_dkk,
             "threshold_dkk": buy_halt.threshold_dkk,
         },
+        "instrument_quarantine": {
+            "enabled": quarantine_cfg.enabled,
+            "lookback_days": quarantine_cfg.lookback_days,
+            "min_failures": quarantine_cfg.min_failures,
+            "active_days": quarantine_cfg.active_days,
+            "active_count": active_quarantines.len(),
+            "active": active_quarantines.iter().map(InstrumentQuarantine::to_json).collect::<Vec<_>>(),
+        },
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
@@ -779,6 +847,7 @@ async fn run_for_report(
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
             "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it.",
+            "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
@@ -1799,6 +1868,200 @@ async fn insert_order_event(
     Ok(())
 }
 
+fn instrument_quarantine_config(state: &AppState) -> InstrumentQuarantineConfig {
+    InstrumentQuarantineConfig {
+        enabled: yaml_bool(&state.config, &["risk", "instrument_quarantine", "enabled"])
+            .unwrap_or(true),
+        lookback_days: yaml_i64(
+            &state.config,
+            &["risk", "instrument_quarantine", "lookback_days"],
+        )
+        .unwrap_or(14)
+        .max(1),
+        min_failures: yaml_i64(
+            &state.config,
+            &["risk", "instrument_quarantine", "min_failures"],
+        )
+        .unwrap_or(3)
+        .max(1) as usize,
+        active_days: yaml_i64(
+            &state.config,
+            &["risk", "instrument_quarantine", "active_days"],
+        )
+        .unwrap_or(14)
+        .max(1),
+    }
+}
+
+async fn active_instrument_quarantines(state: &AppState) -> Result<Vec<InstrumentQuarantine>> {
+    let cfg = instrument_quarantine_config(state);
+    if !cfg.enabled {
+        return Ok(Vec::new());
+    }
+    let cutoff = (Utc::now() - Duration::days(cfg.lookback_days))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let rows = sqlx::query(&format!(
+        "SELECT id, created_at, symbol, action, status, error_text, execution_result_json \
+             FROM execution_orders \
+             WHERE created_at >= '{}' \
+               AND (error_text IS NOT NULL \
+                    OR lower(status) LIKE '%failed%' \
+                    OR lower(status) LIKE '%rejected%' \
+                    OR status IN ('invalid_quantity', 'broker_expired')) \
+             ORDER BY created_at ASC, id ASC \
+             LIMIT 1000",
+        sql_escape(&cutoff)
+    ))
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(|row| row_to_json(&row))
+    .collect::<Vec<_>>();
+    Ok(active_instrument_quarantines_from_rows(
+        &rows,
+        Utc::now(),
+        cfg,
+    ))
+}
+
+fn active_instrument_quarantines_from_rows(
+    rows: &[JsonValue],
+    now: DateTime<Utc>,
+    cfg: InstrumentQuarantineConfig,
+) -> Vec<InstrumentQuarantine> {
+    if !cfg.enabled {
+        return Vec::new();
+    }
+    let mut grouped: HashMap<(String, String, String), (usize, DateTime<Utc>, String)> =
+        HashMap::new();
+    for row in rows {
+        let symbol = text(row, "symbol");
+        let action = text(row, "action").to_uppercase();
+        if symbol.is_empty() || action.is_empty() {
+            continue;
+        }
+        let Some(signature) = classify_execution_failure_signature(row) else {
+            continue;
+        };
+        let Some(created_at) = parse_report_time(&text(row, "created_at")) else {
+            continue;
+        };
+        let sample_error = failure_sample_text(row);
+        let key = (symbol, action, signature);
+        grouped
+            .entry(key)
+            .and_modify(|entry| {
+                entry.0 += 1;
+                if created_at > entry.1 {
+                    entry.1 = created_at;
+                    entry.2 = sample_error.clone();
+                }
+            })
+            .or_insert((1, created_at, sample_error));
+    }
+
+    let mut quarantines = grouped
+        .into_iter()
+        .filter_map(
+            |((symbol, action, signature), (failure_count, latest, sample_error))| {
+                if failure_count < cfg.min_failures {
+                    return None;
+                }
+                let expires_at = latest + Duration::days(cfg.active_days);
+                if expires_at <= now {
+                    return None;
+                }
+                Some(InstrumentQuarantine {
+                    symbol,
+                    action,
+                    signature,
+                    failure_count,
+                    latest_failure_at: latest.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    expires_at: expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    sample_error,
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    quarantines.sort_by(|left, right| {
+        left.symbol
+            .cmp(&right.symbol)
+            .then(left.action.cmp(&right.action))
+            .then(left.signature.cmp(&right.signature))
+    });
+    quarantines
+}
+
+fn matching_instrument_quarantine<'a>(
+    quarantines: &'a [InstrumentQuarantine],
+    order: &CandidateOrder,
+) -> Option<&'a InstrumentQuarantine> {
+    quarantines.iter().find(|quarantine| {
+        quarantine.symbol == order.symbol
+            && (quarantine.action == order.action || quarantine.action == "*")
+    })
+}
+
+fn classify_execution_failure_signature(row: &JsonValue) -> Option<String> {
+    let status = text(row, "status").to_lowercase();
+    let combined = format!(
+        "{} {} {}",
+        text(row, "error_text"),
+        text(row, "execution_result_json"),
+        status
+    )
+    .to_lowercase();
+
+    if combined.contains("does not have any commissions configured")
+        || combined.contains("commissions configured")
+    {
+        return Some("commission_not_configured".to_string());
+    }
+    if combined.contains("tick")
+        || combined.contains("increment")
+        || combined.contains("invalid price")
+        || combined.contains("price step")
+    {
+        return Some("tick_size_or_price_increment".to_string());
+    }
+    if combined.contains("not owned")
+        || combined.contains("notowned")
+        || combined.contains("insufficient holdings")
+        || combined.contains("sell quantity")
+        || combined.contains("holdings quantity")
+    {
+        return Some("sell_not_owned_or_flattened".to_string());
+    }
+    if combined.contains("resolving saxo instrument")
+        || combined.contains("instrument not found")
+        || combined.contains("could not resolve")
+        || combined.contains("no instrument")
+    {
+        return Some("instrument_resolution".to_string());
+    }
+    if combined.contains("not tradable")
+        || combined.contains("not supported")
+        || combined.contains("unsupported order")
+    {
+        return Some("instrument_not_tradable".to_string());
+    }
+    None
+}
+
+fn failure_sample_text(row: &JsonValue) -> String {
+    let text = [text(row, "error_text"), text(row, "status")]
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "execution failure".to_string());
+    if text.chars().count() > 220 {
+        let mut truncated = text.chars().take(220).collect::<String>();
+        truncated.push_str("...");
+        truncated
+    } else {
+        text
+    }
+}
+
 async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64> {
     if broker_position_snapshots_available(state).await? {
         let row = sqlx::query(&format!(
@@ -2236,6 +2499,60 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn instrument_quarantine_requires_repeated_identical_hard_failures() {
+        let cfg = InstrumentQuarantineConfig {
+            enabled: true,
+            lookback_days: 14,
+            min_failures: 3,
+            active_days: 14,
+        };
+        let rows = vec![
+            json!({"created_at": "2026-07-01T10:00:00Z", "symbol": "ARKK:xmil", "action": "BUY", "status": "execution_failed", "error_text": "Saxo precheck rejected: account does not have any commissions configured"}),
+            json!({"created_at": "2026-07-03T10:00:00Z", "symbol": "ARKK:xmil", "action": "BUY", "status": "execution_failed", "error_text": "Saxo precheck rejected: account does not have any commissions configured"}),
+            json!({"created_at": "2026-07-08T10:00:00Z", "symbol": "ARKK:xmil", "action": "BUY", "status": "execution_failed", "error_text": "Saxo precheck rejected: account does not have any commissions configured"}),
+            json!({"created_at": "2026-07-08T10:00:00Z", "symbol": "ARKK:xmil", "action": "SELL", "status": "execution_failed", "error_text": "temporary market closed"}),
+        ];
+
+        let quarantines = active_instrument_quarantines_from_rows(
+            &rows,
+            DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            cfg,
+        );
+
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(quarantines[0].symbol, "ARKK:xmil");
+        assert_eq!(quarantines[0].action, "BUY");
+        assert_eq!(quarantines[0].signature, "commission_not_configured");
+        assert_eq!(quarantines[0].failure_count, 3);
+    }
+
+    #[test]
+    fn instrument_quarantine_expires_after_active_window() {
+        let cfg = InstrumentQuarantineConfig {
+            enabled: true,
+            lookback_days: 14,
+            min_failures: 2,
+            active_days: 2,
+        };
+        let rows = vec![
+            json!({"created_at": "2026-07-01T10:00:00Z", "symbol": "DEMANT:xcse", "action": "BUY", "status": "execution_failed", "error_text": "price violates tick size"}),
+            json!({"created_at": "2026-07-02T10:00:00Z", "symbol": "DEMANT:xcse", "action": "BUY", "status": "execution_failed", "error_text": "invalid price increment"}),
+        ];
+
+        let quarantines = active_instrument_quarantines_from_rows(
+            &rows,
+            DateTime::parse_from_rfc3339("2026-07-05T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            cfg,
+        );
+
+        assert!(quarantines.is_empty());
     }
 
     #[test]

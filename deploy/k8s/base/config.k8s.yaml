@@ -216,6 +216,11 @@ risk:
     - NOVOb:xcse
     - TSLA:xnas
   excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS
+  instrument_quarantine:
+    enabled: true
+    lookback_days: 14
+    min_failures: 3
+    active_days: 14
   max_position_weight: 0.25
   allow_shorting: false
 
