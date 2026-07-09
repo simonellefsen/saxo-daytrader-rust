@@ -485,3 +485,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The first signatures cover commission setup failures, tick-size/price increment failures, already-flat SELL attempts, instrument resolution failures, and not-tradable/unsupported instruments.
 - Configured defaults under `risk.instrument_quarantine`: enabled, 14-day lookback, 3 matching failures, and 14 active quarantine days.
 - The manager records active quarantine config and rows in `manager_json`, and skips matching candidates before queue insertion.
+
+## [2026-07-09] improvement | Instrument quarantine overview panel
+
+- Surfaced the derived instrument quarantine in the Overview sidebar beside Cash Deployment.
+- The panel reports whether the gate is disabled, clear, or active, plus lookback days, minimum failures, active window, and active quarantine count.
+- Active rows show symbol, action, normalized failure signature, repeated-failure count, expiry time, and the sample error as a row tooltip.
+- Left follow-up roadmap work for Slack activation alerts and operator acknowledgment/override flow.

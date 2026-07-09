@@ -480,6 +480,7 @@ fn OverviewView(
                         }
                     }
                     CashDeploymentPanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
+                    InstrumentQuarantinePanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
                     section { class: "section",
                         h2 { "Recent Decisions" }
                         div { class: "stack", for row in data.reports.iter() { DecisionCard { row: row.clone(), prefs: prefs.clone() } } }
@@ -595,6 +596,130 @@ fn cash_deployment_tone(status: &str) -> &'static str {
             "warn-status"
         }
         _ => "",
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct InstrumentQuarantineSummary {
+    enabled: bool,
+    status: String,
+    tone: &'static str,
+    active_count: i64,
+    lookback_days: i64,
+    min_failures: i64,
+    active_days: i64,
+    active: Vec<JsonValue>,
+    description: String,
+}
+
+#[component]
+fn InstrumentQuarantinePanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let latest = trading_manager
+        .get("latest_run")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let summary = instrument_quarantine_summary(&latest);
+    rsx! {
+        section { class: "section",
+            h2 { "Instrument Quarantine" }
+            if latest.is_null() {
+                div { class: "event",
+                    strong { "No Trading Manager run yet." }
+                    span { class: "muted", "Quarantine diagnostics will appear after the next decision report is processed." }
+                }
+            } else {
+                div { class: "cash-deployment-panel",
+                    div { class: "event",
+                        strong { "Status" }
+                        span { class: "status {summary.tone}", "{summary.status}" }
+                        span { class: "muted", "{summary.description}" }
+                    }
+                    div { class: "cash-diagnostic-grid",
+                        div { span { class: "label", "Active" } strong { "{summary.active_count}" } }
+                        div { span { class: "label", "Lookback" } strong { "{summary.lookback_days}d" } }
+                        div { span { class: "label", "Min failures" } strong { "{summary.min_failures}" } }
+                        div { span { class: "label", "Active window" } strong { "{summary.active_days}d" } }
+                    }
+                    if !summary.active.is_empty() {
+                        div { class: "table-wrap",
+                            table {
+                                thead { tr { th { "Symbol" } th { "Side" } th { "Failure" } th { "Count" } th { "Expires" } } }
+                                tbody {
+                                    for row in summary.active.iter() {
+                                        InstrumentQuarantineRow { row: row.clone(), prefs: prefs.clone() }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn InstrumentQuarantineRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let sample = fallback_text(&row, "sample_error", "No sample error recorded.");
+    rsx! {
+        tr { title: "{sample}",
+            td { class: "mono", "{text(&row, \"symbol\")}" }
+            td { "{text(&row, \"action\")}" }
+            td { "{text(&row, \"signature\")}" }
+            td { "{value_i64(&row, \"failure_count\")}" }
+            td { "{format_timestamp(&text(&row, \"expires_at\"), &prefs)}" }
+        }
+    }
+}
+
+fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantineSummary {
+    let quarantine = latest_run
+        .get("manager_json")
+        .and_then(|value| value.get("instrument_quarantine"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let enabled = quarantine
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let active = quarantine
+        .get("active")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let active_count = quarantine
+        .get("active_count")
+        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+        .unwrap_or(active.len() as i64);
+    let (status, tone, description) = if !enabled {
+        (
+            "disabled".to_string(),
+            "",
+            "The quarantine gate was disabled for the latest manager run.".to_string(),
+        )
+    } else if active_count > 0 {
+        (
+            "active".to_string(),
+            "warn-status",
+            format!("{active_count} symbol/action pair(s) are blocked before queueing."),
+        )
+    } else {
+        (
+            "clear".to_string(),
+            "good-status",
+            "No active instrument quarantines in the latest manager run.".to_string(),
+        )
+    };
+    InstrumentQuarantineSummary {
+        enabled,
+        status,
+        tone,
+        active_count,
+        lookback_days: value_i64(&quarantine, "lookback_days"),
+        min_failures: value_i64(&quarantine, "min_failures"),
+        active_days: value_i64(&quarantine, "active_days"),
+        active,
+        description,
     }
 }
 
@@ -4725,6 +4850,57 @@ mod tests {
             cash_deployment_tone("excess_cash_without_buy_candidates"),
             "warn-status"
         );
+    }
+
+    #[test]
+    fn summarizes_clear_instrument_quarantine_state() {
+        let latest_run = json!({
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": true,
+                    "lookback_days": 14,
+                    "min_failures": 3,
+                    "active_days": 14,
+                    "active_count": 0,
+                    "active": []
+                }
+            }
+        });
+
+        let summary = instrument_quarantine_summary(&latest_run);
+        assert!(summary.enabled);
+        assert_eq!(summary.status, "clear");
+        assert_eq!(summary.tone, "good-status");
+        assert_eq!(summary.active_count, 0);
+        assert!(summary.active.is_empty());
+    }
+
+    #[test]
+    fn summarizes_active_instrument_quarantines() {
+        let latest_run = json!({
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": true,
+                    "lookback_days": 14,
+                    "min_failures": 3,
+                    "active_days": 14,
+                    "active": [{
+                        "symbol": "ARKK:xmil",
+                        "action": "BUY",
+                        "signature": "commission_not_configured",
+                        "failure_count": 3,
+                        "expires_at": "2026-07-22T10:00:00Z"
+                    }]
+                }
+            }
+        });
+
+        let summary = instrument_quarantine_summary(&latest_run);
+        assert_eq!(summary.status, "active");
+        assert_eq!(summary.tone, "warn-status");
+        assert_eq!(summary.active_count, 1);
+        assert_eq!(text(&summary.active[0], "symbol"), "ARKK:xmil");
+        assert!(summary.description.contains("blocked"));
     }
 
     #[test]
