@@ -446,7 +446,7 @@ fn OverviewView(
                         h2 { "Execution Queue" }
                         div { class: "table-wrap",
                             table {
-                                thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Status" } th { "Qty" } th { "Limit" } } }
+                                thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Status" } th { "Qty" } th { "Limit" } th { "Expiry" } } }
                                 tbody { for row in data.orders.iter() { OrderRow { row: row.clone(), prefs: prefs.clone() } } }
                             }
                         }
@@ -2353,7 +2353,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "table-wrap",
                 h3 { "Execution Orders" }
                 table {
-                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Attribution" } th { "Error" } } }
+                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Expiry" } th { "Attribution" } th { "Error" } } }
                     tbody {
                         for row in data.orders.iter() {
                             ExecutionOrderRow { row: row.clone(), prefs: prefs.clone() }
@@ -2709,6 +2709,8 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
     let currency = execution_order_price_currency(&row);
     let limit = format_local_money(value_f64(&row, "limit_price_local"), &currency, &prefs);
+    let expiry = execution_order_lifecycle_label(&row, &prefs);
+    let lifecycle_detail = execution_order_lifecycle_detail(&row, &prefs);
     rsx! {
         tr {
             td { "{id}" }
@@ -2718,6 +2720,7 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { span { class: "status", "{status}" } }
             td { "{quantity}" }
             td { "{limit}" }
+            td { class: "muted", title: "{lifecycle_detail}", "{expiry}" }
         }
     }
 }
@@ -2738,6 +2741,8 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let detail_block = execution_detail_block(&row, &detail);
     let (attribution_label, attribution_tone) = execution_attribution_label(&row);
     let attribution_detail = execution_attribution_detail(&row, &prefs);
+    let expiry = execution_order_lifecycle_label(&row, &prefs);
+    let lifecycle_detail = execution_order_lifecycle_detail(&row, &prefs);
     rsx! {
         tr {
             td { "{text(&row, \"id\")}" }
@@ -2757,6 +2762,7 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{format_local_money(value_f64(&row, \"price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
+            td { class: "muted", title: "{lifecycle_detail}", "{expiry}" }
             td { class: "muted attribution-cell",
                 details { class: "error-details attribution-details",
                     summary { span { class: "{attribution_tone}", "{attribution_label}" } }
@@ -3653,7 +3659,56 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
             "detail: order accepted by Saxo; waiting for broker status/fill sync".to_string(),
         );
     }
+    let duration = text(row, "order_duration_type");
+    let expiry = text(row, "expected_expiry_at_utc");
+    if !duration.is_empty() || !expiry.is_empty() {
+        lines.push(format!(
+            "lifecycle: duration {}; expected expiry {}",
+            if duration.is_empty() {
+                "n/a"
+            } else {
+                &duration
+            },
+            if expiry.is_empty() { "n/a" } else { &expiry }
+        ));
+    }
     lines.join("\n")
+}
+
+fn execution_order_lifecycle_label(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
+    let duration = text(row, "order_duration_type");
+    let expiry_at = text(row, "expected_expiry_at_utc");
+    if duration.eq_ignore_ascii_case("DayOrder") && !expiry_at.is_empty() {
+        return format_timestamp(&expiry_at, prefs);
+    }
+    if !duration.is_empty() {
+        return duration;
+    }
+    String::new()
+}
+
+fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
+    let mut lines = Vec::new();
+    let duration = text(row, "order_duration_type");
+    if !duration.is_empty() {
+        lines.push(format!("duration {duration}"));
+    }
+    let expiry_at = text(row, "expected_expiry_at_utc");
+    if !expiry_at.is_empty() {
+        lines.push(format!(
+            "expected expiry {}",
+            format_timestamp(&expiry_at, prefs)
+        ));
+    }
+    let market = text(row, "expected_expiry_market");
+    if !market.is_empty() {
+        lines.push(format!("market {market}"));
+    }
+    let note = text(row, "lifecycle_note");
+    if !note.is_empty() {
+        lines.push(note);
+    }
+    lines.join("; ")
 }
 
 fn execution_event_detail(row: &JsonValue) -> String {
@@ -4512,6 +4567,23 @@ mod tests {
             execution_order_price_currency(&json!({"symbol": "ORSTED:xcse", "currency": ""})),
             "DKK"
         );
+    }
+
+    #[test]
+    fn execution_order_lifecycle_formats_day_order_expiry() {
+        let prefs = default_prefs();
+        let row = json!({
+            "order_duration_type": "DayOrder",
+            "expected_expiry_at_utc": "2026-07-09T19:45:00Z",
+            "expected_expiry_market": "New York Stock Exchange",
+            "lifecycle_note": "DayOrder remains live until broker fill, cancel, reject, or exchange-day expiry sync."
+        });
+
+        assert!(execution_order_lifecycle_label(&row, &prefs).contains("2026"));
+        let detail = execution_order_lifecycle_detail(&row, &prefs);
+        assert!(detail.contains("duration DayOrder"));
+        assert!(detail.contains("New York Stock Exchange"));
+        assert!(detail.contains("DayOrder remains live"));
     }
 
     #[test]

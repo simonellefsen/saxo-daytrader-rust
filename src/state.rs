@@ -117,6 +117,22 @@ fn json_text(value: &JsonValue, key: &str) -> String {
     }
 }
 
+fn nested_json_text(value: &JsonValue, path: &[&str]) -> String {
+    let mut current = value;
+    for key in path {
+        let Some(next) = current.get(*key) else {
+            return String::new();
+        };
+        current = next;
+    }
+    match current {
+        JsonValue::String(text) => text.clone(),
+        JsonValue::Number(number) => number.to_string(),
+        JsonValue::Bool(flag) => flag.to_string(),
+        _ => String::new(),
+    }
+}
+
 fn money_mismatch_exceeds_tolerance(
     left: f64,
     right: f64,
@@ -1694,7 +1710,9 @@ impl AppState {
             clamp_limit(limit, 1, 500)
         );
         let mut orders = self.select_json(&sql).await.unwrap_or_default();
+        let market_rows = self.market_exchange_rows();
         for order in &mut orders {
+            enrich_execution_order_lifecycle(order, &market_rows);
             match self.execution_order_attribution(order).await {
                 Ok(attribution) => {
                     if let Some(object) = order.as_object_mut() {
@@ -4851,6 +4869,7 @@ trait BlankStringExt {
     fn if_empty_then<F>(self, fallback: F) -> Option<String>
     where
         F: FnOnce() -> Option<String>;
+    fn non_empty_or_none(self) -> Option<String>;
 }
 
 impl BlankStringExt for String {
@@ -4864,6 +4883,14 @@ impl BlankStringExt for String {
             Some(self)
         }
     }
+
+    fn non_empty_or_none(self) -> Option<String> {
+        if self.trim().is_empty() {
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 
 fn exchange_code(symbol: &str) -> String {
@@ -4871,6 +4898,119 @@ fn exchange_code(symbol: &str) -> String {
         .split_once(':')
         .map(|(_, exchange)| exchange.to_string())
         .unwrap_or_default()
+}
+
+fn enrich_execution_order_lifecycle(order: &mut JsonValue, market_rows: &[JsonValue]) {
+    let status = json_text(order, "status").to_ascii_lowercase();
+    let active_broker_order = matches!(
+        status.as_str(),
+        "submitted_to_broker"
+            | "broker_working"
+            | "broker_amended"
+            | "broker_partially_filled"
+            | "broker_replace_requested"
+            | "broker_cancel_requested"
+    );
+    if !active_broker_order {
+        return;
+    }
+
+    let duration_type = execution_order_duration_type(order);
+    let exchange = exchange_code(
+        order
+            .get("symbol")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default(),
+    )
+    .to_ascii_lowercase();
+    let lifecycle = if duration_type
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("DayOrder"))
+    {
+        market_rows
+            .iter()
+            .find(|row| {
+                row.get("code")
+                    .and_then(JsonValue::as_str)
+                    .map(|code| code.eq_ignore_ascii_case(&exchange))
+                    .unwrap_or(false)
+            })
+            .map(|market| {
+                (
+                    json_text(market, "tradable_close_at_utc")
+                        .non_empty_or_none()
+                        .or_else(|| json_text(market, "session_close_at_utc").non_empty_or_none()),
+                    market
+                        .get("market")
+                        .cloned()
+                        .unwrap_or_else(|| json!(exchange)),
+                    market.get("timezone").cloned().unwrap_or(JsonValue::Null),
+                )
+            })
+    } else {
+        None
+    };
+
+    let Some(object) = order.as_object_mut() else {
+        return;
+    };
+    if let Some(duration_type) = duration_type.as_deref() {
+        object.insert("order_duration_type".to_string(), json!(duration_type));
+    }
+    if let Some((expiry, market, timezone)) = lifecycle {
+        if let Some(expiry) = expiry {
+            object.insert("expected_expiry_at_utc".to_string(), json!(expiry));
+        }
+        object.insert(
+            "expected_expiry_source".to_string(),
+            json!("exchange_calendar"),
+        );
+        object.insert("expected_expiry_market".to_string(), market);
+        object.insert("expected_expiry_timezone".to_string(), timezone);
+        object.insert(
+            "lifecycle_note".to_string(),
+            json!("DayOrder remains live until broker fill, cancel, reject, or exchange-day expiry sync."),
+        );
+    }
+}
+
+fn execution_order_duration_type(order: &JsonValue) -> Option<String> {
+    nested_json_text(
+        order,
+        &[
+            "execution_result_json",
+            "payload",
+            "OrderDuration",
+            "DurationType",
+        ],
+    )
+    .non_empty_or_none()
+    .or_else(|| {
+        nested_json_text(
+            order,
+            &[
+                "execution_result_json",
+                "broker_sync",
+                "broker_payload",
+                "Duration",
+                "DurationType",
+            ],
+        )
+        .non_empty_or_none()
+    })
+    .or_else(|| {
+        nested_json_text(
+            order,
+            &[
+                "execution_result_json",
+                "broker_sync",
+                "broker_payload",
+                "OrderDuration",
+                "DurationType",
+            ],
+        )
+        .non_empty_or_none()
+    })
 }
 
 fn exchange_region(symbol: &str) -> String {
@@ -5122,6 +5262,38 @@ mod tests {
             50.0,
             0.002
         ));
+    }
+
+    #[test]
+    fn enriches_active_day_order_with_exchange_expiry() {
+        let mut order = json!({
+            "symbol": "BAC:xnys",
+            "status": "broker_working",
+            "execution_result_json": {
+                "payload": {
+                    "OrderDuration": {"DurationType": "DayOrder"}
+                }
+            }
+        });
+        let market_rows = vec![json!({
+            "code": "xnys",
+            "market": "New York Stock Exchange",
+            "timezone": "America/New_York",
+            "tradable_close_at_utc": "2026-07-09T19:45:00Z",
+            "session_close_at_utc": "2026-07-09T20:00:00Z"
+        })];
+
+        enrich_execution_order_lifecycle(&mut order, &market_rows);
+
+        assert_eq!(json_text(&order, "order_duration_type"), "DayOrder");
+        assert_eq!(
+            json_text(&order, "expected_expiry_at_utc"),
+            "2026-07-09T19:45:00Z"
+        );
+        assert_eq!(
+            json_text(&order, "expected_expiry_market"),
+            "New York Stock Exchange"
+        );
     }
 
     #[test]

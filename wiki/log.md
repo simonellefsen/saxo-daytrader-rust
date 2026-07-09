@@ -492,3 +492,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The panel reports whether the gate is disabled, clear, or active, plus lookback days, minimum failures, active window, and active quarantine count.
 - Active rows show symbol, action, normalized failure signature, repeated-failure count, expiry time, and the sample error as a row tooltip.
 - Left follow-up roadmap work for Slack activation alerts and operator acknowledgment/override flow.
+
+## [2026-07-09] improvement | Execution DayOrder lifecycle visibility
+
+- Continued the roadmap after investigating BAC:xnys order 204 by adding DayOrder lifecycle metadata to execution-order read models.
+- Active Saxo broker orders now expose duration type, expected exchange-calendar expiry, market, timezone, and a lifecycle note when the order is a broker DayOrder.
+- The Overview execution queue and full Execution table now include an Expiry column, and broker status tooltips include duration/expiry context.
+- Left follow-up roadmap work for stronger broker reconciliation when Saxo open-order lookup and order-activity lookup disagree.

@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-09: Added execution-order DayOrder lifecycle visibility: active broker orders now carry `order_duration_type`, expected exchange-calendar expiry, market/timezone metadata, and the Overview/Execution tables show an Expiry column with lifecycle tooltip detail.
 - 2026-07-09: Surfaced the derived instrument quarantine in the Overview sidebar so active symbol/action blocks, failure signatures, counts, expiry time, and gate config are visible after each Trading Manager run.
 - 2026-07-09: Added a derived instrument quarantine in the Trading Manager: repeated identical hard execution failures over the configured lookback window now skip matching symbol/action candidates before queueing, and active quarantines are recorded in manager-run JSON.
 - 2026-07-08: Repaired the May 18 import cost-basis corruption end to end: verified all 18 position_snapshots/position_lots rows against the exact old-parser corruption of the original Positioner CSV, restored true values, and recomputed 22 SELL ledger rows via FIFO replay (import lot + subsequent buys). Corrected realised P/L since the reset is +69,251 DKK; per-symbol expectancy analytics are now trustworthy.
@@ -121,7 +122,7 @@ These are specific changes that could improve the quality of trading decisions w
 | Instrument capability cache | Cache resolved instrument metadata: UIC, asset type, currency, exchange, tradability, supported order types, tick size, commission/precheck blockers. | Reduce repeated Saxo resolve/precheck failures. |
 | Precheck-only probe job | Periodically precheck watchlist instruments with tiny/safe hypothetical orders where allowed, without placement. | Identify commission/tradability blockers before reports recommend them. |
 | Market-hours validator | Use Saxo exchange calendars and instrument market state together before queueing orders. | Avoid orders in closed or ambiguous sessions. |
-| Order lifecycle reconciler | Reconcile local orders with Saxo open orders, audit activities, fills, expiries, and cancellations every scheduler cycle. | Fewer stuck `broker_working` or stale local statuses. |
+| Order lifecycle reconciler | Reconcile local orders with Saxo open orders, audit activities, fills, expiries, and cancellations every scheduler cycle. The visibility half landed 2026-07-09: active DayOrders now show expected exchange-calendar expiry in overview/execution rows. | Fewer stuck `broker_working` or stale local statuses. |
 | Tick and currency normalizer | Centralize price rounding, display currency, order currency, and estimated DKK conversion. | Prevent DKK/USD display mistakes and tick-size rejections. |
 | Session health preflight | Before reports and queue processing, assert access token, refresh token, account key, and environment are valid. | Avoid false trade failures caused by reauth drift. |
 | Saxo error taxonomy | Map raw Saxo errors into stable categories and remediation hints. | Better UI, alerts, and Hermes learning from execution failures. |
