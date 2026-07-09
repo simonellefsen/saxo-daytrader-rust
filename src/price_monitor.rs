@@ -39,16 +39,24 @@ static RESOLUTION_WARNED: OnceLock<RwLock<std::collections::HashSet<String>>> = 
 pub(crate) struct PriceMonitorConfig {
     pub(crate) enabled: bool,
     pub(crate) poll_interval_minutes: u64,
+    pub(crate) off_hours_poll_interval_minutes: u64,
     reset_hour_local: u32,
     timezone: Tz,
 }
 
 pub(crate) fn price_monitor_config(state: &AppState) -> PriceMonitorConfig {
+    let poll_interval_minutes = yaml_i64(&state.config, &["price_monitor", "poll_interval_minutes"])
+        .unwrap_or(1)
+        .max(1) as u64;
     PriceMonitorConfig {
         enabled: yaml_bool(&state.config, &["price_monitor", "enabled"]).unwrap_or(true),
-        poll_interval_minutes: yaml_i64(&state.config, &["price_monitor", "poll_interval_minutes"])
-            .unwrap_or(1)
-            .max(1) as u64,
+        poll_interval_minutes,
+        off_hours_poll_interval_minutes: yaml_i64(
+            &state.config,
+            &["price_monitor", "off_hours_poll_interval_minutes"],
+        )
+        .unwrap_or(15)
+        .max(poll_interval_minutes as i64) as u64,
         reset_hour_local: yaml_i64(&state.config, &["price_monitor", "reset_hour_local"])
             .unwrap_or(6)
             .clamp(0, 23) as u32,
@@ -97,11 +105,12 @@ pub async fn run_price_monitor_loop(state: AppState) {
     }
     info!(
         poll_interval_minutes = config.poll_interval_minutes,
+        off_hours_poll_interval_minutes = config.off_hours_poll_interval_minutes,
         reset_hour_local = config.reset_hour_local,
         "starting price monitor loop"
     );
     loop {
-        match refresh_portfolio_prices(&state).await {
+        let sleep_minutes = match refresh_portfolio_prices(&state).await {
             Ok(summary) => {
                 let updated = summary
                     .get("updated")
@@ -110,10 +119,22 @@ pub async fn run_price_monitor_loop(state: AppState) {
                 if updated > 0 {
                     info!(updated, "price monitor refreshed portfolio prices");
                 }
+                price_monitor_sleep_minutes(&config, &summary)
             }
-            Err(err) => warn!("price monitor refresh failed: {err:#}"),
-        }
-        sleep(StdDuration::from_secs(config.poll_interval_minutes * 60)).await;
+            Err(err) => {
+                warn!("price monitor refresh failed: {err:#}");
+                config.poll_interval_minutes
+            }
+        };
+        sleep(StdDuration::from_secs(sleep_minutes * 60)).await;
+    }
+}
+
+pub(crate) fn price_monitor_sleep_minutes(config: &PriceMonitorConfig, summary: &JsonValue) -> u64 {
+    if summary.get("status").and_then(JsonValue::as_str) == Some("market_closed") {
+        config.off_hours_poll_interval_minutes
+    } else {
+        config.poll_interval_minutes
     }
 }
 
@@ -780,5 +801,29 @@ market_data:
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0]["symbol"], "NOVOb:xcse");
         assert_eq!(skipped[0]["exchange"], "XCSE");
+    }
+
+    #[test]
+    fn closed_market_summary_uses_off_hours_sleep_interval() {
+        let config = PriceMonitorConfig {
+            enabled: true,
+            poll_interval_minutes: 1,
+            off_hours_poll_interval_minutes: 15,
+            reset_hour_local: 6,
+            timezone: "Europe/Copenhagen".parse().unwrap(),
+        };
+
+        assert_eq!(
+            price_monitor_sleep_minutes(&config, &json!({"status": "market_closed"})),
+            15
+        );
+        assert_eq!(
+            price_monitor_sleep_minutes(&config, &json!({"status": "ok"})),
+            1
+        );
+        assert_eq!(
+            price_monitor_sleep_minutes(&config, &json!({"status": "partial"})),
+            1
+        );
     }
 }

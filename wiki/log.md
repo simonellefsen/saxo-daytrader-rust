@@ -549,3 +549,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Market tab now shows Quote Monitor status, last update time, and skipped known-closed symbols from the latest monitor refresh.
 - The Operations banner Quotes chip now treats `market_closed` monitor summaries as intentional closed-market pauses instead of stale or unknown quote data.
 - Added UI unit coverage for closed-market quote status and skipped-symbol label formatting.
+
+## [2026-07-09] improvement | Price monitor slow off-hours heartbeat
+
+- Added `price_monitor.off_hours_poll_interval_minutes` to local and Kubernetes config, defaulting to 15 minutes while the regular in-hours quote heartbeat remains 1 minute.
+- The Rust price-monitor loop now sleeps on the slower interval only when the latest refresh summary is `market_closed`; normal, partial, and no-session cycles keep the regular interval.
+- Added unit coverage for the closed-market sleep-interval selector.
