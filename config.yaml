@@ -358,6 +358,9 @@ notifications:
     scheduler_stale_minutes: 30
     hermes_eod_reflection_missed_enabled: true
     hermes_eod_reflection_due_hour_utc: 22
+    hermes_pending_experiment_review_enabled: true
+    hermes_pending_experiment_review_stale_days: 14
+    hermes_pending_experiment_review_limit: 10
   alert_suppression:
     enabled: true
     low_cooldown_minutes: 240

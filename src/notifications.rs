@@ -241,6 +241,24 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
         .await?;
     }
 
+    if yaml_bool(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            hermes_pending_experiment_review_alert(state).await?,
+        )
+        .await?;
+    }
+
     Ok(alerts)
 }
 
@@ -797,6 +815,132 @@ async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<S
             "due_hour_utc": due_hour_utc,
         }),
     )))
+}
+
+async fn hermes_pending_experiment_review_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let stale_days = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_stale_days",
+        ],
+    )
+    .unwrap_or(14)
+    .max(1);
+    let limit = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_limit",
+        ],
+    )
+    .unwrap_or(10)
+    .clamp(1, 50);
+    let cutoff = (Utc::now() - Duration::days(stale_days))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let rows = sqlx::query(&format!(
+        "SELECT id, created_at, status, changed_variable_path, hypothesis, source_session_id
+         FROM strategy_experiments
+         WHERE status = 'pending_review'
+           AND created_at <= '{}'
+         ORDER BY created_at ASC, id ASC
+         LIMIT {}",
+        sql_escape(&cutoff),
+        limit
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("checking stale Hermes experiment proposals")?;
+    let rows = rows.iter().map(row_to_json).collect::<Vec<_>>();
+    Ok(hermes_pending_experiment_review_alert_from_rows(
+        &rows,
+        stale_days,
+        Utc::now(),
+    ))
+}
+
+fn hermes_pending_experiment_review_alert_from_rows(
+    rows: &[JsonValue],
+    stale_days: i64,
+    now: DateTime<Utc>,
+) -> Option<SlackAlert> {
+    let pending = rows
+        .iter()
+        .filter(|row| fallback_text(row, "status", "") == "pending_review")
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return None;
+    }
+
+    let mut ids = pending
+        .iter()
+        .map(|row| fallback_text(row, "id", "unknown"))
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let scope = ids.join(",");
+    let oldest_created_at = pending
+        .iter()
+        .filter_map(|row| optional_text(row, "created_at"))
+        .min()
+        .unwrap_or_else(|| "unknown".to_string());
+    let oldest_age_days = parse_utc_time(&oldest_created_at)
+        .map(|created| (now - created).num_days().max(0))
+        .unwrap_or(0);
+    let row_lines = pending
+        .iter()
+        .take(8)
+        .map(|row| hermes_experiment_review_summary_line(row, now))
+        .collect::<Vec<_>>();
+    let variable_paths = pending
+        .iter()
+        .filter_map(|row| optional_text(row, "changed_variable_path"))
+        .collect::<Vec<_>>();
+
+    let mut lines = vec![
+        "Hermes has stale one-variable experiment proposals waiting for operator review."
+            .to_string(),
+        String::new(),
+        format!("Pending stale proposals: {}", pending.len()),
+        format!("Stale threshold: {stale_days}d"),
+        format!("Oldest proposal: {oldest_created_at} ({oldest_age_days}d old)"),
+        String::new(),
+        "Review, reject, or merge duplicates so the self-improvement loop can close.".to_string(),
+    ];
+    if !row_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("Oldest pending proposals:".to_string());
+        lines.extend(row_lines);
+    }
+
+    Some(operational_alert(
+        "hermes_pending_experiment_review",
+        format!("ops:hermes_pending_experiment_review:stale_days:{stale_days}:ids:{scope}"),
+        "medium",
+        "Hermes experiment review overdue".to_string(),
+        lines,
+        json!({
+            "pending_count": pending.len(),
+            "stale_days": stale_days,
+            "oldest_created_at": oldest_created_at,
+            "oldest_age_days": oldest_age_days,
+            "experiment_ids": ids,
+            "changed_variable_paths": variable_paths,
+        }),
+    ))
+}
+
+fn hermes_experiment_review_summary_line(row: &JsonValue, now: DateTime<Utc>) -> String {
+    let id = fallback_text(row, "id", "unknown");
+    let variable = fallback_text(row, "changed_variable_path", "unknown_variable");
+    let created_at = fallback_text(row, "created_at", "unknown");
+    let age_days = parse_utc_time(&created_at)
+        .map(|created| (now - created).num_days().max(0))
+        .unwrap_or(0);
+    let source = fallback_text(row, "source_session_id", "unknown_source");
+    format!("- {id}: {variable}, created {created_at} ({age_days}d), source {source}")
 }
 
 fn operational_alert(
@@ -1382,5 +1526,66 @@ mod tests {
         assert!(alert.message_text.contains("BAC:xnys BUY: broker_rejected"));
         assert!(!alert.message_text.contains("raw broker body"));
         assert!(!alert.payload.to_string().contains("sample_error"));
+    }
+
+    #[test]
+    fn skips_clear_hermes_pending_experiment_review_alert() {
+        let alert = hermes_pending_experiment_review_alert_from_rows(
+            &[json!({
+                "id": "strategy-experiment-new",
+                "created_at": "2026-07-09T18:00:00Z",
+                "status": "approved_paper",
+                "changed_variable_path": "strategy.swing.daily_indicators.min_confluences"
+            })],
+            14,
+            DateTime::parse_from_rfc3339("2026-07-09T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn builds_hermes_pending_experiment_review_alert() {
+        let now = DateTime::parse_from_rfc3339("2026-07-09T20:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let alert = hermes_pending_experiment_review_alert_from_rows(
+            &[
+                json!({
+                    "id": "strategy-experiment-1",
+                    "created_at": "2026-06-16T12:00:00Z",
+                    "status": "pending_review",
+                    "changed_variable_path": "strategy.swing.daily_indicators.min_confluences",
+                    "hypothesis": "raise confluence threshold",
+                    "source_session_id": "weekly-reflection-2026-06-16",
+                    "raw_payload_json": {"must_not": "surface"}
+                }),
+                json!({
+                    "id": "strategy-experiment-2",
+                    "created_at": "2026-06-20T12:00:00Z",
+                    "status": "pending_review",
+                    "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                    "source_session_id": "daily-eod-reflection-2026-06-20"
+                }),
+            ],
+            14,
+            now,
+        )
+        .expect("alert");
+
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(alert.subject, "Hermes experiment review overdue");
+        assert!(alert.scope_key.contains("strategy-experiment-1"));
+        assert!(alert.scope_key.contains("strategy-experiment-2"));
+        assert!(alert.message_text.contains("Pending stale proposals: 2"));
+        assert!(
+            alert
+                .message_text
+                .contains("strategy.swing.daily_indicators.min_confluences")
+        );
+        assert!(!alert.message_text.contains("must_not"));
+        assert!(!alert.payload.to_string().contains("raw_payload"));
     }
 }

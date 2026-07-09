@@ -2281,6 +2281,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     thead {
                         tr {
                             th { "Created" }
+                            th { "Age" }
                             th { "Status" }
                             th { "Variable" }
                             th { "Old Value" }
@@ -3093,6 +3094,12 @@ fn HermesReflectionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 #[component]
 fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = text_or(&row, "status", "pending_review");
+    let (age, age_class) = hermes_experiment_age_status(
+        &status,
+        &text(&row, "created_at"),
+        Utc::now(),
+        HERMES_EXPERIMENT_REVIEW_STALE_DAYS,
+    );
     let status_class = match status.as_str() {
         "approved_paper"
         | "active_paper"
@@ -3107,6 +3114,7 @@ fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     rsx! {
         tr {
             td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { span { class: "{age_class}", "{age}" } }
             td { span { class: "{status_class}", "{status}" } }
             td { "{text(&row, \"changed_variable_path\")}" }
             td { class: "mono", "{short_json(row.get(\"old_value_json\"))}" }
@@ -3187,6 +3195,30 @@ fn text_or(value: &JsonValue, key: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         text
+    }
+}
+
+const HERMES_EXPERIMENT_REVIEW_STALE_DAYS: i64 = 14;
+
+fn hermes_experiment_age_status(
+    status: &str,
+    created_at: &str,
+    now: DateTime<Utc>,
+    stale_days: i64,
+) -> (String, &'static str) {
+    let Some(created_at) = parse_utc_timestamp(created_at) else {
+        return ("n/a".to_string(), "muted");
+    };
+    let age_days = (now - created_at).num_days().max(0);
+    let label = if age_days == 0 {
+        "<1d".to_string()
+    } else {
+        format!("{age_days}d")
+    };
+    if status == "pending_review" && age_days >= stale_days.max(1) {
+        (label, "warn-text")
+    } else {
+        (label, "muted")
     }
 }
 
@@ -4975,6 +5007,30 @@ mod tests {
         assert_eq!(
             execution_order_price_currency(&json!({"symbol": "ORSTED:xcse", "currency": ""})),
             "DKK"
+        );
+    }
+
+    #[test]
+    fn hermes_pending_experiment_age_warns_after_review_threshold() {
+        let now = DateTime::parse_from_rfc3339("2026-07-09T20:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            hermes_experiment_age_status("pending_review", "2026-06-16T12:00:00Z", now, 14),
+            ("23d".to_string(), "warn-text")
+        );
+    }
+
+    #[test]
+    fn hermes_non_pending_experiment_age_stays_neutral() {
+        let now = DateTime::parse_from_rfc3339("2026-07-09T20:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            hermes_experiment_age_status("approved_paper", "2026-06-16T12:00:00Z", now, 14),
+            ("23d".to_string(), "muted")
         );
     }
 

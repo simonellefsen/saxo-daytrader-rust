@@ -576,3 +576,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Markov and daily indicators now keep persisted rows keyed by the original symbol while using the configured alias only for Saxo instrument/chart lookup.
 - Seeded known stale mappings for `COST:xnys`, `HON:xnys`, `LIN:xnys`, and `SHELL:xlon`; execution order resolution is intentionally unaffected.
 - Markov raw payloads record `analysis_symbol` and whether an alias was applied, preserving auditability for decision prompts and operator review.
+
+## [2026-07-09] improvement | Hermes stale experiment review visibility
+
+- Continued the Hermes advisory-loop roadmap by routing stale `pending_review` strategy experiments into scheduler-driven operational Slack alerts.
+- Added `notifications.alerts.hermes_pending_experiment_review_enabled`, `hermes_pending_experiment_review_stale_days`, and `hermes_pending_experiment_review_limit` to local and Kubernetes config.
+- Alerts summarize experiment ids, changed variable paths, created timestamps, ages, and source session ids while omitting raw Hermes payloads and evidence blobs.
+- Added a Hermes dashboard Age column that highlights stale `pending_review` experiment proposals after the same 14-day threshold.
+- This addresses the first slice of unblocking the experiment review queue; weekly digest, auto-expiry, and duplicate merging remain future roadmap items.

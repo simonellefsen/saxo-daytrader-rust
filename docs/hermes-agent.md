@@ -232,6 +232,25 @@ Supported lifecycle transitions:
 - `active_sim` -> `ready_for_promotion`, `sim_failed`, or `rejected`
 - `ready_for_promotion` -> `promoted` or `rejected`
 
+The scheduler-driven operational Slack alert path also watches for stale
+`pending_review` proposals. Configure it with:
+
+```yaml
+notifications:
+  alerts:
+    hermes_pending_experiment_review_enabled: true
+    hermes_pending_experiment_review_stale_days: 14
+    hermes_pending_experiment_review_limit: 10
+```
+
+The alert includes experiment ids, variable paths, created timestamps, ages,
+and source session ids only. It intentionally omits raw Hermes payloads,
+evidence blobs, broker payloads, and secrets.
+
+The Hermes dashboard also shows each proposal's age in the Experiment Proposals
+table and highlights `pending_review` rows after the same 14-day review
+threshold.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.
