@@ -5,7 +5,7 @@ use sqlx::Row;
 
 use crate::{
     config::{yaml_bool, yaml_i64, yaml_string},
-    db::{row_to_json, sql_escape, value_f64},
+    db::{row_to_json, sql_escape, value_f64, value_i64},
     state::AppState,
 };
 
@@ -176,6 +176,15 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
     .unwrap_or(true)
     {
         maybe_push_unsent(state, &mut alerts, scheduler_stale_alert(state).await?).await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "integrity_alert_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(state, &mut alerts, integrity_alert(state).await?).await?;
     }
 
     if yaml_bool(
@@ -395,6 +404,130 @@ async fn scheduler_stale_alert(state: &AppState) -> Result<Option<SlackAlert>> {
             "last_cycle_status": last_cycle_status,
         }),
     )))
+}
+
+async fn integrity_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let overview = state
+        .overview_payload()
+        .await
+        .context("building overview payload for integrity alert")?;
+    Ok(overview
+        .get("integrity")
+        .and_then(integrity_alert_from_payload))
+}
+
+fn integrity_alert_from_payload(integrity: &JsonValue) -> Option<SlackAlert> {
+    let mismatches = json_array(integrity, "mismatches");
+    let warnings = json_array(integrity, "warnings");
+    let expiry_pending_orders = json_array(integrity, "expiry_pending_orders");
+    if mismatches.is_empty() && warnings.is_empty() && expiry_pending_orders.is_empty() {
+        return None;
+    }
+
+    let mismatch_count = mismatches.len();
+    let warning_count = warnings.len();
+    let expiry_pending_count = expiry_pending_orders.len();
+    let issue_codes = integrity_issue_codes(&mismatches, &warnings);
+    let issue_code_text = if issue_codes.is_empty() {
+        "none".to_string()
+    } else {
+        issue_codes.join(", ")
+    };
+    let expiry_order_ids = expiry_pending_orders
+        .iter()
+        .map(|order| value_i64(order, "id"))
+        .filter(|id| *id > 0)
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>();
+    let expiry_scope = if expiry_order_ids.is_empty() {
+        "none".to_string()
+    } else {
+        expiry_order_ids.join(",")
+    };
+    let severity = if mismatch_count > 0 { "high" } else { "medium" };
+    let subject = if mismatch_count > 0 {
+        "Overview integrity mismatch"
+    } else if expiry_pending_count > 0 {
+        "DayOrder expiry sync pending"
+    } else {
+        "Overview integrity warning"
+    };
+    let checked_at = fallback_text(integrity, "checked_at", "unknown");
+    let order_lines = expiry_pending_orders
+        .iter()
+        .take(5)
+        .map(|order| integrity_order_summary(order))
+        .collect::<Vec<_>>();
+    let mut lines = vec![
+        "Overview integrity checks reported issues.".to_string(),
+        String::new(),
+        format!("Severity: {severity}"),
+        format!("Mismatches: {mismatch_count}"),
+        format!("Warnings: {warning_count}"),
+        format!("Expiry-pending DayOrders: {expiry_pending_count}"),
+        format!("Issue codes: {issue_code_text}"),
+        format!("Checked at: {checked_at}"),
+    ];
+    if !order_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("Orders needing broker sync confirmation:".to_string());
+        lines.extend(order_lines);
+    }
+
+    let scope_codes = if issue_codes.is_empty() {
+        "no-code".to_string()
+    } else {
+        issue_codes.join(",")
+    };
+    Some(operational_alert(
+        "overview_integrity",
+        format!(
+            "ops:overview_integrity:{severity}:codes:{scope_codes}:expiry:{expiry_scope}:counts:{mismatch_count}:{warning_count}:{expiry_pending_count}"
+        ),
+        severity,
+        subject.to_string(),
+        lines,
+        json!({
+            "mismatch_count": mismatch_count,
+            "warning_count": warning_count,
+            "expiry_pending_count": expiry_pending_count,
+            "issue_codes": issue_codes,
+            "expiry_pending_order_ids": expiry_order_ids,
+            "checked_at": checked_at,
+        }),
+    ))
+}
+
+fn json_array<'a>(value: &'a JsonValue, key: &str) -> Vec<&'a JsonValue> {
+    value
+        .get(key)
+        .and_then(JsonValue::as_array)
+        .map(|rows| rows.iter().collect())
+        .unwrap_or_default()
+}
+
+fn integrity_issue_codes(mismatches: &[&JsonValue], warnings: &[&JsonValue]) -> Vec<String> {
+    let mut codes = mismatches
+        .iter()
+        .chain(warnings.iter())
+        .filter_map(|issue| optional_text(issue, "code"))
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    codes
+}
+
+fn integrity_order_summary(order: &JsonValue) -> String {
+    let id = value_i64(order, "id");
+    let symbol = fallback_text(order, "symbol", "unknown");
+    let status = fallback_text(order, "status", "unknown");
+    let action = fallback_text(order, "action", "n/a");
+    let expiry = fallback_text(order, "expected_expiry_at_utc", "unknown");
+    if id > 0 {
+        format!("- #{id} {symbol} {action} {status}, expected expiry {expiry}")
+    } else {
+        format!("- {symbol} {action} {status}, expected expiry {expiry}")
+    }
 }
 
 async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<SlackAlert>> {
@@ -798,5 +931,66 @@ mod tests {
             "2026-07-04T12:00:00Z"
         );
         assert!(parse_utc_time("not-a-timestamp").is_none());
+    }
+
+    #[test]
+    fn skips_clear_integrity_payloads() {
+        let alert = integrity_alert_from_payload(&json!({
+            "warnings": [],
+            "mismatches": [],
+            "expiry_pending_orders": [],
+            "checked_at": "2026-07-09T16:00:00Z"
+        }));
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn builds_day_order_expiry_integrity_alert() {
+        let alert = integrity_alert_from_payload(&json!({
+            "warnings": [{
+                "code": "day_order_expiry_sync_pending",
+                "severity": "warning",
+                "message": "One or more Saxo DayOrders passed expected exchange-calendar expiry."
+            }],
+            "mismatches": [],
+            "expiry_pending_orders": [{
+                "id": 204,
+                "symbol": "BAC:xnys",
+                "action": "BUY",
+                "status": "broker_working",
+                "expected_expiry_at_utc": "2026-07-09T20:00:00Z"
+            }],
+            "checked_at": "2026-07-09T20:10:00Z"
+        }))
+        .expect("alert");
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(alert.subject, "DayOrder expiry sync pending");
+        assert!(alert.scope_key.contains("day_order_expiry_sync_pending"));
+        assert!(alert.scope_key.contains("expiry:204"));
+        assert!(
+            alert
+                .message_text
+                .contains("#204 BAC:xnys BUY broker_working")
+        );
+    }
+
+    #[test]
+    fn builds_high_severity_integrity_mismatch_alert() {
+        let alert = integrity_alert_from_payload(&json!({
+            "warnings": [],
+            "mismatches": [{
+                "code": "portfolio_identity_mismatch",
+                "severity": "error",
+                "message": "Portfolio total does not match invested value plus cash."
+            }],
+            "expiry_pending_orders": [],
+            "checked_at": "2026-07-09T16:00:00Z"
+        }))
+        .expect("alert");
+        assert_eq!(alert.severity, "high");
+        assert_eq!(alert.subject, "Overview integrity mismatch");
+        assert!(alert.message_text.contains("Mismatches: 1"));
+        assert!(alert.scope_key.contains("portfolio_identity_mismatch"));
     }
 }

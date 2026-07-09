@@ -347,6 +347,7 @@ notifications:
     execution_failure_burst_window_hours: 24
     scheduler_stale_enabled: true
     scheduler_stale_minutes: 30
+    integrity_alert_enabled: true
     hermes_eod_reflection_missed_enabled: true
     hermes_eod_reflection_due_hour_utc: 22
   alert_suppression:
