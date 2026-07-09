@@ -583,36 +583,62 @@ async fn lookup_instrument(
     symbol: &str,
 ) -> Result<SaxoInstrument> {
     let parts = symbol_parts(symbol);
-    let requested_symbol = if parts.exchange.is_empty() {
-        parts.base.clone()
-    } else {
-        format!("{}:{}", parts.base, parts.exchange)
-    };
-    let mut attempts = vec![
-        (
-            "symbol".to_string(),
-            vec![("Keywords", requested_symbol.clone())],
+    let requested_symbol = requested_symbol(&parts);
+    let mut attempts = Vec::new();
+    let mut seen_attempts = HashSet::new();
+    for variant in symbol_lookup_variants(&parts) {
+        push_lookup_attempt(
+            &mut attempts,
+            &mut seen_attempts,
+            if variant.eq_ignore_ascii_case(&requested_symbol) {
+                "symbol"
+            } else {
+                "symbol_variant"
+            },
+            vec![("Keywords", variant)],
             true,
-        ),
-        (
-            "exchange".to_string(),
+        );
+    }
+    for variant in base_lookup_variants(&parts.base) {
+        push_lookup_attempt(
+            &mut attempts,
+            &mut seen_attempts,
+            if variant == parts.base {
+                "exchange"
+            } else {
+                "exchange_variant"
+            },
             vec![
-                ("Keywords", parts.base.clone()),
+                ("Keywords", variant),
                 (
                     "ExchangeId",
                     exchange_id_for_suffix(&parts.exchange).to_string(),
                 ),
             ],
             true,
-        ),
-        (
-            "base".to_string(),
-            vec![("Keywords", parts.base.clone())],
-            true,
-        ),
-    ];
+        );
+    }
     if let Some(isin) = latest_position_isin(state, symbol).await? {
-        attempts.insert(2, ("isin".to_string(), vec![("Keywords", isin)], false));
+        push_lookup_attempt(
+            &mut attempts,
+            &mut seen_attempts,
+            "isin",
+            vec![("Keywords", isin)],
+            false,
+        );
+    }
+    for variant in base_lookup_variants(&parts.base) {
+        push_lookup_attempt(
+            &mut attempts,
+            &mut seen_attempts,
+            if variant == parts.base {
+                "base"
+            } else {
+                "base_variant"
+            },
+            vec![("Keywords", variant)],
+            true,
+        );
     }
 
     for (method, params, require_symbol_match) in attempts {
@@ -1250,6 +1276,65 @@ fn symbol_parts(symbol: &str) -> SymbolParts {
     SymbolParts { base, exchange }
 }
 
+fn requested_symbol(parts: &SymbolParts) -> String {
+    if parts.exchange.is_empty() {
+        parts.base.clone()
+    } else {
+        format!("{}:{}", parts.base, parts.exchange)
+    }
+}
+
+fn base_lookup_variants(base: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+    push_unique_string(&mut variants, base.trim().to_uppercase());
+    let Some((prefix, share_class)) = base.trim().split_once('-') else {
+        return variants;
+    };
+    let share_class = share_class.trim();
+    if prefix.trim().is_empty() || share_class.len() != 1 || !share_class.is_ascii() {
+        return variants;
+    }
+    let mut chars = share_class.chars();
+    let class = chars.next().unwrap().to_ascii_lowercase();
+    push_unique_string(
+        &mut variants,
+        format!("{}{}", prefix.trim().to_uppercase(), class),
+    );
+    variants
+}
+
+fn symbol_lookup_variants(parts: &SymbolParts) -> Vec<String> {
+    base_lookup_variants(&parts.base)
+        .into_iter()
+        .map(|base| {
+            if parts.exchange.is_empty() {
+                base
+            } else {
+                format!("{base}:{}", parts.exchange)
+            }
+        })
+        .collect()
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn push_lookup_attempt(
+    attempts: &mut Vec<(String, Vec<(&'static str, String)>, bool)>,
+    seen: &mut HashSet<String>,
+    method: &str,
+    params: Vec<(&'static str, String)>,
+    require_symbol_match: bool,
+) {
+    let signature = format!("{require_symbol_match}:{params:?}");
+    if seen.insert(signature) {
+        attempts.push((method.to_string(), params, require_symbol_match));
+    }
+}
+
 fn exchange_id_for_suffix(exchange: &str) -> &'static str {
     match exchange.to_lowercase().as_str() {
         "xnas" => "XNAS",
@@ -1297,14 +1382,30 @@ fn candidate_score(
 ) -> (i32, i32, i32) {
     let candidate_symbol = text(candidate, "Symbol").to_uppercase();
     let candidate_exchange = text(candidate, "ExchangeId").to_uppercase();
-    let exact_symbol = i32::from(candidate_symbol == requested_symbol.to_uppercase());
+    let requested_variants = symbol_lookup_variants(parts)
+        .into_iter()
+        .map(|value| value.to_uppercase())
+        .collect::<HashSet<_>>();
+    let base_variants = base_lookup_variants(&parts.base)
+        .into_iter()
+        .map(|value| value.to_uppercase())
+        .collect::<HashSet<_>>();
+    let exact_symbol = i32::from(
+        candidate_symbol == requested_symbol.to_uppercase()
+            || requested_variants.contains(&candidate_symbol),
+    );
     let exchange_match = i32::from(
         exchange_aliases(&parts.exchange)
             .iter()
             .any(|alias| candidate_exchange == *alias)
             || candidate_symbol.ends_with(&format!(":{}", parts.exchange.to_uppercase())),
     );
-    let exact_base = i32::from(candidate_symbol.split(':').next().unwrap_or("") == parts.base);
+    let exact_base = i32::from(
+        candidate_symbol
+            .split(':')
+            .next()
+            .is_some_and(|base| base == parts.base || base_variants.contains(base)),
+    );
     let stock_preferred = i32::from(
         candidate
             .get("TradableAs")
@@ -1321,10 +1422,20 @@ fn candidate_matches_requested(
 ) -> bool {
     let candidate_symbol = text(candidate, "Symbol").to_uppercase();
     let candidate_base = candidate_symbol.split(':').next().unwrap_or("");
-    if candidate_symbol == requested_symbol.to_uppercase() {
+    let requested_variants = symbol_lookup_variants(parts)
+        .into_iter()
+        .map(|value| value.to_uppercase())
+        .collect::<HashSet<_>>();
+    if candidate_symbol == requested_symbol.to_uppercase()
+        || requested_variants.contains(&candidate_symbol)
+    {
         return true;
     }
-    if candidate_base != parts.base {
+    let base_variants = base_lookup_variants(&parts.base)
+        .into_iter()
+        .map(|value| value.to_uppercase())
+        .collect::<HashSet<_>>();
+    if candidate_base != parts.base && !base_variants.contains(candidate_base) {
         return false;
     }
     if parts.exchange.is_empty() {
@@ -1638,5 +1749,35 @@ mod tests {
         assert!(!is_negative_cacheable_lookup_error(&anyhow!(
             "HTTP 429 from Saxo reference lookup"
         )));
+    }
+
+    #[test]
+    fn share_class_symbol_variants_match_saxo_compact_symbols() {
+        let requested = symbol_parts("CARL-B:xcse");
+        assert_eq!(
+            symbol_lookup_variants(&requested),
+            vec!["CARL-B:xcse".to_string(), "CARLb:xcse".to_string()]
+        );
+        let compact = json!({
+            "Symbol": "CARLb:xcse",
+            "ExchangeId": "XCSE",
+            "TradableAs": ["Stock"]
+        });
+        let wrong_exchange = json!({
+            "Symbol": "CARLb:xsto",
+            "ExchangeId": "XSTO",
+            "TradableAs": ["Stock"]
+        });
+
+        assert!(candidate_matches_requested(
+            &compact,
+            "CARL-B:xcse",
+            &requested
+        ));
+        assert!(!candidate_matches_requested(
+            &wrong_exchange,
+            "CARL-B:xcse",
+            &requested
+        ));
     }
 }

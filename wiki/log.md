@@ -562,3 +562,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Markov and daily-indicator instrument resolution now skip symbols with a fresh cached no-tradable-match result until the configured retry window expires.
 - The cache defaults to a 7-day retry interval via `strategy.markov.instrument_negative_cache_retry_days`; stored broker/position instruments still bypass and clear cached negative rows.
 - This reduces repeated daily dead-end Saxo reference lookups while leaving a slow retry path for symbols that later become available in SIM.
+
+## [2026-07-09] improvement | Saxo share-class symbol variants
+
+- Continued the Markov coverage roadmap by adding deterministic share-class symbol variants to the shared Markov/daily-indicator Saxo resolver and the Saxo execution resolver.
+- Symbols with a single-letter share class, such as `CARL-B:xcse`, `VOLV-B:xsto`, and `BRK-B:xnys`, now also try and accept Saxo's compact `CARLb`, `VOLVb`, and `BRKb` symbol shape.
+- The matcher still requires the requested exchange alias, so the variant does not silently resolve a share class on the wrong venue.
+- Added Rust regression coverage for Markov and execution resolver candidate matching.
