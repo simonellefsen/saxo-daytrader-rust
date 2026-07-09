@@ -1589,16 +1589,26 @@ async fn update_order_broker_status(
     } else {
         ", error_text = NULL".to_string()
     };
+    let currency_sql = match resolve_order_currency(state, order, broker_payload(broker_state))
+        .await
+    {
+        Ok(currency) if !currency.trim().is_empty() => format!(
+            ", currency = CASE WHEN currency IS NULL OR TRIM(currency) = '' THEN '{}' ELSE currency END",
+            sql_escape(currency.trim())
+        ),
+        _ => String::new(),
+    };
     let sql = format!(
         "UPDATE execution_orders
          SET status = '{}',
              execution_result_json = '{}'
-             {}{}
+             {}{}{}
          WHERE id = {}",
         sql_escape(status),
         sql_escape(&payload_text),
         ledger_sql,
         error_sql,
+        currency_sql,
         order_id
     );
     sqlx::query(&sql)
