@@ -499,3 +499,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Active Saxo broker orders now expose duration type, expected exchange-calendar expiry, market, timezone, and a lifecycle note when the order is a broker DayOrder.
 - The Overview execution queue and full Execution table now include an Expiry column, and broker status tooltips include duration/expiry context.
 - Left follow-up roadmap work for stronger broker reconciliation when Saxo open-order lookup and order-activity lookup disagree.
+
+## [2026-07-09] improvement | Saxo broker-sync provenance
+
+- Continued the order lifecycle reconciler by persisting broker-sync provenance for Saxo orders.
+- Broker sync now records whether the current broker state came from `/port/v1/orders`, the `/cs/v1/audit/orderactivities` fallback, or a probe where both lookups returned no current state.
+- Missing lookup probes create an auditable `broker_sync_not_found` execution event and leave the local order status unchanged pending later reconciliation.
+- Execution status and lifecycle tooltips now show the broker visibility state and fallback note so activity-only `broker_working` rows are not confused with directly visible open orders.

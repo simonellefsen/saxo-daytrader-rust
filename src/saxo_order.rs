@@ -329,13 +329,29 @@ async fn sync_one_broker_order(
     let Some(broker_state) =
         fetch_broker_order_state(state, session, client_key, &broker_order_id).await?
     else {
+        let missing_state = broker_order_lookup_miss_state(&broker_order_id);
+        record_broker_order_event(
+            state,
+            order,
+            &broker_order_id,
+            "broker_sync_not_found",
+            Some("NotFound"),
+            None,
+            None,
+            None,
+            &missing_state,
+        )
+        .await?;
+        let current_status = order_text(order, "status");
+        update_order_broker_status(state, order, &current_status, &missing_state, None).await?;
         return Ok(json!({
             "status": "not_found",
-            "updated": false,
+            "updated": true,
             "fills": 0,
             "order_id": order_id,
             "symbol": symbol,
             "broker_order_id": broker_order_id,
+            "broker_visibility": "not_found",
             "quantity_changed": false,
             "price_changed": false,
         }));
@@ -475,6 +491,9 @@ async fn fetch_broker_order_state(
     {
         return Ok(Some(json!({
             "source": "port/v1/orders",
+            "broker_visibility": "open_order",
+            "open_order_lookup": "found",
+            "activity_lookup": "skipped",
             "broker_payload": open_order,
             "last_sync_at": now_iso()
         })));
@@ -503,10 +522,27 @@ async fn fetch_broker_order_state(
     Ok(activity.map(|broker_payload| {
         json!({
             "source": "cs/v1/audit/orderactivities",
+            "broker_visibility": "activity_only",
+            "open_order_lookup": "not_found",
+            "activity_lookup": "found",
+            "broker_visibility_note": "Saxo open-order lookup returned no active order; using latest audit activity as broker status fallback.",
             "broker_payload": broker_payload,
             "last_sync_at": now_iso()
         })
     }))
+}
+
+fn broker_order_lookup_miss_state(broker_order_id: &str) -> JsonValue {
+    json!({
+        "source": "broker_sync_lookup",
+        "broker_visibility": "not_found",
+        "open_order_lookup": "not_found",
+        "activity_lookup": "not_found",
+        "broker_visibility_note": "Saxo returned no active open order and no latest audit activity for this broker order id; local status is left unchanged pending later reconciliation.",
+        "broker_order_id": broker_order_id,
+        "broker_payload": {"Status": "NotFound"},
+        "last_sync_at": now_iso()
+    })
 }
 
 async fn claim_order_for_submission(state: &AppState, order_id: i64) -> Result<bool> {
@@ -2640,6 +2676,37 @@ execution:
         assert_eq!(
             local_terminal_status(&Some("Rejected".to_string())),
             "execution_failed"
+        );
+    }
+
+    #[test]
+    fn broker_order_lookup_miss_state_preserves_local_reconciliation_context() {
+        let state = broker_order_lookup_miss_state("5039132483");
+
+        assert_eq!(
+            state
+                .get("broker_visibility")
+                .and_then(JsonValue::as_str)
+                .unwrap_or(""),
+            "not_found"
+        );
+        assert_eq!(
+            state
+                .get("open_order_lookup")
+                .and_then(JsonValue::as_str)
+                .unwrap_or(""),
+            "not_found"
+        );
+        assert_eq!(
+            state
+                .get("activity_lookup")
+                .and_then(JsonValue::as_str)
+                .unwrap_or(""),
+            "not_found"
+        );
+        assert_eq!(
+            broker_status_text(broker_payload(&state)).as_deref(),
+            Some("NotFound")
         );
     }
 

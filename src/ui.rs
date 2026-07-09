@@ -3652,6 +3652,16 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
     }
+    let broker_visibility = execution_broker_sync_text(row, "broker_visibility");
+    if !broker_visibility.is_empty() {
+        lines.push(format!("broker visibility: {broker_visibility}"));
+    }
+    let broker_visibility_note = execution_broker_sync_text(row, "broker_visibility_note");
+    if !broker_visibility_note.is_empty() {
+        lines.push(format!(
+            "broker visibility detail: {broker_visibility_note}"
+        ));
+    }
     if !detail.is_empty() {
         lines.push(format!("detail: {detail}"));
     } else if status == "broker_working" {
@@ -3673,6 +3683,17 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
         ));
     }
     lines.join("\n")
+}
+
+fn execution_broker_sync_text(row: &JsonValue, key: &str) -> String {
+    row.get("execution_result_json")
+        .and_then(|value| value.get("broker_sync"))
+        .and_then(|value| value.get(key))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn execution_order_lifecycle_label(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
@@ -3703,6 +3724,14 @@ fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) 
     let market = text(row, "expected_expiry_market");
     if !market.is_empty() {
         lines.push(format!("market {market}"));
+    }
+    let broker_visibility = execution_broker_sync_text(row, "broker_visibility");
+    if !broker_visibility.is_empty() {
+        lines.push(format!("broker visibility {broker_visibility}"));
+    }
+    let broker_visibility_note = execution_broker_sync_text(row, "broker_visibility_note");
+    if !broker_visibility_note.is_empty() {
+        lines.push(broker_visibility_note);
     }
     let note = text(row, "lifecycle_note");
     if !note.is_empty() {
@@ -4584,6 +4613,24 @@ mod tests {
         assert!(detail.contains("duration DayOrder"));
         assert!(detail.contains("New York Stock Exchange"));
         assert!(detail.contains("DayOrder remains live"));
+    }
+
+    #[test]
+    fn execution_status_tooltip_includes_broker_visibility() {
+        let row = json!({
+            "status": "broker_working",
+            "broker_order_id": "5039132483",
+            "execution_result_json": {
+                "broker_sync": {
+                    "broker_visibility": "activity_only",
+                    "broker_visibility_note": "Saxo open-order lookup returned no active order; using latest audit activity as broker status fallback."
+                }
+            }
+        });
+
+        let tooltip = execution_status_tooltip(&row, "Broker working", "");
+        assert!(tooltip.contains("broker visibility: activity_only"));
+        assert!(tooltip.contains("audit activity"));
     }
 
     #[test]
