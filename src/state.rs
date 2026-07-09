@@ -2709,6 +2709,35 @@ impl AppState {
             .unwrap_or(JsonValue::Null))
     }
 
+    pub async fn find_duplicate_hermes_experiment(
+        &self,
+        changed_variable_path: &str,
+    ) -> Result<Option<JsonValue>> {
+        let changed_variable_path =
+            normalize_hermes_experiment_variable_path(changed_variable_path);
+        if changed_variable_path.is_empty() {
+            return Ok(None);
+        }
+        let active_statuses = HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES
+            .iter()
+            .copied()
+            .filter(|status| hermes_experiment_status_blocks_duplicate(status))
+            .map(|status| format!("'{}'", sql_escape(status)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.first_json(&format!(
+            "SELECT id, created_at, status, changed_variable_path, hypothesis, source_session_id
+             FROM strategy_experiments
+             WHERE LOWER(changed_variable_path) = LOWER('{}')
+               AND status IN ({})
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            sql_escape(&changed_variable_path),
+            active_statuses
+        ))
+        .await
+    }
+
     pub async fn hermes_decision_advice_by_session(
         &self,
         source_session_id: &str,
@@ -5003,6 +5032,25 @@ impl BlankStringExt for String {
     }
 }
 
+const HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES: &[&str] = &[
+    "pending_review",
+    "approved_paper",
+    "active_paper",
+    "approved_sim",
+    "active_sim",
+    "ready_for_promotion",
+];
+
+fn normalize_hermes_experiment_variable_path(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn hermes_experiment_status_blocks_duplicate(status: &str) -> bool {
+    HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(status.trim()))
+}
+
 fn exchange_code(symbol: &str) -> String {
     symbol
         .split_once(':')
@@ -5749,6 +5797,41 @@ analysis_windows:
         assert_eq!(
             hermes_experiment_next_status("pending_review", "promote"),
             None
+        );
+    }
+
+    #[test]
+    fn hermes_experiment_duplicate_statuses_are_active_or_pending_only() {
+        for status in [
+            "pending_review",
+            "approved_paper",
+            "active_paper",
+            "approved_sim",
+            "active_sim",
+            "ready_for_promotion",
+        ] {
+            assert!(hermes_experiment_status_blocks_duplicate(status));
+        }
+
+        for status in [
+            "rejected",
+            "paper_failed",
+            "sim_failed",
+            "failed",
+            "promoted",
+            "",
+        ] {
+            assert!(!hermes_experiment_status_blocks_duplicate(status));
+        }
+    }
+
+    #[test]
+    fn normalizes_hermes_experiment_variable_paths_for_duplicate_lookup() {
+        assert_eq!(
+            normalize_hermes_experiment_variable_path(
+                " Strategy.Swing.Daily_Indicators.Min_Confluences "
+            ),
+            "strategy.swing.daily_indicators.min_confluences"
         );
     }
 }

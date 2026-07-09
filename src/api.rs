@@ -764,6 +764,30 @@ async fn create_hermes_experiment(
         )
             .into_response();
     }
+    match state
+        .find_duplicate_hermes_experiment(&request.changed_variable_path)
+        .await
+    {
+        Ok(Some(existing)) => {
+            warn!(
+                changed_variable_path = %request.changed_variable_path,
+                existing_experiment_id = %existing.get("id").and_then(JsonValue::as_str).unwrap_or(""),
+                "Hermes duplicate experiment proposal rejected"
+            );
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "status": "duplicate",
+                    "detail": "An active or pending Hermes experiment already covers this changed_variable_path. Record the candidate in reflection proposed_actions instead of creating a duplicate proposal.",
+                    "changed_variable_path": request.changed_variable_path.trim(),
+                    "existing_experiment": existing
+                })),
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(err) => return json_result(Err(err)),
+    }
     match state.record_hermes_experiment(&request).await {
         Ok(value) => {
             info!(

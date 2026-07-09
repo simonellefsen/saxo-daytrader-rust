@@ -584,3 +584,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Alerts summarize experiment ids, changed variable paths, created timestamps, ages, and source session ids while omitting raw Hermes payloads and evidence blobs.
 - Added a Hermes dashboard Age column that highlights stale `pending_review` experiment proposals after the same 14-day threshold.
 - This addresses the first slice of unblocking the experiment review queue; weekly digest, auto-expiry, and duplicate merging remain future roadmap items.
+
+## [2026-07-10] improvement | Hermes duplicate proposal guard
+
+- Continued the Hermes experiment review queue roadmap by adding backend duplicate detection before inserting a new `strategy_experiments` proposal.
+- The protected Hermes create-proposal endpoint now returns `409 Conflict` when an active or pending experiment already covers the same trimmed, case-insensitive `changed_variable_path`.
+- Terminal statuses (`rejected`, `paper_failed`, `sim_failed`, `failed`) and `promoted` do not block future proposals for the same variable, preserving the ability to run later evidence-backed experiments.
+- Near-duplicate semantic merging, weekly digest, and auto-expiry remain future work.

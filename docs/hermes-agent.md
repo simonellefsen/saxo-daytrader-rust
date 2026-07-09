@@ -251,6 +251,11 @@ The Hermes dashboard also shows each proposal's age in the Experiment Proposals
 table and highlights `pending_review` rows after the same 14-day review
 threshold.
 
+The create-proposal endpoint rejects a new proposal with `409 Conflict` when an
+active or pending experiment already uses the same `changed_variable_path`
+(case-insensitive after trimming). Hermes should then record the duplicate
+candidate in reflection `proposed_actions` instead of retrying the insert.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.
