@@ -521,3 +521,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Integrity alerts now cover high-severity overview mismatches and medium-severity warnings, including overdue DayOrders that need broker-sync confirmation.
 - Alert scope keys are stable across scheduler cycles for the same issue set and expiry-pending order ids, so persistent conditions do not spam Slack every heartbeat.
 - Added `notifications.alerts.integrity_alert_enabled` to the Kubernetes config and unit coverage for clear, warning, and mismatch integrity payloads.
+
+## [2026-07-09] improvement | Instrument quarantine operational Slack alerts
+
+- Continued the instrument-quarantine roadmap by routing active derived quarantines into the existing scheduler-driven operational Slack alert path.
+- Alerts summarize blocked symbol/action/failure-signature rows, failure counts, latest failure time, and quarantine expiry without including raw broker error payloads.
+- Alert scope keys are based on the active quarantine set, so the same active set is sent once while newly activated signatures or count changes can page the operator.
+- Added `notifications.alerts.instrument_quarantine_alert_enabled` to the Kubernetes config and unit coverage for disabled, clear, and active quarantine payloads.

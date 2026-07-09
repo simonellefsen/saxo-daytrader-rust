@@ -171,6 +171,24 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
 
     if yaml_bool(
         &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "instrument_quarantine_alert_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            instrument_quarantine_alert(state).await?,
+        )
+        .await?;
+    }
+
+    if yaml_bool(
+        &state.config,
         &["notifications", "alerts", "scheduler_stale_enabled"],
     )
     .unwrap_or(true)
@@ -346,6 +364,108 @@ async fn execution_failure_burst_alert(state: &AppState) -> Result<Option<SlackA
             "latest_created_at": latest_created_at,
         }),
     )))
+}
+
+async fn instrument_quarantine_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let row = sqlx::query(
+        "SELECT id, created_at, status, manager_json
+         FROM trading_manager_runs
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .context("checking latest Trading Manager quarantine state")?;
+    Ok(row
+        .as_ref()
+        .map(row_to_json)
+        .and_then(|run| instrument_quarantine_alert_from_run(&run)))
+}
+
+fn instrument_quarantine_alert_from_run(run: &JsonValue) -> Option<SlackAlert> {
+    let quarantine = run
+        .get("manager_json")
+        .and_then(|value| value.get("instrument_quarantine"))?;
+    if !quarantine
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let active = json_array(quarantine, "active");
+    let active_count = value_i64(quarantine, "active_count").max(active.len() as i64);
+    if active_count <= 0 || active.is_empty() {
+        return None;
+    }
+
+    let mut active_keys = active
+        .iter()
+        .map(|row| {
+            format!(
+                "{}:{}:{}",
+                fallback_text(row, "symbol", "unknown"),
+                fallback_text(row, "action", "n/a"),
+                fallback_text(row, "signature", "unknown")
+            )
+        })
+        .collect::<Vec<_>>();
+    active_keys.sort();
+    active_keys.dedup();
+    let active_scope = active_keys.join("|");
+    let run_id = value_i64(run, "id");
+    let run_created_at = fallback_text(run, "created_at", "unknown");
+    let lookback_days = value_i64(quarantine, "lookback_days");
+    let min_failures = value_i64(quarantine, "min_failures");
+    let active_days = value_i64(quarantine, "active_days");
+    let row_lines = active
+        .iter()
+        .take(8)
+        .map(|row| instrument_quarantine_summary_line(row))
+        .collect::<Vec<_>>();
+    let mut lines = vec![
+        "Derived instrument quarantine is active.".to_string(),
+        String::new(),
+        format!("Active quarantines: {active_count}"),
+        format!("Lookback: {lookback_days}d"),
+        format!("Minimum matching failures: {min_failures}"),
+        format!("Active window: {active_days}d"),
+        format!("Latest manager run: #{run_id} at {run_created_at}"),
+    ];
+    if !row_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("Blocked symbol/action signatures:".to_string());
+        lines.extend(row_lines);
+    }
+
+    Some(operational_alert(
+        "instrument_quarantine_active",
+        format!("ops:instrument_quarantine_active:active:{active_scope}:count:{active_count}"),
+        "medium",
+        "Instrument quarantine active".to_string(),
+        lines,
+        json!({
+            "active_count": active_count,
+            "active_keys": active_keys,
+            "lookback_days": lookback_days,
+            "min_failures": min_failures,
+            "active_days": active_days,
+            "latest_manager_run_id": run_id,
+            "latest_manager_run_created_at": run_created_at,
+        }),
+    ))
+}
+
+fn instrument_quarantine_summary_line(row: &JsonValue) -> String {
+    let symbol = fallback_text(row, "symbol", "unknown");
+    let action = fallback_text(row, "action", "n/a");
+    let signature = fallback_text(row, "signature", "unknown");
+    let failure_count = value_i64(row, "failure_count");
+    let latest_failure_at = fallback_text(row, "latest_failure_at", "unknown");
+    let expires_at = fallback_text(row, "expires_at", "unknown");
+    format!(
+        "- {symbol} {action}: {signature}, failures {failure_count}, latest {latest_failure_at}, expires {expires_at}"
+    )
 }
 
 async fn scheduler_stale_alert(state: &AppState) -> Result<Option<SlackAlert>> {
@@ -992,5 +1112,75 @@ mod tests {
         assert_eq!(alert.subject, "Overview integrity mismatch");
         assert!(alert.message_text.contains("Mismatches: 1"));
         assert!(alert.scope_key.contains("portfolio_identity_mismatch"));
+    }
+
+    #[test]
+    fn skips_clear_instrument_quarantine_runs() {
+        let alert = instrument_quarantine_alert_from_run(&json!({
+            "id": 88,
+            "created_at": "2026-07-09T16:00:00Z",
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": true,
+                    "active_count": 0,
+                    "active": []
+                }
+            }
+        }));
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn skips_disabled_instrument_quarantine_runs() {
+        let alert = instrument_quarantine_alert_from_run(&json!({
+            "id": 88,
+            "created_at": "2026-07-09T16:00:00Z",
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": false,
+                    "active_count": 1,
+                    "active": [{
+                        "symbol": "BAC:xnys",
+                        "action": "BUY",
+                        "signature": "broker_rejected"
+                    }]
+                }
+            }
+        }));
+        assert!(alert.is_none());
+    }
+
+    #[test]
+    fn builds_instrument_quarantine_alert_without_raw_error_text() {
+        let alert = instrument_quarantine_alert_from_run(&json!({
+            "id": 148,
+            "created_at": "2026-07-09T16:48:00Z",
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": true,
+                    "lookback_days": 14,
+                    "min_failures": 3,
+                    "active_days": 14,
+                    "active_count": 1,
+                    "active": [{
+                        "symbol": "BAC:xnys",
+                        "action": "BUY",
+                        "signature": "broker_rejected",
+                        "failure_count": 3,
+                        "latest_failure_at": "2026-07-09T16:48:00Z",
+                        "expires_at": "2026-07-23T16:48:00Z",
+                        "sample_error": "raw broker body should stay out of Slack"
+                    }]
+                }
+            }
+        }))
+        .expect("alert");
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(alert.subject, "Instrument quarantine active");
+        assert!(alert.scope_key.contains("BAC:xnys:BUY:broker_rejected"));
+        assert!(alert.message_text.contains("BAC:xnys BUY: broker_rejected"));
+        assert!(!alert.message_text.contains("raw broker body"));
+        assert!(!alert.payload.to_string().contains("sample_error"));
     }
 }
