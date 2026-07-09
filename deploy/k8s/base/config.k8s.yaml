@@ -345,6 +345,7 @@ notifications:
     execution_failure_burst_enabled: true
     execution_failure_burst_threshold: 3
     execution_failure_burst_window_hours: 24
+    monthly_loss_circuit_breaker_alert_enabled: true
     instrument_quarantine_alert_enabled: true
     scheduler_stale_enabled: true
     scheduler_stale_minutes: 30

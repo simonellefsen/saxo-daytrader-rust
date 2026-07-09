@@ -528,3 +528,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Alerts summarize blocked symbol/action/failure-signature rows, failure counts, latest failure time, and quarantine expiry without including raw broker error payloads.
 - Alert scope keys are based on the active quarantine set, so the same active set is sent once while newly activated signatures or count changes can page the operator.
 - Added `notifications.alerts.instrument_quarantine_alert_enabled` to the Kubernetes config and unit coverage for disabled, clear, and active quarantine payloads.
+
+## [2026-07-09] improvement | Monthly-loss circuit breaker operational alerts
+
+- Continued the risk-guardrail roadmap by routing monthly-loss circuit-breaker activation and clearing into the scheduler-driven operational Slack alert path.
+- Alerts compare the latest two Trading Manager runs and fire only on state transitions, avoiding repeated pages while the breaker remains active.
+- Alert messages summarize month P/L, halt threshold, latest manager run, and whether BUY suspension is active; SELLs remain explicitly unaffected.
+- Added `notifications.alerts.monthly_loss_circuit_breaker_alert_enabled` to the Kubernetes config and unit coverage for activation, repeated-active suppression, and clearing.

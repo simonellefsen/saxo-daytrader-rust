@@ -174,6 +174,24 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
         &[
             "notifications",
             "alerts",
+            "monthly_loss_circuit_breaker_alert_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            monthly_loss_circuit_breaker_alert(state).await?,
+        )
+        .await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
             "instrument_quarantine_alert_enabled",
         ],
     )
@@ -364,6 +382,86 @@ async fn execution_failure_burst_alert(state: &AppState) -> Result<Option<SlackA
             "latest_created_at": latest_created_at,
         }),
     )))
+}
+
+async fn monthly_loss_circuit_breaker_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let rows = sqlx::query(
+        "SELECT id, created_at, status, manager_json
+         FROM trading_manager_runs
+         ORDER BY created_at DESC, id DESC
+         LIMIT 2",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("checking latest Trading Manager monthly-loss circuit breaker state")?;
+    let runs = rows.iter().map(row_to_json).collect::<Vec<_>>();
+    Ok(monthly_loss_circuit_breaker_alert_from_runs(&runs))
+}
+
+fn monthly_loss_circuit_breaker_alert_from_runs(runs: &[JsonValue]) -> Option<SlackAlert> {
+    let latest = runs.first()?;
+    let latest_breaker = latest
+        .get("manager_json")
+        .and_then(|value| value.get("monthly_loss_circuit_breaker"))?;
+    let latest_active = latest_breaker
+        .get("active")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let previous_active = runs
+        .get(1)
+        .and_then(|run| run.get("manager_json"))
+        .and_then(|value| value.get("monthly_loss_circuit_breaker"))
+        .and_then(|breaker| breaker.get("active"))
+        .and_then(JsonValue::as_bool);
+
+    let transition = match (latest_active, previous_active) {
+        (true, Some(true)) | (false, Some(false)) | (false, None) => return None,
+        (true, _) => "activated",
+        (false, Some(true)) => "cleared",
+    };
+
+    let latest_run_id = value_i64(latest, "id");
+    let previous_run_id = runs.get(1).map(|run| value_i64(run, "id")).unwrap_or(0);
+    let latest_created_at = fallback_text(latest, "created_at", "unknown");
+    let month_pnl_dkk = value_f64(latest_breaker, "month_pnl_dkk");
+    let threshold_dkk = value_f64(latest_breaker, "threshold_dkk");
+    let status_line = if latest_active {
+        "New BUYs are suspended while the breaker is active; SELLs remain allowed."
+    } else {
+        "The BUY suspension is no longer active under the latest Trading Manager run."
+    };
+    let subject = if latest_active {
+        "Monthly-loss circuit breaker active"
+    } else {
+        "Monthly-loss circuit breaker cleared"
+    };
+    let severity = if latest_active { "high" } else { "medium" };
+    Some(operational_alert(
+        "monthly_loss_circuit_breaker",
+        format!(
+            "ops:monthly_loss_circuit_breaker:{transition}:run:{latest_run_id}:prev:{previous_run_id}"
+        ),
+        severity,
+        subject.to_string(),
+        vec![
+            format!("Monthly-loss circuit breaker {transition}."),
+            String::new(),
+            status_line.to_string(),
+            format!("Month P/L DKK: {month_pnl_dkk:.2}"),
+            format!("Threshold DKK: {threshold_dkk:.2}"),
+            format!("Latest manager run: #{latest_run_id} at {latest_created_at}"),
+            format!("Previous manager run: #{previous_run_id}"),
+        ],
+        json!({
+            "transition": transition,
+            "active": latest_active,
+            "month_pnl_dkk": month_pnl_dkk,
+            "threshold_dkk": threshold_dkk,
+            "latest_manager_run_id": latest_run_id,
+            "latest_manager_run_created_at": latest_created_at,
+            "previous_manager_run_id": previous_run_id,
+        }),
+    ))
 }
 
 async fn instrument_quarantine_alert(state: &AppState) -> Result<Option<SlackAlert>> {
@@ -1112,6 +1210,108 @@ mod tests {
         assert_eq!(alert.subject, "Overview integrity mismatch");
         assert!(alert.message_text.contains("Mismatches: 1"));
         assert!(alert.scope_key.contains("portfolio_identity_mismatch"));
+    }
+
+    #[test]
+    fn builds_monthly_loss_activation_alert() {
+        let runs = vec![
+            json!({
+                "id": 151,
+                "created_at": "2026-07-09T16:55:00Z",
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": true,
+                        "month_pnl_dkk": -28277.40,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+            json!({
+                "id": 150,
+                "created_at": "2026-07-09T15:55:00Z",
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": false,
+                        "month_pnl_dkk": -9777.40,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+        ];
+        let alert = monthly_loss_circuit_breaker_alert_from_runs(&runs).expect("alert");
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "high");
+        assert_eq!(alert.subject, "Monthly-loss circuit breaker active");
+        assert!(
+            alert
+                .message_text
+                .contains("New BUYs are suspended while the breaker is active")
+        );
+        assert!(alert.scope_key.contains("activated:run:151:prev:150"));
+    }
+
+    #[test]
+    fn skips_repeated_monthly_loss_active_state() {
+        let runs = vec![
+            json!({
+                "id": 152,
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": true,
+                        "month_pnl_dkk": -28277.40,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+            json!({
+                "id": 151,
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": true,
+                        "month_pnl_dkk": -28100.00,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+        ];
+        assert!(monthly_loss_circuit_breaker_alert_from_runs(&runs).is_none());
+    }
+
+    #[test]
+    fn builds_monthly_loss_clear_alert() {
+        let runs = vec![
+            json!({
+                "id": 161,
+                "created_at": "2026-08-01T09:15:00Z",
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": false,
+                        "month_pnl_dkk": 0.0,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+            json!({
+                "id": 160,
+                "created_at": "2026-07-31T20:45:00Z",
+                "manager_json": {
+                    "monthly_loss_circuit_breaker": {
+                        "active": true,
+                        "month_pnl_dkk": -28277.40,
+                        "threshold_dkk": -10000.0
+                    }
+                }
+            }),
+        ];
+        let alert = monthly_loss_circuit_breaker_alert_from_runs(&runs).expect("alert");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(alert.subject, "Monthly-loss circuit breaker cleared");
+        assert!(
+            alert
+                .message_text
+                .contains("BUY suspension is no longer active")
+        );
+        assert!(alert.scope_key.contains("cleared:run:161:prev:160"));
     }
 
     #[test]
