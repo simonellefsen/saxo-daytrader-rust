@@ -480,6 +480,7 @@ fn OverviewView(
                         }
                     }
                     CashDeploymentPanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
+                    IntegrityPanel { integrity: data.integrity.clone(), prefs: prefs.clone() }
                     InstrumentQuarantinePanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
                     section { class: "section",
                         h2 { "Recent Decisions" }
@@ -596,6 +597,125 @@ fn cash_deployment_tone(status: &str) -> &'static str {
             "warn-status"
         }
         _ => "",
+    }
+}
+
+#[component]
+fn IntegrityPanel(integrity: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let summary = integrity_summary(&integrity, &prefs);
+    let warnings = integrity
+        .get("warnings")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mismatches = integrity
+        .get("mismatches")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let expiry_pending_orders = integrity
+        .get("expiry_pending_orders")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    rsx! {
+        section { class: "section",
+            h2 { "Integrity" }
+            div { class: "cash-deployment-panel",
+                div { class: "event",
+                    strong { "Status" }
+                    span { class: "status {summary.0}", "{summary.1}" }
+                    span { class: "muted", "{summary.2}" }
+                }
+                if !mismatches.is_empty() || !warnings.is_empty() {
+                    div { class: "stack",
+                        for row in mismatches.iter().chain(warnings.iter()) {
+                            IntegrityIssueRow { row: row.clone() }
+                        }
+                    }
+                }
+                if !expiry_pending_orders.is_empty() {
+                    div { class: "table-wrap",
+                        table {
+                            thead { tr { th { "Order" } th { "Symbol" } th { "Status" } th { "Expiry" } } }
+                            tbody {
+                                for row in expiry_pending_orders.iter() {
+                                    {
+                                        let order_id = text(row, "id");
+                                        let symbol = text(row, "symbol");
+                                        let status = text(row, "status");
+                                        let expiry = format_timestamp(&text(row, "expected_expiry_at_utc"), &prefs);
+                                        rsx! {
+                                    tr {
+                                        td { "#{order_id}" }
+                                        td { "{symbol}" }
+                                        td { "{status}" }
+                                        td { "{expiry}" }
+                                    }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn IntegrityIssueRow(row: JsonValue) -> Element {
+    let code = text(&row, "code");
+    let severity = text(&row, "severity");
+    let message = text(&row, "message");
+    let tone = match severity.as_str() {
+        "error" => "bad-status",
+        "warning" => "warn-status",
+        _ => "",
+    };
+    rsx! {
+        div { class: "event", title: "{message}",
+            strong { "{code}" }
+            span { class: "status {tone}", "{severity}" }
+            span { class: "muted", "{message}" }
+        }
+    }
+}
+
+fn integrity_summary(
+    integrity: &JsonValue,
+    prefs: &LocalizationPrefs,
+) -> (&'static str, String, String) {
+    let mismatch_count = integrity
+        .get("mismatches")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let warning_count = integrity
+        .get("warnings")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let checked_at = format_timestamp(&text(integrity, "checked_at"), prefs);
+    if mismatch_count > 0 {
+        (
+            "bad-status",
+            format!("{mismatch_count} error"),
+            format!("{warning_count} warning(s) · checked {checked_at}"),
+        )
+    } else if warning_count > 0 {
+        (
+            "warn-status",
+            format!("{warning_count} warning"),
+            format!("checked {checked_at}"),
+        )
+    } else {
+        (
+            "good-status",
+            "clear".to_string(),
+            format!("checked {checked_at}"),
+        )
     }
 }
 
@@ -3399,12 +3519,14 @@ fn operations_health(data: &DashboardView) -> Vec<OperationHealthItem> {
 fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<OperationHealthItem> {
     vec![
         saxo_operation_health(&data.saxo_auth),
+        integrity_operation_health(&data.integrity),
         scheduler_operation_health(&data.market_status, now),
         decision_operation_health(&data.latest_decision),
         run_operation_health("Markov", &data.latest_markov_run, now),
         run_operation_health("Quiver", &data.latest_quiver_run, now),
         run_operation_health("Indicators", &data.latest_daily_indicator_run, now),
         quote_operation_health(&data.positions, now),
+        execution_operation_health(&data.orders),
     ]
 }
 
@@ -3480,6 +3602,111 @@ fn scheduler_operation_health(
             last_cycle_status
         ),
     }
+}
+
+fn integrity_operation_health(integrity: &JsonValue) -> OperationHealthItem {
+    let mismatch_count = integrity
+        .get("mismatches")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let warning_count = integrity
+        .get("warnings")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let expiry_pending_count = integrity
+        .get("expiry_pending_orders")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let checked_at = text(integrity, "checked_at");
+    let checked_label = if checked_at.is_empty() {
+        "not checked".to_string()
+    } else {
+        format!("checked {}", checked_at)
+    };
+
+    if mismatch_count > 0 {
+        OperationHealthItem {
+            label: "Integrity".to_string(),
+            status: format!("{mismatch_count} error"),
+            tone: "bad",
+            detail: format!(
+                "{mismatch_count} integrity mismatch(es), {warning_count} warning(s); {checked_label}."
+            ),
+        }
+    } else if warning_count > 0 {
+        let status = if expiry_pending_count > 0 {
+            "expiry sync".to_string()
+        } else {
+            format!("{warning_count} warn")
+        };
+        OperationHealthItem {
+            label: "Integrity".to_string(),
+            status,
+            tone: "warn",
+            detail: format!(
+                "{warning_count} integrity warning(s), including {expiry_pending_count} DayOrder expiry-sync pending row(s); {checked_label}."
+            ),
+        }
+    } else {
+        OperationHealthItem {
+            label: "Integrity".to_string(),
+            status: "ok".to_string(),
+            tone: "good",
+            detail: format!("Integrity checks are clear; {checked_label}."),
+        }
+    }
+}
+
+fn execution_operation_health(orders: &[JsonValue]) -> OperationHealthItem {
+    let expiry_pending = orders
+        .iter()
+        .filter(|order| text(order, "lifecycle_state") == "expiry_pending_broker_sync")
+        .count();
+    if expiry_pending > 0 {
+        return OperationHealthItem {
+            label: "Execution".to_string(),
+            status: "expiry sync".to_string(),
+            tone: "warn",
+            detail: format!(
+                "{expiry_pending} active Saxo DayOrder(s) passed expected expiry and need broker sync confirmation."
+            ),
+        };
+    }
+
+    let broker_live = orders
+        .iter()
+        .filter(|order| active_broker_status(&text(order, "status")))
+        .count();
+    if broker_live > 0 {
+        OperationHealthItem {
+            label: "Execution".to_string(),
+            status: format!("{broker_live} live"),
+            tone: "good",
+            detail: format!("{broker_live} Saxo order(s) are awaiting broker fill or status sync."),
+        }
+    } else {
+        OperationHealthItem {
+            label: "Execution".to_string(),
+            status: "ok".to_string(),
+            tone: "good",
+            detail: "No active Saxo broker orders are awaiting sync.".to_string(),
+        }
+    }
+}
+
+fn active_broker_status(status: &str) -> bool {
+    matches!(
+        status,
+        "submitted_to_broker"
+            | "broker_working"
+            | "broker_amended"
+            | "broker_partially_filled"
+            | "broker_replace_requested"
+            | "broker_cancel_requested"
+    )
 }
 
 fn decision_operation_health(report: &JsonValue) -> OperationHealthItem {
@@ -3634,6 +3861,9 @@ fn execution_status_detail(row: &JsonValue) -> String {
 }
 
 fn execution_status_reason(row: &JsonValue) -> String {
+    if text(row, "lifecycle_state") == "expiry_pending_broker_sync" {
+        return "Expiry sync pending".to_string();
+    }
     let status = text(row, "status");
     let detail = execution_status_detail(row);
     classify_execution_detail(&status, &detail)
@@ -3651,6 +3881,10 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     }
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
+    }
+    let lifecycle_state = text(row, "lifecycle_state");
+    if !lifecycle_state.is_empty() {
+        lines.push(format!("lifecycle state: {lifecycle_state}"));
     }
     let broker_visibility = execution_broker_sync_text(row, "broker_visibility");
     if !broker_visibility.is_empty() {
@@ -3724,6 +3958,10 @@ fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) 
     let market = text(row, "expected_expiry_market");
     if !market.is_empty() {
         lines.push(format!("market {market}"));
+    }
+    let lifecycle_state = text(row, "lifecycle_state");
+    if !lifecycle_state.is_empty() {
+        lines.push(format!("state {lifecycle_state}"));
     }
     let broker_visibility = execution_broker_sync_text(row, "broker_visibility");
     if !broker_visibility.is_empty() {
@@ -4634,6 +4872,32 @@ mod tests {
     }
 
     #[test]
+    fn execution_status_reason_flags_expiry_pending_sync() {
+        let row = json!({
+            "status": "broker_working",
+            "lifecycle_state": "expiry_pending_broker_sync",
+            "expected_expiry_at_utc": "2026-07-09T20:00:00Z"
+        });
+
+        assert_eq!(execution_status_reason(&row), "Expiry sync pending");
+        let tooltip = execution_status_tooltip(&row, "Expiry sync pending", "");
+        assert!(tooltip.contains("lifecycle state: expiry_pending_broker_sync"));
+    }
+
+    #[test]
+    fn execution_operation_health_warns_on_expiry_pending_sync() {
+        let item = execution_operation_health(&[json!({
+            "status": "broker_working",
+            "lifecycle_state": "expiry_pending_broker_sync"
+        })]);
+
+        assert_eq!(item.label, "Execution");
+        assert_eq!(item.status, "expiry sync");
+        assert_eq!(item.tone, "warn");
+        assert!(item.detail.contains("broker sync confirmation"));
+    }
+
+    #[test]
     fn execution_attribution_label_summarizes_hermes_delta() {
         let row = json!({"attribution": {"delta": "allowed_executed"}});
         assert_eq!(
@@ -4797,6 +5061,26 @@ mod tests {
         assert_eq!(item.status, "reauth");
         assert_eq!(item.tone, "bad");
         assert!(item.detail.contains("Re-authentication"));
+    }
+
+    #[test]
+    fn integrity_operation_health_warns_on_expiry_pending_orders() {
+        let item = integrity_operation_health(&json!({
+            "healthy": false,
+            "warnings": [{
+                "code": "day_order_expiry_sync_pending",
+                "severity": "warning",
+                "message": "One or more Saxo DayOrders passed expected exchange-calendar expiry."
+            }],
+            "mismatches": [],
+            "expiry_pending_orders": [{"id": 204, "symbol": "BAC:xnys"}],
+            "checked_at": "2026-07-09T20:15:00Z"
+        }));
+
+        assert_eq!(item.label, "Integrity");
+        assert_eq!(item.status, "expiry sync");
+        assert_eq!(item.tone, "warn");
+        assert!(item.detail.contains("DayOrder"));
     }
 
     #[test]

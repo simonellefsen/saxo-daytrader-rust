@@ -47,6 +47,7 @@ const INTEGRITY_MONEY_REL_TOLERANCE: f64 = 0.002;
 const INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK: f64 = 500.0;
 const INTEGRITY_BROKER_CASH_REL_TOLERANCE: f64 = 0.05;
 const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
+const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -561,6 +562,10 @@ impl AppState {
             latest_daily_indicator_run,
             performance_history,
             performance_summary,
+            integrity: overview
+                .get("integrity")
+                .cloned()
+                .unwrap_or_else(|| json!({"healthy": false, "warnings": [], "mismatches": []})),
             market_status,
             trading_manager: overview
                 .get("trading_manager")
@@ -1568,11 +1573,50 @@ impl AppState {
             }));
         }
 
+        let mut active_broker_orders = self
+            .select_json(
+                "SELECT id, created_at, symbol, action, order_type, mode, status, adapter, \
+                        quantity, price_local, limit_price_local, stop_price_local, currency, \
+                        ledger_id, broker_order_id, execution_result_json \
+                 FROM execution_orders \
+                 WHERE mode = 'live' \
+                   AND adapter = 'saxo' \
+                   AND broker_order_id IS NOT NULL \
+                   AND broker_order_id <> '' \
+                   AND status IN ('submitted_to_broker', 'broker_working', \
+                                  'broker_amended', 'broker_partially_filled', \
+                                  'broker_replace_requested', 'broker_cancel_requested') \
+                 ORDER BY created_at ASC, id ASC \
+                 LIMIT 50",
+            )
+            .await
+            .unwrap_or_default();
+        let market_rows = self.market_exchange_rows();
+        for order in &mut active_broker_orders {
+            enrich_execution_order_lifecycle(order, &market_rows);
+        }
+        let expiry_pending_orders = active_broker_orders
+            .into_iter()
+            .filter(|order| text_value(order, "lifecycle_state") == "expiry_pending_broker_sync")
+            .collect::<Vec<_>>();
+        if expiry_pending_orders.is_empty() {
+            checks.insert("day_order_expiry_sync".to_string(), json!("ok"));
+        } else {
+            checks.insert("day_order_expiry_sync".to_string(), json!("warning"));
+            warnings.push(json!({
+                "code": "day_order_expiry_sync_pending",
+                "severity": "warning",
+                "message": "One or more Saxo DayOrders passed expected exchange-calendar expiry but still need broker sync confirmation.",
+                "count": expiry_pending_orders.len()
+            }));
+        }
+
         Ok(json!({
             "healthy": warnings.is_empty() && mismatches.is_empty() && unreconciled_orders.is_empty(),
             "warnings": warnings,
             "mismatches": mismatches,
             "unreconciled_orders": unreconciled_orders,
+            "expiry_pending_orders": expiry_pending_orders,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -4959,7 +5003,18 @@ fn enrich_execution_order_lifecycle(order: &mut JsonValue, market_rows: &[JsonVa
     }
     if let Some((expiry, market, timezone)) = lifecycle {
         if let Some(expiry) = expiry {
+            let expiry_pending = parse_rfc3339_utc(Some(&json!(expiry.clone())))
+                .map(|expiry_at| {
+                    expiry_at + Duration::minutes(DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES) <= Utc::now()
+                })
+                .unwrap_or(false);
             object.insert("expected_expiry_at_utc".to_string(), json!(expiry));
+            if expiry_pending {
+                object.insert(
+                    "lifecycle_state".to_string(),
+                    json!("expiry_pending_broker_sync"),
+                );
+            }
         }
         object.insert(
             "expected_expiry_source".to_string(),
@@ -4969,7 +5024,15 @@ fn enrich_execution_order_lifecycle(order: &mut JsonValue, market_rows: &[JsonVa
         object.insert("expected_expiry_timezone".to_string(), timezone);
         object.insert(
             "lifecycle_note".to_string(),
-            json!("DayOrder remains live until broker fill, cancel, reject, or exchange-day expiry sync."),
+            if object
+                .get("lifecycle_state")
+                .and_then(JsonValue::as_str)
+                == Some("expiry_pending_broker_sync")
+            {
+                json!("Expected DayOrder expiry has passed; waiting for Saxo broker sync to confirm fill, cancel, reject, or expiry.")
+            } else {
+                json!("DayOrder remains live until broker fill, cancel, reject, or exchange-day expiry sync.")
+            },
         );
     }
 }
@@ -5294,6 +5357,61 @@ mod tests {
             json_text(&order, "expected_expiry_market"),
             "New York Stock Exchange"
         );
+    }
+
+    #[test]
+    fn marks_day_order_expiry_pending_after_expected_expiry_passes() {
+        let mut order = json!({
+            "symbol": "BAC:xnys",
+            "status": "broker_working",
+            "execution_result_json": {
+                "payload": {
+                    "OrderDuration": {"DurationType": "DayOrder"}
+                }
+            }
+        });
+        let expired_at = (Utc::now() - Duration::minutes(DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES + 1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let market_rows = vec![json!({
+            "code": "xnys",
+            "market": "New York Stock Exchange",
+            "timezone": "America/New_York",
+            "tradable_close_at_utc": expired_at
+        })];
+
+        enrich_execution_order_lifecycle(&mut order, &market_rows);
+
+        assert_eq!(
+            json_text(&order, "lifecycle_state"),
+            "expiry_pending_broker_sync"
+        );
+        assert!(json_text(&order, "lifecycle_note").contains("waiting for Saxo broker sync"));
+    }
+
+    #[test]
+    fn does_not_mark_day_order_expiry_pending_inside_grace_window() {
+        let mut order = json!({
+            "symbol": "BAC:xnys",
+            "status": "broker_working",
+            "execution_result_json": {
+                "payload": {
+                    "OrderDuration": {"DurationType": "DayOrder"}
+                }
+            }
+        });
+        let expired_at = (Utc::now() - Duration::minutes(DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES - 1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let market_rows = vec![json!({
+            "code": "xnys",
+            "market": "New York Stock Exchange",
+            "timezone": "America/New_York",
+            "tradable_close_at_utc": expired_at
+        })];
+
+        enrich_execution_order_lifecycle(&mut order, &market_rows);
+
+        assert_eq!(json_text(&order, "lifecycle_state"), "");
+        assert!(json_text(&order, "lifecycle_note").contains("remains live"));
     }
 
     #[test]

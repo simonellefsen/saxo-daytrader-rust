@@ -49,6 +49,7 @@ pub struct DashboardView {
     pub latest_daily_indicator_run: JsonValue,
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
+    pub integrity: JsonValue,
     pub market_status: JsonValue,
     pub trading_manager: JsonValue,
     pub watchlists: JsonValue,

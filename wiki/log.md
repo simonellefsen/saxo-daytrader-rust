@@ -506,3 +506,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Broker sync now records whether the current broker state came from `/port/v1/orders`, the `/cs/v1/audit/orderactivities` fallback, or a probe where both lookups returned no current state.
 - Missing lookup probes create an auditable `broker_sync_not_found` execution event and leave the local order status unchanged pending later reconciliation.
 - Execution status and lifecycle tooltips now show the broker visibility state and fallback note so activity-only `broker_working` rows are not confused with directly visible open orders.
+
+## [2026-07-09] improvement | DayOrder expiry sync pending marker
+
+- Added a read-model lifecycle marker for active Saxo DayOrders whose expected exchange-calendar expiry has passed while local status is still an active broker state.
+- The marker is intentionally non-mutating: it labels the order `expiry_pending_broker_sync` for operator visibility, but does not mark it expired unless Saxo confirms a terminal broker status.
+- Execution status and lifecycle tooltips now call out the pending expiry sync state so overdue DayOrders do not look like ordinary in-session `broker_working` orders.
+- Added a 10-minute grace window, an overview integrity warning payload, and an Operations banner `Execution` warning when any active DayOrder remains overdue after the grace window.
+- Surfaced the overview integrity payload in the dashboard model, added an Operations banner `Integrity` chip, and added an Overview Integrity panel listing warnings, mismatches, and expiry-pending orders.
