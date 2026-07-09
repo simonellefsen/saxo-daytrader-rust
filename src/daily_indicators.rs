@@ -290,15 +290,38 @@ async fn analyze_asset(
     config: &IndicatorConfig,
     asset: &MarkovAsset,
 ) -> Result<(SaxoInstrument, usize, IndicatorAnalysis)> {
-    let instrument = resolve_instrument(state, session, &asset.symbol)
+    let instrument = resolve_instrument(state, session, &asset.analysis_symbol)
         .await
-        .with_context(|| format!("resolving Saxo instrument for {}", asset.symbol))?;
+        .with_context(|| {
+            format!(
+                "resolving Saxo instrument for {}",
+                asset_analysis_label(asset)
+            )
+        })?;
     let bars = fetch_ohlc_bars(state, session, &instrument, config)
         .await
-        .with_context(|| format!("fetching Saxo chart history for {}", asset.symbol))?;
+        .with_context(|| {
+            format!(
+                "fetching Saxo chart history for {}",
+                asset_analysis_label(asset)
+            )
+        })?;
     let analysis = analyze_bars(&bars, config.min_reward_risk, config.min_confluences)
-        .with_context(|| format!("computing daily indicators for {}", asset.symbol))?;
+        .with_context(|| {
+            format!(
+                "computing daily indicators for {}",
+                asset_analysis_label(asset)
+            )
+        })?;
     Ok((instrument, bars.len(), analysis))
+}
+
+fn asset_analysis_label(asset: &MarkovAsset) -> String {
+    if asset.analysis_symbol == asset.symbol {
+        asset.symbol.clone()
+    } else {
+        format!("{} via {}", asset.symbol, asset.analysis_symbol)
+    }
 }
 
 async fn fetch_ohlc_bars(

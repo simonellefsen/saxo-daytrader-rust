@@ -569,3 +569,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Symbols with a single-letter share class, such as `CARL-B:xcse`, `VOLV-B:xsto`, and `BRK-B:xnys`, now also try and accept Saxo's compact `CARLb`, `VOLVb`, and `BRKb` symbol shape.
 - The matcher still requires the requested exchange alias, so the variant does not silently resolve a share class on the wrong venue.
 - Added Rust regression coverage for Markov and execution resolver candidate matching.
+
+## [2026-07-09] improvement | Markov analysis symbol aliases
+
+- Continued the Markov coverage roadmap by adding `strategy.markov.symbol_aliases`, an explicit read-only alias map for stale portfolio/watchlist symbols.
+- Markov and daily indicators now keep persisted rows keyed by the original symbol while using the configured alias only for Saxo instrument/chart lookup.
+- Seeded known stale mappings for `COST:xnys`, `HON:xnys`, `LIN:xnys`, and `SHELL:xlon`; execution order resolution is intentionally unaffected.
+- Markov raw payloads record `analysis_symbol` and whether an alias was applied, preserving auditability for decision prompts and operator review.

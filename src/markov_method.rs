@@ -60,11 +60,13 @@ struct MarkovConfig {
     forecast_steps: Vec<usize>,
     max_symbols: usize,
     instrument_negative_cache_retry_days: i64,
+    symbol_aliases: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct MarkovAsset {
     pub(crate) symbol: String,
+    pub(crate) analysis_symbol: String,
     pub(crate) instrument_name: String,
     pub(crate) source: String,
 }
@@ -250,15 +252,33 @@ async fn analyze_asset(
     config: &MarkovConfig,
     asset: &MarkovAsset,
 ) -> Result<(SaxoInstrument, Vec<ChartBar>, MarkovAnalysis)> {
-    let instrument = resolve_instrument(state, session, &asset.symbol)
+    let instrument = resolve_instrument(state, session, &asset.analysis_symbol)
         .await
-        .with_context(|| format!("resolving Saxo instrument for {}", asset.symbol))?;
+        .with_context(|| {
+            format!(
+                "resolving Saxo instrument for {}",
+                asset_analysis_label(asset)
+            )
+        })?;
     let bars = fetch_chart_bars(state, session, &instrument, config)
         .await
-        .with_context(|| format!("fetching Saxo chart history for {}", asset.symbol))?;
+        .with_context(|| {
+            format!(
+                "fetching Saxo chart history for {}",
+                asset_analysis_label(asset)
+            )
+        })?;
     let analysis = analyze_bars(&bars, config)
-        .with_context(|| format!("running Markov model for {}", asset.symbol))?;
+        .with_context(|| format!("running Markov model for {}", asset_analysis_label(asset)))?;
     Ok((instrument, bars, analysis))
+}
+
+fn asset_analysis_label(asset: &MarkovAsset) -> String {
+    if asset.analysis_symbol == asset.symbol {
+        asset.symbol.clone()
+    } else {
+        format!("{} via {}", asset.symbol, asset.analysis_symbol)
+    }
 }
 
 fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalysis> {
@@ -446,8 +466,9 @@ pub(crate) async fn markov_assets(
 ) -> Result<Vec<MarkovAsset>> {
     let mut seen = HashSet::new();
     let mut assets = Vec::new();
+    let aliases = analysis_symbol_aliases(&state.config);
     for row in state.position_items(250).await.unwrap_or_default() {
-        push_asset(&mut assets, &mut seen, &row, "portfolio");
+        push_asset(&mut assets, &mut seen, &row, "portfolio", &aliases);
     }
     let watchlists = state.watchlists_payload().await.unwrap_or_else(|err| {
         warn!("Markov watchlist universe degraded: {err:#}");
@@ -468,7 +489,7 @@ pub(crate) async fn markov_assets(
             .cloned()
             .unwrap_or_default()
         {
-            push_asset(&mut assets, &mut seen, &row, "watchlist");
+            push_asset(&mut assets, &mut seen, &row, "watchlist", &aliases);
         }
     }
     if max_symbols > 0 && assets.len() > max_symbols {
@@ -482,19 +503,50 @@ fn push_asset(
     seen: &mut HashSet<String>,
     row: &JsonValue,
     source: &str,
+    aliases: &HashMap<String, String>,
 ) {
     let symbol = text(row, "symbol").trim().to_string();
     if symbol.is_empty() || !seen.insert(symbol.clone()) {
         return;
     }
+    let alias_key = normalized_symbol_key(&symbol);
+    let analysis_symbol = aliases
+        .get(&alias_key)
+        .cloned()
+        .unwrap_or_else(|| symbol.clone());
     let instrument_name = text(row, "instrument_name")
         .if_empty_then(|| Some(symbol.clone()))
         .unwrap_or_else(|| symbol.clone());
     assets.push(MarkovAsset {
         symbol,
+        analysis_symbol,
         instrument_name,
         source: source.to_string(),
     });
+}
+
+fn analysis_symbol_aliases(config: &serde_yaml::Value) -> HashMap<String, String> {
+    yaml_at(config, &["strategy", "markov", "symbol_aliases"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .map(|mapping| {
+            mapping
+                .iter()
+                .filter_map(|(key, value)| {
+                    let from = key.as_str()?.trim();
+                    let to = value.as_str()?.trim();
+                    if from.is_empty() || to.is_empty() {
+                        return None;
+                    }
+                    Some((normalized_symbol_key(from), to.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalized_symbol_key(symbol: &str) -> String {
+    let parts = symbol_parts(symbol);
+    requested_symbol(&parts).to_lowercase()
 }
 
 pub(crate) async fn resolve_instrument(
@@ -915,7 +967,9 @@ fn signal_row_json(
             "recent_labels": recent_labels_json(&analysis.labels, 60),
             "label_counts": label_counts_json(&analysis.labels),
             "source": "saxo_chart_v3",
-            "method": "observable_markov_rolling_return"
+            "method": "observable_markov_rolling_return",
+            "analysis_symbol": asset.analysis_symbol,
+            "symbol_alias_applied": asset.analysis_symbol != asset.symbol
         }),
         None => json!({}),
     };
@@ -1201,6 +1255,7 @@ fn markov_config(state: &AppState) -> MarkovConfig {
             .unwrap_or(0)
             .max(0) as usize,
         instrument_negative_cache_retry_days: instrument_negative_cache_retry_days(state),
+        symbol_aliases: analysis_symbol_aliases(&state.config),
     }
 }
 
@@ -1233,7 +1288,8 @@ fn markov_config_json(config: &MarkovConfig) -> JsonValue {
         "signal_horizon_days": config.signal_horizon_days,
         "forecast_steps": config.forecast_steps,
         "max_symbols": config.max_symbols,
-        "instrument_negative_cache_retry_days": config.instrument_negative_cache_retry_days
+        "instrument_negative_cache_retry_days": config.instrument_negative_cache_retry_days,
+        "symbol_aliases": config.symbol_aliases
     })
 }
 
@@ -1693,6 +1749,7 @@ mod tests {
             forecast_steps: vec![1, 2],
             max_symbols: 0,
             instrument_negative_cache_retry_days: DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS,
+            symbol_aliases: HashMap::new(),
         }
     }
 
@@ -1779,5 +1836,33 @@ mod tests {
             "CARL-B:xcse",
             &requested
         ));
+    }
+
+    #[test]
+    fn analysis_symbol_alias_keeps_original_asset_symbol() {
+        let mut aliases = HashMap::new();
+        aliases.insert("cost:xnys".to_string(), "COST:xnas".to_string());
+        let mut assets = Vec::new();
+        let mut seen = HashSet::new();
+        push_asset(
+            &mut assets,
+            &mut seen,
+            &json!({
+                "symbol": "COST:xnys",
+                "instrument_name": "Costco Wholesale Corp."
+            }),
+            "watchlist",
+            &aliases,
+        );
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].symbol, "COST:xnys");
+        assert_eq!(assets[0].analysis_symbol, "COST:xnas");
+        assert_eq!(assets[0].source, "watchlist");
+    }
+
+    #[test]
+    fn normalized_symbol_key_is_case_insensitive_and_trimmed() {
+        assert_eq!(normalized_symbol_key(" cost:XNYS "), "cost:xnys");
     }
 }

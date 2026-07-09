@@ -65,9 +65,14 @@ strategy:
     signal_horizon_days: 5
     forecast_steps: [1, 2, 3, 5, 10]
     max_symbols: 0
+    instrument_negative_cache_retry_days: 7
+    symbol_aliases:
+      "COST:xnys": "COST:xnas"
 ```
 
 `max_symbols: 0` means no local cap. If Saxo rate limits become an issue, set a cap while we add batching or throttling.
+
+`symbol_aliases` is intentionally analysis-only. Markov and daily indicators keep rows keyed by the original portfolio/watchlist symbol, but resolve Saxo charts through the configured alias and record alias metadata in the Markov raw payload. Execution orders are not rewritten by this setting.
 
 ## Operator Surfaces
 
