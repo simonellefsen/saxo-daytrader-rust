@@ -758,6 +758,10 @@ impl AppState {
             .scheduler_status_value()
             .await
             .unwrap_or(JsonValue::Null);
+        let price_monitor = self
+            .price_monitor_status_value()
+            .await
+            .unwrap_or(JsonValue::Null);
         let cycle = scheduler
             .get("last_cycle_json")
             .cloned()
@@ -788,12 +792,15 @@ impl AppState {
             "last_heartbeat_at": scheduler.get("last_heartbeat_at").cloned().unwrap_or(JsonValue::Null),
             "next_pulse_at": manager_status.get("next_pulse_at").cloned().unwrap_or(JsonValue::Null),
             "next_pulse_label": manager_status.get("next_pulse_label").cloned().unwrap_or(JsonValue::Null),
+            "price_monitor_status": price_monitor.get("status").cloned().unwrap_or(JsonValue::Null),
+            "price_monitor_updated_at": price_monitor.get("updated_at").cloned().unwrap_or(JsonValue::Null),
             "calendar_refresh": calendar_refresh,
         });
         Ok(json!({
             "items": items,
             "summary": summary,
-            "scheduler": scheduler
+            "scheduler": scheduler,
+            "price_monitor": price_monitor
         }))
     }
 
@@ -2165,6 +2172,54 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
+        Ok(self
+            .first_json(
+                "SELECT singleton_key, updated_at, status, summary_json
+                 FROM price_monitor_status
+                 WHERE singleton_key = 'main'
+                 LIMIT 1",
+            )
+            .await?
+            .unwrap_or(JsonValue::Null))
+    }
+
+    pub async fn record_price_monitor_status(&self, summary: &JsonValue) -> Result<()> {
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let status = json_text(summary, "status");
+        let status = if status.is_empty() {
+            "unknown"
+        } else {
+            &status
+        };
+        let summary_json = summary.to_string();
+        let updated = sqlx::query(&format!(
+            "UPDATE price_monitor_status
+             SET updated_at = '{}', status = '{}', summary_json = '{}'
+             WHERE singleton_key = 'main'",
+            sql_escape(&now),
+            sql_escape(status),
+            sql_escape(&summary_json)
+        ))
+        .execute(&self.pool)
+        .await
+        .context("updating price monitor status")?;
+        if updated.rows_affected() == 0 {
+            sqlx::query(&format!(
+                "INSERT INTO price_monitor_status
+                    (singleton_key, updated_at, status, summary_json)
+                 VALUES ('main', '{}', '{}', '{}')",
+                sql_escape(&now),
+                sql_escape(status),
+                sql_escape(&summary_json)
+            ))
+            .execute(&self.pool)
+            .await
+            .context("inserting price monitor status")?;
+        }
+        Ok(())
     }
 
     pub fn hermes_goal_contract_value(&self) -> JsonValue {
@@ -3707,6 +3762,17 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating runtime settings table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS price_monitor_status (
+                singleton_key TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                summary_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating price monitor status table")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS currency_fx_rates (
                 currency_code TEXT NOT NULL,

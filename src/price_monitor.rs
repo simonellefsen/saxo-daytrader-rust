@@ -122,11 +122,15 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     let session = match state.ensure_saxo_session_json("price_monitor").await {
         Ok(session) => session,
         Err(err) => {
-            return Ok(json!({
-                "status": "no_session",
-                "updated": 0,
-                "error": format!("{err:#}")
-            }));
+            return Ok(record_price_monitor_summary(
+                state,
+                json!({
+                    "status": "no_session",
+                    "updated": 0,
+                    "error": format!("{err:#}")
+                }),
+            )
+            .await);
         }
     };
     let calendar_refresh = match state.refresh_saxo_exchange_calendars_if_stale().await {
@@ -140,22 +144,30 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     let mut instruments = held_instruments(state).await?;
     append_extra_watch_instruments(state, &session, &market_rows, &mut instruments).await;
     if instruments.is_empty() {
-        return Ok(json!({"status": "ok", "updated": 0, "reason": "no_positions"}));
+        return Ok(record_price_monitor_summary(
+            state,
+            json!({"status": "ok", "updated": 0, "reason": "no_positions"}),
+        )
+        .await);
     }
     let total_instruments = instruments.len();
     let (tradable_instruments, skipped_closed) =
         filter_tradable_instruments(&instruments, &market_rows);
     if tradable_instruments.is_empty() {
-        return Ok(json!({
-            "status": "market_closed",
-            "updated": 0,
-            "instruments": total_instruments,
-            "tradable_instruments": 0,
-            "skipped_closed": skipped_closed.len(),
-            "skipped_closed_symbols": skipped_closed,
-            "calendar_refresh": calendar_refresh,
-            "reason": "all_known_exchanges_closed"
-        }));
+        return Ok(record_price_monitor_summary(
+            state,
+            json!({
+                "status": "market_closed",
+                "updated": 0,
+                "instruments": total_instruments,
+                "tradable_instruments": 0,
+                "skipped_closed": skipped_closed.len(),
+                "skipped_closed_symbols": skipped_closed,
+                "calendar_refresh": calendar_refresh,
+                "reason": "all_known_exchanges_closed"
+            }),
+        )
+        .await);
     }
     instruments = tradable_instruments;
     let session_date = session_date_for(Utc::now(), config.timezone, config.reset_hour_local);
@@ -233,18 +245,29 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
             }
         }
     }
-    Ok(json!({
-        "status": if errors.is_empty() { "ok" } else { "partial" },
-        "updated": updated,
-        "instruments": total_instruments,
-        "tradable_instruments": instruments.len(),
-        "skipped_closed": skipped_closed.len(),
-        "skipped_closed_symbols": skipped_closed,
-        "session_date": session_date.to_string(),
-        "calendar_refresh": calendar_refresh,
-        "fx_refresh": fx_refresh,
-        "errors": errors,
-    }))
+    Ok(record_price_monitor_summary(
+        state,
+        json!({
+            "status": if errors.is_empty() { "ok" } else { "partial" },
+            "updated": updated,
+            "instruments": total_instruments,
+            "tradable_instruments": instruments.len(),
+            "skipped_closed": skipped_closed.len(),
+            "skipped_closed_symbols": skipped_closed,
+            "session_date": session_date.to_string(),
+            "calendar_refresh": calendar_refresh,
+            "fx_refresh": fx_refresh,
+            "errors": errors,
+        }),
+    )
+    .await)
+}
+
+async fn record_price_monitor_summary(state: &AppState, summary: JsonValue) -> JsonValue {
+    if let Err(err) = state.record_price_monitor_status(&summary).await {
+        warn!("price monitor status persistence failed: {err:#}");
+    }
+    summary
 }
 
 #[derive(Clone, Debug)]

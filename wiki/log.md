@@ -542,3 +542,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The price monitor now refreshes/reads the exchange-calendar cache, skips known closed exchanges before Saxo infoprice batching, and returns a `market_closed` heartbeat summary when every known exchange is closed.
 - Extra watch symbols are no longer resolved through Saxo while their configured exchange is closed; unknown exchanges still poll so unsupported suffixes do not silently drop data.
 - Added unit coverage for Saxo symbol exchange parsing and closed-market filtering.
+
+## [2026-07-09] improvement | Price monitor closed-market visibility
+
+- Added a persisted `price_monitor_status` singleton row so the latest sanitized quote-monitor outcome survives pod boundaries and page refreshes.
+- The Market tab now shows Quote Monitor status, last update time, and skipped known-closed symbols from the latest monitor refresh.
+- The Operations banner Quotes chip now treats `market_closed` monitor summaries as intentional closed-market pauses instead of stale or unknown quote data.
+- Added UI unit coverage for closed-market quote status and skipped-symbol label formatting.
