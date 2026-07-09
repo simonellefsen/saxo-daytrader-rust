@@ -535,3 +535,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Alerts compare the latest two Trading Manager runs and fire only on state transitions, avoiding repeated pages while the breaker remains active.
 - Alert messages summarize month P/L, halt threshold, latest manager run, and whether BUY suspension is active; SELLs remain explicitly unaffected.
 - Added `notifications.alerts.monthly_loss_circuit_breaker_alert_enabled` to the Kubernetes config and unit coverage for activation, repeated-active suppression, and clearing.
+
+## [2026-07-09] improvement | Price monitor market-hours polling
+
+- Started the price-monitor market-hours roadmap item by validating the Saxo service session before loading positions or resolving extra watch symbols.
+- The price monitor now refreshes/reads the exchange-calendar cache, skips known closed exchanges before Saxo infoprice batching, and returns a `market_closed` heartbeat summary when every known exchange is closed.
+- Extra watch symbols are no longer resolved through Saxo while their configured exchange is closed; unknown exchanges still poll so unsupported suffixes do not silently drop data.
+- Added unit coverage for Saxo symbol exchange parsing and closed-market filtering.

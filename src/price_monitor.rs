@@ -119,7 +119,6 @@ pub async fn run_price_monitor_loop(state: AppState) {
 
 pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     let config = price_monitor_config(state);
-    let mut instruments = held_instruments(state).await?;
     let session = match state.ensure_saxo_session_json("price_monitor").await {
         Ok(session) => session,
         Err(err) => {
@@ -130,10 +129,35 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
             }));
         }
     };
-    append_extra_watch_instruments(state, &session, &mut instruments).await;
+    let calendar_refresh = match state.refresh_saxo_exchange_calendars_if_stale().await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("price monitor using fallback exchange calendar: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    let market_rows = state.market_exchange_rows();
+    let mut instruments = held_instruments(state).await?;
+    append_extra_watch_instruments(state, &session, &market_rows, &mut instruments).await;
     if instruments.is_empty() {
         return Ok(json!({"status": "ok", "updated": 0, "reason": "no_positions"}));
     }
+    let total_instruments = instruments.len();
+    let (tradable_instruments, skipped_closed) =
+        filter_tradable_instruments(&instruments, &market_rows);
+    if tradable_instruments.is_empty() {
+        return Ok(json!({
+            "status": "market_closed",
+            "updated": 0,
+            "instruments": total_instruments,
+            "tradable_instruments": 0,
+            "skipped_closed": skipped_closed.len(),
+            "skipped_closed_symbols": skipped_closed,
+            "calendar_refresh": calendar_refresh,
+            "reason": "all_known_exchanges_closed"
+        }));
+    }
+    instruments = tradable_instruments;
     let session_date = session_date_for(Utc::now(), config.timezone, config.reset_hour_local);
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let fx_refresh = match crate::fx::refresh_best_effort_fx_rates(state, &session).await {
@@ -212,8 +236,12 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     Ok(json!({
         "status": if errors.is_empty() { "ok" } else { "partial" },
         "updated": updated,
-        "instruments": instruments.len(),
+        "instruments": total_instruments,
+        "tradable_instruments": instruments.len(),
+        "skipped_closed": skipped_closed.len(),
+        "skipped_closed_symbols": skipped_closed,
         "session_date": session_date.to_string(),
+        "calendar_refresh": calendar_refresh,
         "fx_refresh": fx_refresh,
         "errors": errors,
     }))
@@ -329,11 +357,15 @@ async fn resolve_by_isin(
 async fn append_extra_watch_instruments(
     state: &AppState,
     session: &JsonValue,
+    market_rows: &[JsonValue],
     instruments: &mut Vec<HeldInstrument>,
 ) {
     let cache = EXTRA_INSTRUMENT_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     for watch in extra_watch_symbols(state) {
         let symbol = watch.symbol.clone();
+        if symbol_market_tradable(&symbol, market_rows) == Some(false) {
+            continue;
+        }
         if instruments
             .iter()
             .any(|instrument| instrument.symbol == symbol)
@@ -399,6 +431,66 @@ async fn append_extra_watch_instruments(
             currency,
         });
     }
+}
+
+fn exchange_code_for_symbol(symbol: &str) -> Option<String> {
+    symbol
+        .split_once(':')
+        .map(|(_, exchange)| exchange.trim().to_uppercase())
+        .filter(|exchange| !exchange.is_empty())
+}
+
+fn market_row_for_exchange<'a>(
+    market_rows: &'a [JsonValue],
+    exchange_code: &str,
+) -> Option<&'a JsonValue> {
+    market_rows.iter().find(|row| {
+        row.get("code")
+            .and_then(JsonValue::as_str)
+            .map(|code| code.eq_ignore_ascii_case(exchange_code))
+            .unwrap_or(false)
+    })
+}
+
+fn market_row_tradable(row: &JsonValue) -> bool {
+    row.get("is_tradable")
+        .and_then(JsonValue::as_bool)
+        .or_else(|| row.get("is_open").and_then(JsonValue::as_bool))
+        .unwrap_or(false)
+}
+
+fn symbol_market_tradable(symbol: &str, market_rows: &[JsonValue]) -> Option<bool> {
+    let exchange_code = exchange_code_for_symbol(symbol)?;
+    market_row_for_exchange(market_rows, &exchange_code).map(market_row_tradable)
+}
+
+fn filter_tradable_instruments(
+    instruments: &[HeldInstrument],
+    market_rows: &[JsonValue],
+) -> (Vec<HeldInstrument>, Vec<JsonValue>) {
+    let mut tradable = Vec::new();
+    let mut skipped = Vec::new();
+    for instrument in instruments {
+        let Some(exchange_code) = exchange_code_for_symbol(&instrument.symbol) else {
+            tradable.push(instrument.clone());
+            continue;
+        };
+        let Some(market) = market_row_for_exchange(market_rows, &exchange_code) else {
+            tradable.push(instrument.clone());
+            continue;
+        };
+        if market_row_tradable(market) {
+            tradable.push(instrument.clone());
+            continue;
+        }
+        skipped.push(json!({
+            "symbol": instrument.symbol,
+            "exchange": exchange_code,
+            "status_reason": market.get("status_reason").cloned().unwrap_or(JsonValue::Null),
+            "next_open_at_utc": market.get("next_open_at_utc").cloned().unwrap_or(JsonValue::Null),
+        }));
+    }
+    (tradable, skipped)
 }
 
 async fn held_instruments(state: &AppState) -> Result<Vec<HeldInstrument>> {
@@ -602,5 +694,68 @@ market_data:
 
         let empty = json!({});
         assert_eq!(parse_info_price(&empty), (None, None));
+    }
+
+    #[test]
+    fn extracts_exchange_code_from_saxo_symbol() {
+        assert_eq!(
+            exchange_code_for_symbol("AMD:xnas"),
+            Some("XNAS".to_string())
+        );
+        assert_eq!(
+            exchange_code_for_symbol("NOVOb:xcse"),
+            Some("XCSE".to_string())
+        );
+        assert_eq!(exchange_code_for_symbol("CASH"), None);
+    }
+
+    #[test]
+    fn filter_tradable_instruments_skips_closed_known_exchanges() {
+        let instruments = vec![
+            HeldInstrument {
+                symbol: "AMD:xnas".to_string(),
+                uic: 1,
+                asset_type: "Stock".to_string(),
+                currency: "USD".to_string(),
+            },
+            HeldInstrument {
+                symbol: "NOVOb:xcse".to_string(),
+                uic: 2,
+                asset_type: "Stock".to_string(),
+                currency: "DKK".to_string(),
+            },
+            HeldInstrument {
+                symbol: "UNKNOWN:xabc".to_string(),
+                uic: 3,
+                asset_type: "Stock".to_string(),
+                currency: "DKK".to_string(),
+            },
+        ];
+        let market_rows = vec![
+            json!({
+                "code": "XNAS",
+                "is_tradable": true,
+                "status_reason": "Open"
+            }),
+            json!({
+                "code": "XCSE",
+                "is_tradable": false,
+                "status_reason": "Closed - After hours",
+                "next_open_at_utc": "2026-07-10T07:00:00Z"
+            }),
+        ];
+
+        let (tradable, skipped) = filter_tradable_instruments(&instruments, &market_rows);
+
+        assert_eq!(
+            tradable
+                .iter()
+                .map(|instrument| instrument.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AMD:xnas", "UNKNOWN:xabc"]
+        );
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0]["symbol"], "NOVOb:xcse");
+        assert_eq!(skipped[0]["exchange"], "XCSE");
     }
 }
