@@ -555,3 +555,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added `price_monitor.off_hours_poll_interval_minutes` to local and Kubernetes config, defaulting to 15 minutes while the regular in-hours quote heartbeat remains 1 minute.
 - The Rust price-monitor loop now sleeps on the slower interval only when the latest refresh summary is `market_closed`; normal, partial, and no-session cycles keep the regular interval.
 - Added unit coverage for the closed-market sleep-interval selector.
+
+## [2026-07-09] improvement | Markov instrument negative cache
+
+- Continued the Markov coverage roadmap by adding a persistent `saxo_instrument_negative_cache` table for definitive Saxo instrument lookup misses.
+- Markov and daily-indicator instrument resolution now skip symbols with a fresh cached no-tradable-match result until the configured retry window expires.
+- The cache defaults to a 7-day retry interval via `strategy.markov.instrument_negative_cache_retry_days`; stored broker/position instruments still bypass and clear cached negative rows.
+- This reduces repeated daily dead-end Saxo reference lookups while leaving a slow retry path for symbols that later become available in SIM.

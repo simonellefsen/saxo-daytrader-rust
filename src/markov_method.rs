@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use reqwest::header;
 use serde_json::{Value as JsonValue, json};
@@ -21,6 +21,8 @@ const DEFAULT_DAILY_TIME: &str = "23:30";
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
 const SAXO_MARKOV_REQUEST_DELAY_MS: u64 = 500;
 const SAXO_MARKOV_MAX_ATTEMPTS: usize = 4;
+const DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS: i64 = 7;
+const NO_TRADABLE_INSTRUMENT_PREFIX: &str = "No tradable Saxo instrument match found for";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Regime {
@@ -57,6 +59,7 @@ struct MarkovConfig {
     signal_horizon_days: usize,
     forecast_steps: Vec<usize>,
     max_symbols: usize,
+    instrument_negative_cache_retry_days: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -500,9 +503,28 @@ pub(crate) async fn resolve_instrument(
     symbol: &str,
 ) -> Result<SaxoInstrument> {
     if let Some(instrument) = stored_instrument(state, symbol).await? {
+        clear_negative_instrument_lookup(state, symbol).await?;
         return Ok(instrument);
     }
-    lookup_instrument(state, session, symbol).await
+    if let Some(cached) = fresh_negative_instrument_lookup(state, symbol).await? {
+        bail!(
+            "Saxo instrument lookup skipped for {symbol}; cached negative result until {}: {}",
+            cached.retry_after,
+            cached.error_text
+        );
+    }
+    match lookup_instrument(state, session, symbol).await {
+        Ok(instrument) => {
+            clear_negative_instrument_lookup(state, symbol).await?;
+            Ok(instrument)
+        }
+        Err(err) => {
+            if is_negative_cacheable_lookup_error(&err) {
+                record_negative_instrument_lookup(state, symbol, &format!("{err:#}")).await?;
+            }
+            Err(err)
+        }
+    }
 }
 
 async fn stored_instrument(state: &AppState, symbol: &str) -> Result<Option<SaxoInstrument>> {
@@ -643,9 +665,97 @@ async fn lookup_instrument(
             return Ok(instrument);
         }
     }
-    Err(anyhow!(
-        "No tradable Saxo instrument match found for {symbol}"
+    Err(anyhow!("{NO_TRADABLE_INSTRUMENT_PREFIX} {symbol}"))
+}
+
+#[derive(Clone, Debug)]
+struct NegativeInstrumentLookup {
+    retry_after: String,
+    error_text: String,
+}
+
+async fn fresh_negative_instrument_lookup(
+    state: &AppState,
+    symbol: &str,
+) -> Result<Option<NegativeInstrumentLookup>> {
+    let row = sqlx::query(&format!(
+        "SELECT retry_after, error_text
+         FROM saxo_instrument_negative_cache
+         WHERE symbol = '{}'
+         LIMIT 1",
+        sql_escape(symbol)
     ))
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let retry_after = row.try_get::<String, _>("retry_after").unwrap_or_default();
+    let error_text = row.try_get::<String, _>("error_text").unwrap_or_default();
+    let retry_at = DateTime::parse_from_rfc3339(&retry_after)
+        .map(|value| value.with_timezone(&Utc))
+        .ok();
+    if retry_at.is_some_and(|value| value > Utc::now()) {
+        Ok(Some(NegativeInstrumentLookup {
+            retry_after,
+            error_text,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn record_negative_instrument_lookup(
+    state: &AppState,
+    symbol: &str,
+    error_text: &str,
+) -> Result<()> {
+    let now = Utc::now();
+    let retry_days = instrument_negative_cache_retry_days(state);
+    let retry_after = now + ChronoDuration::days(retry_days);
+    sqlx::query(&format!(
+        "INSERT INTO saxo_instrument_negative_cache (
+            symbol, created_at, last_error_at, retry_after, error_text, attempt_count
+        ) VALUES ('{}', '{}', '{}', '{}', '{}', 1)
+        ON CONFLICT(symbol) DO UPDATE SET
+            last_error_at = excluded.last_error_at,
+            retry_after = excluded.retry_after,
+            error_text = excluded.error_text,
+            attempt_count = COALESCE(saxo_instrument_negative_cache.attempt_count, 0) + 1",
+        sql_escape(symbol),
+        now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        retry_after.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        sql_escape(error_text)
+    ))
+    .execute(&state.pool)
+    .await
+    .context("recording Saxo instrument negative lookup cache")?;
+    Ok(())
+}
+
+async fn clear_negative_instrument_lookup(state: &AppState, symbol: &str) -> Result<()> {
+    sqlx::query(&format!(
+        "DELETE FROM saxo_instrument_negative_cache WHERE symbol = '{}'",
+        sql_escape(symbol)
+    ))
+    .execute(&state.pool)
+    .await
+    .context("clearing Saxo instrument negative lookup cache")?;
+    Ok(())
+}
+
+fn is_negative_cacheable_lookup_error(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains(NO_TRADABLE_INSTRUMENT_PREFIX)
+}
+
+fn instrument_negative_cache_retry_days(state: &AppState) -> i64 {
+    yaml_i64(
+        &state.config,
+        &["strategy", "markov", "instrument_negative_cache_retry_days"],
+    )
+    .unwrap_or(DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS)
+    .max(1)
 }
 
 async fn latest_position_isin(state: &AppState, symbol: &str) -> Result<Option<String>> {
@@ -1064,6 +1174,7 @@ fn markov_config(state: &AppState) -> MarkovConfig {
         max_symbols: yaml_i64(&state.config, &["strategy", "markov", "max_symbols"])
             .unwrap_or(0)
             .max(0) as usize,
+        instrument_negative_cache_retry_days: instrument_negative_cache_retry_days(state),
     }
 }
 
@@ -1095,7 +1206,8 @@ fn markov_config_json(config: &MarkovConfig) -> JsonValue {
         "min_labeled_days": config.min_labeled_days,
         "signal_horizon_days": config.signal_horizon_days,
         "forecast_steps": config.forecast_steps,
-        "max_symbols": config.max_symbols
+        "max_symbols": config.max_symbols,
+        "instrument_negative_cache_retry_days": config.instrument_negative_cache_retry_days
     })
 }
 
@@ -1428,6 +1540,15 @@ pub fn create_schema_sql() -> Vec<&'static str> {
         "CREATE INDEX IF NOT EXISTS idx_markov_signal_runs_date ON markov_signal_runs(run_date DESC)",
         "CREATE INDEX IF NOT EXISTS idx_markov_asset_signals_date_symbol ON markov_asset_signals(run_date DESC, symbol)",
         "CREATE INDEX IF NOT EXISTS idx_markov_asset_signals_signal ON markov_asset_signals(run_date DESC, signed_signal DESC)",
+        "CREATE TABLE IF NOT EXISTS saxo_instrument_negative_cache (
+            symbol TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            last_error_at TEXT NOT NULL,
+            retry_after TEXT NOT NULL,
+            error_text TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 1
+        )",
+        "CREATE INDEX IF NOT EXISTS idx_saxo_instrument_negative_cache_retry ON saxo_instrument_negative_cache(retry_after)",
     ]
 }
 
@@ -1460,6 +1581,7 @@ mod tests {
             signal_horizon_days: 2,
             forecast_steps: vec![1, 2],
             max_symbols: 0,
+            instrument_negative_cache_retry_days: DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS,
         }
     }
 
@@ -1506,5 +1628,15 @@ mod tests {
         assert_eq!(analysis.current_state, Regime::Bull);
         assert_eq!(analysis.direction, "long");
         assert!(analysis.conviction >= 0.0);
+    }
+
+    #[test]
+    fn classifies_only_no_tradable_match_as_negative_cacheable() {
+        assert!(is_negative_cacheable_lookup_error(&anyhow!(
+            "{NO_TRADABLE_INSTRUMENT_PREFIX} ABB:xsto"
+        )));
+        assert!(!is_negative_cacheable_lookup_error(&anyhow!(
+            "HTTP 429 from Saxo reference lookup"
+        )));
     }
 }

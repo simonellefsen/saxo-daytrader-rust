@@ -111,6 +111,7 @@ strategy:
     signal_horizon_days: 5
     forecast_steps: [1, 2, 3, 5, 10]
     max_symbols: 0
+    instrument_negative_cache_retry_days: 7
   swing:
     min_holdings: 10
     max_holdings: 25
