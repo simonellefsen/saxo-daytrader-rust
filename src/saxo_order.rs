@@ -2384,7 +2384,13 @@ fn commission_dkk_for_fill(order: &JsonValue, gross_amount_dkk: f64, currency: &
 }
 
 fn default_min_commission_dkk(symbol: &str) -> f64 {
-    match symbol_parts(symbol).exchange.as_str() {
+    min_commission_dkk_for_exchange(&symbol_parts(symbol).exchange)
+}
+
+/// Minimum broker commission in DKK for one order on an exchange. Used both
+/// for fill cost booking and for the commission-efficiency floor on BUYs.
+pub(crate) fn min_commission_dkk_for_exchange(exchange: &str) -> f64 {
+    match exchange.trim().to_lowercase().as_str() {
         "xnas" | "xnys" => 3.0 * fx_rate_to_dkk("USD"),
         "xlon" => 8.0 * fx_rate_to_dkk("GBP"),
         "xsto" => 69.0 * fx_rate_to_dkk("SEK"),

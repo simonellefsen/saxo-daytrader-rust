@@ -42,6 +42,11 @@ static SAXO_EXCHANGE_CALENDAR_CACHE: OnceLock<RwLock<Option<SaxoExchangeCalendar
 
 const SAXO_SESSION_REFRESH_LEASE_SECONDS: i64 = 45;
 const SAXO_SESSION_REFRESH_LEASE_WAIT_ATTEMPTS: usize = 50;
+const INTEGRITY_MONEY_ABS_TOLERANCE_DKK: f64 = 50.0;
+const INTEGRITY_MONEY_REL_TOLERANCE: f64 = 0.002;
+const INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK: f64 = 500.0;
+const INTEGRITY_BROKER_CASH_REL_TOLERANCE: f64 = 0.05;
+const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -110,6 +115,20 @@ fn json_text(value: &JsonValue, key: &str) -> String {
         Some(JsonValue::Bool(flag)) => flag.to_string(),
         _ => String::new(),
     }
+}
+
+fn money_mismatch_exceeds_tolerance(
+    left: f64,
+    right: f64,
+    abs_tolerance: f64,
+    rel_tolerance: f64,
+) -> bool {
+    if !left.is_finite() || !right.is_finite() {
+        return true;
+    }
+    let diff = (left - right).abs();
+    let scale = left.abs().max(right.abs()).max(1.0);
+    diff > abs_tolerance && diff / scale > rel_tolerance
 }
 
 fn is_duplicate_column_error(err: &sqlx::Error) -> bool {
@@ -570,6 +589,22 @@ impl AppState {
             yaml_i64(&self.config, &["execution", "max_daily_orders"]).unwrap_or(0);
         let executed_today = self.executed_orders_today().await.unwrap_or(0);
         let decision_refresh = crate::xai_decision::decision_pulse_summary(self);
+        let integrity = self
+            .overview_integrity(&aggregate, &latest_history, &cash_summary)
+            .await
+            .unwrap_or_else(|err| {
+                json!({
+                    "healthy": false,
+                    "warnings": [{
+                        "code": "integrity_check_failed",
+                        "severity": "warning",
+                        "message": format!("Overview integrity checks failed: {err:#}")
+                    }],
+                    "mismatches": [],
+                    "unreconciled_orders": [],
+                    "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                })
+            });
 
         Ok(json!({
             "app": {
@@ -612,7 +647,7 @@ impl AppState {
                 "estimated_tax_dkk": 0.0
             },
             "goal_tracking": self.goal_tracking(total_value).await,
-            "integrity": {"healthy": true, "warnings": [], "mismatches": [], "unreconciled_orders": []},
+            "integrity": integrity,
             "analysis_summary": self.market_status_payload().await.unwrap_or_else(|_| json!({"summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []})),
             "latest_decision": self.latest_decision_summary().await.unwrap_or_else(|_| json!({"id": null, "created_at": null, "status": null})),
             "scheduler_status": self.scheduler_status_value().await.unwrap_or(JsonValue::Null),
@@ -1335,6 +1370,195 @@ impl AppState {
             "initial_cash_dkk": initial_cash,
             "cash_from_trades_dkk": cash_from_trades,
             "cash_balance_dkk": initial_cash + cash_from_trades,
+        }))
+    }
+
+    async fn overview_integrity(
+        &self,
+        aggregate: &JsonValue,
+        latest_history: &JsonValue,
+        cash_summary: &JsonValue,
+    ) -> Result<JsonValue> {
+        let mut warnings = Vec::new();
+        let mut mismatches = Vec::new();
+        let mut checks = serde_json::Map::new();
+
+        let total_value = value_f64(aggregate, "total_market_value_dkk");
+        let invested_value = value_f64(aggregate, "invested_market_value_dkk");
+        let aggregate_cash = value_f64(aggregate, "cash_balance_dkk");
+        let expected_total = invested_value + aggregate_cash;
+        if total_value.abs() > 1e-9 || expected_total.abs() > 1e-9 {
+            if money_mismatch_exceeds_tolerance(
+                total_value,
+                expected_total,
+                INTEGRITY_MONEY_ABS_TOLERANCE_DKK,
+                INTEGRITY_MONEY_REL_TOLERANCE,
+            ) {
+                mismatches.push(json!({
+                    "code": "portfolio_identity_mismatch",
+                    "severity": "error",
+                    "message": "Portfolio total does not match invested value plus cash.",
+                    "total_market_value_dkk": total_value,
+                    "invested_market_value_dkk": invested_value,
+                    "cash_balance_dkk": aggregate_cash,
+                    "expected_total_market_value_dkk": expected_total,
+                    "difference_dkk": total_value - expected_total
+                }));
+                checks.insert("portfolio_identity".to_string(), json!("mismatch"));
+            } else {
+                checks.insert("portfolio_identity".to_string(), json!("ok"));
+            }
+        } else {
+            checks.insert("portfolio_identity".to_string(), json!("skipped_no_value"));
+        }
+
+        let ledger_cash = value_f64(cash_summary, "cash_balance_dkk");
+        if latest_history
+            .as_object()
+            .is_some_and(|history| !history.is_empty())
+        {
+            let history_cash = value_f64(latest_history, "cash_balance_dkk");
+            if money_mismatch_exceeds_tolerance(
+                ledger_cash,
+                history_cash,
+                INTEGRITY_MONEY_ABS_TOLERANCE_DKK,
+                INTEGRITY_MONEY_REL_TOLERANCE,
+            ) {
+                mismatches.push(json!({
+                    "code": "ledger_history_cash_drift",
+                    "severity": "error",
+                    "message": "Ledger-derived cash differs from the latest portfolio value snapshot.",
+                    "ledger_cash_balance_dkk": ledger_cash,
+                    "history_cash_balance_dkk": history_cash,
+                    "difference_dkk": ledger_cash - history_cash,
+                    "history_recorded_at": latest_history.get("recorded_at").cloned().unwrap_or(JsonValue::Null)
+                }));
+                checks.insert("ledger_history_cash".to_string(), json!("mismatch"));
+            } else {
+                checks.insert("ledger_history_cash".to_string(), json!("ok"));
+            }
+        } else {
+            checks.insert(
+                "ledger_history_cash".to_string(),
+                json!("skipped_no_history"),
+            );
+        }
+
+        if let Ok(Some(broker_cash)) = self
+            .first_json(
+                "SELECT updated_at, currency, cash_available_for_trading, cash_balance \
+                 FROM broker_balance_snapshots WHERE singleton_key = 'main' LIMIT 1",
+            )
+            .await
+        {
+            let broker_currency = text_value(&broker_cash, "currency")
+                .if_empty_then(|| Some("DKK".to_string()))
+                .unwrap_or_else(|| "DKK".to_string());
+            let broker_cash_local = value_f64(&broker_cash, "cash_available_for_trading")
+                .max(value_f64(&broker_cash, "cash_balance"));
+            let broker_fx =
+                crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_currency).await;
+            let broker_cash_dkk = broker_cash_local * broker_fx;
+            if broker_cash_local.abs() > 1e-9
+                && money_mismatch_exceeds_tolerance(
+                    ledger_cash,
+                    broker_cash_dkk,
+                    INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK,
+                    INTEGRITY_BROKER_CASH_REL_TOLERANCE,
+                )
+            {
+                warnings.push(json!({
+                    "code": "broker_cash_drift",
+                    "severity": "warning",
+                    "message": "Ledger-derived cash differs from the latest Saxo broker cash snapshot; settlement timing can explain some drift.",
+                    "ledger_cash_balance_dkk": ledger_cash,
+                    "broker_cash_balance_dkk": broker_cash_dkk,
+                    "broker_cash_local": broker_cash_local,
+                    "broker_currency": broker_currency,
+                    "difference_dkk": ledger_cash - broker_cash_dkk,
+                    "broker_updated_at": broker_cash.get("updated_at").cloned().unwrap_or(JsonValue::Null)
+                }));
+                checks.insert("broker_cash".to_string(), json!("warning"));
+            } else {
+                checks.insert("broker_cash".to_string(), json!("ok"));
+            }
+        } else {
+            checks.insert("broker_cash".to_string(), json!("skipped_no_snapshot"));
+        }
+
+        let suspicious_lots = self
+            .select_json(&format!(
+                "SELECT lot_id, symbol, quantity_original, cost_basis_total_dkk, \
+                 cost_basis_total_dkk / NULLIF(quantity_original, 0) AS unit_cost_dkk \
+                 FROM position_lots \
+                 WHERE quantity_original > 0 \
+                   AND cost_basis_total_dkk > 0 \
+                   AND cost_basis_total_dkk / NULLIF(quantity_original, 0) > {} \
+                 ORDER BY unit_cost_dkk DESC \
+                 LIMIT 10",
+                INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK
+            ))
+            .await
+            .unwrap_or_default();
+        if suspicious_lots.is_empty() {
+            checks.insert("position_lot_plausibility".to_string(), json!("ok"));
+        } else {
+            mismatches.push(json!({
+                "code": "implausible_position_lot_cost_basis",
+                "severity": "error",
+                "message": "One or more position lots have an implausibly high per-share DKK cost basis.",
+                "threshold_unit_cost_dkk": INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK,
+                "lots": suspicious_lots
+            }));
+            checks.insert("position_lot_plausibility".to_string(), json!("mismatch"));
+        }
+
+        let stale_cutoff =
+            (Utc::now() - Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let fill_cutoff =
+            (Utc::now() - Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let unreconciled_orders = self
+            .select_json(&format!(
+                "SELECT id, created_at, symbol, action, status, quantity, currency, \
+                        limit_price_local, ledger_id, broker_order_id, error_text \
+                 FROM execution_orders \
+                 WHERE (status IN ('broker_working', 'submitted_to_broker', \
+                                   'broker_partially_filled', 'broker_replace_requested', \
+                                   'broker_cancel_requested', 'pending_execution', \
+                                   'waiting_for_market_open', \
+                                   'waiting_for_cash_settlement', \
+                                   'waiting_for_virtual_cash_budget', \
+                                   'waiting_for_technical_gate') \
+                        AND created_at < '{}') \
+                    OR (status = 'executed' \
+                        AND ledger_id IS NULL \
+                        AND created_at < '{}') \
+                 ORDER BY created_at ASC, id ASC \
+                 LIMIT 20",
+                sql_escape(&stale_cutoff),
+                sql_escape(&fill_cutoff)
+            ))
+            .await
+            .unwrap_or_default();
+        if unreconciled_orders.is_empty() {
+            checks.insert("unreconciled_orders".to_string(), json!("ok"));
+        } else {
+            checks.insert("unreconciled_orders".to_string(), json!("warning"));
+            warnings.push(json!({
+                "code": "stale_or_unreconciled_execution_orders",
+                "severity": "warning",
+                "message": "Some execution orders are still pending with stale timestamps or executed without a linked ledger row.",
+                "count": unreconciled_orders.len()
+            }));
+        }
+
+        Ok(json!({
+            "healthy": warnings.is_empty() && mismatches.is_empty() && unreconciled_orders.is_empty(),
+            "warnings": warnings,
+            "mismatches": mismatches,
+            "unreconciled_orders": unreconciled_orders,
+            "checks": checks,
+            "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
     }
 
@@ -4880,6 +5104,25 @@ fn deterministic_suggested_trades(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn money_integrity_tolerance_requires_absolute_and_relative_drift() {
+        assert!(!money_mismatch_exceeds_tolerance(
+            100_000.0, 100_020.0, 50.0, 0.002
+        ));
+        assert!(!money_mismatch_exceeds_tolerance(
+            100_000.0, 100_100.0, 50.0, 0.002
+        ));
+        assert!(money_mismatch_exceeds_tolerance(
+            100_000.0, 100_500.0, 50.0, 0.002
+        ));
+        assert!(money_mismatch_exceeds_tolerance(
+            f64::NAN,
+            100_000.0,
+            50.0,
+            0.002
+        ));
+    }
 
     #[test]
     fn matching_order_advice_prefers_strategy_key_then_symbol_action() {

@@ -695,7 +695,7 @@ async fn build_decision_prompt(
     let daily_indicators = crate::daily_indicators::compact_indicator_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
-    let capital_context = capital_planning_context(&overview);
+    let capital_context = capital_planning_context(state, &overview);
     let markov_gate = crate::trading_manager::markov_gate_config(state);
     let markov_buy_instruction = format!(
         "When daily technical indicator data is unavailable for a BUY candidate, you may still propose a starter BUY backed by the supplied markov_method signals: the symbol must have a fresh signal with direction long and signed_signal at or above {:.2}. Set strategy_role to \"starter\" and reference the signal in strategy_metadata.markov. The manager re-verifies the signal against its own database and caps starter positions at {:.0}% of total portfolio value, so prefer several smaller starters over one large order.",
@@ -768,7 +768,46 @@ async fn build_decision_prompt(
     Ok(json!({"system": system, "user": user_payload}))
 }
 
-fn capital_planning_context(overview: &JsonValue) -> JsonValue {
+fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue {
+    let max_commission_pct_per_side =
+        crate::config::yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
+            .unwrap_or(0.003)
+            .max(0.0);
+    let floor = |exchange: &str| -> f64 {
+        if max_commission_pct_per_side <= f64::EPSILON {
+            0.0
+        } else {
+            (crate::saxo_order::min_commission_dkk_for_exchange(exchange)
+                / max_commission_pct_per_side)
+                .round()
+        }
+    };
+    let monthly_loss_halt_dkk = crate::config::yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_halt_dkk"],
+    )
+    .unwrap_or(-10_000.0);
+    capital_planning_context_inner(
+        overview,
+        max_commission_pct_per_side,
+        json!({
+            "XNAS_XNYS": floor("xnas"),
+            "XCSE": floor("xcse"),
+            "XETR_XMIL_XAMS_XHEL": floor("xetr"),
+            "XLON": floor("xlon"),
+            "XSTO": floor("xsto"),
+            "XOSL": floor("xosl"),
+        }),
+        monthly_loss_halt_dkk,
+    )
+}
+
+fn capital_planning_context_inner(
+    overview: &JsonValue,
+    max_commission_pct_per_side: f64,
+    min_economical_buy_dkk: JsonValue,
+    monthly_loss_halt_dkk: f64,
+) -> JsonValue {
     let summary = overview
         .get("portfolio_summary")
         .cloned()
@@ -806,6 +845,12 @@ fn capital_planning_context(overview: &JsonValue) -> JsonValue {
     let excess_cash_pct = (cash_pct - min_cash_buffer_pct).max(0.0);
     let reinvestment_pressure_active =
         excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
+    let month_pnl_dkk = overview
+        .get("goal_tracking")
+        .and_then(|value| value.get("periods"))
+        .and_then(|value| value.get("month"))
+        .map(|value| value_f64(value, "pnl_dkk"))
+        .unwrap_or(0.0);
     json!({
         "cash_balance_dkk": cash_balance_dkk,
         "total_market_value_dkk": total_value_dkk,
@@ -825,6 +870,17 @@ fn capital_planning_context(overview: &JsonValue) -> JsonValue {
             "excess_cash_pct": excess_cash_pct,
             "threshold_pct": reinvestment_pressure_threshold_pct,
             "instruction": "If active, either recommend gated BUY candidates within available_buy_budget_dkk or explicitly justify holding cash."
+        },
+        "min_economical_buy_dkk": {
+            "by_exchange": min_economical_buy_dkk,
+            "max_commission_pct_per_side": max_commission_pct_per_side,
+            "instruction": "BUY orders below these DKK floors are rejected by the manager because the exchange minimum commission would exceed the configured share of the clip. Prefer fewer, larger positions over many small ones."
+        },
+        "monthly_loss_circuit_breaker": {
+            "month_pnl_dkk": month_pnl_dkk,
+            "halt_threshold_dkk": monthly_loss_halt_dkk,
+            "active": monthly_loss_halt_dkk < 0.0 && month_pnl_dkk <= monthly_loss_halt_dkk,
+            "instruction": "When active, the manager suspends all new BUYs regardless of signals; focus on risk reduction and document candidates for later."
         },
         "cash_policy": "Preserve the required cash buffer, avoid margin, and size any BUY recommendations within available_buy_budget_dkk.",
     })
@@ -2216,7 +2272,12 @@ mod tests {
                 }
             }
         });
-        let context = capital_planning_context(&overview);
+        let context = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({"XNAS_XNYS": 7021.0}),
+            -10000.0,
+        );
         assert_eq!(
             context["required_cash_buffer_dkk"],
             JsonValue::from(30000.0)
@@ -2228,6 +2289,32 @@ mod tests {
         assert_eq!(
             context["reinvestment_pressure"]["active"],
             JsonValue::from(true)
+        );
+        assert_eq!(
+            context["min_economical_buy_dkk"]["by_exchange"]["XNAS_XNYS"],
+            JsonValue::from(7021.0)
+        );
+        assert_eq!(
+            context["monthly_loss_circuit_breaker"]["active"],
+            JsonValue::from(false)
+        );
+    }
+
+    #[test]
+    fn capital_context_flags_monthly_loss_breaker() {
+        let overview = json!({
+            "portfolio_summary": {"total_market_value_dkk": 300000.0, "invested_market_value_dkk": 250000.0, "cash_balance_dkk": 50000.0},
+            "settings": {"cash_buffer": {"min_cash_buffer_pct": 0.02, "max_deployment_pct": 0.98}},
+            "goal_tracking": {"periods": {"month": {"pnl_dkk": -23070.0}}}
+        });
+        let context = capital_planning_context_inner(&overview, 0.003, json!({}), -10000.0);
+        assert_eq!(
+            context["monthly_loss_circuit_breaker"]["active"],
+            JsonValue::from(true)
+        );
+        assert_eq!(
+            context["monthly_loss_circuit_breaker"]["month_pnl_dkk"],
+            JsonValue::from(-23070.0)
         );
     }
 }

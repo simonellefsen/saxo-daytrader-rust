@@ -98,6 +98,9 @@ strategy:
     max_deployment_pct: 0.98
     min_cash_buffer_pct: 0.02
     reinvestment_pressure_threshold_pct: 0.05
+    # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
+    # floor; SELLs are never blocked. Set >= 0 to disable.
+    monthly_loss_halt_dkk: -10000
   markov:
     enabled: true
     timezone: Europe/Copenhagen
@@ -196,6 +199,9 @@ execution:
   auto_execute_simulation: true
   require_approval_live: false
   min_trade_value_dkk: 500
+  # BUYs must be large enough that the exchange minimum commission stays
+  # under this share of the clip (0.003 = 0.3% per side). 0 disables.
+  max_commission_pct_per_side: 0.003
   max_daily_orders: 50
   delayed_price_limit_orders:
     enabled: true

@@ -10,6 +10,22 @@ updated: 2026-07-06
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-08] fix | Cost-basis repair, monthly-loss breaker, commission floor
+
+- Repaired the May 18 import corruption: the old importer stripped dot-decimals, storing values inflated by 10^(decimal digits). Verified every stored `position_snapshots`/`position_lots` value against the exact old-parser corruption of the original `Positioner_17-maj-2026_13_39_46.csv` before updating (abort-on-mismatch guard), restored true cost bases, and recomputed all 22 post-reset SELL rows via FIFO replay against the corrected import lot plus subsequent ledger buys. Corrected realised P/L since the reset: +69,251 DKK (was showing millions of phantom losses). Repair script and audit trail in the session scratchpad; ledger rows carry a repair note.
+- Landed the monthly-loss circuit breaker (`strategy.capital.monthly_loss_halt_dkk`, default -10000): the Trading Manager suspends new BUYs while month P/L is below the floor, SELLs are never blocked, breaker state is recorded in every manager run, and the decision prompt capital plan carries the same status. Verified active post-deploy with month P/L -28,277 DKK.
+- Landed the commission-efficiency floor (`execution.max_commission_pct_per_side`, default 0.003): BUYs below `exchange minimum commission / pct` are rejected (XNAS/XNYS ≈ 7,021 DKK, XCSE ≈ 4,667 DKK, XLON ≈ 23,200 DKK) and the per-exchange floors are published in the decision prompt so the model sizes clips economically. Added to the Hermes experiment variable allowlist.
+- All 138 tests pass; `make post-deploy-smoke` clean.
+
+## [2026-07-08] roadmap | Live-system review additions
+
+- Reviewed the running system end to end: live API overview, decision reports, Trading Manager runs, execution orders, trade ledger, Hermes reflections/experiments/advice, Quiver runs, Markov runs, and portfolio history.
+- System health is good (24/26 reports completed in 14 days, Quiver 60/60, Hermes advising 25 reports, fills within a minute) but trading performance is negative: month P/L -23,070 DKK vs +20,000 target, weekly closes bleeding 288.8k → 274.6k, cash deployed down to ~6%.
+- New P0 roadmap rows with live evidence: repair the still-corrupted realised-gain data (SELLs book -3.2M DKK "realised losses" from poisoned position_lots cost basis) and commission-aware minimum order size (0.67% one-way commission drag on ~3.5k DKK average clips).
+- New P1 rows: monthly-loss circuit breaker tied to goal tracking (reinvestment pressure currently keeps buying through a losing month), fix for the 38 Nordic/EU assets failing Markov instrument resolution daily, and automatic instrument quarantine after repeated identical precheck failures (ARKK:xmil commissions, DEMANT tick size, flattened-position SELLs).
+- Hermes section: added "unstick the experiment review queue" — four one-variable proposals pending since 2026-06-16 with no review flow, including two near-duplicate cash-buffer raises.
+- Quiver section: added alt-data conflict surfacing (bearish NVDA/AMZN Congress signals while both were held).
+
 ## [2026-07-06] improvement | Scheduler cycle duration metrics
 
 - Continued the roadmap by recording total scheduler-cycle runtime and per-step duration metrics in each persisted `cycle_json`.
@@ -454,3 +470,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Wrapped auth status auto-refresh, explicit refresh, broker session ensure, and user-logout keepalive paths in the lease before they call the Saxo token refresh helper.
 - Waiters now restore the durable DB session and retry until the owner publishes a refreshed token or the lease expires, avoiding concurrent use of Saxo's single-use refresh token during rollouts.
 - Kept `auth.rs` as the token-mechanics owner; the new coordination layer lives in `AppState` and still falls back to reauth when the refresh token is missing, expired, or marked invalid.
+
+## [2026-07-08] improvement | Overview accounting integrity
+
+- Continued the roadmap by replacing the hardcoded overview integrity stub with real read-model invariant checks.
+- The overview payload now reports portfolio identity mismatch, ledger-vs-history cash drift, broker cash drift, implausible position-lot unit costs, and stale or unreconciled execution orders.
+- Added tolerance coverage so small DKK/FX/settlement noise does not mark the dashboard unhealthy.
+- Left follow-up roadmap work for UI surfacing, Slack alert routing, and deeper broker exposure aggregate reconciliation.

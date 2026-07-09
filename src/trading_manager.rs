@@ -22,6 +22,7 @@ const EXPERIMENT_STATUS_ALLOWLIST: &[&str] = &[
 ];
 const EXPERIMENT_VARIABLE_ALLOWLIST: &[&str] = &[
     "execution.min_trade_value_dkk",
+    "execution.max_commission_pct_per_side",
     "strategy.capital.min_cash_buffer_pct",
     "strategy.swing.cash_buffer_pct",
     "strategy.swing.daily_indicators.min_confluences",
@@ -269,6 +270,37 @@ fn attach_hermes_advice(
     }
 }
 
+/// Monthly-loss circuit breaker: when the month's P/L (batch-scoped goal
+/// tracking baseline) breaches the configured floor, new BUYs are suspended
+/// while SELLs stay allowed. Reinvestment pressure otherwise keeps deploying
+/// cash straight through a losing month.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MonthlyLossBuyHalt {
+    active: bool,
+    month_pnl_dkk: f64,
+    threshold_dkk: f64,
+}
+
+fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> MonthlyLossBuyHalt {
+    let threshold_dkk = yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_halt_dkk"],
+    )
+    .unwrap_or(-10_000.0);
+    let month_pnl_dkk = overview
+        .get("goal_tracking")
+        .and_then(|value| value.get("periods"))
+        .and_then(|value| value.get("month"))
+        .map(|value| value_f64(value, "pnl_dkk"))
+        .unwrap_or(0.0);
+    MonthlyLossBuyHalt {
+        // A non-negative threshold disables the breaker.
+        active: threshold_dkk < 0.0 && month_pnl_dkk <= threshold_dkk,
+        month_pnl_dkk,
+        threshold_dkk,
+    }
+}
+
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     let reports = fresh_unmanaged_reports(state).await?;
     if reports.is_empty() {
@@ -310,6 +342,14 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
     });
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
+    let buy_halt = monthly_loss_buy_halt(state, &overview);
+    if buy_halt.active {
+        warn!(
+            month_pnl_dkk = buy_halt.month_pnl_dkk,
+            threshold_dkk = buy_halt.threshold_dkk,
+            "monthly-loss circuit breaker active; all BUY candidates will be skipped"
+        );
+    }
 
     let mut runs = Vec::new();
     for report in reports {
@@ -319,6 +359,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             &open_codes,
             overlay.as_ref(),
             &mut capital_budget,
+            buy_halt,
         )
         .await
         {
@@ -351,6 +392,7 @@ async fn run_for_report(
     open_codes: &[String],
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
+    buy_halt: MonthlyLossBuyHalt,
 ) -> Result<JsonValue> {
     let candidates = candidate_orders_from_report(&report.report_json);
     let candidate_order_count = candidates.len();
@@ -399,6 +441,25 @@ async fn run_for_report(
         .unwrap_or_else(|| {
             yaml_f64(&state.config, &["execution", "min_trade_value_dkk"]).unwrap_or(500.0)
         });
+    // Commission-efficiency floor: a BUY must be large enough that the
+    // exchange minimum commission stays under this share of the clip.
+    // 14 days of live fills averaged ~3,500 DKK per clip at 0.67% one-way
+    // commission drag, which no swing edge survives round trip.
+    let max_commission_pct_per_side = overlay
+        .and_then(|overlay| overlay.f64_value("execution.max_commission_pct_per_side"))
+        .unwrap_or_else(|| {
+            yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"]).unwrap_or(0.003)
+        })
+        .max(0.0);
+    let buy_value_floor_dkk = |symbol: &str| -> f64 {
+        if max_commission_pct_per_side <= f64::EPSILON {
+            return min_trade_value_dkk;
+        }
+        let commission_floor = crate::saxo_order::min_commission_dkk_for_exchange(
+            &exchange_code(symbol).to_lowercase(),
+        ) / max_commission_pct_per_side;
+        min_trade_value_dkk.max(commission_floor)
+    };
     let overlay_min_confluences = overlay
         .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
     let mut markov_cfg = markov_gate_config(state);
@@ -503,6 +564,16 @@ async fn run_for_report(
             skipped.push(skip_order(&order, &shape.reason));
             continue;
         }
+        if order.action == "BUY" && buy_halt.active {
+            skipped.push(skip_order(
+                &order,
+                &format!(
+                    "Monthly-loss circuit breaker active: month P/L {:.0} DKK breached the {:.0} DKK floor; new BUYs are suspended (SELLs unaffected).",
+                    buy_halt.month_pnl_dkk, buy_halt.threshold_dkk
+                ),
+            ));
+            continue;
+        }
         let mut value_verified = false;
         if order.action == "BUY" {
             value_verified = verify_buy_value(state, &mut order).await;
@@ -555,7 +626,20 @@ async fn run_for_report(
                 }
             }
         }
-        if order.estimated_value_dkk.unwrap_or(0.0) < min_trade_value_dkk {
+        if order.action == "BUY" {
+            let floor = buy_value_floor_dkk(&order.symbol);
+            let estimated = order.estimated_value_dkk.unwrap_or(0.0);
+            if estimated < floor {
+                skipped.push(skip_order(
+                    &order,
+                    &format!(
+                        "BUY of {estimated:.0} DKK is below the commission-efficiency floor of {floor:.0} DKK (minimum commission must stay under {:.2}% per side).",
+                        max_commission_pct_per_side * 100.0
+                    ),
+                ));
+                continue;
+            }
+        } else if order.estimated_value_dkk.unwrap_or(0.0) < min_trade_value_dkk {
             skipped.push(skip_order(
                 &order,
                 "Estimated trade value is below the configured minimum.",
@@ -671,6 +755,12 @@ async fn run_for_report(
             skipped.iter().filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("SELL")).count(),
         ),
         "remaining_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
+        "monthly_loss_circuit_breaker": {
+            "active": buy_halt.active,
+            "month_pnl_dkk": buy_halt.month_pnl_dkk,
+            "threshold_dkk": buy_halt.threshold_dkk,
+        },
+        "max_commission_pct_per_side": max_commission_pct_per_side,
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
         "approved_orders": approved.iter().map(|(order, reason)| json!({
@@ -687,6 +777,8 @@ async fn run_for_report(
             "Hermes decision advice is audited for every fresh report when configured; by default it is record-only. In conservative mode it can only block, reduce, or require review.",
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
+            "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
+            "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
