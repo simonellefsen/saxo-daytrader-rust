@@ -609,3 +609,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Continued the accounting-integrity roadmap by adding stable issue keys to current Overview integrity mismatches and warnings.
 - Added a runtime-settings backed acknowledgement lifecycle with operator notes, plus Overview controls to acknowledge or clear current issue acknowledgments.
 - Acknowledged issues remain visible and still count as mismatches/warnings; the acknowledgement is only audit context, not a health override.
+
+## [2026-07-10] improvement | Broker exposure integrity reconciliation
+
+- Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.
+- Added a warning-level quantity drift check between `broker_instrument_exposures` and `broker_position_snapshots`.
+- New broker exposure integrity warnings receive stable issue keys, so the acknowledgement lifecycle can track them without hiding the underlying drift.

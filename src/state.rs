@@ -46,6 +46,9 @@ const INTEGRITY_MONEY_ABS_TOLERANCE_DKK: f64 = 50.0;
 const INTEGRITY_MONEY_REL_TOLERANCE: f64 = 0.002;
 const INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK: f64 = 500.0;
 const INTEGRITY_BROKER_CASH_REL_TOLERANCE: f64 = 0.05;
+const INTEGRITY_BROKER_EXPOSURE_ABS_TOLERANCE_DKK: f64 = 1_000.0;
+const INTEGRITY_BROKER_EXPOSURE_REL_TOLERANCE: f64 = 0.10;
+const INTEGRITY_BROKER_QUANTITY_ABS_TOLERANCE: f64 = 1e-6;
 const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
 const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
 
@@ -1512,6 +1515,85 @@ impl AppState {
             }
         } else {
             checks.insert("broker_cash".to_string(), json!("skipped_no_snapshot"));
+        }
+
+        let broker_exposures = self
+            .select_json(
+                "SELECT symbol, updated_at, quantity, profit_loss_on_trade, currency, calculation_reliability \
+                 FROM broker_instrument_exposures ORDER BY symbol ASC",
+            )
+            .await
+            .unwrap_or_default();
+        if broker_exposures.is_empty() {
+            checks.insert(
+                "broker_exposure_aggregate".to_string(),
+                json!("skipped_no_snapshot"),
+            );
+        } else {
+            let broker_account_currency = self
+                .first_json(
+                    "SELECT account_currency FROM broker_account_snapshots WHERE singleton_key = 'main' LIMIT 1",
+                )
+                .await
+                .ok()
+                .flatten()
+                .and_then(|row| row.get("account_currency").cloned())
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "DKK".to_string());
+            let broker_account_fx =
+                crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_account_currency)
+                    .await;
+            let exposure_unrealised_pnl_dkk = broker_exposures
+                .iter()
+                .map(|row| value_f64(row, "profit_loss_on_trade") * broker_account_fx)
+                .sum::<f64>();
+            let aggregate_unrealised_pnl_dkk = value_f64(aggregate, "total_unrealised_pnl_dkk");
+            if money_mismatch_exceeds_tolerance(
+                aggregate_unrealised_pnl_dkk,
+                exposure_unrealised_pnl_dkk,
+                INTEGRITY_BROKER_EXPOSURE_ABS_TOLERANCE_DKK,
+                INTEGRITY_BROKER_EXPOSURE_REL_TOLERANCE,
+            ) {
+                warnings.push(json!({
+                    "code": "broker_exposure_pnl_drift",
+                    "severity": "warning",
+                    "message": "Dashboard unrealised P/L differs from the latest Saxo instrument exposure aggregate.",
+                    "dashboard_unrealised_pnl_dkk": aggregate_unrealised_pnl_dkk,
+                    "broker_exposure_unrealised_pnl_dkk": exposure_unrealised_pnl_dkk,
+                    "broker_account_currency": broker_account_currency,
+                    "broker_account_fx_rate_to_dkk": broker_account_fx,
+                    "difference_dkk": aggregate_unrealised_pnl_dkk - exposure_unrealised_pnl_dkk,
+                    "exposure_count": broker_exposures.len()
+                }));
+                checks.insert("broker_exposure_aggregate".to_string(), json!("warning"));
+            } else {
+                checks.insert("broker_exposure_aggregate".to_string(), json!("ok"));
+            }
+
+            let broker_positions = self
+                .select_json(
+                    "SELECT symbol, quantity, updated_at FROM broker_position_snapshots ORDER BY symbol ASC",
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| (text_value(&row, "symbol"), row))
+                .collect::<HashMap<_, _>>();
+            let quantity_mismatches =
+                broker_exposure_quantity_mismatches(&broker_exposures, &broker_positions);
+            if quantity_mismatches.is_empty() {
+                checks.insert("broker_exposure_quantities".to_string(), json!("ok"));
+            } else {
+                warnings.push(json!({
+                    "code": "broker_exposure_quantity_drift",
+                    "severity": "warning",
+                    "message": "One or more Saxo instrument exposure quantities differ from broker position quantities.",
+                    "count": quantity_mismatches.len(),
+                    "symbols": quantity_mismatches
+                }));
+                checks.insert("broker_exposure_quantities".to_string(), json!("warning"));
+            }
         }
 
         let suspicious_lots = self
@@ -4607,6 +4689,27 @@ fn overview_integrity_issue_key(issue: &JsonValue) -> String {
                 format!("broker-cash-{currency}")
             }
         }
+        "broker_exposure_pnl_drift" => {
+            let currency = json_text(issue, "broker_account_currency");
+            if currency.is_empty() {
+                "broker-exposure-pnl".to_string()
+            } else {
+                format!("broker-exposure-pnl-{currency}")
+            }
+        }
+        "broker_exposure_quantity_drift" => issue
+            .get("symbols")
+            .and_then(JsonValue::as_array)
+            .map(|symbols| {
+                symbols
+                    .iter()
+                    .map(|row| json_text(row, "symbol"))
+                    .filter(|symbol| !symbol.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .filter(|scope| !scope.is_empty())
+            .unwrap_or_else(|| "broker-exposure-quantities".to_string()),
         "implausible_position_lot_cost_basis" => issue
             .get("lots")
             .and_then(JsonValue::as_array)
@@ -4645,6 +4748,43 @@ fn integrity_key_part(value: &str) -> String {
         .collect::<String>()
         .trim_matches('_')
         .to_string()
+}
+
+fn broker_exposure_quantity_mismatches(
+    exposures: &[JsonValue],
+    positions: &HashMap<String, JsonValue>,
+) -> Vec<JsonValue> {
+    exposures
+        .iter()
+        .filter_map(|exposure| {
+            let symbol = text_value(exposure, "symbol");
+            if symbol.is_empty() {
+                return None;
+            }
+            let exposure_quantity = value_f64(exposure, "quantity");
+            let position_quantity = positions
+                .get(&symbol)
+                .map(|row| value_f64(row, "quantity"))
+                .unwrap_or(0.0);
+            let difference = exposure_quantity - position_quantity;
+            if difference.abs() <= INTEGRITY_BROKER_QUANTITY_ABS_TOLERANCE {
+                return None;
+            }
+            Some(json!({
+                "symbol": symbol,
+                "exposure_quantity": exposure_quantity,
+                "position_quantity": position_quantity,
+                "difference": difference,
+                "exposure_updated_at": exposure.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+                "position_updated_at": positions
+                    .get(&text_value(exposure, "symbol"))
+                    .and_then(|row| row.get("updated_at"))
+                    .cloned()
+                    .unwrap_or(JsonValue::Null)
+            }))
+        })
+        .take(20)
+        .collect()
 }
 
 async fn saxo_reference_get_json(
@@ -5857,6 +5997,44 @@ mod tests {
                 .and_then(|value| value.get("notes"))
                 .and_then(JsonValue::as_str),
             Some("accepted while import repair is pending")
+        );
+    }
+
+    #[test]
+    fn broker_exposure_quantity_mismatch_reports_symbol_drift() {
+        let exposures = vec![
+            json!({"symbol": "BAC:xnys", "quantity": 3.0, "updated_at": "2026-07-10T06:00:00Z"}),
+            json!({"symbol": "AMD:xnas", "quantity": 1.0, "updated_at": "2026-07-10T06:00:00Z"}),
+        ];
+        let positions = HashMap::from([
+            (
+                "BAC:xnys".to_string(),
+                json!({"symbol": "BAC:xnys", "quantity": 2.0, "updated_at": "2026-07-10T06:01:00Z"}),
+            ),
+            (
+                "AMD:xnas".to_string(),
+                json!({"symbol": "AMD:xnas", "quantity": 1.0, "updated_at": "2026-07-10T06:01:00Z"}),
+            ),
+        ]);
+
+        let mismatches = broker_exposure_quantity_mismatches(&exposures, &positions);
+
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(json_text(&mismatches[0], "symbol"), "BAC:xnys");
+        assert_eq!(value_f64(&mismatches[0], "difference"), 1.0);
+    }
+
+    #[test]
+    fn broker_exposure_integrity_issue_key_includes_scope() {
+        let key = overview_integrity_issue_key(&json!({
+            "code": "broker_exposure_quantity_drift",
+            "severity": "warning",
+            "symbols": [{"symbol": "BAC:xnys"}, {"symbol": "AMD:xnas"}]
+        }));
+
+        assert_eq!(
+            key,
+            "broker_exposure_quantity_drift:warning:BAC:xnys_AMD:xnas"
         );
     }
 
