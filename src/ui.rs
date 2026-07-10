@@ -734,6 +734,17 @@ fn IntegrityIssueRow(row: JsonValue) -> Element {
     let code = text(&row, "code");
     let severity = text(&row, "severity");
     let message = text(&row, "message");
+    let issue_key = text(&row, "issue_key");
+    let acknowledged = row
+        .get("acknowledged")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let acknowledgement = row
+        .get("acknowledgement")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let acknowledgement_notes = text(&acknowledgement, "notes");
+    let acknowledgement_updated_at = text(&acknowledgement, "updated_at");
     let tone = match severity.as_str() {
         "error" => "bad-status",
         "warning" => "warn-status",
@@ -744,6 +755,34 @@ fn IntegrityIssueRow(row: JsonValue) -> Element {
             strong { "{code}" }
             span { class: "status {tone}", "{severity}" }
             span { class: "muted", "{message}" }
+            if acknowledged {
+                span { class: "status warn-status", "acknowledged" }
+                if !acknowledgement_notes.is_empty() {
+                    span { class: "muted", "{acknowledgement_notes}" }
+                }
+                if !acknowledgement_updated_at.is_empty() {
+                    span { class: "muted", "ack {acknowledgement_updated_at}" }
+                }
+                form { method: "post", action: "/api/settings/overview-integrity", class: "inline-form compact-inline-form",
+                    input { r#type: "hidden", name: "return_to", value: "/" }
+                    input { r#type: "hidden", name: "operation", value: "clear_acknowledgement" }
+                    input { r#type: "hidden", name: "issue_key", value: "{issue_key}" }
+                    input { r#type: "hidden", name: "code", value: "{code}" }
+                    input { r#type: "hidden", name: "severity", value: "{severity}" }
+                    input { r#type: "text", name: "notes", placeholder: "Reason for clearing" }
+                    button { class: "button secondary", r#type: "submit", "Clear ack" }
+                }
+            } else if !issue_key.is_empty() {
+                form { method: "post", action: "/api/settings/overview-integrity", class: "inline-form compact-inline-form",
+                    input { r#type: "hidden", name: "return_to", value: "/" }
+                    input { r#type: "hidden", name: "operation", value: "acknowledge" }
+                    input { r#type: "hidden", name: "issue_key", value: "{issue_key}" }
+                    input { r#type: "hidden", name: "code", value: "{code}" }
+                    input { r#type: "hidden", name: "severity", value: "{severity}" }
+                    input { r#type: "text", name: "notes", placeholder: "Acknowledgement note" }
+                    button { class: "button", r#type: "submit", "Acknowledge" }
+                }
+            }
         }
     }
 }
@@ -763,17 +802,23 @@ fn integrity_summary(
         .map(Vec::len)
         .unwrap_or(0);
     let checked_at = format_timestamp(&text(integrity, "checked_at"), prefs);
+    let acknowledged_count = value_i64(integrity, "acknowledged_issue_count");
+    let ack_suffix = if acknowledged_count > 0 {
+        format!(" · {acknowledged_count} acknowledged")
+    } else {
+        String::new()
+    };
     if mismatch_count > 0 {
         (
             "bad-status",
             format!("{mismatch_count} error"),
-            format!("{warning_count} warning(s) · checked {checked_at}"),
+            format!("{warning_count} warning(s) · checked {checked_at}{ack_suffix}"),
         )
     } else if warning_count > 0 {
         (
             "warn-status",
             format!("{warning_count} warning"),
-            format!("checked {checked_at}"),
+            format!("checked {checked_at}{ack_suffix}"),
         )
     } else {
         (
@@ -5451,6 +5496,28 @@ mod tests {
         assert_eq!(item.status, "expiry sync");
         assert_eq!(item.tone, "warn");
         assert!(item.detail.contains("DayOrder"));
+    }
+
+    #[test]
+    fn integrity_summary_mentions_acknowledged_issues() {
+        let summary = integrity_summary(
+            &json!({
+                "healthy": false,
+                "mismatches": [{
+                    "code": "portfolio_identity_mismatch",
+                    "severity": "error",
+                    "acknowledged": true
+                }],
+                "warnings": [],
+                "acknowledged_issue_count": 1,
+                "checked_at": "2026-07-10T06:00:00Z"
+            }),
+            &default_prefs(),
+        );
+
+        assert_eq!(summary.0, "bad-status");
+        assert_eq!(summary.1, "1 error");
+        assert!(summary.2.contains("1 acknowledged"));
     }
 
     #[test]

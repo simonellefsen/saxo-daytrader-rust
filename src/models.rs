@@ -142,6 +142,16 @@ pub struct InstrumentQuarantineOverrideRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct OverviewIntegrityAcknowledgementRequest {
+    pub operation: String,
+    pub issue_key: String,
+    pub code: String,
+    pub severity: String,
+    pub notes: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LocalizationSettingsRequest {
     pub locale: Option<String>,
     pub time_zone: Option<String>,

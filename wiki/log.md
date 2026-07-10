@@ -603,3 +603,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The protected Hermes create-proposal endpoint now returns `409 Conflict` when an active or pending experiment already covers the same trimmed, case-insensitive `changed_variable_path`.
 - Terminal statuses (`rejected`, `paper_failed`, `sim_failed`, `failed`) and `promoted` do not block future proposals for the same variable, preserving the ability to run later evidence-backed experiments.
 - Near-duplicate semantic merging, weekly digest, and auto-expiry remain future work.
+
+## [2026-07-10] improvement | Overview integrity acknowledgments
+
+- Continued the accounting-integrity roadmap by adding stable issue keys to current Overview integrity mismatches and warnings.
+- Added a runtime-settings backed acknowledgement lifecycle with operator notes, plus Overview controls to acknowledge or clear current issue acknowledgments.
+- Acknowledged issues remain visible and still count as mismatches/warnings; the acknowledgement is only audit context, not a health override.

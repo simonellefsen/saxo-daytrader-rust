@@ -1618,12 +1618,30 @@ impl AppState {
             }));
         }
 
+        let acknowledgements = self
+            .overview_integrity_acknowledgements_value()
+            .await
+            .unwrap_or_else(|err| {
+                warn!("overview integrity acknowledgement state degraded: {err:#}");
+                json!({"acknowledgements": [], "updated_at": null})
+            });
+        let acknowledged_issue_count = annotate_overview_integrity_acknowledgements(
+            &mut mismatches,
+            &mut warnings,
+            &acknowledgements,
+        );
+
         Ok(json!({
             "healthy": warnings.is_empty() && mismatches.is_empty() && unreconciled_orders.is_empty(),
             "warnings": warnings,
             "mismatches": mismatches,
             "unreconciled_orders": unreconciled_orders,
             "expiry_pending_orders": expiry_pending_orders,
+            "acknowledgements": acknowledgements
+                .get("acknowledgements")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            "acknowledged_issue_count": acknowledged_issue_count,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -3690,6 +3708,87 @@ impl AppState {
         self.instrument_quarantine_overrides_value().await
     }
 
+    pub async fn overview_integrity_acknowledgements_value(&self) -> Result<JsonValue> {
+        let saved = self
+            .runtime_setting("overview_integrity_acknowledgements")
+            .await?;
+        let acknowledgements = saved
+            .as_ref()
+            .and_then(|value| value.get("acknowledgements"))
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| {
+                item.get("enabled")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                    && item
+                        .get("issue_key")
+                        .and_then(JsonValue::as_str)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "acknowledgements": acknowledgements,
+            "updated_at": saved
+                .as_ref()
+                .and_then(|value| value.get("updated_at"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        }))
+    }
+
+    pub async fn save_overview_integrity_acknowledgement(
+        &self,
+        issue_key: &str,
+        code: &str,
+        severity: &str,
+        enabled: bool,
+        notes: &str,
+    ) -> Result<JsonValue> {
+        let issue_key = issue_key.trim();
+        let code = code.trim();
+        let severity = severity.trim();
+        if issue_key.is_empty() || code.is_empty() || severity.is_empty() {
+            anyhow::bail!("Overview integrity acknowledgement requires issue, code, and severity");
+        }
+        if issue_key.len() > 240 || code.len() > 120 || severity.len() > 40 {
+            anyhow::bail!("Overview integrity acknowledgement identifier is too long");
+        }
+        if notes.len() > 500 {
+            anyhow::bail!("Overview integrity acknowledgement notes are too long");
+        }
+        let existing = self.overview_integrity_acknowledgements_value().await?;
+        let mut acknowledgements = existing
+            .get("acknowledgements")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| item.get("issue_key").and_then(JsonValue::as_str) != Some(issue_key))
+            .collect::<Vec<_>>();
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        if enabled {
+            acknowledgements.push(json!({
+                "issue_key": issue_key,
+                "code": code,
+                "severity": severity,
+                "enabled": true,
+                "notes": notes,
+                "updated_at": updated_at
+            }));
+        }
+        let value = json!({
+            "acknowledgements": acknowledgements,
+            "updated_at": updated_at
+        });
+        self.save_runtime_setting("overview_integrity_acknowledgements", &value)
+            .await?;
+        self.overview_integrity_acknowledgements_value().await
+    }
+
     pub async fn effective_xai_model(&self) -> Result<String> {
         Ok(self
             .ai_settings_value()
@@ -4444,6 +4543,108 @@ impl AppState {
         let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_json).collect())
     }
+}
+
+fn annotate_overview_integrity_acknowledgements(
+    mismatches: &mut [JsonValue],
+    warnings: &mut [JsonValue],
+    acknowledgements: &JsonValue,
+) -> usize {
+    let active_acknowledgements = acknowledgements
+        .get("acknowledgements")
+        .and_then(JsonValue::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    if !row
+                        .get("enabled")
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false)
+                    {
+                        return None;
+                    }
+                    Some((json_text(row, "issue_key"), row.clone()))
+                })
+                .filter(|(key, _)| !key.is_empty())
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut acknowledged_count = 0;
+    for issue in mismatches.iter_mut().chain(warnings.iter_mut()) {
+        let issue_key = overview_integrity_issue_key(issue);
+        if let Some(object) = issue.as_object_mut() {
+            object.insert("issue_key".to_string(), JsonValue::from(issue_key.clone()));
+            if let Some(acknowledgement) = active_acknowledgements.get(&issue_key) {
+                acknowledged_count += 1;
+                object.insert("acknowledged".to_string(), JsonValue::from(true));
+                object.insert("acknowledgement".to_string(), acknowledgement.clone());
+            } else {
+                object.insert("acknowledged".to_string(), JsonValue::from(false));
+            }
+        }
+    }
+    acknowledged_count
+}
+
+fn overview_integrity_issue_key(issue: &JsonValue) -> String {
+    let code = json_text(issue, "code");
+    let severity = json_text(issue, "severity");
+    let scope = match code.as_str() {
+        "portfolio_identity_mismatch" => "portfolio".to_string(),
+        "ledger_history_cash_drift" => {
+            let recorded_at = json_text(issue, "history_recorded_at");
+            if recorded_at.is_empty() {
+                "latest-history".to_string()
+            } else {
+                recorded_at
+            }
+        }
+        "broker_cash_drift" => {
+            let currency = json_text(issue, "broker_currency");
+            if currency.is_empty() {
+                "broker-cash".to_string()
+            } else {
+                format!("broker-cash-{currency}")
+            }
+        }
+        "implausible_position_lot_cost_basis" => issue
+            .get("lots")
+            .and_then(JsonValue::as_array)
+            .map(|lots| {
+                lots.iter()
+                    .map(|lot| json_text(lot, "lot_id"))
+                    .filter(|lot_id| !lot_id.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .filter(|scope| !scope.is_empty())
+            .unwrap_or_else(|| "position-lots".to_string()),
+        "stale_or_unreconciled_execution_orders" => "execution-orders".to_string(),
+        "day_order_expiry_sync_pending" => "day-orders".to_string(),
+        _ => "general".to_string(),
+    };
+    format!(
+        "{}:{}:{}",
+        integrity_key_part(&code),
+        integrity_key_part(&severity),
+        integrity_key_part(&scope)
+    )
+}
+
+fn integrity_key_part(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 async fn saxo_reference_get_json(
@@ -5607,6 +5808,56 @@ mod tests {
             50.0,
             0.002
         ));
+    }
+
+    #[test]
+    fn overview_integrity_acknowledgement_matches_stable_issue_key() {
+        let mut mismatches = vec![json!({
+            "code": "implausible_position_lot_cost_basis",
+            "severity": "error",
+            "message": "Bad lot",
+            "lots": [{"lot_id": 42}, {"lot_id": 43}]
+        })];
+        let mut warnings = vec![json!({
+            "code": "broker_cash_drift",
+            "severity": "warning",
+            "message": "Broker cash drift",
+            "broker_currency": "DKK"
+        })];
+        let key = overview_integrity_issue_key(&mismatches[0]);
+        assert_eq!(key, "implausible_position_lot_cost_basis:error:42_43");
+
+        let acknowledged = annotate_overview_integrity_acknowledgements(
+            &mut mismatches,
+            &mut warnings,
+            &json!({
+                "acknowledgements": [{
+                    "issue_key": key,
+                    "enabled": true,
+                    "notes": "accepted while import repair is pending",
+                    "updated_at": "2026-07-10T06:00:00Z"
+                }]
+            }),
+        );
+
+        assert_eq!(acknowledged, 1);
+        assert_eq!(
+            mismatches[0]
+                .get("acknowledged")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            warnings[0].get("acknowledged").and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            mismatches[0]
+                .get("acknowledgement")
+                .and_then(|value| value.get("notes"))
+                .and_then(JsonValue::as_str),
+            Some("accepted while import repair is pending")
+        );
     }
 
     #[test]

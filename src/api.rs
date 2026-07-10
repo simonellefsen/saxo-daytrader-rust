@@ -21,7 +21,8 @@ use crate::{
         AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MonthlyLossBreakerOverrideRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
@@ -73,6 +74,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/settings/instrument-quarantine",
             post(update_instrument_quarantine_override),
+        )
+        .route(
+            "/api/settings/overview-integrity",
+            post(update_overview_integrity_acknowledgement),
         )
         .route(
             "/api/settings/localization",
@@ -338,6 +343,49 @@ async fn update_instrument_quarantine_override(
         }
         Err(err) => {
             warn!("instrument quarantine override update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn update_overview_integrity_acknowledgement(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<OverviewIntegrityAcknowledgementRequest>,
+) -> Response {
+    let enable = match request.operation.trim() {
+        "acknowledge" => true,
+        "clear_acknowledgement" => false,
+        operation => {
+            return json_result(Err(anyhow::anyhow!(
+                "Unsupported overview integrity operation: {operation}"
+            )));
+        }
+    };
+    match state
+        .save_overview_integrity_acknowledgement(
+            &request.issue_key,
+            &request.code,
+            &request.severity,
+            enable,
+            request.notes.unwrap_or_default().trim(),
+        )
+        .await
+    {
+        Ok(value) => {
+            info!(
+                issue_key = %request.issue_key,
+                code = %request.code,
+                severity = %request.severity,
+                acknowledgement_count = value
+                    .get("acknowledgements")
+                    .and_then(JsonValue::as_array)
+                    .map_or(0, Vec::len),
+                "overview integrity acknowledgement updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("overview integrity acknowledgement update failed: {err:#}");
             json_result(Err(err))
         }
     }
