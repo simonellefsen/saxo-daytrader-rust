@@ -132,6 +132,16 @@ pub struct MonthlyLossBreakerOverrideRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct InstrumentQuarantineOverrideRequest {
+    pub operation: String,
+    pub symbol: String,
+    pub side: String,
+    pub signature: String,
+    pub notes: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LocalizationSettingsRequest {
     pub locale: Option<String>,
     pub time_zone: Option<String>,

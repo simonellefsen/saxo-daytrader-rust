@@ -790,6 +790,8 @@ struct InstrumentQuarantineSummary {
     status: String,
     tone: &'static str,
     active_count: i64,
+    blocked_count: i64,
+    override_count: i64,
     lookback_days: i64,
     min_failures: i64,
     active_days: i64,
@@ -821,6 +823,7 @@ fn InstrumentQuarantinePanel(trading_manager: JsonValue, prefs: LocalizationPref
                     }
                     div { class: "cash-diagnostic-grid",
                         div { span { class: "label", "Active" } strong { "{summary.active_count}" } }
+                        div { span { class: "label", "Blocked / overridden" } strong { "{summary.blocked_count} / {summary.override_count}" } }
                         div { span { class: "label", "Lookback" } strong { "{summary.lookback_days}d" } }
                         div { span { class: "label", "Min failures" } strong { "{summary.min_failures}" } }
                         div { span { class: "label", "Active window" } strong { "{summary.active_days}d" } }
@@ -828,7 +831,7 @@ fn InstrumentQuarantinePanel(trading_manager: JsonValue, prefs: LocalizationPref
                     if !summary.active.is_empty() {
                         div { class: "table-wrap",
                             table {
-                                thead { tr { th { "Symbol" } th { "Side" } th { "Failure" } th { "Count" } th { "Expires" } } }
+                                thead { tr { th { "Symbol" } th { "Side" } th { "Failure" } th { "Count" } th { "Expires" } th { "Override" } } }
                                 tbody {
                                     for row in summary.active.iter() {
                                         InstrumentQuarantineRow { row: row.clone(), prefs: prefs.clone() }
@@ -846,13 +849,48 @@ fn InstrumentQuarantinePanel(trading_manager: JsonValue, prefs: LocalizationPref
 #[component]
 fn InstrumentQuarantineRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let sample = fallback_text(&row, "sample_error", "No sample error recorded.");
+    let symbol = text(&row, "symbol");
+    let action = text(&row, "action");
+    let signature = text(&row, "signature");
+    let override_active = row
+        .get("override_active")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let override_notes = text(&row, "override_notes");
     rsx! {
         tr { title: "{sample}",
-            td { class: "mono", "{text(&row, \"symbol\")}" }
-            td { "{text(&row, \"action\")}" }
-            td { "{text(&row, \"signature\")}" }
+            td { class: "mono", "{symbol}" }
+            td { "{action}" }
+            td { "{signature}" }
             td { "{value_i64(&row, \"failure_count\")}" }
             td { "{format_timestamp(&text(&row, \"expires_at\"), &prefs)}" }
+            td {
+                if override_active {
+                    span { class: "status warn-status", "overridden" }
+                    if !override_notes.is_empty() {
+                        div { class: "muted", "{override_notes}" }
+                    }
+                    form { method: "post", action: "/api/settings/instrument-quarantine", class: "inline-form compact-inline-form",
+                        input { r#type: "hidden", name: "return_to", value: "/" }
+                        input { r#type: "hidden", name: "operation", value: "clear_override" }
+                        input { r#type: "hidden", name: "symbol", value: "{symbol}" }
+                        input { r#type: "hidden", name: "side", value: "{action}" }
+                        input { r#type: "hidden", name: "signature", value: "{signature}" }
+                        input { r#type: "text", name: "notes", placeholder: "Reason for clearing" }
+                        button { class: "button secondary", r#type: "submit", "Clear" }
+                    }
+                } else {
+                    form { method: "post", action: "/api/settings/instrument-quarantine", class: "inline-form compact-inline-form",
+                        input { r#type: "hidden", name: "return_to", value: "/" }
+                        input { r#type: "hidden", name: "operation", value: "override" }
+                        input { r#type: "hidden", name: "symbol", value: "{symbol}" }
+                        input { r#type: "hidden", name: "side", value: "{action}" }
+                        input { r#type: "hidden", name: "signature", value: "{signature}" }
+                        input { r#type: "text", name: "notes", placeholder: "Override reason" }
+                        button { class: "button", r#type: "submit", "Override" }
+                    }
+                }
+            }
         }
     }
 }
@@ -876,17 +914,40 @@ fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantine
         .get("active_count")
         .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
         .unwrap_or(active.len() as i64);
+    let blocked_count = quarantine
+        .get("blocked_count")
+        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+        .unwrap_or_else(|| {
+            active
+                .iter()
+                .filter(|row| {
+                    !row.get("override_active")
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false)
+                })
+                .count() as i64
+        });
+    let override_count = quarantine
+        .get("override_count")
+        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+        .unwrap_or_else(|| active_count.saturating_sub(blocked_count));
     let (status, tone, description) = if !enabled {
         (
             "disabled".to_string(),
             "",
             "The quarantine gate was disabled for the latest manager run.".to_string(),
         )
-    } else if active_count > 0 {
+    } else if blocked_count > 0 {
         (
             "active".to_string(),
             "warn-status",
-            format!("{active_count} symbol/action pair(s) are blocked before queueing."),
+            format!("{blocked_count} symbol/action pair(s) are blocked before queueing."),
+        )
+    } else if active_count > 0 {
+        (
+            "overridden".to_string(),
+            "warn-status",
+            format!("{override_count} active quarantine(s) have operator overrides."),
         )
     } else {
         (
@@ -900,6 +961,8 @@ fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantine
         status,
         tone,
         active_count,
+        blocked_count,
+        override_count,
         lookback_days: value_i64(&quarantine, "lookback_days"),
         min_failures: value_i64(&quarantine, "min_failures"),
         active_days: value_i64(&quarantine, "active_days"),
@@ -5641,6 +5704,37 @@ mod tests {
         assert_eq!(summary.active_count, 1);
         assert_eq!(text(&summary.active[0], "symbol"), "ARKK:xmil");
         assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn summarizes_overridden_instrument_quarantines() {
+        let latest_run = json!({
+            "manager_json": {
+                "instrument_quarantine": {
+                    "enabled": true,
+                    "lookback_days": 14,
+                    "min_failures": 3,
+                    "active_days": 14,
+                    "blocked_count": 0,
+                    "override_count": 1,
+                    "active": [{
+                        "symbol": "ARKK:xmil",
+                        "action": "BUY",
+                        "signature": "commission_not_configured",
+                        "failure_count": 3,
+                        "override_active": true,
+                        "override_notes": "operator verified",
+                        "expires_at": "2026-07-22T10:00:00Z"
+                    }]
+                }
+            }
+        });
+
+        let summary = instrument_quarantine_summary(&latest_run);
+        assert_eq!(summary.status, "overridden");
+        assert_eq!(summary.blocked_count, 0);
+        assert_eq!(summary.override_count, 1);
+        assert!(summary.description.contains("operator overrides"));
     }
 
     #[test]

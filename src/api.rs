@@ -19,9 +19,9 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesReflectionRequest, LimitParams,
-        LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest, PerformanceParams,
-        SaxoCallbackParams, ViewParams,
+        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MonthlyLossBreakerOverrideRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
@@ -69,6 +69,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/settings/monthly-loss-breaker",
             post(update_monthly_loss_breaker_override),
+        )
+        .route(
+            "/api/settings/instrument-quarantine",
+            post(update_instrument_quarantine_override),
         )
         .route(
             "/api/settings/localization",
@@ -291,6 +295,49 @@ async fn update_monthly_loss_breaker_override(
         }
         Err(err) => {
             warn!("monthly-loss breaker override update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn update_instrument_quarantine_override(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<InstrumentQuarantineOverrideRequest>,
+) -> Response {
+    let enable = match request.operation.trim() {
+        "override" => true,
+        "clear_override" => false,
+        operation => {
+            return json_result(Err(anyhow::anyhow!(
+                "Unsupported instrument quarantine operation: {operation}"
+            )));
+        }
+    };
+    match state
+        .save_instrument_quarantine_override(
+            &request.symbol,
+            &request.side,
+            &request.signature,
+            enable,
+            request.notes.unwrap_or_default().trim(),
+        )
+        .await
+    {
+        Ok(value) => {
+            info!(
+                symbol = %request.symbol,
+                side = %request.side,
+                signature = %request.signature,
+                override_count = value
+                    .get("overrides")
+                    .and_then(JsonValue::as_array)
+                    .map_or(0, Vec::len),
+                "instrument quarantine override updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("instrument quarantine override update failed: {err:#}");
             json_result(Err(err))
         }
     }

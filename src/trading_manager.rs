@@ -344,6 +344,9 @@ struct InstrumentQuarantine {
     latest_failure_at: String,
     expires_at: String,
     sample_error: String,
+    override_active: bool,
+    override_notes: String,
+    override_updated_at: String,
 }
 
 impl InstrumentQuarantine {
@@ -356,6 +359,9 @@ impl InstrumentQuarantine {
             "latest_failure_at": self.latest_failure_at,
             "expires_at": self.expires_at,
             "sample_error": self.sample_error,
+            "override_active": self.override_active,
+            "override_notes": self.override_notes,
+            "override_updated_at": self.override_updated_at,
         })
     }
 }
@@ -416,6 +422,15 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             warn!("instrument quarantine read degraded: {err:#}");
             Vec::new()
         });
+    let quarantine_overrides = state
+        .instrument_quarantine_overrides_value()
+        .await
+        .unwrap_or_else(|err| {
+            warn!("instrument quarantine override lookup degraded: {err:#}");
+            json!({"overrides": [], "error": err.to_string()})
+        });
+    let active_quarantines =
+        apply_instrument_quarantine_overrides(active_quarantines, &quarantine_overrides);
 
     let mut runs = Vec::new();
     for report in reports {
@@ -626,7 +641,20 @@ async fn run_for_report(
             continue;
         }
         if let Some(quarantine) = matching_instrument_quarantine(active_quarantines, &order) {
-            skipped.push(skip_order(
+            if quarantine.override_active {
+                if let Some(metadata) = order
+                    .raw
+                    .as_object_mut()
+                    .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+                    .and_then(JsonValue::as_object_mut)
+                {
+                    metadata.insert(
+                        "instrument_quarantine_override".to_string(),
+                        quarantine.to_json(),
+                    );
+                }
+            } else {
+                skipped.push(skip_order(
                 &order,
                 &format!(
                     "Instrument quarantine active for {} {} after {} repeated {} failures; latest failure at {}, quarantine expires at {}. Sample: {}",
@@ -639,7 +667,8 @@ async fn run_for_report(
                     quarantine.sample_error
                 ),
             ));
-            continue;
+                continue;
+            }
         }
         if order.quantity <= 0.0 {
             skipped.push(skip_order(&order, "Order quantity is zero or negative."));
@@ -855,6 +884,8 @@ async fn run_for_report(
             "min_failures": quarantine_cfg.min_failures,
             "active_days": quarantine_cfg.active_days,
             "active_count": active_quarantines.len(),
+            "blocked_count": active_quarantines.iter().filter(|item| !item.override_active).count(),
+            "override_count": active_quarantines.iter().filter(|item| item.override_active).count(),
             "active": active_quarantines.iter().map(InstrumentQuarantine::to_json).collect::<Vec<_>>(),
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
@@ -876,7 +907,7 @@ async fn run_for_report(
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
             "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it. An operator override can resume BUYs for the current month and remains visible in manager JSON.",
-            "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders.",
+            "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
@@ -2008,6 +2039,9 @@ fn active_instrument_quarantines_from_rows(
                     latest_failure_at: latest.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     expires_at: expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     sample_error,
+                    override_active: false,
+                    override_notes: String::new(),
+                    override_updated_at: String::new(),
                 })
             },
         )
@@ -2018,6 +2052,52 @@ fn active_instrument_quarantines_from_rows(
             .then(left.action.cmp(&right.action))
             .then(left.signature.cmp(&right.signature))
     });
+    quarantines
+}
+
+fn instrument_quarantine_override_key(symbol: &str, action: &str, signature: &str) -> String {
+    format!(
+        "{}|{}|{}",
+        symbol.trim(),
+        action.trim().to_uppercase(),
+        signature.trim()
+    )
+}
+
+fn apply_instrument_quarantine_overrides(
+    mut quarantines: Vec<InstrumentQuarantine>,
+    overrides: &JsonValue,
+) -> Vec<InstrumentQuarantine> {
+    let mut by_key: HashMap<String, JsonValue> = HashMap::new();
+    if let Some(items) = overrides.get("overrides").and_then(JsonValue::as_array) {
+        for item in items {
+            if item
+                .get("enabled")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                by_key.insert(
+                    instrument_quarantine_override_key(
+                        &text(item, "symbol"),
+                        &text(item, "action"),
+                        &text(item, "signature"),
+                    ),
+                    item.clone(),
+                );
+            }
+        }
+    }
+    for quarantine in &mut quarantines {
+        if let Some(override_item) = by_key.get(&instrument_quarantine_override_key(
+            &quarantine.symbol,
+            &quarantine.action,
+            &quarantine.signature,
+        )) {
+            quarantine.override_active = true;
+            quarantine.override_notes = text(override_item, "notes");
+            quarantine.override_updated_at = text(override_item, "updated_at");
+        }
+    }
     quarantines
 }
 
@@ -3031,5 +3111,38 @@ mod tests {
         assert!(monthly_loss_threshold_breached(-12_000.0, -10_000.0));
         assert!(!monthly_loss_threshold_breached(-9_999.0, -10_000.0));
         assert!(!monthly_loss_threshold_breached(-12_000.0, 0.0));
+    }
+
+    #[test]
+    fn applies_instrument_quarantine_override_by_exact_signature() {
+        let quarantines = vec![InstrumentQuarantine {
+            symbol: "ARKK:xmil".to_string(),
+            action: "BUY".to_string(),
+            signature: "commission_not_configured".to_string(),
+            failure_count: 3,
+            latest_failure_at: "2026-07-09T10:00:00Z".to_string(),
+            expires_at: "2026-07-23T10:00:00Z".to_string(),
+            sample_error: "commissions configured".to_string(),
+            override_active: false,
+            override_notes: String::new(),
+            override_updated_at: String::new(),
+        }];
+        let overrides = json!({
+            "overrides": [{
+                "symbol": "ARKK:xmil",
+                "action": "BUY",
+                "signature": "commission_not_configured",
+                "enabled": true,
+                "notes": "manually verified Saxo commission setup",
+                "updated_at": "2026-07-10T06:00:00Z"
+            }]
+        });
+
+        let result = apply_instrument_quarantine_overrides(quarantines, &overrides);
+        assert!(result[0].override_active);
+        assert_eq!(
+            result[0].override_notes,
+            "manually verified Saxo commission setup"
+        );
     }
 }

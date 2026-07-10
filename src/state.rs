@@ -3595,6 +3595,101 @@ impl AppState {
         self.monthly_loss_breaker_override_value().await
     }
 
+    pub async fn instrument_quarantine_overrides_value(&self) -> Result<JsonValue> {
+        let saved = self
+            .runtime_setting("instrument_quarantine_overrides")
+            .await?;
+        let overrides = saved
+            .as_ref()
+            .and_then(|value| value.get("overrides"))
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| {
+                item.get("enabled")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                    && item
+                        .get("symbol")
+                        .and_then(JsonValue::as_str)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+                    && item
+                        .get("action")
+                        .and_then(JsonValue::as_str)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+                    && item
+                        .get("signature")
+                        .and_then(JsonValue::as_str)
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "overrides": overrides,
+            "updated_at": saved
+                .as_ref()
+                .and_then(|value| value.get("updated_at"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        }))
+    }
+
+    pub async fn save_instrument_quarantine_override(
+        &self,
+        symbol: &str,
+        action: &str,
+        signature: &str,
+        enabled: bool,
+        notes: &str,
+    ) -> Result<JsonValue> {
+        let symbol = symbol.trim();
+        let action = action.trim().to_uppercase();
+        let signature = signature.trim();
+        if symbol.is_empty() || action.is_empty() || signature.is_empty() {
+            anyhow::bail!("Instrument quarantine override requires symbol, side, and signature");
+        }
+        if symbol.len() > 80 || action.len() > 12 || signature.len() > 120 {
+            anyhow::bail!("Instrument quarantine override identifier is too long");
+        }
+        if notes.len() > 500 {
+            anyhow::bail!("Instrument quarantine override notes are too long");
+        }
+        let existing = self.instrument_quarantine_overrides_value().await?;
+        let mut overrides = existing
+            .get("overrides")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| {
+                !(item.get("symbol").and_then(JsonValue::as_str) == Some(symbol)
+                    && item.get("action").and_then(JsonValue::as_str) == Some(action.as_str())
+                    && item.get("signature").and_then(JsonValue::as_str) == Some(signature))
+            })
+            .collect::<Vec<_>>();
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        if enabled {
+            overrides.push(json!({
+                "symbol": symbol,
+                "action": action,
+                "signature": signature,
+                "enabled": true,
+                "notes": notes,
+                "updated_at": updated_at
+            }));
+        }
+        let value = json!({
+            "overrides": overrides,
+            "updated_at": updated_at
+        });
+        self.save_runtime_setting("instrument_quarantine_overrides", &value)
+            .await?;
+        self.instrument_quarantine_overrides_value().await
+    }
+
     pub async fn effective_xai_model(&self) -> Result<String> {
         Ok(self
             .ai_settings_value()

@@ -572,6 +572,16 @@ form.is-submitting .button {
   min-width: 180px;
 }
 
+.compact-inline-form {
+  margin-top: 6px;
+  gap: 6px;
+}
+
+.compact-inline-form input[type="text"] {
+  flex-basis: 180px;
+  min-width: 140px;
+}
+
 .section {
   padding: 18px;
   overflow: hidden;

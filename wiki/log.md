@@ -16,6 +16,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Overview cash deployment panel now shows breached/active/overridden breaker state and posts either "Resume BUYs This Month" or "Clear Override" with operator notes.
 - Updated the roadmap to mark the acknowledgment path as landed and leave only future override-history/audit UX as a possible follow-up.
 
+## [2026-07-10] improvement | Instrument quarantine operator override
+
+- Added exact symbol/action/signature runtime overrides for active instrument quarantines; the Trading Manager continues to block by default and only bypasses the quarantine when the exact override is active.
+- The Overview Instrument Quarantine panel now shows active, blocked, and overridden counts, and each active row can be overridden or cleared with notes.
+- Updated the roadmap to mark the quarantine acknowledgment path as landed and leave only future override-history persistence as a possible follow-up.
+
 ## [2026-07-08] fix | Cost-basis repair, monthly-loss breaker, commission floor
 
 - Repaired the May 18 import corruption: the old importer stripped dot-decimals, storing values inflated by 10^(decimal digits). Verified every stored `position_snapshots`/`position_lots` value against the exact old-parser corruption of the original `Positioner_17-maj-2026_13_39_46.csv` before updating (abort-on-mismatch guard), restored true cost bases, and recomputed all 22 post-reset SELL rows via FIFO replay against the corrected import lot plus subsequent ledger buys. Corrected realised P/L since the reset: +69,251 DKK (was showing millions of phantom losses). Repair script and audit trail in the session scratchpad; ledger rows carry a repair note.
