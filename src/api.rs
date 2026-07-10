@@ -1033,11 +1033,28 @@ async fn action_run_quiver_signals(State(state): State<Arc<AppState>>) -> Respon
 }
 
 async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> Response {
+    action_generate_decision_report_with_mode(state, DecisionReportActionMode::Live).await
+}
+
+async fn action_generate_decision_report_dry_run(State(state): State<Arc<AppState>>) -> Response {
+    action_generate_decision_report_with_mode(state, DecisionReportActionMode::DryRun).await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionReportActionMode {
+    Live,
+    DryRun,
+}
+
+async fn action_generate_decision_report_with_mode(
+    state: Arc<AppState>,
+    mode: DecisionReportActionMode,
+) -> Response {
     match xai_decision::submit_manual_decision_report(&state).await {
         Ok(report) => {
             let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
-            let mut immediate = json!({"status": "not_run"});
-            if report.get("status").and_then(JsonValue::as_str) == Some("completed") {
+            let mut immediate = json!({"status": decision_report_action_skip_status(mode)});
+            if decision_report_action_runs_immediate_pipeline(mode, &report) {
                 let manager = run_trading_manager_cycle(&state).await;
                 let execution = match &manager {
                     Ok(_) => run_saxo_execution_queue(&state).await,
@@ -1068,6 +1085,7 @@ async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> 
                     .get("status")
                     .and_then(JsonValue::as_str)
                     .unwrap_or("unknown"),
+                dry_run = mode == DecisionReportActionMode::DryRun,
                 immediate = %immediate,
                 "manual deferred xAI decision report submitted"
             );
@@ -1080,24 +1098,18 @@ async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> 
     }
 }
 
-async fn action_generate_decision_report_dry_run(State(state): State<Arc<AppState>>) -> Response {
-    match xai_decision::submit_manual_decision_report(&state).await {
-        Ok(report) => {
-            let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
-            info!(
-                report_id = id,
-                status = report
-                    .get("status")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("unknown"),
-                "manual dry-run decision report submitted without Trading Manager or execution queue"
-            );
-            redirect_to_app(&state, &format!("/?view=decisions&report_id={id}")).into_response()
-        }
-        Err(err) => {
-            error!("manual dry-run decision report generation failed: {err:#}");
-            json_result(Err(err))
-        }
+fn decision_report_action_runs_immediate_pipeline(
+    mode: DecisionReportActionMode,
+    report: &JsonValue,
+) -> bool {
+    mode == DecisionReportActionMode::Live
+        && report.get("status").and_then(JsonValue::as_str) == Some("completed")
+}
+
+fn decision_report_action_skip_status(mode: DecisionReportActionMode) -> &'static str {
+    match mode {
+        DecisionReportActionMode::Live => "not_run",
+        DecisionReportActionMode::DryRun => "dry_run_no_side_effects",
     }
 }
 
@@ -1322,5 +1334,46 @@ fn redirect_to_app(state: &AppState, path: &str) -> Redirect {
         Redirect::to(&base)
     } else {
         Redirect::to(&format!("{}{}", base.trim_end_matches('/'), path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_completed_decision_report_runs_immediate_pipeline() {
+        let report = json!({"id": 42, "status": "completed"});
+
+        assert!(decision_report_action_runs_immediate_pipeline(
+            DecisionReportActionMode::Live,
+            &report
+        ));
+    }
+
+    #[test]
+    fn dry_run_completed_decision_report_does_not_run_immediate_pipeline() {
+        let report = json!({"id": 42, "status": "completed"});
+
+        assert!(!decision_report_action_runs_immediate_pipeline(
+            DecisionReportActionMode::DryRun,
+            &report
+        ));
+        assert_eq!(
+            decision_report_action_skip_status(DecisionReportActionMode::DryRun),
+            "dry_run_no_side_effects"
+        );
+    }
+
+    #[test]
+    fn live_non_completed_decision_report_does_not_run_immediate_pipeline() {
+        for status in ["deferred", "xai_error", "provider_error", ""] {
+            let report = json!({"id": 42, "status": status});
+
+            assert!(!decision_report_action_runs_immediate_pipeline(
+                DecisionReportActionMode::Live,
+                &report
+            ));
+        }
     }
 }

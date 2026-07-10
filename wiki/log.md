@@ -575,6 +575,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The cache defaults to a 7-day retry interval via `strategy.markov.instrument_negative_cache_retry_days`; stored broker/position instruments still bypass and clear cached negative rows.
 - This reduces repeated daily dead-end Saxo reference lookups while leaving a slow retry path for symbols that later become available in SIM.
 
+## [2026-07-10] improvement | Decision-report dry-run regression guard
+
+- Continued the roadmap testing work by centralizing manual decision-report action behavior behind an explicit live vs dry-run mode.
+- Added Rust unit coverage proving a completed dry-run report does not run the Trading Manager or Saxo execution queue, while a completed live report still can.
+- This is the first slice of the broader workflow-test roadmap; scheduled reports, Hermes advice, Trading Manager queueing, and execution dry-run paths remain future slices.
+
 ## [2026-07-09] improvement | Saxo share-class symbol variants
 
 - Continued the Markov coverage roadmap by adding deterministic share-class symbol variants to the shared Markov/daily-indicator Saxo resolver and the Saxo execution resolver.
