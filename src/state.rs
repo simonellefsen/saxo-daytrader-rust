@@ -2417,6 +2417,18 @@ impl AppState {
                 "write_tool": "create_decision_advice",
                 "allowed_recommendations": ["proceed", "stand_down", "review"],
                 "allowed_order_actions": ["allow", "reduce", "stand_down", "review"],
+                "required_context_self_check": {
+                    "fields": hermes_context_self_check_required_fields(),
+                    "format": "Include context_self_check with one boolean per field, optional sources, notes, and missing context explanations.",
+                    "required_sources": [
+                        "get_decision_reports",
+                        "get_markov_signals",
+                        "get_end_of_day_reports",
+                        "get_context",
+                        "list_reflections",
+                        "list_experiments"
+                    ]
+                },
                 "safety": "advisory only; cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints"
             },
             "supported_experiment_overlays": {
@@ -2606,6 +2618,13 @@ impl AppState {
                     ORDER BY h.created_at DESC, h.id DESC
                     LIMIT 1
                 ) AS order_advice_json,
+                (
+                    SELECT h.raw_payload_json
+                    FROM hermes_decision_advice h
+                    WHERE h.decision_report_id = dr.id
+                    ORDER BY h.created_at DESC, h.id DESC
+                    LIMIT 1
+                ) AS advice_raw_payload_json,
                 (
                     SELECT tm.status
                     FROM trading_manager_runs tm
@@ -2896,7 +2915,23 @@ impl AppState {
         }
         let order_advice = request.order_advice.clone().unwrap_or_else(|| json!([]));
         let learning_notes = request.learning_notes.clone().unwrap_or_else(|| json!([]));
-        let raw_payload = request.raw_payload.clone().unwrap_or_else(|| json!({}));
+        let mut raw_payload = request.raw_payload.clone().unwrap_or_else(|| json!({}));
+        if let Some(context_self_check) = request.context_self_check.clone() {
+            let normalized = normalize_hermes_context_self_check(context_self_check);
+            if let Some(raw) = raw_payload.as_object_mut() {
+                raw.insert("context_self_check".to_string(), normalized);
+            } else {
+                raw_payload = json!({
+                    "raw_payload": raw_payload,
+                    "context_self_check": normalized
+                });
+            }
+        } else if let Some(context_self_check) = raw_payload.get("context_self_check").cloned() {
+            let normalized = normalize_hermes_context_self_check(context_self_check);
+            if let Some(raw) = raw_payload.as_object_mut() {
+                raw.insert("context_self_check".to_string(), normalized);
+            }
+        }
         let sql = format!(
             "INSERT INTO hermes_decision_advice (
                 id, created_at, decision_report_id, status, source_session_id,
@@ -5927,9 +5962,85 @@ fn deterministic_suggested_trades(
     trades
 }
 
+fn hermes_context_self_check_required_fields() -> Vec<&'static str> {
+    vec![
+        "latest_report",
+        "markov_signals",
+        "end_of_day_report",
+        "current_positions",
+        "active_experiments",
+    ]
+}
+
+fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
+    let mut object = value
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    let mut missing = Vec::new();
+    for field in hermes_context_self_check_required_fields() {
+        if object.get(field).and_then(JsonValue::as_bool) != Some(true) {
+            missing.push(JsonValue::String(field.to_string()));
+        }
+    }
+    object.insert(
+        "required".to_string(),
+        json!(hermes_context_self_check_required_fields()),
+    );
+    object.insert("missing".to_string(), JsonValue::Array(missing.clone()));
+    object.insert("complete".to_string(), JsonValue::Bool(missing.is_empty()));
+    JsonValue::Object(object)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hermes_context_self_check_marks_complete_when_all_sources_seen() {
+        let normalized = normalize_hermes_context_self_check(json!({
+            "latest_report": true,
+            "markov_signals": true,
+            "end_of_day_report": true,
+            "current_positions": true,
+            "active_experiments": true,
+            "sources": ["get_decision_reports", "get_markov_signals"]
+        }));
+
+        assert_eq!(
+            normalized.get("complete").and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("missing")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn hermes_context_self_check_reports_missing_sources() {
+        let normalized = normalize_hermes_context_self_check(json!({
+            "latest_report": true,
+            "markov_signals": false,
+            "current_positions": true
+        }));
+
+        assert_eq!(
+            normalized.get("complete").and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            normalized.get("missing").cloned(),
+            Some(json!([
+                "markov_signals",
+                "end_of_day_report",
+                "active_experiments"
+            ]))
+        );
+    }
 
     #[test]
     fn money_integrity_tolerance_requires_absolute_and_relative_drift() {

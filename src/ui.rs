@@ -2397,6 +2397,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             th { "Report" }
                             th { "Pulse" }
                             th { "Advice" }
+                            th { "Self-check" }
                             th { "Recommendation" }
                             th { "Orders" }
                             th { "Impact" }
@@ -3429,6 +3430,8 @@ fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let pulse = fallback_text(&row, "analysis_pulse_label", "n/a");
     let recommendation = fallback_text(&row, "advice_recommendation", "n/a");
     let manager_status = fallback_text(&row, "manager_status", "not run");
+    let (self_check_label, self_check_tone, self_check_detail) =
+        hermes_context_self_check_label(&row);
     rsx! {
         tr {
             td {
@@ -3438,6 +3441,9 @@ fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{pulse}" }
             td {
                 span { class: "status {hermes_advice_status_tone(&advice_status)}", title: "{hermes_advice_detail(&row)}", "{advice_status}" }
+            }
+            td {
+                span { class: "status {self_check_tone}", title: "{self_check_detail}", "{self_check_label}" }
             }
             td { "{recommendation}" }
             td { title: "{order_detail}", "{order_counts}" }
@@ -3450,6 +3456,52 @@ fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
         }
     }
+}
+
+fn hermes_context_self_check(row: &JsonValue) -> Option<&JsonValue> {
+    row.get("advice_raw_payload_json")
+        .and_then(|value| value.get("context_self_check"))
+        .or_else(|| {
+            row.get("manager_json")
+                .and_then(|value| value.get("hermes_decision_advice"))
+                .and_then(|value| value.get("context_self_check"))
+        })
+}
+
+fn hermes_context_self_check_label(row: &JsonValue) -> (String, &'static str, String) {
+    let Some(check) = hermes_context_self_check(row) else {
+        return (
+            "missing".to_string(),
+            "warn-status",
+            "Hermes advice did not include a context self-check.".to_string(),
+        );
+    };
+    let missing = check
+        .get("missing")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if check.get("complete").and_then(JsonValue::as_bool) == Some(true) && missing.is_empty() {
+        return (
+            "complete".to_string(),
+            "good-status",
+            "Hermes reported that required decision report, Markov, EOD, positions, and experiment context were reviewed.".to_string(),
+        );
+    }
+    let detail = if missing.is_empty() {
+        "Hermes context self-check was present but not complete.".to_string()
+    } else {
+        format!(
+            "Hermes context self-check is missing: {}.",
+            missing.join(", ")
+        )
+    };
+    ("missing".to_string(), "warn-status", detail)
 }
 
 fn hermes_advice_status_label(row: &JsonValue) -> String {

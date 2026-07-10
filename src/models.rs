@@ -97,6 +97,7 @@ pub struct HermesDecisionAdviceRequest {
     pub summary: String,
     pub order_advice: Option<JsonValue>,
     pub learning_notes: Option<JsonValue>,
+    pub context_self_check: Option<JsonValue>,
     pub raw_payload: Option<JsonValue>,
 }
 

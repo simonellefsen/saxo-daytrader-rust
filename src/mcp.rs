@@ -415,6 +415,29 @@ fn mcp_tools() -> Vec<JsonValue> {
                         }
                     },
                     "learning_notes": {},
+                    "context_self_check": {
+                        "type": "object",
+                        "required": [
+                            "latest_report",
+                            "markov_signals",
+                            "end_of_day_report",
+                            "current_positions",
+                            "active_experiments"
+                        ],
+                        "properties": {
+                            "latest_report": {"type": "boolean"},
+                            "markov_signals": {"type": "boolean"},
+                            "end_of_day_report": {"type": "boolean"},
+                            "current_positions": {"type": "boolean"},
+                            "active_experiments": {"type": "boolean"},
+                            "sources": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            },
+                            "notes": {"type": "string"}
+                        },
+                        "additionalProperties": true
+                    },
                     "raw_payload": {}
                 },
                 "additionalProperties": false

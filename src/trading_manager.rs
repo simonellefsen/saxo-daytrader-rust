@@ -29,6 +29,13 @@ const EXPERIMENT_VARIABLE_ALLOWLIST: &[&str] = &[
     "strategy.swing.markov_gate.min_signed_signal",
     "strategy.swing.markov_gate.max_position_pct",
 ];
+const HERMES_CONTEXT_SELF_CHECK_FIELDS: &[&str] = &[
+    "latest_report",
+    "markov_signals",
+    "end_of_day_report",
+    "current_positions",
+    "active_experiments",
+];
 
 #[derive(Clone, Debug)]
 struct DecisionReport {
@@ -148,6 +155,43 @@ struct HermesOrderAdvice {
     raw: JsonValue,
 }
 
+fn hermes_context_self_check_not_recorded(status: &str) -> JsonValue {
+    json!({
+        "complete": false,
+        "status": status,
+        "required": HERMES_CONTEXT_SELF_CHECK_FIELDS,
+        "missing": HERMES_CONTEXT_SELF_CHECK_FIELDS,
+        "notes": "Hermes did not record a context self-check for this advisory result."
+    })
+}
+
+fn hermes_context_self_check_from_raw(row: &JsonValue) -> JsonValue {
+    let source = row
+        .get("raw_payload_json")
+        .and_then(|value| value.get("context_self_check"))
+        .or_else(|| row.get("context_self_check"));
+    let Some(source) = source else {
+        return hermes_context_self_check_not_recorded("missing");
+    };
+    let mut object = source
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    let mut missing = Vec::new();
+    for field in HERMES_CONTEXT_SELF_CHECK_FIELDS {
+        if object.get(*field).and_then(JsonValue::as_bool) != Some(true) {
+            missing.push(JsonValue::String((*field).to_string()));
+        }
+    }
+    object.insert(
+        "required".to_string(),
+        json!(HERMES_CONTEXT_SELF_CHECK_FIELDS),
+    );
+    object.insert("missing".to_string(), JsonValue::Array(missing.clone()));
+    object.insert("complete".to_string(), JsonValue::Bool(missing.is_empty()));
+    JsonValue::Object(object)
+}
+
 impl HermesDecisionAdvice {
     fn fallback(status: &str, mode: String, summary: String, report_id: i64) -> Self {
         let overall_recommendation = if mode == "conservative"
@@ -165,7 +209,8 @@ impl HermesDecisionAdvice {
             "overall_recommendation": overall_recommendation,
             "summary": summary,
             "order_advice_json": [],
-            "learning_notes_json": []
+            "learning_notes_json": [],
+            "context_self_check": hermes_context_self_check_not_recorded(status)
         });
         Self {
             status: status.to_string(),
@@ -241,6 +286,7 @@ impl HermesDecisionAdvice {
             "source_session_id": self.source_session_id,
             "overall_recommendation": self.overall_recommendation,
             "summary": self.summary,
+            "context_self_check": hermes_context_self_check_from_raw(&self.raw),
             "raw": self.raw
         })
     }
@@ -1030,13 +1076,13 @@ async fn request_hermes_decision_advice(
         })
         .collect::<Vec<_>>();
     let input = format!(
-        "Review decision report {} before the Rust Trading Manager queues orders. Use the configured daytrader MCP tools, especially get_decision_reports, get_markov_signals, get_end_of_day_reports, list_reflections, list_experiments, and create_decision_advice. Pull the latest decision report, Markov signals, EOD reports, and Hermes learnings. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        "Review decision report {} before the Rust Trading Manager queues orders. Use the configured daytrader MCP tools, especially get_decision_reports, get_markov_signals, get_end_of_day_reports, list_reflections, list_experiments, and create_decision_advice. Pull the latest decision report, Markov signals, EOD reports, current positions or overview exposure, and Hermes learnings. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
         report.id, report.id, source_session_id
     );
     let payload = json!({
         "session_id": "saxo-daytrader-trading-manager-advice",
         "input": input,
-        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Be specific, use current Markov and learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate.",
+        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Be specific, use current Markov and learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate. Always include context_self_check so operators can audit whether you saw the latest report, Markov signals, EOD report, positions, and active experiments.",
         "metadata": {
             "source": "rust_trading_manager",
             "decision_report_id": report.id,
@@ -1047,6 +1093,18 @@ async fn request_hermes_decision_advice(
             "capital_budget": capital_budget.to_json(),
             "strategy_experiment_overlay": overlay_json,
             "candidate_orders": candidate_payload,
+            "required_context_self_check": {
+                "fields": HERMES_CONTEXT_SELF_CHECK_FIELDS,
+                "expected_sources": [
+                    "get_decision_reports",
+                    "get_markov_signals",
+                    "get_end_of_day_reports",
+                    "get_context current positions and overview exposure",
+                    "list_reflections",
+                    "list_experiments"
+                ],
+                "note": "Set booleans false when a source is unavailable; do not imply a source was reviewed unless it was actually fetched."
+            }
         }
     });
 
@@ -2608,6 +2666,56 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn hermes_context_self_check_extracts_complete_payload() {
+        let check = hermes_context_self_check_from_raw(&json!({
+            "raw_payload_json": {
+                "context_self_check": {
+                    "latest_report": true,
+                    "markov_signals": true,
+                    "end_of_day_report": true,
+                    "current_positions": true,
+                    "active_experiments": true
+                }
+            }
+        }));
+
+        assert_eq!(
+            check.get("complete").and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            check
+                .get("missing")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn hermes_context_self_check_reports_missing_payload_fields() {
+        let check = hermes_context_self_check_from_raw(&json!({
+            "context_self_check": {
+                "latest_report": true,
+                "current_positions": true
+            }
+        }));
+
+        assert_eq!(
+            check.get("complete").and_then(JsonValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            check.get("missing").cloned(),
+            Some(json!([
+                "markov_signals",
+                "end_of_day_report",
+                "active_experiments"
+            ]))
+        );
     }
 
     #[test]

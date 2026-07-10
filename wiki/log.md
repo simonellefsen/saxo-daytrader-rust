@@ -581,6 +581,14 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added Rust unit coverage proving a completed dry-run report does not run the Trading Manager or Saxo execution queue, while a completed live report still can.
 - This is the first slice of the broader workflow-test roadmap; scheduled reports, Hermes advice, Trading Manager queueing, and execution dry-run paths remain future slices.
 
+## [2026-07-10] improvement | Hermes advisory context self-check
+
+- Continued the Hermes advisory-loop roadmap by adding a structured context self-check to per-report Hermes advice.
+- The Trading Manager now instructs Hermes to report whether it reviewed the latest decision report, Markov signals, EOD report, current positions, and active experiments before recording advice.
+- The `create_decision_advice` MCP schema accepts `context_self_check`; the recorder normalizes `complete`, `missing`, and `required` fields into the advice raw payload.
+- The Hermes Decision Advice Audit table now shows self-check status with a tooltip for missing sources.
+- Remaining roadmap work: decide whether incomplete self-checks should automatically force manual review in conservative mode and add a richer preflight bundle.
+
 ## [2026-07-09] improvement | Saxo share-class symbol variants
 
 - Continued the Markov coverage roadmap by adding deterministic share-class symbol variants to the shared Markov/daily-indicator Saxo resolver and the Saxo execution resolver.
