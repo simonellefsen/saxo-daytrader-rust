@@ -587,7 +587,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Trading Manager now instructs Hermes to report whether it reviewed the latest decision report, Markov signals, EOD report, current positions, and active experiments before recording advice.
 - The `create_decision_advice` MCP schema accepts `context_self_check`; the recorder normalizes `complete`, `missing`, and `required` fields into the advice raw payload.
 - The Hermes Decision Advice Audit table now shows self-check status with a tooltip for missing sources.
-- Remaining roadmap work: decide whether incomplete self-checks should automatically force manual review in conservative mode and add a richer preflight bundle.
+- Conservative mode now blocks automatic queueing whenever the self-check is incomplete, even if Hermes supplies an `allow` or `reduce` order action; the Trading Manager records the gate reason and self-check in its run JSON.
+- The Hermes audit impact label now identifies this outcome as a context review gate rather than a normal restriction or no-op.
+- Remaining roadmap work: add the richer preflight bundle with normalized candidate waterfall, current exposure, Markov freshness, pending experiments, and recent execution failures.
 
 ## [2026-07-09] improvement | Saxo share-class symbol variants
 

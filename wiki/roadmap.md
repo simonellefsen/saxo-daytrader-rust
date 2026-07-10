@@ -21,7 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
-- 2026-07-10: Added the first Hermes advice self-check contract: Trading Manager advisory prompts now require Hermes to state whether it reviewed the latest report, Markov signals, EOD report, positions, and active experiments; the MCP tool accepts a structured `context_self_check`; stored advice normalizes missing sources; and the Hermes audit table shows the self-check status.
+- 2026-07-10: Completed the Hermes advice self-check safety gate: Trading Manager advisory prompts require Hermes to state whether it reviewed the latest report, Markov signals, EOD report, positions, and active experiments; stored advice normalizes missing sources; the audit table shows the self-check status; and conservative mode blocks automatic queueing whenever the self-check is incomplete.
 - 2026-07-10: Added the first decision-action regression guard: manual decision-report actions now share an explicit live/dry-run mode helper, and unit tests prove completed dry-run reports cannot trigger Trading Manager or Saxo execution side effects.
 - 2026-07-10: Added an operator acknowledgment/override path for the monthly-loss circuit breaker: the Trading Manager now records threshold breach vs active halt separately, current-month overrides are persisted in runtime settings, and the Overview cash deployment panel can resume or clear BUY resumption for the month with notes.
 - 2026-07-10: Added an operator override path for active instrument quarantines: exact symbol/action/signature overrides are persisted in runtime settings, the Trading Manager only bypasses a quarantine when the exact override is active, and the Overview quarantine panel exposes row-level override/clear controls with notes.
@@ -120,7 +120,7 @@ These are specific changes that could improve the quality of trading decisions w
 | Counterfactual tracking | When Hermes blocks/reduces a trade, track the hypothetical performance of the original report order. | Decide whether conservative Hermes advice improves outcomes. |
 | Proposal quality rubric | Score Hermes proposals by evidence strength, one-variable purity, safety, measurable metric, and duplicate risk. | Promote fewer vague proposals and more testable experiments. |
 | Learning memory compression | Summarize EOD/weekly reflections into stable lessons and stale lessons with expiry dates. | Prevent old lessons from overweighting new market conditions. |
-| Hermes self-check | First slice landed 2026-07-10: before writing advice, Hermes is asked to submit a structured context self-check for latest report, Markov run, EOD report, current positions, and active experiments, and the Hermes audit table surfaces missing context. Remaining work is to fail closed or require manual review when the self-check is incomplete in conservative mode. | Detect missing context before advice is trusted. |
+| Hermes self-check | Landed 2026-07-10: before writing advice, Hermes must submit a structured context self-check for latest report, Markov run, EOD report, current positions, and active experiments. The audit table surfaces missing context; conservative mode fail-closes automatic queueing when any required source is missing, even if per-order advice says `allow`. | Detect missing context before advice is trusted. |
 
 ### Decision Report Flow
 

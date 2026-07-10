@@ -292,6 +292,58 @@ impl HermesDecisionAdvice {
     }
 }
 
+fn hermes_context_self_check_gate_reason(advice: &HermesDecisionAdvice) -> Option<String> {
+    if advice.mode != "conservative" {
+        return None;
+    }
+    let check = hermes_context_self_check_from_raw(&advice.raw);
+    if check
+        .get("complete")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let missing = check
+        .get("missing")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "required context was not recorded".to_string());
+    Some(format!(
+        "Hermes context self-check is incomplete ({missing}); conservative mode blocks automatic queueing until the advice is re-run with the required context."
+    ))
+}
+
+fn attach_hermes_context_gate(
+    order: &mut CandidateOrder,
+    advice: &HermesDecisionAdvice,
+    reason: &str,
+) {
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "hermes_context_gate".to_string(),
+            json!({
+                "mode": advice.mode,
+                "automatic_queueing_blocked": true,
+                "reason": reason,
+                "context_self_check": hermes_context_self_check_from_raw(&advice.raw),
+            }),
+        );
+    }
+}
+
 fn attach_hermes_advice(
     order: &mut CandidateOrder,
     advice: &HermesOrderAdvice,
@@ -562,6 +614,8 @@ async fn run_for_report(
         )
     });
     let hermes_conservative = hermes_advice.mode == "conservative";
+    let hermes_context_self_check = hermes_context_self_check_from_raw(&hermes_advice.raw);
+    let hermes_context_gate_reason = hermes_context_self_check_gate_reason(&hermes_advice);
     let hermes_global_block =
         hermes_conservative && hermes_advice.overall_recommendation == "stand_down";
     let hermes_global_review =
@@ -616,6 +670,13 @@ async fn run_for_report(
         let mut has_order_specific_hermes_allow = false;
         if let Some(advice) = hermes_advice.for_order(&order) {
             attach_hermes_advice(&mut order, advice, &hermes_advice);
+        }
+        if let Some(reason) = &hermes_context_gate_reason {
+            attach_hermes_context_gate(&mut order, &hermes_advice, reason);
+            skipped.push(skip_order(&order, reason));
+            continue;
+        }
+        if let Some(advice) = hermes_advice.for_order(&order) {
             if hermes_conservative && matches!(advice.action.as_str(), "stand_down" | "review") {
                 skipped.push(skip_order(
                     &order,
@@ -946,9 +1007,16 @@ async fn run_for_report(
         "skipped_orders": skipped,
         "strategy_experiment_overlay": overlay_json,
         "hermes_decision_advice": hermes_advice.to_json(),
+        "hermes_context_self_check_gate": {
+            "enforced": hermes_context_gate_reason.is_some(),
+            "mode": hermes_advice.mode,
+            "reason": hermes_context_gate_reason,
+            "context_self_check": hermes_context_self_check,
+        },
         "execution_notes": [
             "Approved Hermes experiment overlays are loaded only in paper/simulation mode or Saxo SIM.",
             "Hermes decision advice is audited for every fresh report when configured; by default it is record-only. In conservative mode it can only block, reduce, or require review.",
+            "In conservative mode, incomplete Hermes context self-checks block all automatic queueing even when per-order advice says allow or reduce.",
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
@@ -2859,6 +2927,64 @@ mod tests {
         );
 
         assert_eq!(advice.overall_recommendation, "proceed");
+    }
+
+    #[test]
+    fn hermes_conservative_incomplete_self_check_blocks_automatic_queueing() {
+        let advice = HermesDecisionAdvice::from_row(
+            json!({
+                "status": "received",
+                "overall_recommendation": "proceed",
+                "summary": "Allow the candidate.",
+                "order_advice_json": [{
+                    "strategy_key": "test:BUY",
+                    "symbol": "NVDA:xnas",
+                    "side": "BUY",
+                    "action": "allow",
+                    "reason": "Otherwise acceptable."
+                }],
+                "raw_payload_json": {
+                    "context_self_check": {
+                        "latest_report": true,
+                        "markov_signals": true,
+                        "end_of_day_report": true,
+                        "current_positions": false,
+                        "active_experiments": true
+                    }
+                }
+            }),
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+
+        let reason = hermes_context_self_check_gate_reason(&advice).unwrap();
+        assert!(reason.contains("current_positions"));
+        assert!(reason.contains("blocks automatic queueing"));
+    }
+
+    #[test]
+    fn hermes_complete_self_check_does_not_add_a_conservative_gate() {
+        let advice = HermesDecisionAdvice::from_row(
+            json!({
+                "status": "received",
+                "overall_recommendation": "proceed",
+                "summary": "Complete evidence reviewed.",
+                "order_advice_json": [],
+                "raw_payload_json": {
+                    "context_self_check": {
+                        "latest_report": true,
+                        "markov_signals": true,
+                        "end_of_day_report": true,
+                        "current_positions": true,
+                        "active_experiments": true
+                    }
+                }
+            }),
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+
+        assert!(hermes_context_self_check_gate_reason(&advice).is_none());
     }
 
     #[test]

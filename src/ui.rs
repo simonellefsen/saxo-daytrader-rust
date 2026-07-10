@@ -3598,6 +3598,13 @@ fn hermes_advice_impact(row: &JsonValue) -> (String, &'static str) {
         .and_then(|value| value.get("mode"))
         .and_then(JsonValue::as_str)
         .unwrap_or("");
+    let context_self_check_complete = hermes_context_self_check(row)
+        .and_then(|check| check.get("complete"))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    if mode == "conservative" && !context_self_check_complete {
+        return ("context review gate".to_string(), "warn-text");
+    }
     let items = row
         .get("order_advice_json")
         .and_then(JsonValue::as_array)
@@ -3650,10 +3657,14 @@ fn hermes_advice_impact_detail(row: &JsonValue) -> String {
         .and_then(|value| value.get("hermes_decision_advice"))
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let context_self_check = hermes_context_self_check(row)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     format!(
-        "Recommendation: {}. Order advice: {} ({order_detail}). Manager advice: {}",
+        "Recommendation: {}. Order advice: {} ({order_detail}). Context self-check: {}. Manager advice: {}",
         fallback_text(row, "advice_recommendation", "n/a"),
         orders,
+        compact_json(Some(&context_self_check)),
         compact_json(Some(&manager))
     )
 }
@@ -5656,7 +5667,11 @@ mod tests {
             "manager_json": {
                 "hermes_decision_advice": {
                     "mode": "conservative",
-                    "status": "received"
+                    "status": "received",
+                    "context_self_check": {
+                        "complete": true,
+                        "missing": []
+                    }
                 }
             }
         });
@@ -5678,7 +5693,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_conservative_hermes_timeout_as_review_fallback() {
+    fn flags_conservative_hermes_timeout_as_context_review_gate() {
         let row = json!({
             "advice_recommendation": "",
             "order_advice_json": [],
@@ -5693,9 +5708,35 @@ mod tests {
         assert_eq!(hermes_advice_status_label(&row), "timeout");
         assert_eq!(
             hermes_advice_impact(&row),
-            ("review fallback".to_string(), "warn-text")
+            ("context review gate".to_string(), "warn-text")
         );
         assert!(hermes_advice_detail(&row).contains("No persisted"));
+    }
+
+    #[test]
+    fn flags_incomplete_conservative_hermes_context_as_review_gate() {
+        let row = json!({
+            "advice_recommendation": "proceed",
+            "order_advice_json": [{"action": "allow"}],
+            "advice_raw_payload_json": {
+                "context_self_check": {
+                    "complete": false,
+                    "missing": ["current_positions"]
+                }
+            },
+            "manager_json": {
+                "hermes_decision_advice": {
+                    "mode": "conservative",
+                    "status": "received"
+                }
+            }
+        });
+
+        assert_eq!(
+            hermes_advice_impact(&row),
+            ("context review gate".to_string(), "warn-text")
+        );
+        assert!(hermes_advice_impact_detail(&row).contains("current_positions"));
     }
 
     #[test]
