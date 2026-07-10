@@ -20,7 +20,8 @@ use crate::{
     models::{
         AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
         HermesExperimentTransitionRequest, HermesReflectionRequest, LimitParams,
-        LocalizationSettingsRequest, PerformanceParams, SaxoCallbackParams, ViewParams,
+        LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest, PerformanceParams,
+        SaxoCallbackParams, ViewParams,
     },
     saxo_order::run_saxo_execution_queue,
     state::AppState,
@@ -64,6 +65,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/settings/cash-buffer",
             get(cash_buffer_settings).post(update_cash_buffer),
+        )
+        .route(
+            "/api/settings/monthly-loss-breaker",
+            post(update_monthly_loss_breaker_override),
         )
         .route(
             "/api/settings/localization",
@@ -253,6 +258,42 @@ async fn update_cash_buffer(
         obj.insert("source".to_string(), JsonValue::from("request_preview"));
     }
     Json(value)
+}
+
+async fn update_monthly_loss_breaker_override(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<MonthlyLossBreakerOverrideRequest>,
+) -> Response {
+    let action = request.action.trim();
+    let enable = match action {
+        "resume_buys" => true,
+        "clear_override" => false,
+        _ => {
+            return json_result(Err(anyhow::anyhow!(
+                "Unsupported monthly-loss breaker action: {action}"
+            )));
+        }
+    };
+    match state
+        .save_monthly_loss_breaker_override(enable, request.notes.unwrap_or_default().trim())
+        .await
+    {
+        Ok(value) => {
+            info!(
+                enabled = value
+                    .get("enabled")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false),
+                month_key = %value.get("month_key").and_then(JsonValue::as_str).unwrap_or(""),
+                "monthly-loss breaker override updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("monthly-loss breaker override update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
 }
 
 async fn update_localization_settings(

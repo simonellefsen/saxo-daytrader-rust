@@ -3522,6 +3522,79 @@ impl AppState {
         self.ai_settings_value().await
     }
 
+    fn strategy_month_key(&self) -> String {
+        let tz = yaml_string(&self.config, &["price_monitor", "timezone"])
+            .and_then(|value| value.parse::<Tz>().ok())
+            .unwrap_or(chrono_tz::Europe::Copenhagen);
+        Utc::now().with_timezone(&tz).format("%Y-%m").to_string()
+    }
+
+    pub async fn monthly_loss_breaker_override_value(&self) -> Result<JsonValue> {
+        let current_month_key = self.strategy_month_key();
+        let saved = self
+            .runtime_setting("monthly_loss_breaker_override")
+            .await?;
+        let mut value = json!({
+            "enabled": false,
+            "current_month_key": current_month_key,
+            "month_key": null,
+            "active_for_current_month": false,
+            "notes": "",
+            "updated_at": null
+        });
+        if let Some(saved) = saved {
+            let enabled = saved
+                .get("enabled")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+            let month_key = saved
+                .get("month_key")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("");
+            let active_for_current_month = enabled && month_key == current_month_key;
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("enabled".to_string(), JsonValue::from(enabled));
+                obj.insert("month_key".to_string(), JsonValue::from(month_key));
+                obj.insert(
+                    "active_for_current_month".to_string(),
+                    JsonValue::from(active_for_current_month),
+                );
+                obj.insert(
+                    "notes".to_string(),
+                    saved
+                        .get("notes")
+                        .cloned()
+                        .unwrap_or_else(|| JsonValue::from("")),
+                );
+                obj.insert(
+                    "updated_at".to_string(),
+                    saved.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+                );
+            }
+        }
+        Ok(value)
+    }
+
+    pub async fn save_monthly_loss_breaker_override(
+        &self,
+        enabled: bool,
+        notes: &str,
+    ) -> Result<JsonValue> {
+        if notes.len() > 500 {
+            anyhow::bail!("Monthly-loss breaker override notes are too long");
+        }
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let value = json!({
+            "enabled": enabled,
+            "month_key": self.strategy_month_key(),
+            "notes": notes,
+            "updated_at": updated_at
+        });
+        self.save_runtime_setting("monthly_loss_breaker_override", &value)
+            .await?;
+        self.monthly_loss_breaker_override_value().await
+    }
+
     pub async fn effective_xai_model(&self) -> Result<String> {
         Ok(self
             .ai_settings_value()

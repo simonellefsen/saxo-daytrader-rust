@@ -274,14 +274,17 @@ fn attach_hermes_advice(
 /// tracking baseline) breaches the configured floor, new BUYs are suspended
 /// while SELLs stay allowed. Reinvestment pressure otherwise keeps deploying
 /// cash straight through a losing month.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct MonthlyLossBuyHalt {
     active: bool,
+    threshold_breached: bool,
     month_pnl_dkk: f64,
     threshold_dkk: f64,
+    override_active: bool,
+    override_value: JsonValue,
 }
 
-fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> MonthlyLossBuyHalt {
+async fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> MonthlyLossBuyHalt {
     let threshold_dkk = yaml_f64(
         &state.config,
         &["strategy", "capital", "monthly_loss_halt_dkk"],
@@ -293,12 +296,35 @@ fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> MonthlyLossB
         .and_then(|value| value.get("month"))
         .map(|value| value_f64(value, "pnl_dkk"))
         .unwrap_or(0.0);
+    let override_value = state
+        .monthly_loss_breaker_override_value()
+        .await
+        .unwrap_or_else(|err| {
+            warn!("monthly-loss breaker override lookup degraded: {err:#}");
+            json!({
+                "enabled": false,
+                "active_for_current_month": false,
+                "error": err.to_string()
+            })
+        });
+    let override_active = override_value
+        .get("active_for_current_month")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let threshold_breached = monthly_loss_threshold_breached(month_pnl_dkk, threshold_dkk);
     MonthlyLossBuyHalt {
         // A non-negative threshold disables the breaker.
-        active: threshold_dkk < 0.0 && month_pnl_dkk <= threshold_dkk,
+        active: threshold_breached && !override_active,
+        threshold_breached,
         month_pnl_dkk,
         threshold_dkk,
+        override_active,
+        override_value,
     }
+}
+
+fn monthly_loss_threshold_breached(month_pnl_dkk: f64, threshold_dkk: f64) -> bool {
+    threshold_dkk < 0.0 && month_pnl_dkk <= threshold_dkk
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -375,7 +401,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
     });
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
-    let buy_halt = monthly_loss_buy_halt(state, &overview);
+    let buy_halt = monthly_loss_buy_halt(state, &overview).await;
     if buy_halt.active {
         warn!(
             month_pnl_dkk = buy_halt.month_pnl_dkk,
@@ -399,7 +425,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             &open_codes,
             overlay.as_ref(),
             &mut capital_budget,
-            buy_halt,
+            &buy_halt,
             quarantine_cfg,
             &active_quarantines,
         )
@@ -434,7 +460,7 @@ async fn run_for_report(
     open_codes: &[String],
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
-    buy_halt: MonthlyLossBuyHalt,
+    buy_halt: &MonthlyLossBuyHalt,
     quarantine_cfg: InstrumentQuarantineConfig,
     active_quarantines: &[InstrumentQuarantine],
 ) -> Result<JsonValue> {
@@ -817,8 +843,11 @@ async fn run_for_report(
         "remaining_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
         "monthly_loss_circuit_breaker": {
             "active": buy_halt.active,
+            "threshold_breached": buy_halt.threshold_breached,
             "month_pnl_dkk": buy_halt.month_pnl_dkk,
             "threshold_dkk": buy_halt.threshold_dkk,
+            "override_active": buy_halt.override_active,
+            "override": buy_halt.override_value,
         },
         "instrument_quarantine": {
             "enabled": quarantine_cfg.enabled,
@@ -846,7 +875,7 @@ async fn run_for_report(
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
-            "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it.",
+            "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it. An operator override can resume BUYs for the current month and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL quantities are capped to the latest local holding quantity."
@@ -2995,5 +3024,12 @@ mod tests {
         let budget = capital_budget_from_overview(&overview, Some(0.15));
         assert_eq!(budget.required_cash_buffer_dkk, 45000.0);
         assert_eq!(budget.available_buy_budget_dkk, 5000.0);
+    }
+
+    #[test]
+    fn monthly_loss_threshold_respects_disabled_non_negative_floor() {
+        assert!(monthly_loss_threshold_breached(-12_000.0, -10_000.0));
+        assert!(!monthly_loss_threshold_breached(-9_999.0, -10_000.0));
+        assert!(!monthly_loss_threshold_breached(-12_000.0, 0.0));
     }
 }

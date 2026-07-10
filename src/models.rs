@@ -125,6 +125,13 @@ pub struct CashBufferRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct MonthlyLossBreakerOverrideRequest {
+    pub action: String,
+    pub notes: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LocalizationSettingsRequest {
     pub locale: Option<String>,
     pub time_zone: Option<String>,

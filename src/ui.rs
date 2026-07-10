@@ -501,6 +501,14 @@ struct CashDeploymentSummary {
     approved_buy_count: i64,
     skipped_buy_count: i64,
     candidate_buy_count: i64,
+    breaker_active: bool,
+    breaker_threshold_breached: bool,
+    breaker_override_active: bool,
+    breaker_month_pnl_dkk: f64,
+    breaker_threshold_dkk: f64,
+    breaker_override_month_key: String,
+    breaker_override_updated_at: String,
+    breaker_override_notes: String,
     description: String,
 }
 
@@ -536,6 +544,38 @@ fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> 
                         strong { "Reason" }
                         span { "{summary.description}" }
                     }
+                    if summary.breaker_threshold_breached {
+                        div { class: "event cash-diagnostic-reason",
+                            strong { "Monthly-loss circuit breaker" }
+                            span {
+                                if summary.breaker_active {
+                                    "BUYs are suspended because month P/L {format_dkk(summary.breaker_month_pnl_dkk, &prefs)} breached the {format_dkk(summary.breaker_threshold_dkk, &prefs)} floor."
+                                } else if summary.breaker_override_active {
+                                    "Threshold is breached, but an operator override resumed BUYs for {summary.breaker_override_month_key}."
+                                } else {
+                                    "Threshold was breached in this run."
+                                }
+                            }
+                            if !summary.breaker_override_updated_at.is_empty() {
+                                span { class: "muted", "Override updated {summary.breaker_override_updated_at}" }
+                            }
+                            if !summary.breaker_override_notes.is_empty() {
+                                span { class: "muted", "Notes: {summary.breaker_override_notes}" }
+                            }
+                            form { method: "post", action: "/api/settings/monthly-loss-breaker", class: "inline-form",
+                                input { r#type: "hidden", name: "return_to", value: "/" }
+                                if summary.breaker_override_active {
+                                    input { r#type: "hidden", name: "action", value: "clear_override" }
+                                    input { r#type: "text", name: "notes", placeholder: "Reason for clearing override" }
+                                    button { class: "button secondary", r#type: "submit", "Clear Override" }
+                                } else {
+                                    input { r#type: "hidden", name: "action", value: "resume_buys" }
+                                    input { r#type: "text", name: "notes", placeholder: "Reason for resuming BUYs this month" }
+                                    button { class: "button", r#type: "submit", "Resume BUYs This Month" }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -559,6 +599,11 @@ fn cash_deployment_summary(
         .or_else(|| manager.get("capital_budget"))
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let breaker = manager
+        .get("monthly_loss_circuit_breaker")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let breaker_override = breaker.get("override").cloned().unwrap_or(JsonValue::Null);
     let status = fallback_text(
         &diagnostics,
         "status",
@@ -581,6 +626,26 @@ fn cash_deployment_summary(
         approved_buy_count: value_i64(&diagnostics, "approved_buy_count"),
         skipped_buy_count: value_i64(&diagnostics, "skipped_buy_count"),
         candidate_buy_count: value_i64(&diagnostics, "buy_candidate_count"),
+        breaker_active: breaker
+            .get("active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        breaker_threshold_breached: breaker
+            .get("threshold_breached")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        breaker_override_active: breaker
+            .get("override_active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        breaker_month_pnl_dkk: value_f64(&breaker, "month_pnl_dkk"),
+        breaker_threshold_dkk: value_f64(&breaker, "threshold_dkk"),
+        breaker_override_month_key: text(&breaker_override, "month_key"),
+        breaker_override_updated_at: format_timestamp(
+            &text(&breaker_override, "updated_at"),
+            prefs,
+        ),
+        breaker_override_notes: text(&breaker_override, "notes"),
         description: fallback_text(
             &diagnostics,
             "description",
@@ -5482,6 +5547,36 @@ mod tests {
         assert_eq!(summary.approved_buy_count, 0);
         assert_eq!(summary.skipped_buy_count, 4);
         assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn summarizes_monthly_loss_breaker_override_from_manager_run() {
+        let latest_run = json!({
+            "created_at": "2026-07-10T08:00:00Z",
+            "status": "completed_no_orders",
+            "manager_json": {
+                "monthly_loss_circuit_breaker": {
+                    "active": false,
+                    "threshold_breached": true,
+                    "month_pnl_dkk": -12000.0,
+                    "threshold_dkk": -10000.0,
+                    "override_active": true,
+                    "override": {
+                        "enabled": true,
+                        "month_key": "2026-07",
+                        "updated_at": "2026-07-10T07:55:00Z"
+                    }
+                }
+            }
+        });
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert!(summary.breaker_threshold_breached);
+        assert!(!summary.breaker_active);
+        assert!(summary.breaker_override_active);
+        assert_eq!(summary.breaker_override_month_key, "2026-07");
+        assert_eq!(summary.breaker_month_pnl_dkk, -12000.0);
+        assert_eq!(summary.breaker_threshold_dkk, -10000.0);
     }
 
     #[test]
