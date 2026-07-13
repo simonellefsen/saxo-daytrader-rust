@@ -322,6 +322,23 @@ Hermes rationale, raw broker payloads, and raw execution errors; those remain
 in their dedicated, access-controlled audit records. This makes report-time
 Hermes impact measurable without inferring it from free-form skip messages.
 
+When an advisory block or reduction removes a positive quantity, the manager
+also creates one `hermes_counterfactuals` row for that prevented quantity. The
+price monitor resolves active rows through Saxo's read-only reference and quote
+endpoints, then records a quote-to-quote shadow outcome:
+
+- BUY shadow: `(latest price - report reference price) / report reference price`.
+- SELL shadow: `(report reference price - latest price) / report reference price`.
+- The ledger records only the prevented/reduced quantity, source effect, price
+  reference, and observation timestamps.
+
+This is an audit metric, not a backtest or realised P/L. It assumes the report
+reference price was immediately achievable and deliberately excludes broker
+execution, commissions, spreads, slippage, FX, taxes, corporate actions, and
+later Trading Manager gates. It never places, replaces, cancels, or otherwise
+changes a Saxo order. Unpriced rows remain visible until a report supplied a
+valid reference price; they are not silently filled from a later quote.
+
 Runtime knobs:
 
 ```bash

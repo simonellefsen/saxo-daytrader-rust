@@ -8,7 +8,7 @@
 //! maintains a per-session baseline that resets at the configured local
 //! reset hour (default 06:00).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration as StdDuration;
 
@@ -25,9 +25,9 @@ use crate::{
     state::AppState,
 };
 
-/// Resolved Saxo identifiers for configured extra watch symbols; cached per
-/// process so each non-held symbol costs one reference lookup, not one per
-/// poll.
+/// Resolved Saxo identifiers for non-held monitor symbols; cached per process
+/// so configured watch and counterfactual symbols cost one reference lookup,
+/// not one per poll.
 static EXTRA_INSTRUMENT_CACHE: OnceLock<RwLock<HashMap<String, (i64, String)>>> = OnceLock::new();
 
 /// Symbols whose resolution failure was already logged. Extra watch symbols
@@ -164,6 +164,8 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
     let market_rows = state.market_exchange_rows();
     let mut instruments = held_instruments(state).await?;
     append_extra_watch_instruments(state, &session, &market_rows, &mut instruments).await;
+    let counterfactual_symbols =
+        append_counterfactual_instruments(state, &session, &market_rows, &mut instruments).await;
     if instruments.is_empty() {
         return Ok(record_price_monitor_summary(
             state,
@@ -261,7 +263,20 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
             match upsert_price_snapshot(state, instrument, price, last_close, session_date, &now)
                 .await
             {
-                Ok(()) => updated += 1,
+                Ok(()) => {
+                    updated += 1;
+                    if counterfactual_symbols.contains(&instrument.symbol) {
+                        if let Err(err) = state
+                            .refresh_hermes_counterfactual_price(&instrument.symbol, price, &now)
+                            .await
+                        {
+                            warn!(
+                                symbol = %instrument.symbol,
+                                "Hermes counterfactual quote refresh degraded: {err:#}"
+                            );
+                        }
+                    }
+                }
                 Err(err) => errors.push(format!("{}: {err:#}", instrument.symbol)),
             }
         }
@@ -475,6 +490,77 @@ async fn append_extra_watch_instruments(
             currency,
         });
     }
+}
+
+/// Adds active Hermes shadow observations to the same read-only quote loop as
+/// holdings and configured watch symbols. The counterfactual ledger remains
+/// non-mutating; resolving a symbol and requesting an info price cannot place
+/// or alter a Saxo order.
+async fn append_counterfactual_instruments(
+    state: &AppState,
+    session: &JsonValue,
+    market_rows: &[JsonValue],
+    instruments: &mut Vec<HeldInstrument>,
+) -> HashSet<String> {
+    let symbols = match state.active_hermes_counterfactual_symbols().await {
+        Ok(symbols) => symbols,
+        Err(err) => {
+            warn!("loading active Hermes counterfactual symbols degraded: {err:#}");
+            return HashSet::new();
+        }
+    };
+    let counterfactual_symbols = symbols.iter().cloned().collect::<HashSet<_>>();
+    let cache = EXTRA_INSTRUMENT_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    for symbol in symbols {
+        if symbol_market_tradable(&symbol, market_rows) == Some(false)
+            || instruments
+                .iter()
+                .any(|instrument| instrument.symbol == symbol)
+        {
+            continue;
+        }
+        let cached = cache
+            .read()
+            .ok()
+            .and_then(|cache| cache.get(&symbol).cloned());
+        let resolved = match cached {
+            Some(found) => Some(found),
+            None => crate::markov_method::resolve_instrument(state, session, &symbol)
+                .await
+                .ok()
+                .map(|instrument| (instrument.uic, instrument.asset_type)),
+        };
+        let Some((uic, asset_type)) = resolved else {
+            let warned =
+                RESOLUTION_WARNED.get_or_init(|| RwLock::new(std::collections::HashSet::new()));
+            let first_failure = warned
+                .write()
+                .map(|mut warned| warned.insert(format!("counterfactual:{symbol}")))
+                .unwrap_or(true);
+            if first_failure {
+                warn!(
+                    symbol,
+                    "Hermes counterfactual symbol is not resolvable on Saxo yet; will keep retrying quietly"
+                );
+            }
+            continue;
+        };
+        if let Ok(mut cache) = cache.write() {
+            cache.insert(symbol.clone(), (uic, asset_type.clone()));
+        }
+        let currency = symbol
+            .split_once(':')
+            .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange))
+            .unwrap_or("DKK")
+            .to_string();
+        instruments.push(HeldInstrument {
+            symbol,
+            uic,
+            asset_type,
+            currency,
+        });
+    }
+    counterfactual_symbols
 }
 
 fn exchange_code_for_symbol(symbol: &str) -> Option<String> {

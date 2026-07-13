@@ -668,6 +668,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Each candidate keeps only matching precedence, advisory action, requested/resulting quantities, applied effect, and final local manager outcome; Hermes rationale, raw broker payloads, and raw execution errors are excluded.
 - The Hermes Decision Advice Audit UI now prefers the stored delta, making conservative blocks, review gates, reductions, and record-only no-ops visible without parsing free-form skip messages.
 
+## [2026-07-13] improvement | Hermes counterfactual tracking
+
+- Added a durable, non-mutating `hermes_counterfactuals` ledger for only the quantity a conservative Hermes advisory blocked or reduced. It is created from the normalized manager delta and stores no Hermes rationale, Saxo session data, broker payload, or raw execution error.
+- Active rows join the read-only Saxo quote monitor and calculate a directional quote-to-quote shadow return: prevented BUYs benefit from later price increases, prevented SELLs benefit from later price decreases.
+- The Hermes dashboard now presents reference and latest quotes, directional shadow return/P&L, source effect, and tracking status. The values deliberately exclude broker execution, fees, FX, slippage, taxes, and realised P/L.
+
 ## [2026-07-10] improvement | Broker exposure integrity reconciliation
 
 - Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.

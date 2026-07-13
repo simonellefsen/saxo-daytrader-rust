@@ -41,6 +41,7 @@ pub struct DashboardView {
     pub hermes_reflections: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
+    pub hermes_counterfactuals: Vec<JsonValue>,
     pub active_strategy_baseline: JsonValue,
     pub markov_signals: Vec<JsonValue>,
     pub latest_markov_run: JsonValue,

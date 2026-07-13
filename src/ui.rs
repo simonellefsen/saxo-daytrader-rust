@@ -2362,6 +2362,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
                     span { class: "pill", "Advised reports: {advised_reports}" }
                     span { class: "pill", "Changed: {changed_reports}" }
+                    span { class: "pill", "Counterfactuals: {data.hermes_counterfactuals.len()}" }
                     span { class: "pill", "Pending: {pending_experiments}" }
                 }
             }
@@ -2408,6 +2409,30 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     tbody {
                         for row in data.hermes_decision_advice_audit.iter() {
                             HermesAdviceAuditRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Counterfactual Tracking" }
+                p { class: "muted", "Quote-to-quote shadow outcomes for trade quantity Hermes blocked or reduced. They are observational estimates only and exclude fees, FX, slippage, and broker execution." }
+                table {
+                    thead {
+                        tr {
+                            th { "Report" }
+                            th { "Symbol" }
+                            th { "Source" }
+                            th { "Shadow Qty" }
+                            th { "Reference" }
+                            th { "Latest" }
+                            th { "Estimated Return" }
+                            th { "Estimated P/L" }
+                            th { "Status" }
+                        }
+                    }
+                    tbody {
+                        for row in data.hermes_counterfactuals.iter() {
+                            HermesCounterfactualRow { row: row.clone(), prefs: prefs.clone() }
                         }
                     }
                 }
@@ -3455,6 +3480,86 @@ fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 span { class: "event-message", title: "{summary}", "{truncate_chars(&summary, 180)}" }
             }
         }
+    }
+}
+
+#[component]
+fn HermesCounterfactualRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let currency = fallback_text(&row, "currency", "DKK");
+    let reference = optional_json_number(&row, "reference_price_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let latest = optional_json_number(&row, "latest_price_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let estimated_return = optional_json_number(&row, "estimated_return_pct")
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let estimated_pnl = optional_json_number(&row, "estimated_pnl_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let return_tone = optional_json_number(&row, "estimated_return_pct")
+        .map(|value| {
+            if value > 0.0 {
+                "good-text"
+            } else if value < 0.0 {
+                "bad-text"
+            } else {
+                ""
+            }
+        })
+        .unwrap_or("");
+    let status = fallback_text(&row, "status", "unknown");
+    let source = fallback_text(&row, "source_effect", "unknown").replace('_', " ");
+    let action = fallback_text(&row, "action", "n/a");
+    rsx! {
+        tr {
+            td {
+                span { "#{text(&row, \"report_id\")}" }
+                small { class: "muted block", "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            }
+            td {
+                strong { "{text(&row, \"symbol\")}" }
+                small { class: "muted block", "{action}" }
+            }
+            td { "{source}" }
+            td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
+            td { "{reference}" }
+            td {
+                span { "{latest}" }
+                if !text(&row, "latest_price_at").is_empty() {
+                    small { class: "muted block", "{format_timestamp(&text(&row, \"latest_price_at\"), &prefs)}" }
+                }
+            }
+            td { class: "{return_tone}", "{estimated_return}" }
+            td { class: "{return_tone}", "{estimated_pnl}" }
+            td {
+                span {
+                    class: "status {counterfactual_status_tone(&status)}",
+                    title: "Shadow observations never place or modify Saxo orders.",
+                    "{status}"
+                }
+            }
+        }
+    }
+}
+
+fn optional_json_number(row: &JsonValue, key: &str) -> Option<f64> {
+    row.get(key)
+        .and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|value| value as f64))
+                .or_else(|| value.as_str()?.parse::<f64>().ok())
+        })
+        .filter(|value| value.is_finite())
+}
+
+fn counterfactual_status_tone(status: &str) -> &'static str {
+    match status {
+        "tracking" => "good-status",
+        "unpriced" => "warn-status",
+        _ => "",
     }
 }
 

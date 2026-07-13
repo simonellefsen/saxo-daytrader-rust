@@ -451,6 +451,8 @@ fn hermes_advice_delta(
                 "strategy_key": order.strategy_key,
                 "symbol": order.symbol,
                 "action": order.action,
+                "currency": order.currency,
+                "reference_price_local": order.limit_price_local.or(order.price_local),
                 "match_source": match_source,
                 "advice_action": advice_action,
                 "advice_max_quantity": advice_max_quantity,
@@ -1216,6 +1218,22 @@ async fn run_for_report(
         None,
     )
     .await?;
+    if run_id > 0 {
+        if let Err(err) = state
+            .record_hermes_counterfactuals(report.id, run_id, &hermes_advice_delta)
+            .await
+        {
+            warn!(
+                report_id = report.id,
+                run_id, "Hermes counterfactual audit persistence degraded: {err:#}"
+            );
+        }
+    } else {
+        warn!(
+            report_id = report.id,
+            "Trading Manager run id missing; skipped Hermes counterfactual audit persistence"
+        );
+    }
 
     info!(
         report_id = report.id,

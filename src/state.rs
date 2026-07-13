@@ -112,6 +112,52 @@ fn sql_f64(value: f64) -> String {
     }
 }
 
+fn hermes_counterfactual_shadow_quantity(
+    effect: &str,
+    requested_quantity: f64,
+    resulting_quantity: f64,
+) -> Option<f64> {
+    if !matches!(
+        effect,
+        "context_gate_blocked"
+            | "blocked_by_order_advice"
+            | "blocked_by_reduce_below_one_share"
+            | "blocked_by_global_stand_down"
+            | "review_required_by_global_advice"
+            | "reduced"
+    ) {
+        return None;
+    }
+    let quantity = requested_quantity - resulting_quantity;
+    (quantity.is_finite() && quantity > 0.0).then_some(quantity)
+}
+
+fn hermes_counterfactual_quote_metrics(
+    action: &str,
+    shadow_quantity: f64,
+    reference_price_local: f64,
+    latest_price_local: f64,
+) -> Option<(f64, f64)> {
+    if !shadow_quantity.is_finite()
+        || shadow_quantity <= 0.0
+        || !reference_price_local.is_finite()
+        || reference_price_local <= 0.0
+        || !latest_price_local.is_finite()
+        || latest_price_local <= 0.0
+    {
+        return None;
+    }
+    let price_change = match action.trim().to_uppercase().as_str() {
+        "BUY" => latest_price_local - reference_price_local,
+        "SELL" => reference_price_local - latest_price_local,
+        _ => return None,
+    };
+    Some((
+        price_change / reference_price_local,
+        shadow_quantity * price_change,
+    ))
+}
+
 fn json_text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -439,6 +485,10 @@ impl AppState {
                 warn!("dashboard Hermes decision advice audit degraded: {err:#}");
                 Vec::new()
             });
+        let hermes_counterfactuals = self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
+            warn!("dashboard Hermes counterfactuals degraded: {err:#}");
+            Vec::new()
+        });
         let active_strategy_baseline =
             self.active_strategy_baseline().await.unwrap_or_else(|err| {
                 warn!("dashboard active strategy baseline degraded: {err:#}");
@@ -557,6 +607,7 @@ impl AppState {
             hermes_reflections,
             hermes_experiments,
             hermes_decision_advice_audit,
+            hermes_counterfactuals,
             active_strategy_baseline,
             markov_signals,
             latest_markov_run,
@@ -2676,6 +2727,185 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    /// Records the portion of a decision-report order that Hermes prevented or
+    /// reduced as a quote-to-quote shadow observation. This is audit-only: it
+    /// never creates a broker order and intentionally excludes fees, FX and
+    /// slippage, so it must not be treated as realised strategy performance.
+    pub async fn record_hermes_counterfactuals(
+        &self,
+        report_id: i64,
+        manager_run_id: i64,
+        advice_delta: &JsonValue,
+    ) -> Result<JsonValue> {
+        let candidates = advice_delta
+            .get("candidates")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut created = 0usize;
+        let mut unpriced = 0usize;
+        let mut skipped = 0usize;
+
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            let effect = json_text(&candidate, "effect");
+            let requested_quantity = value_f64(&candidate, "requested_quantity");
+            let resulting_quantity = value_f64(&candidate, "resulting_quantity");
+            let Some(shadow_quantity) = hermes_counterfactual_shadow_quantity(
+                &effect,
+                requested_quantity,
+                resulting_quantity,
+            ) else {
+                skipped += 1;
+                continue;
+            };
+            let strategy_key = json_text(&candidate, "strategy_key");
+            let symbol = json_text(&candidate, "symbol");
+            let action = json_text(&candidate, "action").to_uppercase();
+            if strategy_key.trim().is_empty()
+                || symbol.trim().is_empty()
+                || !matches!(action.as_str(), "BUY" | "SELL")
+            {
+                skipped += 1;
+                continue;
+            }
+            let reference_price_local = candidate
+                .get("reference_price_local")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            let status = if reference_price_local.is_some() {
+                "tracking"
+            } else {
+                unpriced += 1;
+                "unpriced"
+            };
+            let reference_sql = reference_price_local
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let currency = json_text(&candidate, "currency");
+            let id = format!("hermes-counterfactual-{manager_run_id}-{index}");
+            let result = sqlx::query(&format!(
+                "INSERT INTO hermes_counterfactuals (
+                    id, created_at, updated_at, report_id, manager_run_id,
+                    strategy_key, symbol, action, source_effect, shadow_quantity,
+                    reference_price_local, currency, status, observation_count
+                ) VALUES (
+                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', 0
+                ) ON CONFLICT (manager_run_id, strategy_key) DO NOTHING",
+                sql_escape(&id),
+                sql_escape(&now),
+                sql_escape(&now),
+                report_id,
+                manager_run_id,
+                sql_escape(&strategy_key),
+                sql_escape(&symbol),
+                sql_escape(&action),
+                sql_escape(&effect),
+                shadow_quantity,
+                reference_sql,
+                sql_optional_text(Some(&currency)),
+                status,
+            ))
+            .execute(&self.pool)
+            .await
+            .context("recording Hermes counterfactual")?;
+            created += result.rows_affected() as usize;
+        }
+
+        Ok(json!({
+            "status": "ok",
+            "created": created,
+            "unpriced": unpriced,
+            "skipped": skipped,
+            "safety": "quote_to_quote_observation_only"
+        }))
+    }
+
+    pub async fn hermes_counterfactuals(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, updated_at, report_id, manager_run_id, strategy_key,
+                    symbol, action, source_effect, shadow_quantity, reference_price_local,
+                    currency, status, latest_price_local, latest_price_at,
+                    estimated_return_pct, estimated_pnl_local, observation_count
+             FROM hermes_counterfactuals
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn active_hermes_counterfactual_symbols(&self) -> Result<Vec<String>> {
+        let rows = self
+            .select_json(
+                "SELECT DISTINCT symbol
+                 FROM hermes_counterfactuals
+                 WHERE status = 'tracking' AND reference_price_local > 0
+                 ORDER BY symbol",
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| json_text(row, "symbol"))
+            .filter(|symbol| !symbol.trim().is_empty())
+            .collect())
+    }
+
+    pub async fn refresh_hermes_counterfactual_price(
+        &self,
+        symbol: &str,
+        latest_price_local: f64,
+        observed_at: &str,
+    ) -> Result<usize> {
+        if symbol.trim().is_empty() || !latest_price_local.is_finite() || latest_price_local <= 0.0
+        {
+            return Ok(0);
+        }
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, action, shadow_quantity, reference_price_local
+                 FROM hermes_counterfactuals
+                 WHERE symbol = '{}' AND status = 'tracking' AND reference_price_local > 0",
+                sql_escape(symbol)
+            ))
+            .await?;
+        let mut updated = 0usize;
+        for row in rows {
+            let id = json_text(&row, "id");
+            let action = json_text(&row, "action");
+            let shadow_quantity = value_f64(&row, "shadow_quantity");
+            let reference_price_local = value_f64(&row, "reference_price_local");
+            let Some((estimated_return_pct, estimated_pnl_local)) =
+                hermes_counterfactual_quote_metrics(
+                    &action,
+                    shadow_quantity,
+                    reference_price_local,
+                    latest_price_local,
+                )
+            else {
+                continue;
+            };
+            let result = sqlx::query(&format!(
+                "UPDATE hermes_counterfactuals
+                 SET updated_at = '{}', latest_price_local = {}, latest_price_at = '{}',
+                     estimated_return_pct = {}, estimated_pnl_local = {},
+                     observation_count = observation_count + 1
+                 WHERE id = '{}'",
+                sql_escape(observed_at),
+                latest_price_local,
+                sql_escape(observed_at),
+                estimated_return_pct,
+                estimated_pnl_local,
+                sql_escape(&id)
+            ))
+            .execute(&self.pool)
+            .await
+            .context("updating Hermes counterfactual quote")?;
+            updated += result.rows_affected() as usize;
+        }
+        Ok(updated)
+    }
+
     pub async fn hermes_end_of_day_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, journal_date, cadence, status, summary, metrics_json, learnings_json, source_report_id, diary_json
@@ -4357,6 +4587,31 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating Hermes decision advice table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS hermes_counterfactuals (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                manager_run_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_effect TEXT NOT NULL,
+                shadow_quantity REAL NOT NULL,
+                reference_price_local REAL,
+                currency TEXT,
+                status TEXT NOT NULL,
+                latest_price_local REAL,
+                latest_price_at TEXT,
+                estimated_return_pct REAL,
+                estimated_pnl_local REAL,
+                observation_count INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes counterfactuals table")?;
         for sql in crate::markov_method::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -4403,6 +4658,20 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating Hermes decision advice session index")?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hermes_counterfactuals_manager_strategy
+             ON hermes_counterfactuals(manager_run_id, strategy_key)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes counterfactual manager strategy index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_counterfactuals_tracking
+             ON hermes_counterfactuals(status, symbol, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Hermes counterfactual tracking index")?;
         Ok(())
     }
 
@@ -6059,6 +6328,42 @@ mod tests {
             50.0,
             0.002
         ));
+    }
+
+    #[test]
+    fn hermes_counterfactuals_only_shadow_advice_that_changed_quantity() {
+        assert_eq!(
+            hermes_counterfactual_shadow_quantity("reduced", 5.0, 2.0),
+            Some(3.0)
+        );
+        assert_eq!(
+            hermes_counterfactual_shadow_quantity("blocked_by_order_advice", 5.0, 0.0),
+            Some(5.0)
+        );
+        assert_eq!(
+            hermes_counterfactual_shadow_quantity("allowed", 5.0, 5.0),
+            None
+        );
+        assert_eq!(
+            hermes_counterfactual_shadow_quantity("reduced", 2.0, 2.0),
+            None
+        );
+    }
+
+    #[test]
+    fn hermes_counterfactual_quote_metrics_are_directional() {
+        assert_eq!(
+            hermes_counterfactual_quote_metrics("BUY", 2.0, 100.0, 110.0),
+            Some((0.1, 20.0))
+        );
+        assert_eq!(
+            hermes_counterfactual_quote_metrics("SELL", 2.0, 100.0, 90.0),
+            Some((0.1, 20.0))
+        );
+        assert_eq!(
+            hermes_counterfactual_quote_metrics("HOLD", 2.0, 100.0, 90.0),
+            None
+        );
     }
 
     #[test]
