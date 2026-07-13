@@ -82,15 +82,30 @@ struct ExchangeDaySession {
 }
 
 fn redacted_database_url(value: &str) -> String {
-    // Logs should explain where the app connects without leaking credentials.
-    // `Url` is a structured parser, so this is safer than replacing arbitrary text.
-    let Ok(mut url) = Url::parse(value) else {
-        return "<unparseable database url>".to_string();
+    // This value reaches both logs and the operator dashboard. Render only
+    // connection topology, never URL user-info, query parameters, or a local
+    // filesystem path. A structured URL parser avoids fragile string masking.
+    let Ok(url) = Url::parse(value) else {
+        return "Configured database".to_string();
     };
-    if url.password().is_some() {
-        let _ = url.set_password(Some("***"));
+    match url.scheme() {
+        "postgres" | "postgresql" => {
+            let host = url.host_str().unwrap_or("configured host");
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            let database = url.path().trim_matches('/');
+            if database.is_empty() {
+                format!("PostgreSQL · {host}{port}")
+            } else {
+                format!("PostgreSQL · {host}{port}/{database}")
+            }
+        }
+        "sqlite" => "SQLite · local database".to_string(),
+        scheme if !scheme.is_empty() => format!("{} database", scheme.to_ascii_uppercase()),
+        _ => "Configured database".to_string(),
     }
-    url.to_string()
 }
 
 fn runtime_id(prefix: &str) -> String {
@@ -815,7 +830,7 @@ impl AppState {
                 .unwrap_or_else(|| "saxo-rust".to_string()),
             environment: yaml_string(&self.config, &["app", "environment"])
                 .unwrap_or_else(|| "local".to_string()),
-            db_label: self.db_url.clone(),
+            db_label: redacted_database_url(&self.db_url),
             total_value_dkk: json_f64(&summary, "total_market_value_dkk"),
             invested_value_dkk: json_f64(&summary, "invested_market_value_dkk"),
             cash_dkk: json_f64(&summary, "cash_balance_dkk"),
@@ -7196,5 +7211,23 @@ analysis_windows:
         assert_eq!(waterfall["candidates"][0]["hermes"]["effect"], "reduced");
         assert!(!waterfall.to_string().contains("do not render this"));
         assert!(!waterfall.to_string().contains("technical_gate"));
+    }
+
+    #[test]
+    fn database_display_label_excludes_credentials_and_query_parameters() {
+        let label = redacted_database_url(
+            "postgresql://daytrader:super-secret@daytrader-postgres-rw.saxo.svc.cluster.local:5432/daytrader?sslmode=require&token=also-secret",
+        );
+        assert_eq!(
+            label,
+            "PostgreSQL · daytrader-postgres-rw.saxo.svc.cluster.local:5432/daytrader"
+        );
+        assert!(!label.contains("daytrader:"));
+        assert!(!label.contains("super-secret"));
+        assert!(!label.contains("also-secret"));
+        assert_eq!(
+            redacted_database_url("sqlite:///Users/example/private/ledger.db"),
+            "SQLite · local database"
+        );
     }
 }

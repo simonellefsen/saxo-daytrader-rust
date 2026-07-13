@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] security | Dashboard database display redaction
+
+- Replaced the Runtime panel's raw database URL with a structured display label shared by startup logging.
+- PostgreSQL displays only host, port, and database name; SQLite uses a generic local label. URL user-info, connection query parameters, and filesystem paths are excluded.
+- Added regression coverage using a secret-bearing PostgreSQL URL to ensure the display value contains neither credentials nor query parameters.
+
 ## [2026-07-13] improvement | Decision Report candidate scoring waterfall
 
 - Added a read-only Decision Reports waterfall over the stored `trading_manager_runs.manager_json` preflight, advice delta, and final manager outcomes.
