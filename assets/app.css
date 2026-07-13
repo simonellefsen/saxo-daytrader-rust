@@ -453,6 +453,20 @@ form.is-submitting .button {
   white-space: normal;
 }
 
+.candidate-scoring-panel {
+  white-space: normal;
+}
+
+.candidate-scoring-panel > p {
+  margin: 6px 0 0;
+  line-height: 1.35;
+}
+
+.candidate-scoring-table table {
+  min-width: 1060px;
+  margin-top: 10px;
+}
+
 .quality-score-row {
   display: flex;
   flex-wrap: wrap;

@@ -1572,6 +1572,10 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .unwrap_or_else(|| decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run"));
     let diagnostics = decision_report_diagnostics(&report);
     let quality = decision_report_quality(&report, &report_json, &diagnostics);
+    let candidate_waterfall = report
+        .get("candidate_scoring_waterfall")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -1633,6 +1637,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     MetricCard { label: "Report Cadence", value: fallback_text(&report, "analysis_pulse_label", "Manual Decision Report"), tone: "" }
                     MetricCard { label: "Model", value: text(&report, "model"), tone: "" }
                 }
+                CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }
                 div { class: "decision-report-grid",
                     div { class: "stack loose",
                         div { class: "event",
@@ -1701,6 +1706,136 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn CandidateScoringWaterfallPanel(waterfall: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&waterfall, "status");
+    let summary = waterfall.get("summary").cloned().unwrap_or(JsonValue::Null);
+    let candidates = json_array(&waterfall, "candidates");
+    let approved_count = value_i64(&summary, "approved_count");
+    let skipped_count = value_i64(&summary, "skipped_count");
+    let not_reached_count = value_i64(&summary, "not_reached_count");
+    rsx! {
+        div { class: "event candidate-scoring-panel",
+            strong { "Candidate Scoring Waterfall" }
+            p { class: "muted", "Stored deterministic manager-gate snapshot. It does not make a provider or Saxo call, and raw advisory rationale is excluded." }
+            if status != "available" {
+                span { class: "muted", "No Trading Manager run has processed this report yet." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status good", "{approved_count} approved" }
+                    span { class: "status warn", "{skipped_count} blocked" }
+                    span { class: "status", "{not_reached_count} not reached" }
+                }
+                if candidates.is_empty() {
+                    span { class: "muted", "The manager run contained no candidate orders." }
+                } else {
+                    div { class: "table-wrap candidate-scoring-table",
+                        table {
+                            thead { tr { th { "Candidate" } th { "Market / Risk" } th { "Technical" } th { "Markov" } th { "Hermes" } th { "Outcome" } th { "Gate" } } }
+                            tbody {
+                                for row in candidates.iter() {
+                                    CandidateScoringWaterfallRow { row: row.clone(), prefs: prefs.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let symbol = fallback_text(&row, "symbol", "Legacy candidate");
+    let action = text(&row, "action");
+    let market = row.get("market").cloned().unwrap_or(JsonValue::Null);
+    let technical = row.get("technical").cloned().unwrap_or(JsonValue::Null);
+    let markov = row.get("markov").cloned().unwrap_or(JsonValue::Null);
+    let hermes = row.get("hermes").cloned().unwrap_or(JsonValue::Null);
+    let outcome = text(&row, "outcome");
+    let outcome_class = match outcome.as_str() {
+        "approved" => "status good",
+        "skipped" => "status bad",
+        _ => "status",
+    };
+    let market_label = if market
+        .get("risk_excluded")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        "risk excluded".to_string()
+    } else if market
+        .get("quarantine_active")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        "instrument quarantined".to_string()
+    } else if market
+        .get("exchange_open")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        format!("{} open", fallback_text(&market, "exchange", "market"))
+    } else {
+        format!("{} closed", fallback_text(&market, "exchange", "market"))
+    };
+    let technical_label = if text(&technical, "status") == "unavailable" {
+        "unavailable".to_string()
+    } else {
+        format!(
+            "{} / {} / {}/{}",
+            fallback_text(&technical, "sentiment", "n/a"),
+            fallback_text(&technical, "trend_bias", "n/a"),
+            value_i64(&technical, "confluence_count"),
+            value_i64(&technical, "min_confluences"),
+        )
+    };
+    let markov_label = if text(&markov, "status") == "unavailable" {
+        "unavailable".to_string()
+    } else {
+        format!(
+            "{} / {}{}",
+            fallback_text(&markov, "direction", "n/a"),
+            format_signed_pct(value_f64(&markov, "signed_signal"), &prefs),
+            if markov
+                .get("fresh")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                " fresh"
+            } else {
+                " stale"
+            },
+        )
+    };
+    let hermes_effect = fallback_text(&hermes, "effect", "not recorded").replace('_', " ");
+    let gate_code = text(&row, "gate_code").replace('_', " ");
+    let requested_quantity = value_f64(&hermes, "requested_quantity");
+    let resulting_quantity = value_f64(&hermes, "resulting_quantity");
+    let hermes_label = if requested_quantity > 0.0 {
+        format!(
+            "{}: {} -> {}",
+            hermes_effect,
+            format_quantity(requested_quantity, &prefs),
+            format_quantity(resulting_quantity, &prefs),
+        )
+    } else {
+        hermes_effect
+    };
+    rsx! {
+        tr {
+            td { strong { "{symbol}" } span { class: "muted block", "{action}" } }
+            td { "{market_label}" }
+            td { "{technical_label}" }
+            td { "{markov_label}" }
+            td { "{hermes_label}" }
+            td { span { class: outcome_class, "{outcome}" } }
+            td { "{gate_code}" }
         }
     }
 }

@@ -167,6 +167,258 @@ fn json_text(value: &JsonValue, key: &str) -> String {
     }
 }
 
+fn candidate_scoring_key(value: &JsonValue) -> String {
+    let strategy_key = json_text(value, "strategy_key");
+    if !strategy_key.trim().is_empty() {
+        return format!("strategy:{strategy_key}");
+    }
+    format!(
+        "order:{}:{}",
+        json_text(value, "symbol"),
+        json_text(value, "action").to_ascii_uppercase()
+    )
+}
+
+fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
+    let normalized = reason.trim().to_ascii_lowercase();
+    if normalized.starts_with("hermes context") {
+        "hermes_context"
+    } else if normalized.starts_with("hermes advisory") {
+        "hermes_advice"
+    } else if normalized.starts_with("exchange ") {
+        "market_open"
+    } else if normalized.starts_with("symbol is excluded") {
+        "risk_exclusion"
+    } else if normalized.starts_with("instrument quarantine") {
+        "instrument_quarantine"
+    } else if normalized.starts_with("order quantity") {
+        "quantity"
+    } else if normalized.starts_with("unsupported order")
+        || normalized.contains("orders require")
+        || normalized.contains("order shape")
+    {
+        "order_shape"
+    } else if normalized.starts_with("monthly-loss circuit breaker") {
+        "monthly_loss_breaker"
+    } else if normalized.starts_with("buy would exceed available cash budget") {
+        "cash_budget"
+    } else if normalized.contains("commission-efficiency floor") {
+        "commission_floor"
+    } else if normalized.starts_with("estimated trade value") {
+        "minimum_trade_value"
+    } else if normalized.starts_with("no broker-authoritative sellable") {
+        "sellable_quantity"
+    } else if normalized.contains("markov") {
+        "markov"
+    } else if normalized.contains("technical") || normalized.starts_with("only ") {
+        "technical"
+    } else {
+        "other"
+    }
+}
+
+fn candidate_gate_code(value: &JsonValue) -> String {
+    let configured = json_text(value, "gate_code");
+    if matches!(
+        configured.as_str(),
+        "approved"
+            | "hermes_context"
+            | "hermes_advice"
+            | "market_open"
+            | "risk_exclusion"
+            | "instrument_quarantine"
+            | "quantity"
+            | "order_shape"
+            | "monthly_loss_breaker"
+            | "cash_budget"
+            | "commission_floor"
+            | "minimum_trade_value"
+            | "sellable_quantity"
+            | "markov"
+            | "technical"
+            | "other"
+    ) {
+        return configured;
+    }
+    candidate_gate_code_from_reason(&json_text(value, "technical_gate")).to_string()
+}
+
+fn compact_candidate_technical(value: &JsonValue) -> JsonValue {
+    let technical = value.get("technical").unwrap_or(&JsonValue::Null);
+    json!({
+        "status": json_text(technical, "status"),
+        "sentiment": json_text(technical, "sentiment"),
+        "trend_bias": json_text(technical, "trend_bias"),
+        "confluence_count": value_i64(technical, "confluence_count"),
+        "min_confluences": value_i64(technical, "min_confluences"),
+    })
+}
+
+fn compact_candidate_markov(value: &JsonValue) -> JsonValue {
+    let markov = value.get("markov").unwrap_or(&JsonValue::Null);
+    json!({
+        "status": json_text(markov, "status"),
+        "fresh": markov.get("fresh").and_then(JsonValue::as_bool).unwrap_or(false),
+        "direction": json_text(markov, "direction"),
+        "signed_signal": value_f64(markov, "signed_signal"),
+        "age_days": value_i64(markov, "age_days"),
+    })
+}
+
+fn compact_candidate_market(value: &JsonValue) -> JsonValue {
+    let quarantine_active = value
+        .get("instrument_quarantine")
+        .and_then(|value| value.get("active"))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    json!({
+        "exchange": json_text(value, "exchange"),
+        "exchange_open": value.get("exchange_open").and_then(JsonValue::as_bool).unwrap_or(false),
+        "risk_excluded": value.get("risk_excluded").and_then(JsonValue::as_bool).unwrap_or(false),
+        "quarantine_active": quarantine_active,
+    })
+}
+
+fn compact_candidate_advice(value: Option<&JsonValue>) -> JsonValue {
+    let Some(value) = value else {
+        return json!({"effect": "not_recorded", "requested_quantity": 0.0, "resulting_quantity": 0.0});
+    };
+    json!({
+        "effect": json_text(value, "effect"),
+        "requested_quantity": value_f64(value, "requested_quantity"),
+        "resulting_quantity": value_f64(value, "resulting_quantity"),
+    })
+}
+
+/// Reconstructs the deterministic manager gate snapshot for a report without
+/// exposing raw Hermes rationale, broker payloads, or raw execution errors.
+fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
+    let Some(manager_json) = run.get("manager_json") else {
+        return json!({
+            "status": "not_processed",
+            "candidates": [],
+            "summary": {"candidate_count": 0, "approved_count": 0, "skipped_count": 0, "not_reached_count": 0, "gate_counts": {}},
+            "safety": "sanitized_local_manager_audit",
+        });
+    };
+    let preflight = manager_json
+        .get("hermes_preflight")
+        .and_then(|value| value.get("candidate_waterfall"))
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let advice = manager_json
+        .get("hermes_advice_delta")
+        .and_then(|value| value.get("candidates"))
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut advice_by_key = HashMap::new();
+    for row in advice {
+        advice_by_key.insert(candidate_scoring_key(&row), row);
+    }
+
+    let mut outcomes = HashMap::new();
+    for (outcome, rows) in [
+        ("approved", manager_json.get("approved_orders")),
+        ("skipped", manager_json.get("skipped_orders")),
+    ] {
+        for row in rows.and_then(JsonValue::as_array).into_iter().flatten() {
+            outcomes.insert(
+                candidate_scoring_key(row),
+                json!({
+                    "strategy_key": json_text(row, "strategy_key"),
+                    "symbol": json_text(row, "symbol"),
+                    "action": json_text(row, "action"),
+                    "outcome": outcome,
+                    "gate_code": candidate_gate_code(row),
+                }),
+            );
+        }
+    }
+
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for row in preflight {
+        let key = candidate_scoring_key(&row);
+        seen.insert(key.clone());
+        let outcome = outcomes
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| json!({"outcome": "not_reached", "gate_code": "other"}));
+        candidates.push(json!({
+            "strategy_key": json_text(&row, "strategy_key"),
+            "symbol": json_text(&row, "symbol"),
+            "action": json_text(&row, "action"),
+            "order_type": json_text(&row, "order_type"),
+            "quantity": value_f64(&row, "quantity"),
+            "market": compact_candidate_market(&row),
+            "technical": compact_candidate_technical(&row),
+            "markov": compact_candidate_markov(&row),
+            "hermes": compact_candidate_advice(advice_by_key.get(&key)),
+            "outcome": json_text(&outcome, "outcome"),
+            "gate_code": json_text(&outcome, "gate_code"),
+        }));
+    }
+    for (key, outcome) in outcomes {
+        if seen.contains(&key) {
+            continue;
+        }
+        let strategy_key = json_text(&outcome, "strategy_key");
+        let strategy_key = if strategy_key.trim().is_empty() {
+            key.strip_prefix("strategy:")
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            strategy_key
+        };
+        candidates.push(json!({
+            "strategy_key": strategy_key,
+            "symbol": json_text(&outcome, "symbol"),
+            "action": json_text(&outcome, "action"),
+            "order_type": "",
+            "quantity": 0.0,
+            "market": {"exchange": "", "exchange_open": false, "risk_excluded": false, "quarantine_active": false},
+            "technical": {"status": "unavailable", "sentiment": "", "trend_bias": "", "confluence_count": 0, "min_confluences": 0},
+            "markov": {"status": "unavailable", "fresh": false, "direction": "", "signed_signal": 0.0, "age_days": 0},
+            "hermes": compact_candidate_advice(advice_by_key.get(&key)),
+            "outcome": json_text(&outcome, "outcome"),
+            "gate_code": json_text(&outcome, "gate_code"),
+        }));
+    }
+
+    let mut approved_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut not_reached_count = 0usize;
+    let mut gate_counts: HashMap<String, usize> = HashMap::new();
+    for candidate in &candidates {
+        match json_text(candidate, "outcome").as_str() {
+            "approved" => approved_count += 1,
+            "skipped" => skipped_count += 1,
+            _ => not_reached_count += 1,
+        }
+        *gate_counts
+            .entry(json_text(candidate, "gate_code"))
+            .or_default() += 1;
+    }
+
+    json!({
+        "status": "available",
+        "run_id": value_i64(run, "id"),
+        "created_at": json_text(run, "created_at"),
+        "manager_status": json_text(run, "status"),
+        "candidates": candidates,
+        "summary": {
+            "candidate_count": approved_count + skipped_count + not_reached_count,
+            "approved_count": approved_count,
+            "skipped_count": skipped_count,
+            "not_reached_count": not_reached_count,
+            "gate_counts": gate_counts,
+        },
+        "safety": "sanitized_local_manager_audit",
+    })
+}
+
 fn nested_json_text(value: &JsonValue, path: &[&str]) -> String {
     let mut current = value;
     for key in path {
@@ -458,6 +710,9 @@ impl AppState {
             }
             None => reports.first().cloned().unwrap_or(JsonValue::Null),
         };
+        let selected_decision = self
+            .attach_decision_candidate_waterfall(selected_decision)
+            .await;
         let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
             warn!("dashboard decision pulse statuses degraded: {err:#}");
             Vec::new()
@@ -2105,6 +2360,39 @@ impl AppState {
             report_id.max(0)
         );
         self.first_json(&sql).await
+    }
+
+    async fn attach_decision_candidate_waterfall(&self, mut report: JsonValue) -> JsonValue {
+        let report_id = value_i64(&report, "id");
+        if report_id <= 0 {
+            return report;
+        }
+        match self.decision_candidate_waterfall(report_id).await {
+            Ok(waterfall) => {
+                if let Some(object) = report.as_object_mut() {
+                    object.insert("candidate_scoring_waterfall".to_string(), waterfall);
+                }
+            }
+            Err(err) => {
+                warn!(report_id, "candidate scoring waterfall degraded: {err:#}");
+            }
+        }
+        report
+    }
+
+    async fn decision_candidate_waterfall(&self, report_id: i64) -> Result<JsonValue> {
+        let run = self
+            .first_json(&format!(
+                "SELECT id, created_at, status, manager_json
+                 FROM trading_manager_runs
+                 WHERE report_id = {}
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                report_id.max(0)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        Ok(candidate_scoring_waterfall_from_manager_run(&run))
     }
 
     pub async fn decision_pulse_statuses(&self) -> Result<Vec<JsonValue>> {
@@ -6846,5 +7134,67 @@ analysis_windows:
             ),
             "strategy.swing.daily_indicators.min_confluences"
         );
+    }
+
+    #[test]
+    fn candidate_scoring_waterfall_sanitizes_legacy_manager_reasons() {
+        let run = json!({
+            "id": 42,
+            "created_at": "2026-07-13T12:00:00Z",
+            "status": "completed",
+            "manager_json": {
+                "hermes_preflight": {
+                    "candidate_waterfall": [{
+                        "strategy_key": "swing:NVDA:xnas:BUY",
+                        "symbol": "NVDA:xnas",
+                        "action": "BUY",
+                        "order_type": "Limit",
+                        "quantity": 2,
+                        "exchange": "XNAS",
+                        "exchange_open": true,
+                        "risk_excluded": false,
+                        "instrument_quarantine": null,
+                        "technical": {
+                            "status": "ok",
+                            "sentiment": "bullish",
+                            "trend_bias": "up",
+                            "confluence_count": 3,
+                            "min_confluences": 3
+                        },
+                        "markov": {
+                            "status": "ok",
+                            "fresh": true,
+                            "direction": "long",
+                            "signed_signal": 0.34,
+                            "age_days": 0
+                        }
+                    }]
+                },
+                "hermes_advice_delta": {
+                    "candidates": [{
+                        "strategy_key": "swing:NVDA:xnas:BUY",
+                        "effect": "reduced",
+                        "requested_quantity": 2,
+                        "resulting_quantity": 1,
+                        "raw_rationale": "do not render this"
+                    }]
+                },
+                "skipped_orders": [{
+                    "strategy_key": "swing:NVDA:xnas:BUY",
+                    "symbol": "NVDA:xnas",
+                    "action": "BUY",
+                    "technical_gate": "Hermes advisory rejected because do not render this"
+                }]
+            }
+        });
+
+        let waterfall = candidate_scoring_waterfall_from_manager_run(&run);
+        assert_eq!(waterfall["status"], "available");
+        assert_eq!(waterfall["summary"]["skipped_count"], 1);
+        assert_eq!(waterfall["candidates"][0]["symbol"], "NVDA:xnas");
+        assert_eq!(waterfall["candidates"][0]["gate_code"], "hermes_advice");
+        assert_eq!(waterfall["candidates"][0]["hermes"]["effect"], "reduced");
+        assert!(!waterfall.to_string().contains("do not render this"));
+        assert!(!waterfall.to_string().contains("technical_gate"));
     }
 }

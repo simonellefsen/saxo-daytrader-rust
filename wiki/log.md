@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-06
+updated: 2026-07-13
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-13] improvement | Decision Report candidate scoring waterfall
+
+- Added a read-only Decision Reports waterfall over the stored `trading_manager_runs.manager_json` preflight, advice delta, and final manager outcomes.
+- It renders only compact deterministic manager context: market/risk eligibility, technical confluence, Markov freshness/signal, Hermes quantity effect, normalized gate code, and final outcome.
+- New manager runs persist stable gate codes; historical rows use local fallback classification. Raw Hermes rationale, broker payloads, and raw execution errors remain excluded, and the view performs no provider or Saxo call.
 
 ## [2026-07-11] roadmap | Build, deploy, and repo hygiene review
 

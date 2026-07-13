@@ -322,6 +322,13 @@ Hermes rationale, raw broker payloads, and raw execution errors; those remain
 in their dedicated, access-controlled audit records. This makes report-time
 Hermes impact measurable without inferring it from free-form skip messages.
 
+The selected Decision Report renders this stored preflight, normalized advice
+delta, and final manager outcome as a read-only candidate scoring waterfall.
+It shows only compact market/risk, technical, Markov, Hermes quantity effect,
+outcome, and stable gate-code fields. The dashboard never renders raw Hermes
+rationale or broker data from this projection, and viewing it makes no Hermes
+or Saxo request.
+
 When an advisory block or reduction removes a positive quantity, the manager
 also creates one `hermes_counterfactuals` row for that prevented quantity. The
 price monitor resolves active rows through Saxo's read-only reference and quote

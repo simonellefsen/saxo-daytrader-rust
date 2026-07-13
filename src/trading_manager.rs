@@ -1177,6 +1177,7 @@ async fn run_for_report(
             "strategy_key": order.strategy_key,
             "symbol": order.symbol,
             "action": order.action,
+            "gate_code": "approved",
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
@@ -2763,8 +2764,47 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         "strategy_key": order.strategy_key,
         "symbol": order.symbol,
         "action": order.action,
+        "gate_code": candidate_gate_reason_code(reason),
         "technical_gate": reason,
     })
+}
+
+fn candidate_gate_reason_code(reason: &str) -> &'static str {
+    let normalized = reason.trim().to_ascii_lowercase();
+    if normalized.starts_with("hermes context") {
+        "hermes_context"
+    } else if normalized.starts_with("hermes advisory") {
+        "hermes_advice"
+    } else if normalized.starts_with("exchange ") {
+        "market_open"
+    } else if normalized.starts_with("symbol is excluded") {
+        "risk_exclusion"
+    } else if normalized.starts_with("instrument quarantine") {
+        "instrument_quarantine"
+    } else if normalized.starts_with("order quantity") {
+        "quantity"
+    } else if normalized.starts_with("unsupported order")
+        || normalized.contains("orders require")
+        || normalized.contains("order shape")
+    {
+        "order_shape"
+    } else if normalized.starts_with("monthly-loss circuit breaker") {
+        "monthly_loss_breaker"
+    } else if normalized.starts_with("buy would exceed available cash budget") {
+        "cash_budget"
+    } else if normalized.contains("commission-efficiency floor") {
+        "commission_floor"
+    } else if normalized.starts_with("estimated trade value") {
+        "minimum_trade_value"
+    } else if normalized.starts_with("no broker-authoritative sellable") {
+        "sellable_quantity"
+    } else if normalized.contains("markov") {
+        "markov"
+    } else if normalized.contains("technical") || normalized.starts_with("only ") {
+        "technical"
+    } else {
+        "other"
+    }
 }
 
 fn unique_strategy_key(strategy_key: String, symbol: &str, action: &str) -> String {
@@ -3915,6 +3955,26 @@ mod tests {
         assert_eq!(
             result[0].override_notes,
             "manually verified Saxo commission setup"
+        );
+    }
+
+    #[test]
+    fn candidate_gate_reason_codes_are_stable_and_safe() {
+        assert_eq!(
+            candidate_gate_reason_code("Hermes advisory reduced quantity below minimum"),
+            "hermes_advice"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Exchange XNAS is closed"),
+            "market_open"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Monthly-loss circuit breaker is active"),
+            "monthly_loss_breaker"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Technical confluence below configured minimum"),
+            "technical"
         );
     }
 }
