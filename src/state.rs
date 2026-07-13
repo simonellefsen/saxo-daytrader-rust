@@ -51,6 +51,8 @@ const INTEGRITY_BROKER_EXPOSURE_REL_TOLERANCE: f64 = 0.10;
 const INTEGRITY_BROKER_QUANTITY_ABS_TOLERANCE: f64 = 1e-6;
 const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
 const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
+const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, error_text, analysis_pulse_key, analysis_pulse_label";
+const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label";
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -695,39 +697,54 @@ impl AppState {
             warn!("dashboard execution events degraded: {err:#}");
             Vec::new()
         });
-        let mut reports = self.decision_report_items(20).await.unwrap_or_else(|err| {
-            warn!("dashboard decision reports degraded: {err:#}");
-            Vec::new()
-        });
-        let selected_decision = match selected_report_id {
-            Some(report_id) => {
-                let selected = if let Some(row) = reports
-                    .iter()
-                    .find(|row| row.get("id").and_then(JsonValue::as_i64) == Some(report_id))
-                    .cloned()
-                {
-                    row
-                } else {
+        let report_limit = match active_view.as_str() {
+            "overview" => 5,
+            "decisions" => 20,
+            _ => 1,
+        };
+        let mut reports = self
+            .decision_report_summaries(report_limit)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("dashboard decision reports degraded: {err:#}");
+                Vec::new()
+            });
+        let needs_report_detail = matches!(active_view.as_str(), "decisions" | "prompts");
+        let selected_decision = if needs_report_detail {
+            let report_id = selected_report_id.or_else(|| {
+                reports
+                    .first()
+                    .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
+            });
+            match report_id {
+                Some(report_id) => {
+                    if !reports
+                        .iter()
+                        .any(|row| row.get("id").and_then(JsonValue::as_i64) == Some(report_id))
+                    {
+                        if let Some(summary) =
+                            self.decision_report_summary(report_id).await.ok().flatten()
+                        {
+                            reports.insert(0, summary);
+                        }
+                    }
                     self.decision_report_item(report_id)
                         .await
                         .ok()
                         .flatten()
                         .unwrap_or(JsonValue::Null)
-                };
-                if !selected.is_null()
-                    && !reports
-                        .iter()
-                        .any(|row| row.get("id").and_then(JsonValue::as_i64) == Some(report_id))
-                {
-                    reports.insert(0, selected.clone());
                 }
-                selected
+                None => JsonValue::Null,
             }
-            None => reports.first().cloned().unwrap_or(JsonValue::Null),
+        } else {
+            JsonValue::Null
         };
-        let selected_decision = self
-            .attach_decision_candidate_waterfall(selected_decision)
-            .await;
+        let selected_decision = if active_view == "decisions" {
+            self.attach_decision_candidate_waterfall(selected_decision)
+                .await
+        } else {
+            selected_decision
+        };
         let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
             warn!("dashboard decision pulse statuses degraded: {err:#}");
             Vec::new()
@@ -803,7 +820,11 @@ impl AppState {
             warn!("dashboard watchlists degraded: {err:#}");
             json!({"generated_at": Utc::now().to_rfc3339(), "categories": []})
         });
-        let latest_decision = reports.first().cloned().unwrap_or(JsonValue::Null);
+        let latest_decision = if active_view == "prompts" {
+            selected_decision.clone()
+        } else {
+            reports.first().cloned().unwrap_or(JsonValue::Null)
+        };
         let summary = overview
             .get("portfolio_summary")
             .and_then(JsonValue::as_object)
@@ -2361,9 +2382,25 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    pub async fn decision_report_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT {DECISION_REPORT_SUMMARY_COLUMNS} FROM decision_reports ORDER BY created_at DESC, id DESC LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn decision_report_summary(&self, report_id: i64) -> Result<Option<JsonValue>> {
+        let sql = format!(
+            "SELECT {DECISION_REPORT_SUMMARY_COLUMNS} FROM decision_reports WHERE id = {} LIMIT 1",
+            report_id.max(0)
+        );
+        self.first_json(&sql).await
+    }
+
     pub async fn decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label FROM decision_reports ORDER BY created_at DESC, id DESC LIMIT {}",
+            "SELECT {DECISION_REPORT_DETAIL_COLUMNS} FROM decision_reports ORDER BY created_at DESC, id DESC LIMIT {}",
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
@@ -2371,7 +2408,7 @@ impl AppState {
 
     pub async fn decision_report_item(&self, report_id: i64) -> Result<Option<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label FROM decision_reports WHERE id = {} LIMIT 1",
+            "SELECT {DECISION_REPORT_DETAIL_COLUMNS} FROM decision_reports WHERE id = {} LIMIT 1",
             report_id.max(0)
         );
         self.first_json(&sql).await
@@ -7229,5 +7266,24 @@ analysis_windows:
             redacted_database_url("sqlite:///Users/example/private/ledger.db"),
             "SQLite · local database"
         );
+    }
+
+    #[test]
+    fn decision_report_summary_projection_excludes_heavy_payload_columns() {
+        for column in [
+            "prompt_text",
+            "request_json",
+            "response_json",
+            "report_json",
+        ] {
+            assert!(
+                !DECISION_REPORT_SUMMARY_COLUMNS.contains(column),
+                "summary projection must not load {column}"
+            );
+            assert!(
+                DECISION_REPORT_DETAIL_COLUMNS.contains(column),
+                "detail projection must retain {column}"
+            );
+        }
     }
 }

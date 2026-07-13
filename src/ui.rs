@@ -1696,6 +1696,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
                 div { class: "table-wrap",
+                    p { class: "muted", "Recent rows are lightweight metadata. Select a report to load its trade counts and debug detail." }
                     table { class: "data-table recent-report-table",
                         thead { tr { th { "Created" } th { "Status" } th { "Strategy" } th { "Selected" } th { "Trades" } } }
                         tbody {
@@ -2377,10 +2378,21 @@ fn SymbolSentimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 fn DecisionReportRow(row: JsonValue, prefs: LocalizationPrefs, selected_id: i64) -> Element {
     let id = row.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
     let report_json = row.get("report_json").cloned().unwrap_or(JsonValue::Null);
-    let selected = json_array(&report_json, "selected_assets")
-        .len()
-        .max(json_array(&report_json, "candidate_assets").len());
-    let trades = json_array(&report_json, "suggested_trades").len();
+    let selected = if report_json.is_null() {
+        "-".to_string()
+    } else {
+        json_array(&report_json, "selected_assets")
+            .len()
+            .max(json_array(&report_json, "candidate_assets").len())
+            .to_string()
+    };
+    let trades = if report_json.is_null() {
+        "-".to_string()
+    } else {
+        json_array(&report_json, "suggested_trades")
+            .len()
+            .to_string()
+    };
     let active = id == selected_id;
     rsx! {
         tr { class: if active { "selected-row" } else { "" },

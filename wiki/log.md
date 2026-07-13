@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] performance | Lightweight Decision Report dashboard reads
+
+- Split Decision Report database projections into metadata summaries and full detail records.
+- Normal dashboard renders no longer fetch heavyweight prompt, request, provider-response, or normalized-report JSON for historical rows; full payloads load only for the active report or prompt detail view.
+- The recent-report table now labels unloaded trade counts rather than implying missing data, and regression coverage protects the compact SQL projection.
+
 ## [2026-07-13] safety | Git-verified deployment provenance
 
 - Docker release builds now receive the full committed Git SHA and bake it into the Rust binary; `/api/health` returns the immutable build revision.
