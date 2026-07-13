@@ -535,6 +535,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
         match run_for_report(
             state,
             &report,
+            &overview,
             &open_codes,
             overlay.as_ref(),
             &mut capital_budget,
@@ -570,6 +571,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
 async fn run_for_report(
     state: &AppState,
     report: &DecisionReport,
+    overview: &JsonValue,
     open_codes: &[String],
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
@@ -592,27 +594,33 @@ async fn run_for_report(
         .map(|overlay| overlay.clone().to_json())
         .unwrap_or(JsonValue::Null);
     let initial_capital_budget = *capital_budget;
-    let hermes_advice = request_hermes_decision_advice(
+    let hermes_preflight = hermes_decision_preflight_bundle(
         state,
         report,
+        overview,
         &candidates,
         open_codes,
         &initial_capital_budget,
         &overlay_json,
+        &excluded,
+        buy_halt,
+        active_quarantines,
     )
-    .await
-    .unwrap_or_else(|err| {
-        warn!(
-            report_id = report.id,
-            "Hermes decision advice degraded: {err:#}"
-        );
-        HermesDecisionAdvice::fallback(
-            "error",
-            hermes_advisory_mode(),
-            format!("Hermes decision advice failed: {err:#}"),
-            report.id,
-        )
-    });
+    .await;
+    let hermes_advice = request_hermes_decision_advice(state, report, &hermes_preflight)
+        .await
+        .unwrap_or_else(|err| {
+            warn!(
+                report_id = report.id,
+                "Hermes decision advice degraded: {err:#}"
+            );
+            HermesDecisionAdvice::fallback(
+                "error",
+                hermes_advisory_mode(),
+                format!("Hermes decision advice failed: {err:#}"),
+                report.id,
+            )
+        });
     let hermes_conservative = hermes_advice.mode == "conservative";
     let hermes_context_self_check = hermes_context_self_check_from_raw(&hermes_advice.raw);
     let hermes_context_gate_reason = hermes_context_self_check_gate_reason(&hermes_advice);
@@ -1006,6 +1014,7 @@ async fn run_for_report(
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
         "strategy_experiment_overlay": overlay_json,
+        "hermes_preflight": hermes_preflight,
         "hermes_decision_advice": hermes_advice.to_json(),
         "hermes_context_self_check_gate": {
             "enforced": hermes_context_gate_reason.is_some(),
@@ -1063,13 +1072,234 @@ async fn run_for_report(
     }))
 }
 
-async fn request_hermes_decision_advice(
+async fn hermes_decision_preflight_bundle(
     state: &AppState,
     report: &DecisionReport,
+    overview: &JsonValue,
     candidates: &[CandidateOrder],
     open_codes: &[String],
     capital_budget: &CapitalBudget,
     overlay_json: &JsonValue,
+    excluded_symbols: &[String],
+    buy_halt: &MonthlyLossBuyHalt,
+    active_quarantines: &[InstrumentQuarantine],
+) -> JsonValue {
+    let today = Utc::now().date_naive();
+    let markov_cfg = markov_gate_config(state);
+    let latest_markov_run = match state.latest_markov_run().await {
+        Ok(run) if !run.is_null() => compact_hermes_preflight_markov_run(&run),
+        _ => json!({"status": "unavailable"}),
+    };
+    let latest_markov_run_status = text(&latest_markov_run, "status");
+    let (experiments, experiment_context_status) = match state.hermes_experiments(20).await {
+        Ok(rows) => (compact_hermes_preflight_experiments(&rows), "available"),
+        Err(_) => (Vec::new(), "unavailable"),
+    };
+    let (recent_failures, failure_context_status) = match state.hermes_execution_failures(12).await
+    {
+        Ok(rows) => (compact_hermes_preflight_failures(&rows), "available"),
+        Err(_) => (Vec::new(), "unavailable"),
+    };
+
+    let mut candidate_waterfall = Vec::with_capacity(candidates.len());
+    for order in candidates {
+        let (position_quantity, position_context_status) =
+            match latest_position_quantity(state, &order.symbol).await {
+                Ok(quantity) => (quantity, "available"),
+                Err(_) => (0.0, "unavailable"),
+            };
+        let (sellable_quantity, sellable_context_status) = if order.action == "SELL" {
+            match latest_sellable_position_quantity(state, &order.symbol).await {
+                Ok(quantity) => (Some(quantity), "available"),
+                Err(_) => (None, "unavailable"),
+            }
+        } else {
+            (None, "not_applicable")
+        };
+        let markov_signal = match latest_markov_signal(state, &order.symbol).await {
+            Ok(signal) => compact_hermes_preflight_markov_signal(
+                signal.as_ref(),
+                today,
+                markov_cfg.max_signal_age_days,
+            ),
+            Err(_) => json!({"status": "unavailable"}),
+        };
+        let quarantine = matching_instrument_quarantine(active_quarantines, order).map(|item| {
+            json!({
+                "active": !item.override_active,
+                "override_active": item.override_active,
+                "signature": item.signature,
+                "failure_count": item.failure_count,
+                "expires_at": item.expires_at,
+            })
+        });
+        candidate_waterfall.push(json!({
+            "strategy_key": &order.strategy_key,
+            "symbol": &order.symbol,
+            "action": &order.action,
+            "order_type": &order.order_type,
+            "quantity": order.quantity,
+            "currency": &order.currency,
+            "estimated_value_dkk": order.estimated_value_dkk,
+            "strategy_role": &order.strategy_role,
+            "exchange": exchange_code(&order.symbol),
+            "exchange_open": open_codes.iter().any(|code| code == &exchange_code(&order.symbol)),
+            "risk_excluded": excluded_symbols.iter().any(|symbol| symbol == &order.symbol),
+            "instrument_quarantine": quarantine,
+            "current_position_quantity": position_quantity,
+            "position_context_status": position_context_status,
+            "sellable_quantity": sellable_quantity,
+            "sellable_context_status": sellable_context_status,
+            "technical": compact_hermes_preflight_technical(order),
+            "markov": markov_signal,
+        }));
+    }
+
+    json!({
+        "version": 1,
+        "generated_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "report": {
+            "id": report.id,
+            "created_at": &report.created_at,
+            "status": &report.status,
+            "pulse_key": &report.pulse_key,
+            "pulse_label": &report.pulse_label,
+        },
+        "portfolio": overview.get("portfolio_summary").cloned().unwrap_or(JsonValue::Null),
+        "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
+        "capital_budget": capital_budget.to_json(),
+        "monthly_loss_circuit_breaker": {
+            "active": buy_halt.active,
+            "threshold_breached": buy_halt.threshold_breached,
+            "month_pnl_dkk": buy_halt.month_pnl_dkk,
+            "threshold_dkk": buy_halt.threshold_dkk,
+            "override_active": buy_halt.override_active,
+        },
+        "open_exchange_codes": open_codes,
+        "strategy_experiment_overlay": overlay_json,
+        "markov": {
+            "max_signal_age_days": markov_cfg.max_signal_age_days,
+            "min_signed_signal": markov_cfg.min_signed_signal,
+            "latest_run": latest_markov_run,
+        },
+        "candidate_waterfall": candidate_waterfall,
+        "active_experiments": experiments,
+        "recent_execution_failures": recent_failures,
+        "data_availability": {
+            "portfolio_snapshot": overview.get("portfolio_summary").is_some(),
+            "latest_markov_run": latest_markov_run_status,
+            "active_experiments": experiment_context_status,
+            "recent_execution_failures": failure_context_status,
+        },
+        "safety": {
+            "saxo_sessions_excluded": true,
+            "broker_mutation_endpoints_excluded": true,
+            "raw_broker_payloads_excluded": true,
+            "raw_execution_errors_excluded": true,
+        }
+    })
+}
+
+fn compact_hermes_preflight_technical(order: &CandidateOrder) -> JsonValue {
+    let technical = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("technical"));
+    let Some(technical) = technical else {
+        return json!({"status": "unavailable"});
+    };
+    json!({
+        "status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
+        "source": technical.get("source").cloned().unwrap_or(JsonValue::Null),
+        "run_date": technical.get("run_date").cloned().unwrap_or(JsonValue::Null),
+        "sentiment": technical.get("sentiment").cloned().unwrap_or(JsonValue::Null),
+        "trend_bias": technical.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
+        "confluence_count": technical.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
+        "min_confluences": technical.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_hermes_preflight_markov_run(run: &JsonValue) -> JsonValue {
+    json!({
+        "status": run.get("status").cloned().unwrap_or(JsonValue::Null),
+        "run_date": run.get("run_date").cloned().unwrap_or(JsonValue::Null),
+        "created_at": run.get("created_at").cloned().unwrap_or(JsonValue::Null),
+        "asset_count": run.get("asset_count").cloned().unwrap_or(JsonValue::Null),
+        "success_count": run.get("success_count").cloned().unwrap_or(JsonValue::Null),
+        "error_count": run.get("error_count").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_hermes_preflight_markov_signal(
+    signal: Option<&JsonValue>,
+    today: chrono::NaiveDate,
+    max_age_days: i64,
+) -> JsonValue {
+    let Some(signal) = signal else {
+        return json!({"status": "unavailable"});
+    };
+    let run_date = signal
+        .get("run_date")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
+    let age_days = run_date.map(|date| (today - date).num_days());
+    json!({
+        "status": signal.get("status").cloned().unwrap_or(JsonValue::Null),
+        "run_date": run_date.map(|date| date.to_string()),
+        "age_days": age_days,
+        "fresh": age_days.is_some_and(|age| age >= 0 && age <= max_age_days),
+        "current_state": signal.get("current_state").cloned().unwrap_or(JsonValue::Null),
+        "direction": signal.get("direction").cloned().unwrap_or(JsonValue::Null),
+        "signed_signal": signal.get("signed_signal").cloned().unwrap_or(JsonValue::Null),
+        "conviction": signal.get("conviction").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_hermes_preflight_experiments(rows: &[JsonValue]) -> Vec<JsonValue> {
+    rows.iter()
+        .filter(|row| {
+            matches!(
+                text(row, "status").as_str(),
+                "pending_review"
+                    | "approved_paper"
+                    | "active_paper"
+                    | "approved_sim"
+                    | "active_sim"
+                    | "ready_for_promotion"
+            )
+        })
+        .map(|row| {
+            json!({
+                "id": row.get("id").cloned().unwrap_or(JsonValue::Null),
+                "created_at": row.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "status": row.get("status").cloned().unwrap_or(JsonValue::Null),
+                "changed_variable_path": row.get("changed_variable_path").cloned().unwrap_or(JsonValue::Null),
+                "expected_effect": row.get("expected_effect").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect()
+}
+
+fn compact_hermes_preflight_failures(rows: &[JsonValue]) -> Vec<JsonValue> {
+    rows.iter()
+        .map(|row| {
+            json!({
+                "created_at": row.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+                "action": row.get("action").cloned().unwrap_or(JsonValue::Null),
+                "order_type": row.get("order_type").cloned().unwrap_or(JsonValue::Null),
+                "status": row.get("status").cloned().unwrap_or(JsonValue::Null),
+                "failure_signature": classify_execution_failure_signature(row)
+                    .unwrap_or_else(|| "unclassified_execution_failure".to_string()),
+            })
+        })
+        .collect()
+}
+
+async fn request_hermes_decision_advice(
+    state: &AppState,
+    report: &DecisionReport,
+    preflight: &JsonValue,
 ) -> Result<HermesDecisionAdvice> {
     let mode = hermes_advisory_mode();
     let source_session_id = format!("decision-advice-{}", report.id);
@@ -1128,23 +1358,8 @@ async fn request_hermes_decision_advice(
         .unwrap_or(10)
         .min(60);
 
-    let candidate_payload = candidates
-        .iter()
-        .map(|order| {
-            json!({
-                "strategy_key": &order.strategy_key,
-                "symbol": &order.symbol,
-                "action": &order.action,
-                "quantity": order.quantity,
-                "order_type": &order.order_type,
-                "estimated_value_dkk": order.estimated_value_dkk,
-                "strategy_role": &order.strategy_role,
-                "strategy_metadata": order.raw.get("strategy_metadata").cloned().unwrap_or(JsonValue::Null),
-            })
-        })
-        .collect::<Vec<_>>();
     let input = format!(
-        "Review decision report {} before the Rust Trading Manager queues orders. Use the configured daytrader MCP tools, especially get_decision_reports, get_markov_signals, get_end_of_day_reports, list_reflections, list_experiments, and create_decision_advice. Pull the latest decision report, Markov signals, EOD reports, current positions or overview exposure, and Hermes learnings. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, portfolio and candidate exposure, Markov freshness, experiment state, and classified execution failures. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
         report.id, report.id, source_session_id
     );
     let payload = json!({
@@ -1156,11 +1371,8 @@ async fn request_hermes_decision_advice(
             "decision_report_id": report.id,
             "decision_pulse_key": report.pulse_key,
             "source_session_id": source_session_id,
-            "open_exchange_codes": open_codes,
             "advisory_mode": mode,
-            "capital_budget": capital_budget.to_json(),
-            "strategy_experiment_overlay": overlay_json,
-            "candidate_orders": candidate_payload,
+            "preflight": preflight,
             "required_context_self_check": {
                 "fields": HERMES_CONTEXT_SELF_CHECK_FIELDS,
                 "expected_sources": [
@@ -2985,6 +3197,78 @@ mod tests {
         );
 
         assert!(hermes_context_self_check_gate_reason(&advice).is_none());
+    }
+
+    #[test]
+    fn hermes_preflight_marks_markov_signal_freshness() {
+        let signal = json!({
+            "status": "ok",
+            "run_date": "2026-07-09",
+            "current_state": "Bull",
+            "direction": "long",
+            "signed_signal": 0.42,
+            "conviction": 0.42
+        });
+        let compact = compact_hermes_preflight_markov_signal(
+            Some(&signal),
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+            5,
+        );
+
+        assert_eq!(compact["fresh"], json!(true));
+        assert_eq!(compact["age_days"], json!(1));
+        assert_eq!(compact["signed_signal"], json!(0.42));
+    }
+
+    #[test]
+    fn hermes_preflight_preserves_markov_run_health_counts() {
+        let compact = compact_hermes_preflight_markov_run(&json!({
+            "status": "completed",
+            "run_date": "2026-07-10",
+            "asset_count": 80,
+            "success_count": 76,
+            "error_count": 4,
+            "config_json": {"must_not_be_in_preflight": true}
+        }));
+
+        assert_eq!(compact["success_count"], json!(76));
+        assert_eq!(compact["error_count"], json!(4));
+        assert!(compact.get("config_json").is_none());
+    }
+
+    #[test]
+    fn hermes_preflight_failure_summary_excludes_raw_error_text() {
+        let rows = vec![json!({
+            "created_at": "2026-07-10T10:00:00Z",
+            "symbol": "DEMANT:xcse",
+            "action": "BUY",
+            "order_type": "Limit",
+            "status": "execution_failed",
+            "error_text": "PriceNotInTickSizeIncrements bearer-secret-must-not-leak"
+        })];
+
+        let compact = compact_hermes_preflight_failures(&rows);
+        let encoded = serde_json::to_string(&compact).unwrap();
+        assert_eq!(
+            compact[0]["failure_signature"],
+            json!("tick_size_or_price_increment")
+        );
+        assert!(!encoded.contains("bearer-secret-must-not-leak"));
+        assert!(!encoded.contains("error_text"));
+    }
+
+    #[test]
+    fn hermes_preflight_only_includes_pending_or_active_experiments() {
+        let rows = vec![
+            json!({"id": "pending", "status": "pending_review", "changed_variable_path": "strategy.swing.daily_indicators.min_confluences"}),
+            json!({"id": "active", "status": "active_sim", "changed_variable_path": "strategy.capital.min_cash_buffer_pct"}),
+            json!({"id": "rejected", "status": "rejected", "changed_variable_path": "execution.min_trade_value_dkk"}),
+        ];
+
+        let compact = compact_hermes_preflight_experiments(&rows);
+        assert_eq!(compact.len(), 2);
+        assert_eq!(compact[0]["id"], json!("pending"));
+        assert_eq!(compact[1]["id"], json!("active"));
     }
 
     #[test]

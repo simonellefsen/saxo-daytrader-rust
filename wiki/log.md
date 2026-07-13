@@ -10,11 +10,42 @@ updated: 2026-07-06
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-11] roadmap | Build, deploy, and repo hygiene review
+
+- Reviewed `Dockerfile.api`, the deploy script, and the working tree; added a "Build, Deploy, And Repo Hygiene" roadmap subsection.
+- Build: no dependency-layer caching (`COPY . .` recompiles ~500 crates every deploy) — proposed cargo-chef/dummy-main layering with BuildKit cache mounts; `screenshots/` (12 MB, new today) is in neither `.dockerignore` nor `.gitignore` and regresses the 4 MB build context.
+- Deploy: proposed content-addressed image tags (git SHA + dirty marker, feeding the deploy-provenance P0 row), skipping the per-deploy CNPG helm upgrade when unchanged, parallel rollout waits, and digest-based restart short-circuiting.
+- Repo: enumerated the removable legacy Python surface (main.py, web_main.py, src/saxo_daytrader_xai, .venv 425 MB) while noting the backup scripts stay load-bearing via the `daytrader-backup` CronJob image; flagged 12 GB of live RustFS object-store data living inside the repo tree as a data-safety hazard, plus root-level Positioner CSVs (17-maj file preserved as the cost-basis repair source), legacy ledger.db, and empty dirs.
+- Verified `cargo build --release` currently emits zero warnings.
+
+## [2026-07-11] roadmap | Saxo OpenAPI capability review
+
+- Reviewed the Saxo OpenAPI reference docs and streaming architecture against the runtime's current usage (port snapshots, chart history, infoprice polling, trade v2 orders/precheck, ref lookups).
+- Added a "Saxo OpenAPI Capabilities To Adopt" subsection to the roadmap: streaming price subscriptions to replace the 1-minute quote poller, ENS activities subscriptions for near-instant fill/order events instead of fast-poll broker sync, `/port/v1/closedpositions` as a broker-computed realized-P/L cross-check (would have caught the cost-basis corruption within a day), FX-spot infoprices as the concrete source for the live-FX roadmap row, `hist` performance timeseries for independent verification of the Performance tab, and later balances/positions streaming.
+- Streaming verified reachable on SIM via the OpenAPI Explorer (plain WebSocket, ContextId + ReferenceId subscriptions, delta messages up to 3/s, `?messageid=` resume, `PUT /streaming/ws/authorize` re-auth) using the same OAuth session.
+- Reviewed the learn-section pages (high-level overview, request/response conventions, batching, streaming): multipart batching is explicitly obsolete in favor of HTTP/2, which exposed that several runtime call sites build a fresh `reqwest::Client` per request; added a unified-Saxo-HTTP-client roadmap row (shared HTTP/2 client, gzip, uniform 429 handling, correlation ids) plus a row folding the documented order-placement return codes and pre-trade disclaimers into the error taxonomy.
+- Reviewed the rate-limiting page and added a rate-limit-aware throttling row with the concrete numbers: 120 requests/minute per session per service group (the nightly Markov run paces exactly at this limit today), 1 order/second per session, 10M requests/day per application, `X-RateLimit-*` headers for adaptive pacing, unique `x-request-id` on POST/PATCH to avoid the 15-second duplicate 409 and to make order retries idempotent, and the rule that entry + related orders must be bundled in one request.
+- Reviewed the planned-changes page: pre-trade disclaimer handling is mandatory for all OpenAPI apps and the runtime has none (SIM tolerates it today; flagged as a required implementation in the disclaimers roadmap row, and added to LIVE readiness); `root/v1/user` retires 2026-09-01 but the runtime does not call it (verified by source grep); the client-onboarding (2027) and proxy-voting (2026-05) changes do not apply to this app.
+- Reviewed the environments page: SIM is a restricted LIVE copy (some market data/reporting unavailable, lower support priority, possibly newer API versions than LIVE), app key/secret are per-environment, and dev-portal one-day tokens are SIM-only. Added a SIM-limitations note plus a LIVE-readiness checklist row (separate app registration, redirect URIs, live auth/gateway/streaming hosts, secrets, entitlements, `require_approval_live` re-enabled, safeguard verification) so SIM quirks like reference-data lag stop being chased as bugs and a future LIVE switch is a checklist, not an improvisation.
+- Reviewed the ENS, Trade, and order-placement learn pages: refined the ENS roadmap row with the concrete subscription/replay model (streaming-only, SequenceId/FromDateTime replay, 3-day streaming retention, 14-day GET retention at 50 msg/s) and added three rows — a scheduled 14-day ENS activities backfill as a broker-authored reconciliation source, unknown-state timeout handling (`TradeNotCompleted` means state-unknown, not failed; reconcile by ExternalReference before retrying), and tradable `Prices` (vs display `InfoPrices`) for limit-order anchoring plus routing `/trade/v1/messages` into ops alerts.
+
+## [2026-07-11] roadmap | UI performance and live-system review additions
+
+- Reviewed the running system, database, and the operator's dashboard screenshots after the 2026-07-09/10 roadmap implementation wave (Markov aliases cut daily resolution errors 38→27; breaker/quarantine/integrity alerts and overrides landed; Hermes duplicate rejection and stale-experiment alerts landed while the pending-review queue still grew to five).
+- New P0 rows: redact the database connection string rendered with password on the Overview Runtime panel (`DashboardView.db_label` uses the raw URL); per-tab lazy read models for UI performance — measured every view at 0.9-2.1 s server time because `load_dashboard` fetches all decision reports (~1 MB/row, 19 MB table) and 5,000 portfolio-history rows for every tab, with `?view=prompts` shipping 1 MB of HTML; deploy provenance (git SHA in `/api/health` checked by smoke) after the 2026-07-09 stale-image window executed four BUYs that the then-missing breaker and commission floor would have blocked.
+- New P1 rows: enforce `history_max_rows`/retention for `scheduler_cycle_history` (9,228 rows / 51 MB vs a 250-row cap) and vacuum `audit_log` (65 MB, zero live tuples); remove the dormant 2026-05-05 `runtime_settings` cash-buffer override that stores a zero buffer.
+- UI section additions: paginated per-tab read models with a 300 ms/200 KB target, age-labels for stale per-position decision chips (screenshots show "HOLD 2026-05-08" rendered as current), market-aware ops-banner staleness (Quiver/Indicators warn "stale" on weekends despite being weekday-only by design), and collapsing the AI Prompts dump behind on-demand sections.
+
 ## [2026-07-10] improvement | Monthly-loss breaker operator override
 
 - Added a month-scoped runtime override for the monthly-loss circuit breaker so an operator can deliberately resume BUYs before month end while preserving the threshold-breach evidence in Trading Manager run JSON.
 - The Overview cash deployment panel now shows breached/active/overridden breaker state and posts either "Resume BUYs This Month" or "Clear Override" with operator notes.
 - Updated the roadmap to mark the acknowledgment path as landed and leave only future override-history/audit UX as a possible follow-up.
+
+## [2026-07-13] policy | Monthly-loss circuit-breaker threshold raised
+
+- Updated `strategy.capital.monthly_loss_halt_dkk` from `-10,000 DKK` to `-50,000 DKK` in the local and Kubernetes runtime configuration at operator request.
+- The guardrail continues to block only new BUYs once the batch-scoped month P/L breaches the configured floor; SELLs remain available for risk reduction. The change is deployed by applying the ConfigMap and restarting the Rust API and singleton scheduler, without deploying unrelated application code.
 
 ## [2026-07-10] improvement | Instrument quarantine operator override
 
@@ -589,7 +620,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Hermes Decision Advice Audit table now shows self-check status with a tooltip for missing sources.
 - Conservative mode now blocks automatic queueing whenever the self-check is incomplete, even if Hermes supplies an `allow` or `reduce` order action; the Trading Manager records the gate reason and self-check in its run JSON.
 - The Hermes audit impact label now identifies this outcome as a context review gate rather than a normal restriction or no-op.
-- Remaining roadmap work: add the richer preflight bundle with normalized candidate waterfall, current exposure, Markov freshness, pending experiments, and recent execution failures.
+
+## [2026-07-10] improvement | Hermes normalized decision preflight
+
+- Added an exact per-manager-run preflight snapshot before Hermes advice is requested, covering report/candidate waterfall, capital and circuit-breaker state, candidate-relevant position exposure, compact daily technical/Markov freshness, active experiment metadata, and classified recent execution failures.
+- The snapshot is both sent to Hermes and persisted in `trading_manager_runs.manager_json.hermes_preflight`, enabling later audit and offline replay without another changing-state lookup.
+- The bundle intentionally excludes Saxo sessions, account identifiers, raw broker payloads, and raw execution-error text; tests verify failure summaries do not leak raw error content.
 
 ## [2026-07-09] improvement | Saxo share-class symbol variants
 

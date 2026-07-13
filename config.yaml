@@ -97,7 +97,7 @@ strategy:
     reinvestment_pressure_threshold_pct: 0.05
     # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
     # floor; SELLs are never blocked. Set >= 0 to disable.
-    monthly_loss_halt_dkk: -10000
+    monthly_loss_halt_dkk: -50000
   markov:
     enabled: true
     timezone: Europe/Copenhagen

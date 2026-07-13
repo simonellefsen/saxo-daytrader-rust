@@ -290,7 +290,7 @@ sequenceDiagram
   participant DB as Audit DB
 
   S->>TM: Fresh completed decision report
-  TM->>H: Submit advisory run with report id, candidates, Markov/capital metadata
+  TM->>H: Submit sanitized, persisted preflight bundle
   H->>MCP: Pull latest reports, Markov, EOD, reflections, experiments
   H->>MCP: create_decision_advice
   MCP->>DB: Insert hermes_decision_advice
@@ -305,6 +305,14 @@ The advice schema is intentionally conservative:
 - Per-candidate `action`: `allow`, `reduce`, `stand_down`, or `review`.
 - Candidate matching uses `strategy_key` first, then `symbol` plus `side`.
 
+The manager builds and persists the exact preflight bundle in
+`trading_manager_runs.manager_json.hermes_preflight`. It contains report and
+candidate summaries, candidate-relevant holdings/sellable quantities, exchange
+and risk/quarantine state, capital budget, circuit-breaker status, compact
+technical and Markov freshness, active experiment metadata, and classified
+recent execution failures. It deliberately excludes Saxo sessions, account
+identifiers, raw broker payloads, and raw execution-error text.
+
 Runtime knobs:
 
 ```bash
@@ -316,7 +324,7 @@ HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=90
 
 `record_only` asks Hermes, audits the response, and includes the advice in `trading_manager_runs.manager_json`, but it does not alter queued orders. It is useful for bring-up and regression checks.
 
-Kubernetes runs `conservative` mode. It can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is not configured, fails, or times out in conservative mode, the Trading Manager treats the report as requiring review and does not silently proceed.
+Kubernetes runs `conservative` mode. It can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is not configured, fails, times out, or records an incomplete required-context self-check in conservative mode, the Trading Manager blocks automatic queueing and records the review gate.
 
 ## Reflection Jobs
 
