@@ -228,7 +228,15 @@ async fn favicon_ico() -> Redirect {
 }
 
 async fn health() -> Json<JsonValue> {
-    Json(json!({"status": "ok", "runtime": "rust-dioxus"}))
+    Json(health_payload())
+}
+
+fn health_payload() -> JsonValue {
+    json!({
+        "status": "ok",
+        "runtime": "rust-dioxus",
+        "git_sha": crate::build_info::git_sha(),
+    })
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Response {
@@ -1340,6 +1348,21 @@ fn redirect_to_app(state: &AppState, path: &str) -> Redirect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_payload_identifies_the_runtime_and_build() {
+        let health = health_payload();
+
+        assert_eq!(health.get("status").and_then(JsonValue::as_str), Some("ok"));
+        assert_eq!(
+            health.get("runtime").and_then(JsonValue::as_str),
+            Some("rust-dioxus")
+        );
+        assert_eq!(
+            health.get("git_sha").and_then(JsonValue::as_str),
+            Some(crate::build_info::git_sha())
+        );
+    }
 
     #[test]
     fn live_completed_decision_report_runs_immediate_pipeline() {

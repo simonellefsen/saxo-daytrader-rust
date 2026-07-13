@@ -30,6 +30,18 @@ require_cmd docker
 require_cmd kubectl
 require_cmd helm
 require_cmd python3
+require_cmd git
+
+GIT_SHA="${GIT_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
+if [[ ! "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  printf "GIT_SHA must be a full 40-character commit SHA, got: %s\n" "$GIT_SHA" >&2
+  exit 1
+fi
+if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+  printf "Refusing to deploy a dirty worktree; commit or stash changes first.\n" >&2
+  printf "Deployment provenance must identify the exact source in the image.\n" >&2
+  exit 1
+fi
 
 if [ ! -f "$ENV_FILE" ]; then
   printf "Missing env file: %s\n" "$ENV_FILE" >&2
@@ -192,7 +204,7 @@ if [ "$(kubectl config current-context)" != "$CONTEXT" ]; then
 fi
 
 printf "Building local Docker images...\n"
-docker build -f "$ROOT/Dockerfile.api" -t "$API_IMAGE" -t daytrader-api:local "$ROOT"
+docker build --build-arg "GIT_SHA=$GIT_SHA" -f "$ROOT/Dockerfile.api" -t "$API_IMAGE" -t daytrader-api:local "$ROOT"
 docker build -f "$ROOT/Dockerfile.backup" -t "$BACKUP_IMAGE" -t daytrader-backup:local "$ROOT"
 
 printf "Installing/upgrading CloudNativePG operator...\n"
@@ -286,6 +298,7 @@ LAST_DEPLOY_KUBE_CONTEXT=$CONTEXT
 LAST_DEPLOY_APP_NAMESPACE=$NAMESPACE
 LAST_DEPLOY_DB_NAMESPACE=$DB_NAMESPACE
 LAST_DEPLOY_IMAGE_TAG=$IMAGE_TAG
+LAST_DEPLOY_GIT_SHA=$GIT_SHA
 LAST_DEPLOY_API_IMAGE=$API_IMAGE
 LAST_DEPLOY_BACKUP_IMAGE=$BACKUP_IMAGE
 LAST_DEPLOY_HERMES_IMAGE=$HERMES_IMAGE

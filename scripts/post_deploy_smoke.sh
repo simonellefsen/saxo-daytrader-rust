@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KUBE_CONTEXT="${KUBE_CONTEXT:-docker-desktop}"
 APP_NAMESPACE="${APP_NAMESPACE:-saxo}"
 API_SERVICE="${API_SERVICE:-daytrader-frontend}"
@@ -13,6 +14,7 @@ EXPECTED_API_IMAGE="${EXPECTED_API_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_SCHEDULER_IMAGE="${EXPECTED_SCHEDULER_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_MCP_IMAGE="${EXPECTED_MCP_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_HERMES_IMAGE="${EXPECTED_HERMES_IMAGE:-}"
+EXPECTED_GIT_SHA="${EXPECTED_GIT_SHA:-}"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/daytrader-smoke.XXXXXX")"
 PORT_FORWARD_PIDS=()
@@ -104,6 +106,7 @@ wait_for_url() {
 require_cmd kubectl
 require_cmd curl
 require_cmd base64
+require_cmd git
 
 info "checking Kubernetes rollouts in ${APP_NAMESPACE}"
 for deployment in daytrader-api daytrader-scheduler daytrader-mcp hermes-agent; do
@@ -137,6 +140,26 @@ if [[ "$health" != *'"status":"ok"'* ]]; then
   fail "health endpoint returned unexpected payload: ${health}"
 fi
 info "health endpoint ok"
+
+if [[ ! "$EXPECTED_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  fail "expected Git SHA is missing or invalid; refusing to verify an unprovenanced rollout"
+fi
+actual_git_sha="$(printf '%s' "$health" | tr -d '[:space:]' | sed -n 's/.*"git_sha":"\([^"]*\)".*/\1/p')"
+if [[ ! "$actual_git_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  fail "health endpoint did not return a full Git SHA: ${actual_git_sha:-missing}"
+fi
+if ! git -C "$ROOT" cat-file -e "${EXPECTED_GIT_SHA}^{commit}" 2>/dev/null; then
+  fail "expected Git SHA is not available in the local repository: ${EXPECTED_GIT_SHA}"
+fi
+if ! git -C "$ROOT" cat-file -e "${actual_git_sha}^{commit}" 2>/dev/null; then
+  fail "running Git SHA is not available in the local repository: ${actual_git_sha}"
+fi
+# The running image must include the requested commit. Equality passes; a later
+# descendant also passes, while an older stale build fails closed.
+if ! git -C "$ROOT" merge-base --is-ancestor "$EXPECTED_GIT_SHA" "$actual_git_sha"; then
+  fail "running Git SHA ${actual_git_sha} does not include requested commit ${EXPECTED_GIT_SHA}"
+fi
+info "running Git SHA ${actual_git_sha} includes requested commit ${EXPECTED_GIT_SHA}"
 
 curl -fsS "http://127.0.0.1:${API_LOCAL_PORT}/api/overview" -o "$TMP_DIR/overview.json"
 overview="$(cat "$TMP_DIR/overview.json")"

@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] safety | Git-verified deployment provenance
+
+- Docker release builds now receive the full committed Git SHA and bake it into the Rust binary; `/api/health` returns the immutable build revision.
+- `post-deploy-guard` records the expected SHA in non-secret deploy metadata and fails closed unless the running revision contains that requested commit. This catches stale images even when their mutable tag appears correct.
+- Updated the build/deploy runbook with the provenance check and the requirement to prefer the guard target after a deploy.
+
 ## [2026-07-13] security | Dashboard database display redaction
 
 - Replaced the Runtime panel's raw database URL with a structured display label shared by startup logging.

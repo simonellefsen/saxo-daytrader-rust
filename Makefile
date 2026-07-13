@@ -6,6 +6,7 @@ KUBE_CONTEXT ?= docker-desktop
 APP_NAMESPACE ?= saxo
 DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
+GIT_SHA ?= $(shell git rev-parse HEAD)
 SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
 
 .PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke post-deploy-guard diagnostics diagnostics-artifact shared-ngrok-status shared-ngrok-apply
@@ -65,7 +66,7 @@ scheduler:
 	CARGO_HOME=$(CARGO_HOME) $(CARGO) run --bin saxo-rust -- --scheduler
 
 docker-build:
-	docker build -f Dockerfile.api -t $(IMAGE) .
+	docker build --build-arg GIT_SHA=$(GIT_SHA) -f Dockerfile.api -t $(IMAGE) .
 
 deps-dry-run:
 	CARGO_HOME=$(CARGO_HOME) $(CARGO) update --dry-run

@@ -220,7 +220,9 @@ endpoint, overview/scheduler reachability, Saxo session status, authenticated
 decision-report schema health, MCP `tools/list` discovery for Hermes-safe tools,
 and Hermes gateway health. A broken rollout, missing health endpoint, invalid
 decision-report schema, missing expected MCP tool, or unhealthy Hermes gateway
-fails the smoke. A Saxo SIM session that needs reauth is
+fails the smoke. The guard target also verifies that the Git SHA embedded in the
+running binary includes the commit requested by the deploy, preventing an older
+image with a matching tag from passing. A Saxo SIM session that needs reauth is
 reported as a warning because it blocks broker refresh/execution but does not
 mean the Rust web runtime failed to deploy.
 
@@ -233,12 +235,16 @@ rtk env EXPECTED_API_IMAGE=daytrader-api:local EXPECTED_SCHEDULER_IMAGE=daytrade
 ```
 
 After `make k8s-deploy`, prefer the guard target. The deploy script writes
-non-secret image metadata to `.run/last_deploy.env`; the guard reads it and
-runs the smoke check with expected API, scheduler, MCP, and Hermes image values:
+non-secret image metadata and the committed Git SHA to `.run/last_deploy.env`;
+the guard reads it and runs the smoke check with expected API, scheduler, MCP,
+Hermes image values, and binary provenance:
 
 ```bash
 rtk make post-deploy-guard
 ```
+
+Deploys require a clean Git worktree. Commit the intended release before
+deploying so the SHA reported by the binary identifies the exact source.
 
 For a narrower in-cluster service check, verify the app from inside the cluster:
 

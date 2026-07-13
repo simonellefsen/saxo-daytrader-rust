@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod build_info;
 mod config;
 mod daily_indicators;
 mod db;

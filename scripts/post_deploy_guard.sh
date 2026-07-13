@@ -18,21 +18,28 @@ EXPECTED_API_IMAGE="${EXPECTED_API_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_SCHEDULER_IMAGE="${EXPECTED_SCHEDULER_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_MCP_IMAGE="${EXPECTED_MCP_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
 EXPECTED_HERMES_IMAGE="${EXPECTED_HERMES_IMAGE:-${LAST_DEPLOY_HERMES_IMAGE:-}}"
+EXPECTED_GIT_SHA="${EXPECTED_GIT_SHA:-${LAST_DEPLOY_GIT_SHA:-}}"
 
 if [[ -z "$EXPECTED_API_IMAGE" && -z "$EXPECTED_SCHEDULER_IMAGE" && -z "$EXPECTED_MCP_IMAGE" && -z "$EXPECTED_HERMES_IMAGE" ]]; then
   printf 'post-deploy guard needs expected images.\n' >&2
   printf 'Set EXPECTED_DAYTRADER_IMAGE or run make k8s-deploy first so %s exists.\n' "$DEPLOY_ENV_FILE" >&2
   exit 1
 fi
+if [[ ! "$EXPECTED_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'post-deploy guard needs a full expected Git SHA.\n' >&2
+  printf 'Run the deploy script so %s records LAST_DEPLOY_GIT_SHA.\n' "$DEPLOY_ENV_FILE" >&2
+  exit 1
+fi
 
 export KUBE_CONTEXT APP_NAMESPACE
-export EXPECTED_API_IMAGE EXPECTED_SCHEDULER_IMAGE EXPECTED_MCP_IMAGE EXPECTED_HERMES_IMAGE
+export EXPECTED_API_IMAGE EXPECTED_SCHEDULER_IMAGE EXPECTED_MCP_IMAGE EXPECTED_HERMES_IMAGE EXPECTED_GIT_SHA
 
 printf '[guard] kube_context=%s app_namespace=%s\n' "$KUBE_CONTEXT" "$APP_NAMESPACE"
-printf '[guard] expected api=%s scheduler=%s mcp=%s hermes=%s\n' \
+printf '[guard] expected api=%s scheduler=%s mcp=%s hermes=%s git_sha=%s\n' \
   "${EXPECTED_API_IMAGE:-skip}" \
   "${EXPECTED_SCHEDULER_IMAGE:-skip}" \
   "${EXPECTED_MCP_IMAGE:-skip}" \
-  "${EXPECTED_HERMES_IMAGE:-skip}"
+  "${EXPECTED_HERMES_IMAGE:-skip}" \
+  "$EXPECTED_GIT_SHA"
 
 exec "$ROOT/scripts/post_deploy_smoke.sh"
