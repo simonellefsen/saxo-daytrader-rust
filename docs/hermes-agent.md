@@ -313,6 +313,15 @@ technical and Markov freshness, active experiment metadata, and classified
 recent execution failures. It deliberately excludes Saxo sessions, account
 identifiers, raw broker payloads, and raw execution-error text.
 
+Each manager run also records `hermes_advice_delta`, a normalized per-candidate
+audit of the advice actually applied. It records matching precedence
+(`strategy_key`, then `symbol` plus `side`, then `symbol`), requested and
+resulting quantities, advisory effect (`allowed`, `reduced`, block/review
+gate, or no-op), and the final local manager outcome. The compact delta omits
+Hermes rationale, raw broker payloads, and raw execution errors; those remain
+in their dedicated, access-controlled audit records. This makes report-time
+Hermes impact measurable without inferring it from free-form skip messages.
+
 Runtime knobs:
 
 ```bash

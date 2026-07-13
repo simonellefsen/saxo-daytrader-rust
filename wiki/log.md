@@ -662,6 +662,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a runtime-settings backed acknowledgement lifecycle with operator notes, plus Overview controls to acknowledge or clear current issue acknowledgments.
 - Acknowledged issues remain visible and still count as mismatches/warnings; the acknowledgement is only audit context, not a health override.
 
+## [2026-07-13] improvement | Hermes decision advice delta audit
+
+- Added a normalized `hermes_advice_delta` to `trading_manager_runs.manager_json` after each report-time Hermes advisory request.
+- Each candidate keeps only matching precedence, advisory action, requested/resulting quantities, applied effect, and final local manager outcome; Hermes rationale, raw broker payloads, and raw execution errors are excluded.
+- The Hermes Decision Advice Audit UI now prefers the stored delta, making conservative blocks, review gates, reductions, and record-only no-ops visible without parsing free-form skip messages.
+
 ## [2026-07-10] improvement | Broker exposure integrity reconciliation
 
 - Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.

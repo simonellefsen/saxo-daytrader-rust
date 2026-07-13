@@ -3589,7 +3589,54 @@ fn hermes_advice_order_counts(row: &JsonValue) -> (String, String) {
     (label, detail)
 }
 
+fn hermes_advice_delta(row: &JsonValue) -> Option<&JsonValue> {
+    row.get("manager_json")
+        .and_then(|value| value.get("hermes_advice_delta"))
+}
+
+fn hermes_advice_delta_count(delta: &JsonValue, effect: &str) -> usize {
+    delta
+        .get("effect_counts")
+        .and_then(|value| value.get(effect))
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0) as usize
+}
+
 fn hermes_advice_impact(row: &JsonValue) -> (String, &'static str) {
+    if let Some(delta) = hermes_advice_delta(row) {
+        let context = hermes_advice_delta_count(delta, "context_gate_blocked");
+        let blocked = hermes_advice_delta_count(delta, "blocked_by_order_advice")
+            + hermes_advice_delta_count(delta, "blocked_by_global_stand_down")
+            + hermes_advice_delta_count(delta, "blocked_by_reduce_below_one_share");
+        let review = hermes_advice_delta_count(delta, "review_required_by_global_advice");
+        let reduced = hermes_advice_delta_count(delta, "reduced");
+        let allowed = hermes_advice_delta_count(delta, "allowed");
+        if context > 0 {
+            return (format!("context gate {context}"), "warn-text");
+        }
+        if blocked > 0 || review > 0 || reduced > 0 {
+            let mut parts = Vec::new();
+            if blocked > 0 {
+                parts.push(format!("blocked {blocked}"));
+            }
+            if review > 0 {
+                parts.push(format!("review {review}"));
+            }
+            if reduced > 0 {
+                parts.push(format!("reduced {reduced}"));
+            }
+            return (
+                parts.join(", "),
+                if blocked > 0 { "bad-text" } else { "warn-text" },
+            );
+        }
+        if allowed > 0 {
+            return (format!("allowed {allowed}"), "good-text");
+        }
+        if hermes_advice_delta_count(delta, "record_only_no_op") > 0 {
+            return ("record-only".to_string(), "");
+        }
+    }
     let recommendation = text(row, "advice_recommendation").trim().to_lowercase();
     let status = hermes_advice_status_label(row);
     let mode = row
@@ -3660,11 +3707,13 @@ fn hermes_advice_impact_detail(row: &JsonValue) -> String {
     let context_self_check = hermes_context_self_check(row)
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let delta = hermes_advice_delta(row).cloned().unwrap_or(JsonValue::Null);
     format!(
-        "Recommendation: {}. Order advice: {} ({order_detail}). Context self-check: {}. Manager advice: {}",
+        "Recommendation: {}. Order advice: {} ({order_detail}). Context self-check: {}. Normalized delta: {}. Manager advice: {}",
         fallback_text(row, "advice_recommendation", "n/a"),
         orders,
         compact_json(Some(&context_self_check)),
+        compact_json(Some(&delta)),
         compact_json(Some(&manager))
     )
 }

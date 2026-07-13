@@ -270,13 +270,27 @@ impl HermesDecisionAdvice {
     }
 
     fn for_order(&self, order: &CandidateOrder) -> Option<&HermesOrderAdvice> {
+        self.for_order_with_match_source(order)
+            .map(|(advice, _)| advice)
+    }
+
+    fn for_order_with_match_source(
+        &self,
+        order: &CandidateOrder,
+    ) -> Option<(&HermesOrderAdvice, &'static str)> {
         self.order_advice
             .get(&format!("strategy:{}", order.strategy_key))
+            .map(|advice| (advice, "strategy_key"))
             .or_else(|| {
                 self.order_advice
                     .get(&format!("symbol_side:{}:{}", order.symbol, order.action))
+                    .map(|advice| (advice, "symbol_side"))
             })
-            .or_else(|| self.order_advice.get(&format!("symbol:{}", order.symbol)))
+            .or_else(|| {
+                self.order_advice
+                    .get(&format!("symbol:{}", order.symbol))
+                    .map(|advice| (advice, "symbol"))
+            })
     }
 
     fn to_json(&self) -> JsonValue {
@@ -366,6 +380,150 @@ fn attach_hermes_advice(
             }),
         );
     }
+}
+
+/// Persist a deterministic account of the advisory effect before local gates
+/// run. This keeps Hermes influence measurable without serializing arbitrary
+/// Hermes rationale or broker data into the manager-run record.
+fn hermes_advice_delta(
+    candidates: &[CandidateOrder],
+    advice: &HermesDecisionAdvice,
+    context_gate_reason: Option<&str>,
+) -> JsonValue {
+    let conservative = advice.mode == "conservative";
+    let global_stand_down = conservative && advice.overall_recommendation == "stand_down";
+    let global_review = conservative && advice.overall_recommendation == "review";
+    let mut matched_candidate_count = 0usize;
+    let mut effect_counts: HashMap<String, usize> = HashMap::new();
+    let candidates = candidates
+        .iter()
+        .map(|order| {
+            let matched = advice.for_order_with_match_source(order);
+            if matched.is_some() {
+                matched_candidate_count += 1;
+            }
+            let (advice_action, advice_max_quantity, match_source) = matched
+                .map(|(item, source)| {
+                    (
+                        item.action.clone(),
+                        item.max_quantity,
+                        Some(source.to_string()),
+                    )
+                })
+                .unwrap_or_else(|| ("none".to_string(), None, None));
+            let requested_quantity = order.quantity;
+            let (effect, resulting_quantity) = if !conservative {
+                ("record_only_no_op", requested_quantity)
+            } else if context_gate_reason.is_some() {
+                ("context_gate_blocked", 0.0)
+            } else if matches!(advice_action.as_str(), "stand_down" | "review") {
+                ("blocked_by_order_advice", 0.0)
+            } else {
+                let (reduced_quantity, reduced) = match advice_max_quantity {
+                    Some(max_quantity)
+                        if advice_action == "reduce"
+                            && max_quantity >= 1.0
+                            && max_quantity.floor() < requested_quantity =>
+                    {
+                        (max_quantity.floor(), true)
+                    }
+                    _ => (requested_quantity, false),
+                };
+                let explicit_allow = matches!(advice_action.as_str(), "allow" | "reduce");
+                if advice_action == "reduce" && advice_max_quantity.unwrap_or(0.0) < 1.0 {
+                    ("blocked_by_reduce_below_one_share", 0.0)
+                } else if global_stand_down {
+                    ("blocked_by_global_stand_down", 0.0)
+                } else if global_review && !explicit_allow {
+                    ("review_required_by_global_advice", 0.0)
+                } else if reduced {
+                    ("reduced", reduced_quantity)
+                } else if advice_action == "allow" {
+                    ("allowed", requested_quantity)
+                } else if advice_action == "reduce" {
+                    ("reduce_cap_no_op", requested_quantity)
+                } else {
+                    ("no_op", requested_quantity)
+                }
+            };
+            *effect_counts.entry(effect.to_string()).or_default() += 1;
+            json!({
+                "strategy_key": order.strategy_key,
+                "symbol": order.symbol,
+                "action": order.action,
+                "match_source": match_source,
+                "advice_action": advice_action,
+                "advice_max_quantity": advice_max_quantity,
+                "requested_quantity": requested_quantity,
+                "resulting_quantity": resulting_quantity,
+                "effect": effect,
+                "manager_outcome": "not_recorded",
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "version": 1,
+        "mode": advice.mode,
+        "overall_recommendation": advice.overall_recommendation,
+        "candidate_count": candidates.len(),
+        "matched_candidate_count": matched_candidate_count,
+        "context_gate_enforced": context_gate_reason.is_some(),
+        "effect_counts": effect_counts,
+        "candidates": candidates,
+        "safety": {
+            "hermes_rationale_excluded": true,
+            "raw_broker_payloads_excluded": true,
+            "raw_execution_errors_excluded": true,
+        }
+    })
+}
+
+fn with_hermes_advice_manager_outcomes(
+    mut delta: JsonValue,
+    approved: &[(CandidateOrder, String)],
+    skipped: &[JsonValue],
+) -> JsonValue {
+    let Some(entries) = delta
+        .get_mut("candidates")
+        .and_then(JsonValue::as_array_mut)
+    else {
+        return delta;
+    };
+    let mut manager_outcome_counts: HashMap<String, usize> = HashMap::new();
+    for entry in entries {
+        let strategy_key = text(entry, "strategy_key");
+        let symbol = text(entry, "symbol");
+        let action = text(entry, "action");
+        let outcome = if approved.iter().any(|(order, _)| {
+            order.strategy_key == strategy_key && order.symbol == symbol && order.action == action
+        }) {
+            "approved"
+        } else if skipped.iter().any(|order| {
+            text(order, "strategy_key") == strategy_key
+                && text(order, "symbol") == symbol
+                && text(order, "action") == action
+        }) {
+            "skipped"
+        } else {
+            "not_reached"
+        };
+        if let Some(object) = entry.as_object_mut() {
+            object.insert(
+                "manager_outcome".to_string(),
+                JsonValue::String(outcome.to_string()),
+            );
+        }
+        *manager_outcome_counts
+            .entry(outcome.to_string())
+            .or_default() += 1;
+    }
+    if let Some(object) = delta.as_object_mut() {
+        object.insert(
+            "manager_outcome_counts".to_string(),
+            json!(manager_outcome_counts),
+        );
+    }
+    delta
 }
 
 /// Monthly-loss circuit breaker: when the month's P/L (batch-scoped goal
@@ -628,6 +786,11 @@ async fn run_for_report(
         hermes_conservative && hermes_advice.overall_recommendation == "stand_down";
     let hermes_global_review =
         hermes_conservative && hermes_advice.overall_recommendation == "review";
+    let hermes_advice_delta = hermes_advice_delta(
+        &candidates,
+        &hermes_advice,
+        hermes_context_gate_reason.as_deref(),
+    );
 
     let min_trade_value_dkk = overlay
         .and_then(|overlay| overlay.f64_value("execution.min_trade_value_dkk"))
@@ -971,6 +1134,8 @@ async fn run_for_report(
         "status": if queued_orders.is_empty() { "completed_no_orders" } else { "queued" },
         "orders": queued_orders
     });
+    let hermes_advice_delta =
+        with_hermes_advice_manager_outcomes(hermes_advice_delta, &approved, &skipped);
     let manager_json = json!({
         "summary": "Rust Trading Manager approved scheduled report orders using embedded daily technical gates.",
         "capital_budget": initial_capital_budget.to_json(),
@@ -1016,6 +1181,7 @@ async fn run_for_report(
         "strategy_experiment_overlay": overlay_json,
         "hermes_preflight": hermes_preflight,
         "hermes_decision_advice": hermes_advice.to_json(),
+        "hermes_advice_delta": hermes_advice_delta,
         "hermes_context_self_check_gate": {
             "enforced": hermes_context_gate_reason.is_some(),
             "mode": hermes_advice.mode,
@@ -3108,6 +3274,76 @@ mod tests {
         assert_eq!(matched.action, "reduce");
         assert_eq!(matched.max_quantity, Some(2.0));
         assert_eq!(matched.reason, "Strategy-specific reduction");
+    }
+
+    #[test]
+    fn hermes_advice_delta_records_reduction_and_final_manager_outcome() {
+        let candidate = order("BUY", "BUY", "bullish", 4);
+        let strategy_key = candidate.strategy_key.clone();
+        let advice = HermesDecisionAdvice::from_row(
+            json!({
+                "status": "received",
+                "overall_recommendation": "proceed",
+                "summary": "Reduce the candidate.",
+                "order_advice_json": [{
+                    "strategy_key": strategy_key,
+                    "symbol": "NVDA:xnas",
+                    "side": "BUY",
+                    "action": "reduce",
+                    "max_quantity": 2,
+                    "reason": "Private rationale stays in the advice record."
+                }]
+            }),
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+
+        let delta = hermes_advice_delta(&[candidate.clone()], &advice, None);
+        assert_eq!(delta["matched_candidate_count"], json!(1));
+        assert_eq!(
+            delta["candidates"][0]["match_source"],
+            json!("strategy_key")
+        );
+        assert_eq!(delta["candidates"][0]["effect"], json!("reduced"));
+        assert_eq!(delta["candidates"][0]["resulting_quantity"], json!(2.0));
+        assert!(
+            !serde_json::to_string(&delta)
+                .unwrap()
+                .contains("Private rationale stays in the advice record")
+        );
+
+        let finalized = with_hermes_advice_manager_outcomes(
+            delta,
+            &[(candidate, "technical gate passed".to_string())],
+            &[],
+        );
+        assert_eq!(
+            finalized["candidates"][0]["manager_outcome"],
+            json!("approved")
+        );
+        assert_eq!(finalized["manager_outcome_counts"]["approved"], json!(1));
+    }
+
+    #[test]
+    fn hermes_advice_delta_records_global_review_without_order_allow() {
+        let candidate = order("BUY", "BUY", "bullish", 4);
+        let advice = HermesDecisionAdvice::from_row(
+            json!({
+                "status": "received",
+                "overall_recommendation": "review",
+                "summary": "Review before acting.",
+                "order_advice_json": []
+            }),
+            "conservative".to_string(),
+            "decision-advice-42".to_string(),
+        );
+
+        let delta = hermes_advice_delta(&[candidate], &advice, None);
+        assert_eq!(
+            delta["candidates"][0]["effect"],
+            json!("review_required_by_global_advice")
+        );
+        assert_eq!(delta["candidates"][0]["resulting_quantity"], json!(0.0));
     }
 
     #[test]

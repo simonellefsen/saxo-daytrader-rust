@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-10
+updated: 2026-07-13
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-13: Added a normalized Hermes advice delta to every Trading Manager run. Each candidate records matching precedence, requested/resulting quantity, whether advice allowed/reduced/blocked/reviewed/no-oped it, and its final local manager outcome; the delta excludes Hermes rationale, raw broker payloads, and raw execution errors so advisory impact can be measured safely.
 - 2026-07-10: Completed the Hermes advice self-check safety gate: Trading Manager advisory prompts require Hermes to state whether it reviewed the latest report, Markov signals, EOD report, positions, and active experiments; stored advice normalizes missing sources; the audit table shows the self-check status; and conservative mode blocks automatic queueing whenever the self-check is incomplete.
 - 2026-07-10: Added Hermes's normalized, persisted decision preflight bundle: the exact manager-cycle snapshot now supplies report/candidate waterfall, candidate-relevant exposure, capital and circuit-breaker state, Markov freshness, active experiments, and classified recent failures while excluding Saxo sessions, raw broker payloads, and raw error text.
 - 2026-07-10: Added the first decision-action regression guard: manual decision-report actions now share an explicit live/dry-run mode helper, and unit tests prove completed dry-run reports cannot trigger Trading Manager or Saxo execution side effects.
@@ -122,7 +123,7 @@ These are specific changes that could improve the quality of trading decisions w
 | --- | --- | --- |
 | Unstick the experiment review queue | Four one-variable proposals have sat in `pending_review` since as early as 2026-06-16 (Markov age gate, min_confluences 3→4, and two near-duplicate cash-buffer raises) while reflections run nightly. Pending-review aging alerts through the Slack path and dashboard age highlighting landed 2026-07-09; exact same-variable duplicate rejection landed 2026-07-10. Remaining work is a weekly review digest, auto-expiry with a "stale, superseded by market conditions" status after N days, and near-duplicate semantic merging before insert. | Median time from proposal to decision; zero proposals older than 14 days; the self-improvement loop actually completes its cycle instead of accumulating unreviewed hypotheses. |
 | Hermes preflight contract | Landed 2026-07-10: Hermes receives a compact normalized manager-cycle bundle with report summary, candidate waterfall, candidate-relevant exposure, Markov freshness, active experiments, and classified recent failures. The exact snapshot is retained in `trading_manager_runs.manager_json` for audit/replay; sensitive session, broker-payload, and raw-error data is excluded. | Higher advice consistency and fewer irrelevant comments. |
-| Advice delta audit | Store exactly what Hermes changed: allowed, blocked, reduced, required review, or no-op. | Quantify Hermes impact separately from model/report impact. |
+| Advice delta audit | Landed 2026-07-13: each manager run records the normalized per-candidate applied advisory effect, quantity delta, matching precedence, and final manager outcome without raw rationale/broker data. | Quantify Hermes impact separately from model/report impact. |
 | Counterfactual tracking | When Hermes blocks/reduces a trade, track the hypothetical performance of the original report order. | Decide whether conservative Hermes advice improves outcomes. |
 | Proposal quality rubric | Score Hermes proposals by evidence strength, one-variable purity, safety, measurable metric, and duplicate risk. | Promote fewer vague proposals and more testable experiments. |
 | Learning memory compression | Summarize EOD/weekly reflections into stable lessons and stale lessons with expiry dates. | Prevent old lessons from overweighting new market conditions. |
