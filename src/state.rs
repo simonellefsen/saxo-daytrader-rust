@@ -615,6 +615,10 @@ fn performance_range_limit(range_key: &str) -> i64 {
     }
 }
 
+fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Option<i64> {
+    (active_view == "performance").then(|| performance_range_limit(range_key))
+}
+
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
     match (current_status, action.trim()) {
         ("pending_review", "approve_paper") => Some("approved_paper"),
@@ -804,14 +808,22 @@ impl AppState {
                     warn!("dashboard latest daily indicator run degraded: {err:#}");
                     JsonValue::Null
                 });
-        let performance_history = self
-            .performance_history_with_current(&performance_range, 5000)
-            .await
-            .unwrap_or_else(|err| {
-                warn!("dashboard performance history degraded: {err:#}");
-                Vec::new()
-            });
-        let performance_summary = self.performance_summary(&performance_history);
+        let performance_history =
+            match dashboard_performance_history_limit(&active_view, &performance_range) {
+                Some(limit) => self
+                    .performance_history_with_current(&performance_range, limit)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard performance history degraded: {err:#}");
+                        Vec::new()
+                    }),
+                None => Vec::new(),
+            };
+        let performance_summary = if active_view == "performance" {
+            self.performance_summary(&performance_history)
+        } else {
+            JsonValue::Null
+        };
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -7283,6 +7295,21 @@ analysis_windows:
             assert!(
                 DECISION_REPORT_DETAIL_COLUMNS.contains(column),
                 "detail projection must retain {column}"
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_loads_performance_history_only_for_performance_view() {
+        assert_eq!(
+            dashboard_performance_history_limit("performance", "1W"),
+            Some(600)
+        );
+        for view in ["overview", "decisions", "prompts", "execution", "hermes"] {
+            assert_eq!(
+                dashboard_performance_history_limit(view, "1M"),
+                None,
+                "{view} must not load performance history"
             );
         }
     }

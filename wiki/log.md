@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] performance | Performance-tab history gating
+
+- Dashboard SSR no longer reads `portfolio_value_history` for views other than Performance, where no component consumes it.
+- The Performance view continues to load its selected range using the existing range limits; the standalone performance API remains unchanged.
+- Added regression coverage so a later dashboard change cannot silently reintroduce the cross-tab history query.
+
 ## [2026-07-13] performance | Lightweight Decision Report dashboard reads
 
 - Split Decision Report database projections into metadata summaries and full detail records.
