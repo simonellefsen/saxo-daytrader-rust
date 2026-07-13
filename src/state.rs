@@ -626,6 +626,7 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
 const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
 const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
 const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
+const MARKOV_SIGNALS_PAGE_SIZE: i64 = 40;
 
 fn dashboard_execution_order_window(
     active_view: &str,
@@ -647,6 +648,13 @@ fn dashboard_execution_order_window(
     let page = requested_page.max(1).min(total_pages);
     let offset = (page - 1) * EXECUTION_ORDERS_PAGE_SIZE;
     (page, EXECUTION_ORDERS_PAGE_SIZE, offset)
+}
+
+fn dashboard_markov_signal_window(requested_page: i64, total_signals: i64) -> (i64, i64) {
+    let total_pages =
+        ((total_signals.max(0) + MARKOV_SIGNALS_PAGE_SIZE - 1) / MARKOV_SIGNALS_PAGE_SIZE).max(1);
+    let page = requested_page.max(1).min(total_pages);
+    (page, (page - 1) * MARKOV_SIGNALS_PAGE_SIZE)
 }
 
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
@@ -711,6 +719,7 @@ impl AppState {
         performance_range: String,
         selected_report_id: Option<i64>,
         requested_execution_page: i64,
+        requested_markov_page: i64,
     ) -> DashboardView {
         let overview = self.overview_payload().await.unwrap_or_else(|err| {
             error!("overview load failed: {err:#}");
@@ -874,11 +883,23 @@ impl AppState {
         } else {
             JsonValue::Null
         };
-        let markov_signals = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
-            self.markov_signals(80).await.unwrap_or_else(|err| {
-                warn!("dashboard Markov signals degraded: {err:#}");
-                Vec::new()
+        let markov_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
+            self.markov_signals_count().await.unwrap_or_else(|err| {
+                warn!("dashboard Markov signal count degraded: {err:#}");
+                0
             })
+        } else {
+            0
+        };
+        let (markov_page, markov_signals_offset) =
+            dashboard_markov_signal_window(requested_markov_page, markov_signal_total);
+        let markov_signals = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
+            self.markov_signals_page(MARKOV_SIGNALS_PAGE_SIZE, markov_signals_offset)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard Markov signals degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -1003,6 +1024,9 @@ impl AppState {
             execution_page,
             execution_page_size,
             execution_order_total,
+            markov_page,
+            markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
+            markov_signal_total,
             positions,
             orders,
             execution_fills,
@@ -2651,6 +2675,14 @@ impl AppState {
 
     pub async fn markov_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
         crate::markov_method::latest_markov_signals(self, limit).await
+    }
+
+    pub async fn markov_signals_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
+        crate::markov_method::latest_markov_signals_page(self, limit, offset).await
+    }
+
+    pub async fn markov_signals_count(&self) -> Result<i64> {
+        crate::markov_method::latest_markov_signal_count(self).await
     }
 
     pub async fn latest_markov_run(&self) -> Result<JsonValue> {
@@ -7466,5 +7498,18 @@ analysis_windows:
             dashboard_execution_order_window("markov", 5, 500),
             (1, SHARED_EXECUTION_ORDERS_LIMIT, 0)
         );
+    }
+
+    #[test]
+    fn dashboard_markov_signal_window_clamps_page_and_calculates_offset() {
+        assert_eq!(
+            dashboard_markov_signal_window(2, 81),
+            (2, MARKOV_SIGNALS_PAGE_SIZE)
+        );
+        assert_eq!(
+            dashboard_markov_signal_window(9, 41),
+            (2, MARKOV_SIGNALS_PAGE_SIZE)
+        );
+        assert_eq!(dashboard_markov_signal_window(0, 0), (1, 0));
     }
 }

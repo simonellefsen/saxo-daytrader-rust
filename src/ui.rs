@@ -1296,16 +1296,12 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .get("config_json")
         .cloned()
         .unwrap_or_else(|| JsonValue::Null);
-    let ok_count = data
-        .markov_signals
-        .iter()
-        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
-        .count();
-    let error_count = data
-        .markov_signals
-        .iter()
-        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("error"))
-        .count();
+    let ok_count = value_i64(&run, "success_count");
+    let error_count = value_i64(&run, "error_count");
+    let total_pages =
+        ((data.markov_signal_total + data.markov_page_size - 1) / data.markov_page_size).max(1);
+    let previous_page_href = format!("/?view=markov&markov_page={}", data.markov_page - 1);
+    let next_page_href = format!("/?view=markov&markov_page={}", data.markov_page + 1);
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -1338,6 +1334,10 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
             div { class: "table-wrap compact-table",
+                div { class: "section-title-row compact",
+                    h3 { "Signals" }
+                    span { class: "muted", "{data.markov_signal_total} total · page {data.markov_page} of {total_pages}" }
+                }
                 table { class: "data-table",
                     thead {
                         tr {
@@ -1358,6 +1358,14 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         for row in data.markov_signals.iter() {
                             MarkovSignalRow { row: row.clone(), prefs: prefs.clone() }
                         }
+                    }
+                }
+                div { class: "button-row table-pagination",
+                    if data.markov_page > 1 {
+                        a { class: "small-button", href: "{previous_page_href}", "Previous" }
+                    }
+                    if data.markov_page < total_pages {
+                        a { class: "small-button", href: "{next_page_href}", "Next" }
                     }
                 }
             }

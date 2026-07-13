@@ -1124,6 +1124,14 @@ async fn markov_run_exists(state: &AppState, run_date: NaiveDate) -> Result<bool
 }
 
 pub async fn latest_markov_signals(state: &AppState, limit: i64) -> Result<Vec<JsonValue>> {
+    latest_markov_signals_page(state, limit, 0).await
+}
+
+pub async fn latest_markov_signals_page(
+    state: &AppState,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<JsonValue>> {
     let sql = format!(
         "SELECT id, run_id, created_at, run_date, status, symbol, instrument_name,
                 exchange, source, uic, asset_type, window_days, threshold,
@@ -1140,11 +1148,31 @@ pub async fn latest_markov_signals(state: &AppState, limit: i64) -> Result<Vec<J
             LIMIT 1
          )
          ORDER BY run_date DESC, created_at DESC, symbol ASC
-         LIMIT {}",
-        clamp_limit(limit, 1, 500)
+         LIMIT {} OFFSET {}",
+        clamp_limit(limit, 1, 500),
+        offset.max(0).min(100_000),
     );
     let rows = sqlx::query(&sql).fetch_all(&state.pool).await?;
     Ok(rows.iter().map(row_to_json).collect())
+}
+
+pub async fn latest_markov_signal_count(state: &AppState) -> Result<i64> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count
+         FROM markov_asset_signals
+         WHERE run_id = (
+            SELECT id
+            FROM markov_signal_runs
+            ORDER BY run_date DESC, created_at DESC
+            LIMIT 1
+         )",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row
+        .as_ref()
+        .and_then(|row| row.try_get::<i64, _>("count").ok())
+        .unwrap_or(0))
 }
 
 pub async fn latest_markov_run(state: &AppState) -> Result<JsonValue> {
