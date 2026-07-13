@@ -619,6 +619,10 @@ fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Op
     (active_view == "performance").then(|| performance_range_limit(range_key))
 }
 
+fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
+    active_view == tab
+}
+
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
     match (current_status, action.trim()) {
         ("pending_review", "approve_paper") => Some("approved_paper"),
@@ -693,14 +697,22 @@ impl AppState {
             warn!("dashboard execution queue degraded: {err:#}");
             Vec::new()
         });
-        let execution_fills = self.execution_fills(50).await.unwrap_or_else(|err| {
-            warn!("dashboard execution fills degraded: {err:#}");
+        let execution_fills = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+            self.execution_fills(50).await.unwrap_or_else(|err| {
+                warn!("dashboard execution fills degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
-        let execution_events = self.execution_events(50).await.unwrap_or_else(|err| {
-            warn!("dashboard execution events degraded: {err:#}");
+        };
+        let execution_events = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+            self.execution_events(50).await.unwrap_or_else(|err| {
+                warn!("dashboard execution events degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
+        };
         let report_limit = match active_view.as_str() {
             "overview" => 5,
             "decisions" => 20,
@@ -749,54 +761,95 @@ impl AppState {
         } else {
             selected_decision
         };
-        let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
-            warn!("dashboard decision pulse statuses degraded: {err:#}");
-            Vec::new()
-        });
-        let journal_entries = self.strategy_journal_items(20).await.unwrap_or_else(|err| {
-            warn!("dashboard end-of-day journal degraded: {err:#}");
-            Vec::new()
-        });
-        let scheduler_cycles = self.scheduler_cycles(12).await.unwrap_or_else(|err| {
-            warn!("dashboard scheduler cycles degraded: {err:#}");
-            Vec::new()
-        });
-        let hermes_reflections = self.hermes_reflections(20).await.unwrap_or_else(|err| {
-            warn!("dashboard Hermes reflections degraded: {err:#}");
-            Vec::new()
-        });
-        let hermes_experiments = self.hermes_experiments(20).await.unwrap_or_else(|err| {
-            warn!("dashboard Hermes experiments degraded: {err:#}");
-            Vec::new()
-        });
-        let hermes_decision_advice_audit = self
-            .hermes_decision_advice_audit(20)
-            .await
-            .unwrap_or_else(|err| {
-                warn!("dashboard Hermes decision advice audit degraded: {err:#}");
+        let decision_pulse_statuses =
+            if dashboard_loads_tab_exclusive_data(&active_view, "decisions") {
+                self.decision_pulse_statuses().await.unwrap_or_else(|err| {
+                    warn!("dashboard decision pulse statuses degraded: {err:#}");
+                    Vec::new()
+                })
+            } else {
                 Vec::new()
-            });
-        let hermes_counterfactuals = self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
-            warn!("dashboard Hermes counterfactuals degraded: {err:#}");
+            };
+        let journal_entries = if dashboard_loads_tab_exclusive_data(&active_view, "eod") {
+            self.strategy_journal_items(20).await.unwrap_or_else(|err| {
+                warn!("dashboard end-of-day journal degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
-        let active_strategy_baseline =
+        };
+        let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+            self.scheduler_cycles(12).await.unwrap_or_else(|err| {
+                warn!("dashboard scheduler cycles degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let hermes_reflections = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            self.hermes_reflections(20).await.unwrap_or_else(|err| {
+                warn!("dashboard Hermes reflections degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let hermes_experiments = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            self.hermes_experiments(20).await.unwrap_or_else(|err| {
+                warn!("dashboard Hermes experiments degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let hermes_decision_advice_audit =
+            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+                self.hermes_decision_advice_audit(20)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard Hermes decision advice audit degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
+        let hermes_counterfactuals = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
+                warn!("dashboard Hermes counterfactuals degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let active_strategy_baseline = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
+        {
             self.active_strategy_baseline().await.unwrap_or_else(|err| {
                 warn!("dashboard active strategy baseline degraded: {err:#}");
                 JsonValue::Null
-            });
-        let markov_signals = self.markov_signals(80).await.unwrap_or_else(|err| {
-            warn!("dashboard Markov signals degraded: {err:#}");
+            })
+        } else {
+            JsonValue::Null
+        };
+        let markov_signals = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
+            self.markov_signals(80).await.unwrap_or_else(|err| {
+                warn!("dashboard Markov signals degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
+        };
         let latest_markov_run = self.latest_markov_run().await.unwrap_or_else(|err| {
             warn!("dashboard latest Markov run degraded: {err:#}");
             JsonValue::Null
         });
-        let quiver_signals = self.quiver_signals(80).await.unwrap_or_else(|err| {
-            warn!("dashboard Quiver signals degraded: {err:#}");
+        let quiver_signals = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
+            self.quiver_signals(80).await.unwrap_or_else(|err| {
+                warn!("dashboard Quiver signals degraded: {err:#}");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
+        };
         let latest_quiver_run = self.latest_quiver_run().await.unwrap_or_else(|err| {
             warn!("dashboard latest Quiver run degraded: {err:#}");
             JsonValue::Null
@@ -828,10 +881,14 @@ impl AppState {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
         });
-        let watchlists = self.watchlists_payload().await.unwrap_or_else(|err| {
-            warn!("dashboard watchlists degraded: {err:#}");
-            json!({"generated_at": Utc::now().to_rfc3339(), "categories": []})
-        });
+        let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
+            self.watchlists_payload().await.unwrap_or_else(|err| {
+                warn!("dashboard watchlists degraded: {err:#}");
+                json!({"generated_at": Utc::now().to_rfc3339(), "categories": []})
+            })
+        } else {
+            JsonValue::Null
+        };
         let latest_decision = if active_view == "prompts" {
             selected_decision.clone()
         } else {
@@ -7311,6 +7368,23 @@ analysis_windows:
                 None,
                 "{view} must not load performance history"
             );
+        }
+    }
+
+    #[test]
+    fn dashboard_loads_tab_exclusive_collections_only_for_their_tab() {
+        for tab in [
+            "decisions",
+            "eod",
+            "execution",
+            "hermes",
+            "markov",
+            "quiver",
+            "watchlists",
+        ] {
+            assert!(dashboard_loads_tab_exclusive_data(tab, tab));
+            assert!(!dashboard_loads_tab_exclusive_data("overview", tab));
+            assert!(!dashboard_loads_tab_exclusive_data("performance", tab));
         }
     }
 }

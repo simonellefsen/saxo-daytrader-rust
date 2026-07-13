@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] performance | Tab-exclusive dashboard collection gating
+
+- Stopped fetching Hermes, execution detail, Markov, Quiver, Watchlist, End-of-Day, and decision-pulse collections for unrelated SSR tabs.
+- Retained overview positions/orders plus shared market, quote, and latest-run inputs because they drive the persistent operational health strip.
+- Added regression coverage for the tab-exclusive data gate; the next P0 step is pagination for long shared tables.
+
 ## [2026-07-13] performance | Performance-tab history gating
 
 - Dashboard SSR no longer reads `portfolio_value_history` for views other than Performance, where no component consumes it.
