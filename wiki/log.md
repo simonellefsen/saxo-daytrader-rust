@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] performance | Server-side execution-order pagination
+
+- The Execution tab now requests a bounded 25-order page with an explicit total and Previous/Next links; out-of-range pages clamp to the last valid page.
+- Overview renders only its 12 most recent queue entries, while other tabs retain 20 recent orders for the persistent execution-health indicator.
+- This bounds the expensive per-row execution attribution lookups to the displayed page and avoids the previous fixed 80-row dashboard query.
+
 ## [2026-07-13] performance | Tab-exclusive dashboard collection gating
 
 - Stopped fetching Hermes, execution detail, Markov, Quiver, Watchlist, End-of-Day, and decision-pulse collections for unrelated SSR tabs.

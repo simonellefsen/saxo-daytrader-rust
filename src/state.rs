@@ -623,6 +623,32 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
+const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
+const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
+const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
+
+fn dashboard_execution_order_window(
+    active_view: &str,
+    requested_page: i64,
+    total_orders: i64,
+) -> (i64, i64, i64) {
+    if active_view != "execution" {
+        let limit = if active_view == "overview" {
+            OVERVIEW_EXECUTION_ORDERS_LIMIT
+        } else {
+            SHARED_EXECUTION_ORDERS_LIMIT
+        };
+        return (1, limit, 0);
+    }
+
+    let total_pages = ((total_orders.max(0) + EXECUTION_ORDERS_PAGE_SIZE - 1)
+        / EXECUTION_ORDERS_PAGE_SIZE)
+        .max(1);
+    let page = requested_page.max(1).min(total_pages);
+    let offset = (page - 1) * EXECUTION_ORDERS_PAGE_SIZE;
+    (page, EXECUTION_ORDERS_PAGE_SIZE, offset)
+}
+
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
     match (current_status, action.trim()) {
         ("pending_review", "approve_paper") => Some("approved_paper"),
@@ -684,6 +710,7 @@ impl AppState {
         active_view: String,
         performance_range: String,
         selected_report_id: Option<i64>,
+        requested_execution_page: i64,
     ) -> DashboardView {
         let overview = self.overview_payload().await.unwrap_or_else(|err| {
             error!("overview load failed: {err:#}");
@@ -693,10 +720,27 @@ impl AppState {
             warn!("dashboard positions degraded: {err:#}");
             Vec::new()
         });
-        let orders = self.execution_orders(80).await.unwrap_or_else(|err| {
-            warn!("dashboard execution queue degraded: {err:#}");
-            Vec::new()
-        });
+        let execution_order_total = if active_view == "execution" {
+            self.execution_orders_count().await.unwrap_or_else(|err| {
+                warn!("dashboard execution-order count degraded: {err:#}");
+                0
+            })
+        } else {
+            0
+        };
+        let (execution_page, execution_page_size, execution_orders_offset) =
+            dashboard_execution_order_window(
+                &active_view,
+                requested_execution_page,
+                execution_order_total,
+            );
+        let orders = self
+            .execution_orders_page(execution_page_size, execution_orders_offset)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("dashboard execution queue degraded: {err:#}");
+                Vec::new()
+            });
         let execution_fills = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
             self.execution_fills(50).await.unwrap_or_else(|err| {
                 warn!("dashboard execution fills degraded: {err:#}");
@@ -956,6 +1000,9 @@ impl AppState {
             active_view,
             performance_range,
             selected_report_id,
+            execution_page,
+            execution_page_size,
+            execution_order_total,
             positions,
             orders,
             execution_fills,
@@ -2267,9 +2314,14 @@ impl AppState {
     }
 
     pub async fn execution_orders(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        self.execution_orders_page(limit, 0).await
+    }
+
+    pub async fn execution_orders_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id, execution_result_json FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {}",
-            clamp_limit(limit, 1, 500)
+            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id, execution_result_json FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {} OFFSET {}",
+            clamp_limit(limit, 1, 500),
+            offset.max(0).min(100_000),
         );
         let mut orders = self.select_json(&sql).await.unwrap_or_default();
         let market_rows = self.market_exchange_rows();
@@ -2287,6 +2339,14 @@ impl AppState {
             }
         }
         Ok(orders)
+    }
+
+    pub async fn execution_orders_count(&self) -> Result<i64> {
+        let row = self
+            .first_json("SELECT COUNT(*) AS count FROM execution_orders")
+            .await?
+            .unwrap_or_else(|| json!({}));
+        Ok(value_i64(&row, "count"))
     }
 
     async fn execution_order_attribution(&self, order: &JsonValue) -> Result<JsonValue> {
@@ -7386,5 +7446,25 @@ analysis_windows:
             assert!(!dashboard_loads_tab_exclusive_data("overview", tab));
             assert!(!dashboard_loads_tab_exclusive_data("performance", tab));
         }
+    }
+
+    #[test]
+    fn dashboard_execution_order_window_pages_execution_and_bounds_other_tabs() {
+        assert_eq!(
+            dashboard_execution_order_window("execution", 2, 56),
+            (2, EXECUTION_ORDERS_PAGE_SIZE, 25)
+        );
+        assert_eq!(
+            dashboard_execution_order_window("execution", 99, 26),
+            (2, EXECUTION_ORDERS_PAGE_SIZE, 25)
+        );
+        assert_eq!(
+            dashboard_execution_order_window("overview", 5, 500),
+            (1, OVERVIEW_EXECUTION_ORDERS_LIMIT, 0)
+        );
+        assert_eq!(
+            dashboard_execution_order_window("markov", 5, 500),
+            (1, SHARED_EXECUTION_ORDERS_LIMIT, 0)
+        );
     }
 }

@@ -2714,6 +2714,17 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let total_pages = ((data.execution_order_total + data.execution_page_size - 1)
+        / data.execution_page_size)
+        .max(1);
+    let previous_page_href = format!(
+        "/?view=execution&execution_page={}",
+        data.execution_page - 1
+    );
+    let next_page_href = format!(
+        "/?view=execution&execution_page={}",
+        data.execution_page + 1
+    );
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -2829,13 +2840,24 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
             div { class: "table-wrap",
-                h3 { "Execution Orders" }
+                div { class: "section-title-row compact",
+                    h3 { "Execution Orders" }
+                    span { class: "muted", "{data.execution_order_total} total · page {data.execution_page} of {total_pages}" }
+                }
                 table {
                     thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Expiry" } th { "Attribution" } th { "Error" } } }
                     tbody {
                         for row in data.orders.iter() {
                             ExecutionOrderRow { row: row.clone(), prefs: prefs.clone() }
                         }
+                    }
+                }
+                div { class: "button-row table-pagination",
+                    if data.execution_page > 1 {
+                        a { class: "small-button", href: "{previous_page_href}", "Previous" }
+                    }
+                    if data.execution_page < total_pages {
+                        a { class: "small-button", href: "{next_page_href}", "Next" }
                     }
                 }
             }

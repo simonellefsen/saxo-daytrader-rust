@@ -185,6 +185,7 @@ async fn index(
         .await;
     let active_view = normalize_view(params.view.as_deref());
     let performance_range = normalize_performance_range(params.range_key.as_deref());
+    let execution_page = normalize_execution_page(params.execution_page);
     info!(
         view = %active_view,
         locale = %localization.locale,
@@ -200,6 +201,7 @@ async fn index(
                 active_view,
                 performance_range,
                 params.report_id,
+                execution_page,
             )
             .await,
         &base_path,
@@ -1316,6 +1318,10 @@ fn normalize_performance_range(value: Option<&str>) -> String {
     }
 }
 
+fn normalize_execution_page(value: Option<i64>) -> i64 {
+    value.unwrap_or(1).clamp(1, 1_000)
+}
+
 fn clean_setting(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
@@ -1398,5 +1404,13 @@ mod tests {
                 &report
             ));
         }
+    }
+
+    #[test]
+    fn normalizes_execution_page_to_a_bounded_positive_value() {
+        assert_eq!(normalize_execution_page(None), 1);
+        assert_eq!(normalize_execution_page(Some(0)), 1);
+        assert_eq!(normalize_execution_page(Some(4)), 4);
+        assert_eq!(normalize_execution_page(Some(9_999)), 1_000);
     }
 }
