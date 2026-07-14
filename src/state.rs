@@ -53,6 +53,8 @@ const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
 const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
 const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, error_text, analysis_pulse_key, analysis_pulse_label";
 const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label";
+const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
+const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -672,6 +674,20 @@ fn dashboard_scheduler_cycle_window(requested_page: i64, total_cycles: i64) -> (
         .max(1);
     let page = requested_page.max(1).min(total_pages);
     (page, (page - 1) * SCHEDULER_CYCLES_PAGE_SIZE)
+}
+
+fn scheduler_history_policy_values(
+    configured_max_rows: Option<i64>,
+    configured_retention_days: Option<i64>,
+) -> (i64, i64) {
+    (
+        configured_max_rows
+            .unwrap_or(DEFAULT_SCHEDULER_HISTORY_MAX_ROWS)
+            .max(0),
+        configured_retention_days
+            .unwrap_or(DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS)
+            .max(0),
+    )
 }
 
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
@@ -2900,6 +2916,42 @@ impl AppState {
             .await?
             .and_then(|row| row.get("count").and_then(JsonValue::as_i64))
             .unwrap_or(0))
+    }
+
+    pub async fn prune_scheduler_cycles(&self, now: DateTime<Utc>) -> Result<i64> {
+        let (max_rows, retention_days) = scheduler_history_policy_values(
+            yaml_i64(&self.config, &["scheduler", "history_max_rows"]),
+            yaml_i64(&self.config, &["scheduler", "history_retention_days"]),
+        );
+        let mut deleted_rows = 0;
+        if retention_days > 0 {
+            let keep_since_started_at = (now - Duration::days(retention_days))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            deleted_rows += sqlx::query(&format!(
+                "DELETE FROM scheduler_cycle_history WHERE started_at < '{}'",
+                sql_escape(&keep_since_started_at)
+            ))
+            .execute(&self.pool)
+            .await
+            .context("pruning scheduler cycle history by retention age")?
+            .rows_affected() as i64;
+        }
+        if max_rows > 0 {
+            deleted_rows += sqlx::query(&format!(
+                "DELETE FROM scheduler_cycle_history
+                 WHERE id NOT IN (
+                    SELECT id
+                    FROM scheduler_cycle_history
+                    ORDER BY id DESC
+                    LIMIT {max_rows}
+                 )"
+            ))
+            .execute(&self.pool)
+            .await
+            .context("pruning scheduler cycle history by row cap")?
+            .rows_affected() as i64;
+        }
+        Ok(deleted_rows)
     }
 
     pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
@@ -7613,5 +7665,21 @@ analysis_windows:
             (2, SCHEDULER_CYCLES_PAGE_SIZE)
         );
         assert_eq!(dashboard_scheduler_cycle_window(0, 0), (1, 0));
+    }
+
+    #[test]
+    fn scheduler_history_policy_uses_defaults_and_disables_negative_values() {
+        assert_eq!(
+            scheduler_history_policy_values(None, None),
+            (
+                DEFAULT_SCHEDULER_HISTORY_MAX_ROWS,
+                DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS
+            )
+        );
+        assert_eq!(scheduler_history_policy_values(Some(-1), Some(-2)), (0, 0));
+        assert_eq!(
+            scheduler_history_policy_values(Some(500), Some(14)),
+            (500, 14)
+        );
     }
 }

@@ -281,6 +281,11 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     state
         .record_scheduler_cycle(&started_at, &completed_at, status, &cycle_json)
         .await?;
+    match state.prune_scheduler_cycles(Utc::now()).await {
+        Ok(0) => {}
+        Ok(deleted_rows) => info!(deleted_rows, "pruned scheduler cycle history"),
+        Err(err) => warn!("scheduler cycle history prune failed: {err:#}"),
+    }
     info!(status, "scheduler cycle completed");
     Ok(())
 }

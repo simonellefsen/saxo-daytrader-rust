@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] data-hygiene | Rust scheduler-history retention
+
+- The Rust scheduler now applies the existing configured `history_retention_days` age cutoff followed by `history_max_rows` after recording every cycle.
+- The prune path is best-effort: a database prune failure is logged but does not turn an otherwise successful scheduling cycle into a failed one.
+- Existing PostgreSQL disk bloat is not implicitly vacuumed; physical reclaim remains a deliberately scheduled operator task.
+
 ## [2026-07-14] performance | Server-side Scheduler Cycle pagination
 
 - The Execution tab now reads 12 scheduler-cycle rows at a time with a bounded offset, explicit total, and Previous/Next navigation.
