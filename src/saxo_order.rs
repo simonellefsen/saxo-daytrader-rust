@@ -2684,7 +2684,7 @@ mod tests {
     use sqlx::{Row, any::AnyPoolOptions};
     use std::{path::PathBuf, sync::Once};
 
-    async fn claim_test_state() -> AppState {
+    async fn execution_order_test_state() -> AppState {
         static INSTALL_DRIVERS: Once = Once::new();
         INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
 
@@ -2694,18 +2694,38 @@ mod tests {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
-            .expect("open in-memory claim test database");
+            .expect("open in-memory execution-order test database");
         sqlx::query(
             "CREATE TABLE execution_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 status TEXT NOT NULL,
                 error_text TEXT,
-                broker_order_id TEXT
+                broker_order_id TEXT,
+                execution_result_json TEXT,
+                currency TEXT
             )",
         )
         .execute(&pool)
         .await
-        .expect("create execution-order claim table");
+        .expect("create execution-order test table");
+        sqlx::query(
+            "CREATE TABLE execution_order_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                execution_order_id INTEGER NOT NULL,
+                broker_order_id TEXT,
+                event_type TEXT NOT NULL,
+                broker_status TEXT,
+                broker_substatus TEXT,
+                broker_quantity REAL,
+                broker_price_local REAL,
+                event_signature TEXT NOT NULL UNIQUE,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create execution-order event test table");
 
         AppState {
             config_path: PathBuf::from("saxo-order-claim-test.yaml"),
@@ -2739,7 +2759,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_order_claims_have_exactly_one_database_winner() {
-        let state = claim_test_state().await;
+        let state = execution_order_test_state().await;
         sqlx::query(
             "INSERT INTO execution_orders (status, error_text, broker_order_id)
              VALUES ('pending_execution', 'stale local error', NULL)",
@@ -2786,6 +2806,115 @@ mod tests {
                 .try_get::<Option<String>, _>("broker_order_id")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_broker_sync_persists_expiry_status_and_event_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, error_text, broker_order_id, execution_result_json, currency
+            ) VALUES (1, 'broker_working', NULL, '5039132483', '{\"precheck\":true}', 'EUR')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working execution order");
+        let order = json!({
+            "id": 1,
+            "symbol": "ADS:xetr",
+            "status": "broker_working",
+            "currency": "EUR",
+            "execution_result_json": {"precheck": true}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "Expired",
+                "SubStatus": "DoneForDay"
+            }
+        });
+
+        // These are the two local persistence calls made after a broker response
+        // has already been received. The fixture deliberately does not fetch Saxo.
+        record_broker_order_event(
+            &state,
+            &order,
+            "5039132483",
+            "broker_status_sync",
+            Some("Expired"),
+            Some("DoneForDay"),
+            Some(3.0),
+            Some(245.5),
+            &broker_state,
+        )
+        .await
+        .expect("record terminal broker event");
+        update_order_broker_status(
+            &state,
+            &order,
+            local_terminal_status(&Some("Expired".to_string())),
+            &broker_state,
+            None,
+        )
+        .await
+        .expect("persist terminal broker status");
+
+        let stored = sqlx::query(
+            "SELECT status, error_text, execution_result_json
+             FROM execution_orders WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read terminal execution order");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "broker_expired"
+        );
+        assert_eq!(
+            stored.try_get::<Option<String>, _>("error_text").unwrap(),
+            Some("Expired".to_string())
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("broker-sync result"),
+        )
+        .expect("parse stored broker-sync result");
+        assert_eq!(result["precheck"], json!(true));
+        assert_eq!(
+            result["broker_sync"]["broker_payload"]["Status"],
+            json!("Expired")
+        );
+
+        let event = sqlx::query(
+            "SELECT event_type, broker_order_id, broker_status, broker_substatus,
+                    broker_quantity, broker_price_local
+             FROM execution_order_events WHERE execution_order_id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read terminal broker event");
+        assert_eq!(
+            event.try_get::<String, _>("event_type").unwrap(),
+            "broker_status_sync"
+        );
+        assert_eq!(
+            event.try_get::<String, _>("broker_order_id").unwrap(),
+            "5039132483"
+        );
+        assert_eq!(
+            event.try_get::<String, _>("broker_status").unwrap(),
+            "Expired"
+        );
+        assert_eq!(
+            event.try_get::<String, _>("broker_substatus").unwrap(),
+            "DoneForDay"
+        );
+        assert_eq!(event.try_get::<f64, _>("broker_quantity").unwrap(), 3.0);
+        assert_eq!(
+            event.try_get::<f64, _>("broker_price_local").unwrap(),
+            245.5
         );
     }
 

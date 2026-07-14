@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] testing | Database-backed broker terminal-state fixture
+
+- Added an isolated SQLite fixture for the local persistence half of terminal broker synchronization.
+- A synthetic `Expired` Saxo response records a normalized event and transitions the order to `broker_expired`, retaining prior local result data plus broker-sync provenance and the terminal error summary.
+- The test intentionally starts after a response exists: it does not create a Saxo session or make broker HTTP requests.
+
 ## [2026-07-14] testing | Database-backed execution-order claim race fixture
 
 - Added an isolated SQLite fixture around the conditional execution-order claim update.
