@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] ux | Per-pulse scheduled report health
+
+- The persistent Operations banner now exposes separate EU and US decision-report health chips, including the latest normalized status and the timestamp of the last successful report.
+- `completed` and locally accepted `xai_fallback` reports both count as a last success, aligning dashboard health with the Trading Manager's scheduled-report eligibility rule.
+- The shared dashboard payload contains compact report-status metadata only; prompt, provider-response, and normalized-report JSON remain scoped to report detail views.
+
 ## [2026-07-14] testing | Scheduled report hand-off guard
 
 - Trading Manager now fails closed before queueing unless a report has a positive id, `completed` or `xai_fallback` status, a scheduled pulse key, and a parseable timestamp inside the configured freshness window.

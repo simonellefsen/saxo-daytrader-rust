@@ -850,15 +850,14 @@ impl AppState {
         } else {
             selected_decision
         };
-        let decision_pulse_statuses =
-            if dashboard_loads_tab_exclusive_data(&active_view, "decisions") {
-                self.decision_pulse_statuses().await.unwrap_or_else(|err| {
-                    warn!("dashboard decision pulse statuses degraded: {err:#}");
-                    Vec::new()
-                })
-            } else {
-                Vec::new()
-            };
+        // The Operations banner is visible on every dashboard tab, so it needs
+        // a compact per-pulse report status rather than only the latest global
+        // report. The payload deliberately excludes report prompt/response
+        // bodies and remains small enough for the shared read model.
+        let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
+            warn!("dashboard decision pulse statuses degraded: {err:#}");
+            Vec::new()
+        });
         let journal_entries = if dashboard_loads_tab_exclusive_data(&active_view, "eod") {
             self.strategy_journal_items(20).await.unwrap_or_else(|err| {
                 warn!("dashboard end-of-day journal degraded: {err:#}");
@@ -2708,7 +2707,7 @@ impl AppState {
                     "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
                      FROM decision_reports
                      WHERE analysis_pulse_key LIKE '{}%'
-                       AND status = 'completed'
+                       AND status IN ('completed', 'xai_fallback')
                      ORDER BY created_at DESC, id DESC
                      LIMIT 1",
                     sql_escape(prefix)

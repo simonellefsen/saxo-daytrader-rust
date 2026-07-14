@@ -1941,7 +1941,7 @@ fn decision_pulse_health(
         text(row, "analysis_pulse_key")
             .to_lowercase()
             .starts_with(pulse_key_prefix)
-            && text(row, "status") == "completed"
+            && matches!(text(row, "status").as_str(), "completed" | "xai_fallback")
     });
     let latest_status = latest
         .map(|row| fallback_text(row, "status", "missing"))
@@ -2013,7 +2013,7 @@ fn decision_pulse_health_from_status(
 
 fn decision_status_text_tone(status: &str) -> &'static str {
     match status {
-        "completed" => "good-text",
+        "completed" | "xai_fallback" => "good-text",
         "xai_error" | "error" | "failed" | "missing" => "bad-text",
         "pending" | "xai_deferred" => "",
         _ => "",
@@ -4234,7 +4234,16 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
         saxo_operation_health(&data.saxo_auth),
         integrity_operation_health(&data.integrity),
         scheduler_operation_health(&data.market_status, now),
-        decision_operation_health(&data.latest_decision),
+        decision_pulse_operation_health(
+            &data.decision_pulse_statuses,
+            "europe_open_followup",
+            "EU Report",
+        ),
+        decision_pulse_operation_health(
+            &data.decision_pulse_statuses,
+            "us_open_followup",
+            "US Report",
+        ),
         run_operation_health(
             "Markov",
             &data.latest_markov_run,
@@ -4439,44 +4448,56 @@ fn active_broker_status(status: &str) -> bool {
     )
 }
 
-fn decision_operation_health(report: &JsonValue) -> OperationHealthItem {
-    let status = text(report, "status");
-    if status.is_empty() {
+fn decision_pulse_operation_health(
+    statuses: &[JsonValue],
+    key: &str,
+    label: &str,
+) -> OperationHealthItem {
+    let Some(pulse) = statuses.iter().find(|row| text(row, "key") == key) else {
         return OperationHealthItem {
-            label: "Reports".to_string(),
+            label: label.to_string(),
+            status: "unknown".to_string(),
+            tone: "warn",
+            detail: "Decision-pulse status was unavailable while the dashboard loaded.".to_string(),
+        };
+    };
+    let latest = pulse.get("latest").unwrap_or(&JsonValue::Null);
+    if latest.is_null() {
+        return OperationHealthItem {
+            label: label.to_string(),
             status: "missing".to_string(),
             tone: "warn",
-            detail: "No decision report has been recorded yet.".to_string(),
+            detail: format!("No {label} decision report has been recorded yet."),
         };
     }
-    let tone = match status.as_str() {
-        "completed" => "good",
-        "pending" | "xai_deferred" => "warn",
-        "xai_error" | "error" | "failed" => "bad",
-        _ => "warn",
+
+    let latest_status = fallback_text(latest, "status", "unknown");
+    let (tone, status) = match latest_status.as_str() {
+        "completed" | "xai_fallback" => ("good", "ok"),
+        "pending" | "xai_deferred" => ("warn", "pending"),
+        "xai_error" | "error" | "failed" | "parse_error" => ("bad", "failed"),
+        _ => ("warn", "check"),
     };
-    let display = match status.as_str() {
-        "completed" => "ok",
-        "xai_error" => "failed",
-        "xai_deferred" => "pending",
-        other => other,
+    let last_success = pulse.get("last_success").unwrap_or(&JsonValue::Null);
+    let success_detail = if last_success.is_null() {
+        "No successful report is recorded yet.".to_string()
+    } else {
+        format!(
+            "Last success #{} at {}.",
+            fallback_text(last_success, "id", "n/a"),
+            fallback_text(last_success, "created_at", "unknown time"),
+        )
     };
-    let mut detail = format!(
-        "Latest report #{} from {} is {}.",
-        fallback_text(report, "id", "n/a"),
-        fallback_text(report, "created_at", "unknown time"),
-        status
-    );
-    let error = text(report, "error_text");
-    if !error.is_empty() {
-        detail.push(' ');
-        detail.push_str(&truncate_chars(&error, 180));
-    }
     OperationHealthItem {
-        label: "Reports".to_string(),
-        status: display.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
         tone,
-        detail,
+        detail: format!(
+            "Latest report #{} at {} is {}. {success_detail}",
+            fallback_text(latest, "id", "n/a"),
+            fallback_text(latest, "created_at", "unknown time"),
+            latest_status,
+        ),
     }
 }
 
@@ -5801,7 +5822,7 @@ fn decision_health(latest_decision: &JsonValue) -> (&'static str, String) {
         .and_then(JsonValue::as_str)
         .unwrap_or("");
     match status {
-        "completed" => ("pill good", "Decisions: OK".to_string()),
+        "completed" | "xai_fallback" => ("pill good", "Decisions: OK".to_string()),
         "pending" | "xai_deferred" => ("pill", "Decisions: Pending".to_string()),
         "xai_error" => {
             let error_text = latest_decision
@@ -6611,6 +6632,10 @@ mod tests {
         assert_eq!(class, "pill good");
         assert_eq!(label, "Decisions: OK");
 
+        let (class, label) = decision_health(&json!({"status": "xai_fallback"}));
+        assert_eq!(class, "pill good");
+        assert_eq!(label, "Decisions: OK");
+
         let (class, label) = decision_health(&json!({
             "status": "xai_error",
             "error_text": "xAI deferred submit failed with HTTP 403 Forbidden: {\"code\":\"permission-denied\",\"error\":\"Your team has either used all available credits or reached its monthly spending limit.\"}"
@@ -6650,7 +6675,7 @@ mod tests {
             json!({
                 "id": 11,
                 "created_at": "2026-06-23T14:45:00Z",
-                "status": "completed",
+                "status": "xai_fallback",
                 "analysis_pulse_key": "us_open_followup:2026-06-23",
             }),
             json!({
@@ -6681,6 +6706,34 @@ mod tests {
         assert_eq!(manual.latest_tone, "bad-text");
         assert_eq!(manual.last_success_id, 0);
         assert_eq!(manual.attempts_7d, 0);
+    }
+
+    #[test]
+    fn derives_operation_health_from_per_pulse_report_status() {
+        let statuses = vec![json!({
+            "key": "us_open_followup",
+            "latest": {
+                "id": 77,
+                "created_at": "2026-07-14T14:45:00Z",
+                "status": "xai_fallback"
+            },
+            "last_success": {
+                "id": 77,
+                "created_at": "2026-07-14T14:45:00Z",
+                "status": "xai_fallback"
+            }
+        })];
+
+        let health = decision_pulse_operation_health(&statuses, "us_open_followup", "US Report");
+        assert_eq!(health.label, "US Report");
+        assert_eq!(health.status, "ok");
+        assert_eq!(health.tone, "good");
+        assert!(health.detail.contains("Last success #77"));
+
+        let missing =
+            decision_pulse_operation_health(&statuses, "europe_open_followup", "EU Report");
+        assert_eq!(missing.status, "unknown");
+        assert_eq!(missing.tone, "warn");
     }
 
     #[test]
