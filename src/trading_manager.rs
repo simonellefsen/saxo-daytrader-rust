@@ -3150,6 +3150,89 @@ fn sql_opt_text(value: Option<&str>) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use sqlx::{Row, any::AnyPoolOptions};
+    use std::{path::PathBuf, sync::Once};
+
+    async fn manager_queue_test_state() -> AppState {
+        static INSTALL_DRIVERS: Once = Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory manager test database");
+        for statement in [
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                adapter TEXT NOT NULL,
+                requested_weight_pct REAL,
+                quantity REAL NOT NULL,
+                price_local REAL,
+                limit_price_local REAL,
+                stop_price_local REAL,
+                currency TEXT,
+                estimated_value_dkk REAL,
+                approval_required INTEGER NOT NULL,
+                approved_at TEXT,
+                strategy_type TEXT,
+                strategy_session TEXT,
+                strategy_key TEXT NOT NULL UNIQUE,
+                strategy_role TEXT,
+                request_json TEXT NOT NULL,
+                execution_result_json TEXT,
+                error_text TEXT
+            )",
+            "CREATE TABLE execution_order_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                execution_order_id INTEGER NOT NULL,
+                broker_order_id TEXT,
+                event_type TEXT NOT NULL,
+                broker_status TEXT,
+                broker_substatus TEXT,
+                broker_quantity REAL,
+                broker_price_local REAL,
+                event_signature TEXT NOT NULL UNIQUE,
+                raw_payload_json TEXT NOT NULL
+            )",
+            "CREATE TABLE trading_manager_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                manager_key TEXT NOT NULL,
+                manager_kind TEXT NOT NULL,
+                manager_label TEXT NOT NULL,
+                target_at_utc TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                open_exchange_codes_json TEXT NOT NULL,
+                technical_json TEXT NOT NULL,
+                manager_json TEXT NOT NULL,
+                queue_result_json TEXT NOT NULL,
+                error_text TEXT
+            )",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("create manager test table");
+        }
+
+        AppState {
+            config_path: PathBuf::from("manager-queue-test.yaml"),
+            config: serde_yaml::from_str("execution:\n  mode: live\n  adapter: saxo\n")
+                .expect("parse manager test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
 
     fn order(
         action: &str,
@@ -3225,6 +3308,85 @@ mod tests {
                 report
             );
         }
+    }
+
+    #[tokio::test]
+    async fn manager_queue_persists_idempotently_without_broker_access() {
+        let state = manager_queue_test_state().await;
+        let report = scheduled_report(
+            "completed",
+            "2026-07-14T14:45:00Z",
+            "us_open_followup:2026-07-14",
+        );
+        let candidate = order("BUY", "BUY", "bullish", 4);
+
+        let first = insert_execution_order(
+            &state,
+            &report,
+            &candidate,
+            "Technical gate passed.",
+            false,
+            &JsonValue::Null,
+        )
+        .await
+        .expect("queue manager candidate");
+        let order_id = first["id"].as_i64().expect("queued order id");
+        assert_eq!(first["status"], json!("pending_execution"));
+
+        let duplicate = insert_execution_order(
+            &state,
+            &report,
+            &candidate,
+            "Technical gate passed.",
+            false,
+            &JsonValue::Null,
+        )
+        .await
+        .expect("deduplicate manager candidate");
+        assert_eq!(duplicate["id"], json!(order_id));
+        assert_eq!(duplicate["status"], json!("already_exists"));
+
+        let order_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_orders")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count queued orders")
+            .try_get::<i64, _>("count")
+            .expect("read queued-order count");
+        let event_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_order_events")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count queue events")
+            .try_get::<i64, _>("count")
+            .expect("read queue-event count");
+        assert_eq!(order_count, 1);
+        assert_eq!(event_count, 1);
+
+        let run_id = insert_trading_manager_run(
+            &state,
+            &report,
+            "completed",
+            &["XNAS".to_string()],
+            &json!({"approved_order_count": 1}),
+            &json!({"status": "queued", "orders": [first]}),
+            None,
+        )
+        .await
+        .expect("persist manager run");
+        assert!(run_id > 0);
+
+        let stored = sqlx::query(
+            "SELECT report_id, status, manager_key FROM trading_manager_runs WHERE id = ?",
+        )
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await
+        .expect("read manager run");
+        assert_eq!(stored.try_get::<i64, _>("report_id").unwrap(), report.id);
+        assert_eq!(stored.try_get::<String, _>("status").unwrap(), "completed");
+        assert_eq!(
+            stored.try_get::<String, _>("manager_key").unwrap(),
+            report.pulse_key
+        );
     }
 
     #[test]

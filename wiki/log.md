@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] testing | Database-backed Trading Manager queue fixture
+
+- Added an isolated one-connection SQLite fixture for the manager-owned execution-order, execution-event, and manager-run tables.
+- The fixture proves a completed scheduled-report candidate creates exactly one local `pending_execution` order and one queue audit event, deduplicates a repeated strategy key, and persists a matching manager run without a Saxo session or broker HTTP.
+- This covers the manager-to-local-queue boundary only. Saxo precheck, placement, and broker-status behavior stay in the separately tested and explicitly gated execution path.
+
 ## [2026-07-14] testing | Execution queue admission guard
 
 - Saxo execution queue admission is now a pure, tested safety gate with fixed precedence: non-live/non-Saxo configuration, then `app.dry_run`, then `execution.require_approval_live`.
