@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] testing | Database-backed execution-order claim race fixture
+
+- Added an isolated SQLite fixture around the conditional execution-order claim update.
+- Two concurrent local claim attempts for the same pending order produce exactly one winner, preserve the empty broker-order id, and clear a stale local error as the order moves to `submitting_to_broker`.
+- The fixture makes no Saxo session request and no broker HTTP request; it verifies only the local idempotency boundary that precedes broker mutation.
+
 ## [2026-07-14] testing | Database-backed Trading Manager queue fixture
 
 - Added an isolated one-connection SQLite fixture for the manager-owned execution-order, execution-event, and manager-run tables.

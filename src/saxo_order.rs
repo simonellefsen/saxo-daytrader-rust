@@ -2681,6 +2681,40 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::{Row, any::AnyPoolOptions};
+    use std::{path::PathBuf, sync::Once};
+
+    async fn claim_test_state() -> AppState {
+        static INSTALL_DRIVERS: Once = Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+
+        // A single connection keeps SQLite's in-memory database stable while the
+        // concurrent callers still exercise the conditional claim transition.
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory claim test database");
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT NOT NULL,
+                error_text TEXT,
+                broker_order_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create execution-order claim table");
+
+        AppState {
+            config_path: PathBuf::from("saxo-order-claim-test.yaml"),
+            config: serde_yaml::from_str("execution:\n  mode: live\n  adapter: saxo\n")
+                .expect("parse claim test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
 
     #[test]
     fn execution_queue_gate_fails_closed_until_live_saxo_is_explicitly_ungated() {
@@ -2701,6 +2735,58 @@ mod tests {
             Some(ExecutionQueueGate::ApprovalRequired)
         );
         assert_eq!(execution_queue_gate("live", "saxo", false, false), None);
+    }
+
+    #[tokio::test]
+    async fn concurrent_order_claims_have_exactly_one_database_winner() {
+        let state = claim_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (status, error_text, broker_order_id)
+             VALUES ('pending_execution', 'stale local error', NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed claimable execution order");
+        let order_id = sqlx::query("SELECT id FROM execution_orders LIMIT 1")
+            .fetch_one(&state.pool)
+            .await
+            .expect("read seeded execution-order id")
+            .try_get::<i64, _>("id")
+            .expect("execution-order id");
+
+        let (first, second) = tokio::join!(
+            claim_order_for_submission(&state, order_id),
+            claim_order_for_submission(&state, order_id),
+        );
+        let claims = [
+            first.expect("first claim query"),
+            second.expect("second claim query"),
+        ];
+
+        assert_eq!(claims.iter().filter(|claimed| **claimed).count(), 1);
+        let stored = sqlx::query(
+            "SELECT status, error_text, broker_order_id FROM execution_orders WHERE id = ?",
+        )
+        .bind(order_id)
+        .fetch_one(&state.pool)
+        .await
+        .expect("read claimed execution order");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "submitting_to_broker"
+        );
+        assert!(
+            stored
+                .try_get::<Option<String>, _>("error_text")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            stored
+                .try_get::<Option<String>, _>("broker_order_id")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
