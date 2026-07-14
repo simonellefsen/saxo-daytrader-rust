@@ -72,6 +72,46 @@ struct PositionCostBasis {
     instrument_name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExecutionQueueGate {
+    NotLiveSaxo,
+    DryRun,
+    ApprovalRequired,
+}
+
+impl ExecutionQueueGate {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::NotLiveSaxo => {
+                "Saxo execution queue only runs when execution.mode=live and execution.adapter=saxo."
+            }
+            Self::DryRun => "app.dry_run is true",
+            Self::ApprovalRequired => "execution.require_approval_live is true",
+        }
+    }
+}
+
+/// Returns the first safety gate that keeps the queue away from Saxo.
+/// The order is deliberate: a non-live/non-Saxo configuration cannot be
+/// described as an approval or dry-run issue because it must never enter the
+/// live execution path in the first place.
+fn execution_queue_gate(
+    execution_mode: &str,
+    adapter: &str,
+    dry_run: bool,
+    require_approval: bool,
+) -> Option<ExecutionQueueGate> {
+    if !execution_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
+        Some(ExecutionQueueGate::NotLiveSaxo)
+    } else if dry_run {
+        Some(ExecutionQueueGate::DryRun)
+    } else if require_approval {
+        Some(ExecutionQueueGate::ApprovalRequired)
+    } else {
+        None
+    }
+}
+
 pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
     let execution_mode =
         yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
@@ -81,21 +121,19 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
     let require_approval =
         yaml_bool(&state.config, &["execution", "require_approval_live"]).unwrap_or(true);
 
-    if !execution_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
-        return Ok(json!({
-            "status": "disabled",
-            "reason": "Saxo execution queue only runs when execution.mode=live and execution.adapter=saxo.",
-            "execution_mode": execution_mode,
-            "adapter": adapter
-        }));
-    }
-    if dry_run {
-        return Ok(json!({"status": "disabled", "reason": "app.dry_run is true"}));
-    }
-    if require_approval {
-        return Ok(
-            json!({"status": "disabled", "reason": "execution.require_approval_live is true"}),
-        );
+    if let Some(gate) = execution_queue_gate(&execution_mode, &adapter, dry_run, require_approval) {
+        return Ok(match gate {
+            ExecutionQueueGate::NotLiveSaxo => json!({
+                "status": "disabled",
+                "reason": gate.reason(),
+                "execution_mode": execution_mode,
+                "adapter": adapter
+            }),
+            ExecutionQueueGate::DryRun | ExecutionQueueGate::ApprovalRequired => json!({
+                "status": "disabled",
+                "reason": gate.reason(),
+            }),
+        });
     }
 
     let rows = pending_live_saxo_orders(state).await?;
@@ -2643,6 +2681,27 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn execution_queue_gate_fails_closed_until_live_saxo_is_explicitly_ungated() {
+        assert_eq!(
+            execution_queue_gate("simulation", "saxo", false, false),
+            Some(ExecutionQueueGate::NotLiveSaxo)
+        );
+        assert_eq!(
+            execution_queue_gate("live", "simulation", false, false),
+            Some(ExecutionQueueGate::NotLiveSaxo)
+        );
+        assert_eq!(
+            execution_queue_gate("live", "saxo", true, false),
+            Some(ExecutionQueueGate::DryRun)
+        );
+        assert_eq!(
+            execution_queue_gate("live", "saxo", false, true),
+            Some(ExecutionQueueGate::ApprovalRequired)
+        );
+        assert_eq!(execution_queue_gate("live", "saxo", false, false), None);
+    }
 
     #[test]
     fn splits_symbols_into_saxo_lookup_parts() {

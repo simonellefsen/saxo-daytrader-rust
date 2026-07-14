@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] testing | Execution queue admission guard
+
+- Saxo execution queue admission is now a pure, tested safety gate with fixed precedence: non-live/non-Saxo configuration, then `app.dry_run`, then `execution.require_approval_live`.
+- Regression coverage proves that only explicit `execution.mode=live`, `execution.adapter=saxo`, `app.dry_run=false`, and `execution.require_approval_live=false` can proceed toward a Saxo session or broker call.
+- API response shapes and gate reasons are preserved; this refactor does not change any order payload, queue claim, or broker mutation behavior.
+
 ## [2026-07-14] ux | Per-pulse scheduled report health
 
 - The persistent Operations banner now exposes separate EU and US decision-report health chips, including the latest normalized status and the timestamp of the last successful report.
