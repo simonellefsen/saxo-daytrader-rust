@@ -55,6 +55,7 @@ const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, mode
 const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label";
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
+const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -1055,6 +1056,12 @@ impl AppState {
             unrealised_after_tax_dkk: json_f64(&after_tax_summary, "unrealised_pnl_after_tax_dkk"),
             daily_pnl_dkk: json_f64(&summary, "total_daily_pnl_dkk"),
             position_count: json_i64(&summary, "position_count"),
+            position_decision_stale_after_days: yaml_i64(
+                &self.config,
+                &["strategy", "swing", "position_decision_stale_after_days"],
+            )
+            .unwrap_or(DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS)
+            .max(1),
             execution_mode: execution
                 .get("mode")
                 .and_then(JsonValue::as_str)

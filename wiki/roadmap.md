@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-13
+updated: 2026-07-14
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-14: Made dashboard decision chips age-aware. Portfolio and watchlist labels now use a relative age, explicitly say `Stale` after the configured `strategy.swing.position_decision_stale_after_days` horizon (default seven days), and fail closed to an `Undated` stale state when a source timestamp is absent. This is display-only context; it cannot change a recommendation, queue an order, or affect broker behavior.
 - 2026-07-14: Restored scheduler-history retention in the Rust scheduler. Each completed cycle now prunes rows older than the configured age and then applies the configured row cap, matching the legacy policy without blocking the cycle if pruning fails. Physical database space reclamation remains an operator maintenance task.
 - 2026-07-14: Added server-side pagination for the Scheduler Cycles table. The Execution tab reads a 12-row bounded projection with a total and Previous/Next navigation instead of loading unbounded `SELECT *` cycle history.
 - 2026-07-13: Added server-side pagination for the latest Quiver run's signal table. The tab loads 40 rows per page with a bounded offset and run-scoped total; its success/error pills now use the run’s aggregate metrics rather than the current page.
@@ -260,7 +261,7 @@ The dashboard should make action, risk, and system state obvious without needing
 - Add a Markov tab table filter for portfolio, watchlist, errors, stale signals, and high-conviction signals.
 - Add keyboard-safe and mobile-safe layouts for the main monitoring views.
 - Per-tab lazy read models (see P0 UI performance row): each view fetches only its own data, heavy JSON/prompt payloads load on demand, and long tables (positions, Markov signals, execution orders, scheduler cycles) paginate server-side. Target: any tab under 300 ms server time and under 200 KB HTML.
-- Age-label or hide stale per-position decisions: the Overview Positions table shows "HOLD 2026-05-08" chips as if current (two months old on the 2026-07-11 screenshots). Show relative age ("HOLD · 63d"), fade after a configurable horizon, and stop implying an active recommendation.
+- ~~Age-label or hide stale per-position decisions~~ Landed 2026-07-14: portfolio and watchlist decision chips show relative age, become `Stale` after the configurable seven-day default horizon, and treat missing timestamps as stale rather than current advice.
 - Make ops-banner staleness market-aware: on weekends the banner shows "Quiver stale / Indicators stale" in warning colors even though both are weekday-only by design (screenshots taken Saturday 2026-07-11). Idle-by-schedule should render as neutral "idle (weekend)" and only overdue-while-due should warn.
 - Render the AI Prompts view as collapsed sections with copy buttons instead of a 1 MB inline dump of system prompt and payload.
 

@@ -20,6 +20,7 @@ pub struct DashboardView {
     pub unrealised_after_tax_dkk: f64,
     pub daily_pnl_dkk: f64,
     pub position_count: i64,
+    pub position_decision_stale_after_days: i64,
     pub execution_mode: String,
     pub execution_adapter: String,
     pub saxo_status: String,

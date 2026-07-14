@@ -913,6 +913,12 @@ tr:last-child td {
   color: var(--warn);
 }
 
+.decision-chip.stale {
+  background: #f1f3f5;
+  color: #52606d;
+  border: 1px dashed #aeb8c2;
+}
+
 .decision-action {
   color: var(--muted);
   font-size: 0.78rem;
@@ -924,6 +930,10 @@ tr:last-child td {
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 700;
+}
+
+.decision-age.stale {
+  color: #7b8794;
 }
 
 .symbol-link {

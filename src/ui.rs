@@ -438,7 +438,13 @@ fn OverviewView(
                         div { class: "table-wrap",
                             table { class: "positions-table",
                                 thead { tr { th { "Position" } th { "Decision" } th { "Trend" } th { "Qty" } th { "Kostpris" } th { "Current" } th { "Market value" } th { "% 1D" } th { "Gevinst/tab i alt (DKK)" } th { "Allocation" } } }
-                                tbody { for row in data.positions.iter() { PositionRow { row: row.clone(), prefs: prefs.clone() } } }
+                                tbody { for row in data.positions.iter() {
+                                    PositionRow {
+                                        row: row.clone(),
+                                        prefs: prefs.clone(),
+                                        decision_stale_after_days: data.position_decision_stale_after_days,
+                                    }
+                                } }
                             }
                         }
                     }
@@ -1217,7 +1223,11 @@ fn WatchlistsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "stack loose",
                 for category in categories.iter().filter(|category| text(category, "key") != "all") {
-                    WatchlistCategory { category: category.clone(), prefs: prefs.clone() }
+                    WatchlistCategory {
+                        category: category.clone(),
+                        prefs: prefs.clone(),
+                        decision_stale_after_days: data.position_decision_stale_after_days,
+                    }
                 }
             }
         }
@@ -1225,7 +1235,11 @@ fn WatchlistsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn WatchlistCategory(category: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn WatchlistCategory(
+    category: JsonValue,
+    prefs: LocalizationPrefs,
+    decision_stale_after_days: i64,
+) -> Element {
     let items = category
         .get("items")
         .and_then(JsonValue::as_array)
@@ -1273,7 +1287,13 @@ fn WatchlistCategory(category: JsonValue, prefs: LocalizationPrefs) -> Element {
                             tr {
                                 td { SymbolLink { symbol: text(row, "symbol"), instrument_name: text(row, "instrument_name") } }
                                 td { "{text(row, \"instrument_name\")}" }
-                                td { DecisionBadge { decision: row.get("decision").cloned().unwrap_or(JsonValue::Null), prefs: prefs.clone() } }
+                                td {
+                                    DecisionBadge {
+                                        decision: row.get("decision").cloned().unwrap_or(JsonValue::Null),
+                                        prefs: prefs.clone(),
+                                        stale_after_days: decision_stale_after_days,
+                                    }
+                                }
                                 td { TrendSparkline { row: row.clone() } }
                                 td { "{text(row, \"exchange\")}" }
                                 td { "{text(row, \"currency\")}" }
@@ -2978,7 +2998,11 @@ fn SummaryMetricCard(label: String, value: String, subtitle: String, tone: Strin
 }
 
 #[component]
-fn PositionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn PositionRow(
+    row: JsonValue,
+    prefs: LocalizationPrefs,
+    decision_stale_after_days: i64,
+) -> Element {
     let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
     let currency = text(&row, "currency");
     let market_value = format_dkk(value_f64(&row, "market_value_dkk"), &prefs);
@@ -2997,7 +3021,13 @@ fn PositionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     rsx! {
         tr {
             td { PositionSymbolCell { row: row.clone(), prefs: prefs.clone() } }
-            td { DecisionBadge { decision: row.get("decision").cloned().unwrap_or(JsonValue::Null), prefs: prefs.clone() } }
+            td {
+                DecisionBadge {
+                    decision: row.get("decision").cloned().unwrap_or(JsonValue::Null),
+                    prefs: prefs.clone(),
+                    stale_after_days: decision_stale_after_days,
+                }
+            }
             td { TrendSparkline { row: row.clone() } }
             td { "{quantity}" }
             td { "{cost_price}" }
@@ -3135,7 +3165,7 @@ fn SymbolLink(symbol: String, instrument_name: String) -> Element {
 }
 
 #[component]
-fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs, stale_after_days: i64) -> Element {
     if decision.is_null() {
         return rsx! { span { class: "muted", "n/a" } };
     }
@@ -3143,9 +3173,10 @@ fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs) -> Element {
     let action = text(&decision, "action");
     let created_at = text(&decision, "created_at");
     let decision_time = format_timestamp(&created_at, &prefs);
+    let (age, stale) = position_decision_age_status(&created_at, Utc::now(), stale_after_days);
     let rationale = text(&decision, "target_rationale");
     let fallback_rationale = text(&decision, "rationale");
-    let tooltip = if rationale.is_empty() {
+    let rationale_tooltip = if rationale.is_empty() {
         fallback_rationale
     } else {
         rationale
@@ -3161,17 +3192,41 @@ fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs) -> Element {
         "UNDERWEIGHT" => "decision-chip warn",
         _ => "decision-chip neutral",
     };
+    let chip_label = if stale {
+        format!("Stale · {sentiment_label}")
+    } else {
+        sentiment_label
+    };
+    let chip_tone = if stale { "decision-chip stale" } else { tone };
+    let age_label = if created_at.is_empty() {
+        "timestamp unavailable".to_string()
+    } else {
+        format!("{age} old")
+    };
+    let tooltip = if stale {
+        let stale_note = if decision_time.is_empty() {
+            "This decision has no usable timestamp and is not treated as current advice."
+                .to_string()
+        } else {
+            format!("This decision is stale; it was created {decision_time}.")
+        };
+        if rationale_tooltip.is_empty() {
+            stale_note
+        } else {
+            format!("{stale_note} {rationale_tooltip}")
+        }
+    } else {
+        rationale_tooltip
+    };
     rsx! {
         span { class: "decision-cell", title: "{tooltip}",
             span { class: "decision-topline",
-                span { class: tone, "{sentiment_label}" }
+                span { class: chip_tone, "{chip_label}" }
                 if !action.is_empty() {
                     span { class: "decision-action", "{action}" }
                 }
             }
-            if !created_at.is_empty() {
-                span { class: "decision-age", "{decision_time}" }
-            }
+            span { class: if stale { "decision-age stale" } else { "decision-age" }, "{age_label}" }
         }
     }
 }
@@ -3605,6 +3660,23 @@ fn text_or(value: &JsonValue, key: &str, fallback: &str) -> String {
 }
 
 const HERMES_EXPERIMENT_REVIEW_STALE_DAYS: i64 = 14;
+
+fn position_decision_age_status(
+    created_at: &str,
+    now: DateTime<Utc>,
+    stale_after_days: i64,
+) -> (String, bool) {
+    let Some(created_at) = parse_utc_timestamp(created_at) else {
+        return ("undated".to_string(), true);
+    };
+    let age_days = (now - created_at).num_days().max(0);
+    let label = if age_days == 0 {
+        "<1d".to_string()
+    } else {
+        format!("{age_days}d")
+    };
+    (label, age_days >= stale_after_days.max(1))
+}
 
 fn hermes_experiment_age_status(
     status: &str,
@@ -5628,6 +5700,34 @@ mod tests {
         assert_eq!(
             hermes_experiment_age_status("approved_paper", "2026-06-16T12:00:00Z", now, 14),
             ("23d".to_string(), "muted")
+        );
+    }
+
+    #[test]
+    fn position_decision_age_marks_old_recommendations_stale() {
+        let now = DateTime::parse_from_rfc3339("2026-07-14T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            position_decision_age_status("2026-05-08T12:00:00Z", now, 7),
+            ("67d".to_string(), true)
+        );
+        assert_eq!(
+            position_decision_age_status("2026-07-13T12:00:00Z", now, 7),
+            ("1d".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn position_decision_age_fails_closed_for_missing_timestamp() {
+        let now = DateTime::parse_from_rfc3339("2026-07-14T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            position_decision_age_status("", now, 7),
+            ("undated".to_string(), true)
         );
     }
 

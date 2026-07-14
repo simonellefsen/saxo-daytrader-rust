@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-13
+updated: 2026-07-14
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-14] ux | Age-aware decision labels
+
+- Portfolio and watchlist decision badges now show a relative report age instead of presenting an absolute historical timestamp as active advice.
+- The display threshold is `strategy.swing.position_decision_stale_after_days`, defaulting to seven days. Old recommendations render as `Stale`, and missing/invalid timestamps fail closed to an undated stale state.
+- This is a rendering-only safeguard; decision-report generation, Hermes advice, Trading Manager queueing, and Saxo execution are unchanged.
 
 ## [2026-07-14] data-hygiene | Rust scheduler-history retention
 

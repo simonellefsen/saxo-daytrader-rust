@@ -123,6 +123,9 @@ strategy:
   swing:
     min_holdings: 10
     max_holdings: 25
+    # Decision chips are advisory context, not evergreen instructions. Mark
+    # report-derived symbols stale after this many days in the dashboard.
+    position_decision_stale_after_days: 7
     min_holding_weight_pct: 0.05
     max_holding_weight_pct: 0.25
     cash_buffer_pct: 0.02
