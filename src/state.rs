@@ -627,6 +627,7 @@ const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
 const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
 const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
 const MARKOV_SIGNALS_PAGE_SIZE: i64 = 40;
+const QUIVER_SIGNALS_PAGE_SIZE: i64 = 40;
 
 fn dashboard_execution_order_window(
     active_view: &str,
@@ -655,6 +656,13 @@ fn dashboard_markov_signal_window(requested_page: i64, total_signals: i64) -> (i
         ((total_signals.max(0) + MARKOV_SIGNALS_PAGE_SIZE - 1) / MARKOV_SIGNALS_PAGE_SIZE).max(1);
     let page = requested_page.max(1).min(total_pages);
     (page, (page - 1) * MARKOV_SIGNALS_PAGE_SIZE)
+}
+
+fn dashboard_quiver_signal_window(requested_page: i64, total_signals: i64) -> (i64, i64) {
+    let total_pages =
+        ((total_signals.max(0) + QUIVER_SIGNALS_PAGE_SIZE - 1) / QUIVER_SIGNALS_PAGE_SIZE).max(1);
+    let page = requested_page.max(1).min(total_pages);
+    (page, (page - 1) * QUIVER_SIGNALS_PAGE_SIZE)
 }
 
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
@@ -720,6 +728,7 @@ impl AppState {
         selected_report_id: Option<i64>,
         requested_execution_page: i64,
         requested_markov_page: i64,
+        requested_quiver_page: i64,
     ) -> DashboardView {
         let overview = self.overview_payload().await.unwrap_or_else(|err| {
             error!("overview load failed: {err:#}");
@@ -907,11 +916,23 @@ impl AppState {
             warn!("dashboard latest Markov run degraded: {err:#}");
             JsonValue::Null
         });
-        let quiver_signals = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
-            self.quiver_signals(80).await.unwrap_or_else(|err| {
-                warn!("dashboard Quiver signals degraded: {err:#}");
-                Vec::new()
+        let quiver_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
+            self.quiver_signals_count().await.unwrap_or_else(|err| {
+                warn!("dashboard Quiver signal count degraded: {err:#}");
+                0
             })
+        } else {
+            0
+        };
+        let (quiver_page, quiver_signals_offset) =
+            dashboard_quiver_signal_window(requested_quiver_page, quiver_signal_total);
+        let quiver_signals = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
+            self.quiver_signals_page(QUIVER_SIGNALS_PAGE_SIZE, quiver_signals_offset)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard Quiver signals degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -1027,6 +1048,9 @@ impl AppState {
             markov_page,
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
             markov_signal_total,
+            quiver_page,
+            quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
+            quiver_signal_total,
             positions,
             orders,
             execution_fills,
@@ -2691,6 +2715,14 @@ impl AppState {
 
     pub async fn quiver_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
         crate::quiver::latest_quiver_signals(self, limit).await
+    }
+
+    pub async fn quiver_signals_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
+        crate::quiver::latest_quiver_signals_page(self, limit, offset).await
+    }
+
+    pub async fn quiver_signals_count(&self) -> Result<i64> {
+        crate::quiver::latest_quiver_signal_count(self).await
     }
 
     pub async fn latest_quiver_run(&self) -> Result<JsonValue> {
@@ -7511,5 +7543,18 @@ analysis_windows:
             (2, MARKOV_SIGNALS_PAGE_SIZE)
         );
         assert_eq!(dashboard_markov_signal_window(0, 0), (1, 0));
+    }
+
+    #[test]
+    fn dashboard_quiver_signal_window_clamps_page_and_calculates_offset() {
+        assert_eq!(
+            dashboard_quiver_signal_window(2, 81),
+            (2, QUIVER_SIGNALS_PAGE_SIZE)
+        );
+        assert_eq!(
+            dashboard_quiver_signal_window(9, 41),
+            (2, QUIVER_SIGNALS_PAGE_SIZE)
+        );
+        assert_eq!(dashboard_quiver_signal_window(0, 0), (1, 0));
     }
 }

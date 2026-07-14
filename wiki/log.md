@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-13] performance | Server-side Quiver signal pagination
+
+- The Quiver tab now reads 40 signals at a time from only the latest Quiver run, with a run-scoped count and Previous/Next navigation.
+- Page numbers clamp to the available total, preventing arbitrary query offsets, while the standalone Quiver signals API retains its existing limit-based response behavior.
+- Header pills now reflect `quiver_signal_runs.success_count` and `error_count`, not merely the visible page.
+
 ## [2026-07-13] performance | Server-side Markov signal pagination
 
 - The Markov tab now reads 40 signals at a time from only the latest completed Markov run, with a run-scoped count and Previous/Next navigation.

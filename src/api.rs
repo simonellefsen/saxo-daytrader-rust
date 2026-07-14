@@ -187,6 +187,7 @@ async fn index(
     let performance_range = normalize_performance_range(params.range_key.as_deref());
     let execution_page = normalize_execution_page(params.execution_page);
     let markov_page = normalize_markov_page(params.markov_page);
+    let quiver_page = normalize_quiver_page(params.quiver_page);
     info!(
         view = %active_view,
         locale = %localization.locale,
@@ -204,6 +205,7 @@ async fn index(
                 params.report_id,
                 execution_page,
                 markov_page,
+                quiver_page,
             )
             .await,
         &base_path,
@@ -1328,6 +1330,10 @@ fn normalize_markov_page(value: Option<i64>) -> i64 {
     value.unwrap_or(1).clamp(1, 1_000)
 }
 
+fn normalize_quiver_page(value: Option<i64>) -> i64 {
+    value.unwrap_or(1).clamp(1, 1_000)
+}
+
 fn clean_setting(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
@@ -1426,5 +1432,13 @@ mod tests {
         assert_eq!(normalize_markov_page(Some(-3)), 1);
         assert_eq!(normalize_markov_page(Some(7)), 7);
         assert_eq!(normalize_markov_page(Some(9_999)), 1_000);
+    }
+
+    #[test]
+    fn normalizes_quiver_page_to_a_bounded_positive_value() {
+        assert_eq!(normalize_quiver_page(None), 1);
+        assert_eq!(normalize_quiver_page(Some(-3)), 1);
+        assert_eq!(normalize_quiver_page(Some(7)), 7);
+        assert_eq!(normalize_quiver_page(Some(9_999)), 1_000);
     }
 }

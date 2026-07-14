@@ -627,6 +627,14 @@ async fn quiver_run_exists(state: &AppState, run_date: NaiveDate) -> Result<bool
 }
 
 pub async fn latest_quiver_signals(state: &AppState, limit: i64) -> Result<Vec<JsonValue>> {
+    latest_quiver_signals_page(state, limit, 0).await
+}
+
+pub async fn latest_quiver_signals_page(
+    state: &AppState,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<JsonValue>> {
     let sql = format!(
         "SELECT id, run_id, created_at, run_date, status, symbol, ticker,
                 instrument_name, source, lookback_days, signal, direction,
@@ -641,11 +649,31 @@ pub async fn latest_quiver_signals(state: &AppState, limit: i64) -> Result<Vec<J
             LIMIT 1
          )
          ORDER BY signal DESC, confidence DESC, symbol ASC
-         LIMIT {}",
-        clamp_limit(limit, 1, 500)
+         LIMIT {} OFFSET {}",
+        clamp_limit(limit, 1, 500),
+        offset.max(0).min(100_000)
     );
     let rows = sqlx::query(&sql).fetch_all(&state.pool).await?;
     Ok(rows.iter().map(row_to_json).collect())
+}
+
+pub async fn latest_quiver_signal_count(state: &AppState) -> Result<i64> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count
+         FROM quiver_asset_signals
+         WHERE run_id = (
+            SELECT id
+            FROM quiver_signal_runs
+            ORDER BY run_date DESC, created_at DESC
+            LIMIT 1
+         )",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row
+        .as_ref()
+        .and_then(|row| row_to_json(row).get("count").and_then(JsonValue::as_i64))
+        .unwrap_or(0))
 }
 
 pub async fn latest_quiver_run(state: &AppState) -> Result<JsonValue> {

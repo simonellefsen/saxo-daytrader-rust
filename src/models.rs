@@ -36,6 +36,9 @@ pub struct DashboardView {
     pub markov_page: i64,
     pub markov_page_size: i64,
     pub markov_signal_total: i64,
+    pub quiver_page: i64,
+    pub quiver_page_size: i64,
+    pub quiver_signal_total: i64,
     pub positions: Vec<JsonValue>,
     pub orders: Vec<JsonValue>,
     pub execution_fills: Vec<JsonValue>,
@@ -127,6 +130,7 @@ pub struct ViewParams {
     pub report_id: Option<i64>,
     pub execution_page: Option<i64>,
     pub markov_page: Option<i64>,
+    pub quiver_page: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
