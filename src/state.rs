@@ -1118,6 +1118,11 @@ impl AppState {
             quiver_signals,
             latest_quiver_run,
             latest_daily_indicator_run,
+            run_schedules: json!({
+                "markov": crate::markov_method::markov_config_json_for_state(self),
+                "quiver": crate::quiver::quiver_config_json_for_state(self),
+                "indicators": crate::daily_indicators::indicator_config_json_for_state(self),
+            }),
             performance_history,
             performance_summary,
             integrity: overview

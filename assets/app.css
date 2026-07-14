@@ -212,6 +212,12 @@ h2 {
   color: #a4312b;
 }
 
+.operation-chip.neutral {
+  border-color: #d5dde2;
+  background: #f4f6f8;
+  color: #627080;
+}
+
 .operation-chip strong {
   color: inherit;
 }

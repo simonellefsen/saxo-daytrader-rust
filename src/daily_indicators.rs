@@ -101,6 +101,24 @@ pub(crate) fn indicator_config(state: &AppState) -> IndicatorConfig {
     }
 }
 
+pub(crate) fn indicator_config_json_for_state(state: &AppState) -> JsonValue {
+    indicator_config_json(&indicator_config(state))
+}
+
+fn indicator_config_json(config: &IndicatorConfig) -> JsonValue {
+    json!({
+        "enabled": config.enabled,
+        "sample_count": config.sample_count,
+        "horizon_minutes": config.horizon_minutes,
+        "max_symbols": config.max_symbols,
+        "min_confluences": config.min_confluences,
+        "min_reward_risk": config.min_reward_risk,
+        "daily_time": config.daily_time.format("%H:%M").to_string(),
+        "timezone": config.timezone.name(),
+        "run_weekdays_only": config.run_weekdays_only,
+    })
+}
+
 fn parse_hh_mm(value: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(value.trim(), "%H:%M").ok()
 }
@@ -726,15 +744,7 @@ async fn insert_run(
     config: &IndicatorConfig,
     summary: &JsonValue,
 ) -> Result<()> {
-    let config_json = json!({
-        "sample_count": config.sample_count,
-        "horizon_minutes": config.horizon_minutes,
-        "max_symbols": config.max_symbols,
-        "min_confluences": config.min_confluences,
-        "min_reward_risk": config.min_reward_risk,
-        "daily_time": config.daily_time.format("%H:%M").to_string(),
-        "timezone": config.timezone.name(),
-    });
+    let config_json = indicator_config_json(config);
     let sql = format!(
         "INSERT INTO daily_indicator_runs (id, created_at, run_date, status, asset_count, success_count, error_count, config_json, summary_json)
          VALUES ('{}', '{}', '{}', '{}', {}, {}, {}, '{}', '{}')",

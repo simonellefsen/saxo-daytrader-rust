@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] ux | Schedule-aware Operations freshness
+
+- Operations health now evaluates Markov, Quiver, and daily-indicator run age against the live configured timezone, due time, weekday policy, and enabled state.
+- A completed prior-weekday run is neutral `idle (weekend)` during the weekend and `waiting` before its next local due time. Only jobs overdue for their latest expected date remain stale warnings; job failures and partial runs retain their higher-severity signals.
+- The dashboard receives compact schedule metadata from active configuration rather than trusting historical run configuration, so configuration changes take effect immediately in health labels.
+
 ## [2026-07-14] ux | Age-aware decision labels
 
 - Portfolio and watchlist decision badges now show a relative report age instead of presenting an absolute historical timestamp as active advice.

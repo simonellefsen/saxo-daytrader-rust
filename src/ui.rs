@@ -1,4 +1,5 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
+use chrono_tz::Tz;
 use dioxus::prelude::*;
 use serde_json::{Map, Value as JsonValue};
 
@@ -4234,9 +4235,26 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
         integrity_operation_health(&data.integrity),
         scheduler_operation_health(&data.market_status, now),
         decision_operation_health(&data.latest_decision),
-        run_operation_health("Markov", &data.latest_markov_run, now),
-        run_operation_health("Quiver", &data.latest_quiver_run, now),
-        run_operation_health("Indicators", &data.latest_daily_indicator_run, now),
+        run_operation_health(
+            "Markov",
+            &data.latest_markov_run,
+            data.run_schedules.get("markov").unwrap_or(&JsonValue::Null),
+            now,
+        ),
+        run_operation_health(
+            "Quiver",
+            &data.latest_quiver_run,
+            data.run_schedules.get("quiver").unwrap_or(&JsonValue::Null),
+            now,
+        ),
+        run_operation_health(
+            "Indicators",
+            &data.latest_daily_indicator_run,
+            data.run_schedules
+                .get("indicators")
+                .unwrap_or(&JsonValue::Null),
+            now,
+        ),
         quote_operation_health(&data.positions, &data.market_status, now),
         execution_operation_health(&data.orders),
     ]
@@ -4462,36 +4480,44 @@ fn decision_operation_health(report: &JsonValue) -> OperationHealthItem {
     }
 }
 
-fn run_operation_health(label: &str, run: &JsonValue, now: DateTime<Utc>) -> OperationHealthItem {
+fn run_operation_health(
+    label: &str,
+    run: &JsonValue,
+    schedule: &JsonValue,
+    now: DateTime<Utc>,
+) -> OperationHealthItem {
+    let schedule_state = scheduled_run_state(schedule, now);
     if run.is_null() {
+        let (tone, status) = match schedule_state {
+            ScheduledRunState::Disabled => ("neutral", "disabled"),
+            ScheduledRunState::Weekend { .. } => ("neutral", "idle (weekend)"),
+            ScheduledRunState::BeforeDue { .. } => ("neutral", "waiting"),
+            ScheduledRunState::Due { .. } | ScheduledRunState::Unknown => ("warn", "missing"),
+        };
         return OperationHealthItem {
             label: label.to_string(),
-            status: "missing".to_string(),
-            tone: "warn",
-            detail: format!("No {label} run has been recorded yet."),
+            status: status.to_string(),
+            tone,
+            detail: scheduled_run_missing_detail(label, schedule_state),
         };
     }
     let status = text_or(run, "status", "unknown");
     let run_date = text(run, "run_date");
     let error_count = value_f64(run, "error_count");
-    let today = now.date_naive().to_string();
-    let stale = !run_date.is_empty() && run_date < today;
     let lower_status = status.to_ascii_lowercase();
     let (tone, display) = if lower_status.contains("error") || lower_status.contains("failed") {
         ("bad", "failed")
     } else if error_count > 0.0 {
         ("warn", "partial")
-    } else if stale {
-        ("warn", "stale")
     } else {
-        ("good", "fresh")
+        scheduled_run_tone_and_status(&run_date, schedule_state)
     };
     OperationHealthItem {
         label: label.to_string(),
         status: display.to_string(),
         tone,
         detail: format!(
-            "{} run date {}. Status: {}. Succeeded: {}. Failed: {}.",
+            "{} run date {}. Status: {}. Succeeded: {}. Failed: {}. {}",
             label,
             if run_date.is_empty() {
                 "unknown".to_string()
@@ -4500,8 +4526,164 @@ fn run_operation_health(label: &str, run: &JsonValue, now: DateTime<Utc>) -> Ope
             },
             status,
             fallback_text(run, "success_count", "0"),
-            fallback_text(run, "error_count", "0")
+            fallback_text(run, "error_count", "0"),
+            scheduled_run_detail(schedule_state),
         ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ScheduledRunState {
+    Disabled,
+    Weekend {
+        expected_run_date: NaiveDate,
+    },
+    BeforeDue {
+        expected_run_date: NaiveDate,
+        due_time: NaiveTime,
+    },
+    Due {
+        expected_run_date: NaiveDate,
+        due_time: NaiveTime,
+    },
+    Unknown,
+}
+
+fn scheduled_run_state(schedule: &JsonValue, now: DateTime<Utc>) -> ScheduledRunState {
+    if schedule.is_null() {
+        return ScheduledRunState::Unknown;
+    }
+    if !schedule
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true)
+    {
+        return ScheduledRunState::Disabled;
+    }
+    let timezone = text(schedule, "timezone")
+        .parse::<Tz>()
+        .unwrap_or(chrono_tz::Europe::Copenhagen);
+    let due_time = NaiveTime::parse_from_str(&text(schedule, "daily_time"), "%H:%M")
+        .unwrap_or_else(|_| NaiveTime::from_hms_opt(23, 30, 0).expect("valid default time"));
+    let weekdays_only = schedule
+        .get("run_weekdays_only")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true);
+    let now_local = now.with_timezone(&timezone);
+    let local_date = now_local.date_naive();
+    let expected_run_date =
+        latest_scheduled_run_date(local_date, now_local.time(), due_time, weekdays_only);
+    if weekdays_only && local_date.weekday().number_from_monday() > 5 {
+        ScheduledRunState::Weekend { expected_run_date }
+    } else if now_local.time() < due_time {
+        ScheduledRunState::BeforeDue {
+            expected_run_date,
+            due_time,
+        }
+    } else {
+        ScheduledRunState::Due {
+            expected_run_date,
+            due_time,
+        }
+    }
+}
+
+fn latest_scheduled_run_date(
+    local_date: NaiveDate,
+    local_time: NaiveTime,
+    due_time: NaiveTime,
+    weekdays_only: bool,
+) -> NaiveDate {
+    let mut expected = if local_time < due_time {
+        local_date - Duration::days(1)
+    } else {
+        local_date
+    };
+    while weekdays_only && expected.weekday().number_from_monday() > 5 {
+        expected -= Duration::days(1);
+    }
+    expected
+}
+
+fn scheduled_run_tone_and_status(
+    run_date: &str,
+    state: ScheduledRunState,
+) -> (&'static str, &'static str) {
+    let parsed_run_date = NaiveDate::parse_from_str(run_date, "%Y-%m-%d").ok();
+    match state {
+        ScheduledRunState::Disabled => ("neutral", "disabled"),
+        ScheduledRunState::Weekend { expected_run_date } => {
+            if parsed_run_date.is_some_and(|value| value >= expected_run_date) {
+                ("neutral", "idle (weekend)")
+            } else {
+                ("warn", "stale")
+            }
+        }
+        ScheduledRunState::BeforeDue {
+            expected_run_date, ..
+        } => {
+            if parsed_run_date.is_some_and(|value| value >= expected_run_date) {
+                ("neutral", "waiting")
+            } else {
+                ("warn", "stale")
+            }
+        }
+        ScheduledRunState::Due {
+            expected_run_date, ..
+        } => {
+            if parsed_run_date.is_some_and(|value| value >= expected_run_date) {
+                ("good", "fresh")
+            } else {
+                ("warn", "stale")
+            }
+        }
+        ScheduledRunState::Unknown => {
+            if parsed_run_date.is_some() {
+                ("warn", "schedule unknown")
+            } else {
+                ("warn", "unknown")
+            }
+        }
+    }
+}
+
+fn scheduled_run_detail(state: ScheduledRunState) -> String {
+    match state {
+        ScheduledRunState::Disabled => "The configured job is disabled.".to_string(),
+        ScheduledRunState::Weekend { expected_run_date } => format!(
+            "No weekday run is due during the weekend; the latest expected run date is {expected_run_date}."
+        ),
+        ScheduledRunState::BeforeDue {
+            expected_run_date,
+            due_time,
+        } => format!(
+            "The next local run is due at {}. The latest expected run date remains {expected_run_date}.",
+            due_time.format("%H:%M")
+        ),
+        ScheduledRunState::Due {
+            expected_run_date,
+            due_time,
+        } => format!(
+            "A run is due after {} for {expected_run_date}.",
+            due_time.format("%H:%M")
+        ),
+        ScheduledRunState::Unknown => "No usable schedule configuration is available.".to_string(),
+    }
+}
+
+fn scheduled_run_missing_detail(label: &str, state: ScheduledRunState) -> String {
+    match state {
+        ScheduledRunState::Disabled => format!("{label} is disabled and has no recorded run."),
+        ScheduledRunState::Weekend { .. } => {
+            format!("No {label} run is expected during the configured weekday-only weekend window.")
+        }
+        ScheduledRunState::BeforeDue { due_time, .. } => format!(
+            "No {label} run is due until {} local time.",
+            due_time.format("%H:%M")
+        ),
+        ScheduledRunState::Due { .. } | ScheduledRunState::Unknown => {
+            format!("No {label} run has been recorded yet.")
+        }
     }
 }
 
@@ -6077,6 +6259,12 @@ mod tests {
                 "success_count": 10,
                 "error_count": 2
             }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "10:00",
+                "run_weekdays_only": true,
+            }),
             now,
         );
         assert_eq!(partial.status, "partial");
@@ -6090,10 +6278,69 @@ mod tests {
                 "success_count": 12,
                 "error_count": 0
             }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "10:00",
+                "run_weekdays_only": true,
+            }),
             now,
         );
         assert_eq!(stale.status, "stale");
         assert_eq!(stale.tone, "warn");
+    }
+
+    #[test]
+    fn weekday_only_run_is_neutral_during_the_weekend() {
+        let now = DateTime::parse_from_rfc3339("2026-07-11T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let item = run_operation_health(
+            "Markov",
+            &json!({
+                "run_date": "2026-07-10",
+                "status": "completed",
+                "success_count": 20,
+                "error_count": 0
+            }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "23:30",
+                "run_weekdays_only": true,
+            }),
+            now,
+        );
+
+        assert_eq!(item.status, "idle (weekend)");
+        assert_eq!(item.tone, "neutral");
+        assert!(item.detail.contains("No weekday run is due"));
+    }
+
+    #[test]
+    fn weekday_only_run_is_stale_after_its_due_time() {
+        let now = DateTime::parse_from_rfc3339("2026-07-14T22:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let item = run_operation_health(
+            "Quiver",
+            &json!({
+                "run_date": "2026-07-11",
+                "status": "completed",
+                "success_count": 20,
+                "error_count": 0
+            }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "21:00",
+                "run_weekdays_only": true,
+            }),
+            now,
+        );
+
+        assert_eq!(item.status, "stale");
+        assert_eq!(item.tone, "warn");
     }
 
     #[test]

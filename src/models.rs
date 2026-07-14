@@ -61,6 +61,7 @@ pub struct DashboardView {
     pub quiver_signals: Vec<JsonValue>,
     pub latest_quiver_run: JsonValue,
     pub latest_daily_indicator_run: JsonValue,
+    pub run_schedules: JsonValue,
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
     pub integrity: JsonValue,
