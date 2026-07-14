@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] testing | Scheduled report hand-off guard
+
+- Trading Manager now fails closed before queueing unless a report has a positive id, `completed` or `xai_fallback` status, a scheduled pulse key, and a parseable timestamp inside the configured freshness window.
+- Regression tests cover accepted completed/fallback reports and rejected deferred, stale, malformed-timestamp, and non-scheduled reports.
+- This is a workflow safety change only; it does not alter candidate gates, Hermes advice, or Saxo execution behavior for valid reports.
+
 ## [2026-07-14] ux | Schedule-aware Operations freshness
 
 - Operations health now evaluates Markov, Quiver, and daily-indicator run age against the live configured timezone, due time, weekday policy, and enabled state.

@@ -1730,10 +1730,7 @@ async fn fresh_unmanaged_reports(state: &AppState) -> Result<Vec<DecisionReport>
     let mut reports = Vec::new();
     for row in rows.iter().map(row_to_json) {
         let report = decode_report(&row)?;
-        if !matches!(report.status.as_str(), "completed" | "xai_fallback") {
-            continue;
-        }
-        if parse_report_time(&report.created_at).is_some_and(|created| created < cutoff) {
+        if !is_fresh_scheduled_report(&report, cutoff) {
             continue;
         }
         if has_manager_run_for_report(state, report.id).await? {
@@ -1743,6 +1740,17 @@ async fn fresh_unmanaged_reports(state: &AppState) -> Result<Vec<DecisionReport>
     }
     reports.sort_by_key(|report| report.id);
     Ok(reports)
+}
+
+/// A report is eligible for automatic queueing only when it is a completed
+/// scheduled pulse with a timestamp we can verify is inside the manager's
+/// freshness window. Missing or malformed timestamps fail closed: a report
+/// without an auditable age must not create broker work.
+fn is_fresh_scheduled_report(report: &DecisionReport, cutoff: DateTime<Utc>) -> bool {
+    report.id > 0
+        && matches!(report.status.as_str(), "completed" | "xai_fallback")
+        && !report.pulse_key.trim().is_empty()
+        && parse_report_time(&report.created_at).is_some_and(|created| created >= cutoff)
 }
 
 fn decode_report(row: &JsonValue) -> Result<DecisionReport> {
@@ -3170,6 +3178,53 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn scheduled_report(status: &str, created_at: &str, pulse_key: &str) -> DecisionReport {
+        DecisionReport {
+            id: 42,
+            created_at: created_at.to_string(),
+            status: status.to_string(),
+            pulse_key: pulse_key.to_string(),
+            pulse_label: "US open +1h15".to_string(),
+            report_json: json!({"strategy_plan": {"swing_orders": []}}),
+        }
+    }
+
+    #[test]
+    fn only_fresh_completed_scheduled_reports_are_eligible_for_queueing() {
+        let cutoff = DateTime::parse_from_rfc3339("2026-07-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert!(is_fresh_scheduled_report(
+            &scheduled_report("completed", "2026-07-14T08:00:00Z", "us_open"),
+            cutoff,
+        ));
+        assert!(is_fresh_scheduled_report(
+            &scheduled_report("xai_fallback", "2026-07-14T08:01:00Z", "eu_open"),
+            cutoff,
+        ));
+    }
+
+    #[test]
+    fn unmanaged_report_selector_fails_closed_for_unverifiable_or_non_scheduled_reports() {
+        let cutoff = DateTime::parse_from_rfc3339("2026-07-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        for report in [
+            scheduled_report("deferred", "2026-07-14T09:00:00Z", "us_open"),
+            scheduled_report("completed", "2026-07-14T07:59:59Z", "us_open"),
+            scheduled_report("completed", "not-a-timestamp", "us_open"),
+            scheduled_report("completed", "2026-07-14T09:00:00Z", ""),
+        ] {
+            assert!(
+                !is_fresh_scheduled_report(&report, cutoff),
+                "unexpectedly eligible report: {:?}",
+                report
+            );
+        }
     }
 
     #[test]
