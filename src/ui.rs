@@ -2741,6 +2741,17 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         "/?view=execution&execution_page={}",
         data.execution_page + 1
     );
+    let scheduler_total_pages = ((data.scheduler_cycle_total + data.scheduler_page_size - 1)
+        / data.scheduler_page_size)
+        .max(1);
+    let previous_scheduler_page_href = format!(
+        "/?view=execution&scheduler_page={}",
+        data.scheduler_page - 1
+    );
+    let next_scheduler_page_href = format!(
+        "/?view=execution&scheduler_page={}",
+        data.scheduler_page + 1
+    );
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -2901,11 +2912,14 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
                 div { class: "table-wrap",
-                    h3 { "Scheduler Cycles" }
+                    div { class: "section-title-row compact",
+                        h3 { "Scheduler Cycles" }
+                        span { class: "muted", "{data.scheduler_cycle_total} total · page {data.scheduler_page} of {scheduler_total_pages}" }
+                    }
                     table {
                         thead { tr { th { "Started" } th { "Runtime" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } } }
                         tbody {
-                            for row in data.scheduler_cycles.iter().take(12) {
+                            for row in data.scheduler_cycles.iter() {
                                 tr {
                                     td { "{format_timestamp(&text(row, \"started_at\"), &prefs)}" }
                                     td { "{scheduler_cycle_duration(row)}" }
@@ -2916,6 +2930,14 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                                     td { "{scheduler_cycle_json_status(row, \"operational_notifications\")}" }
                                 }
                             }
+                        }
+                    }
+                    div { class: "button-row table-pagination",
+                        if data.scheduler_page > 1 {
+                            a { class: "small-button", href: "{previous_scheduler_page_href}", "Previous" }
+                        }
+                        if data.scheduler_page < scheduler_total_pages {
+                            a { class: "small-button", href: "{next_scheduler_page_href}", "Next" }
                         }
                     }
                 }

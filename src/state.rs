@@ -628,6 +628,7 @@ const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
 const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
 const MARKOV_SIGNALS_PAGE_SIZE: i64 = 40;
 const QUIVER_SIGNALS_PAGE_SIZE: i64 = 40;
+const SCHEDULER_CYCLES_PAGE_SIZE: i64 = 12;
 
 fn dashboard_execution_order_window(
     active_view: &str,
@@ -663,6 +664,14 @@ fn dashboard_quiver_signal_window(requested_page: i64, total_signals: i64) -> (i
         ((total_signals.max(0) + QUIVER_SIGNALS_PAGE_SIZE - 1) / QUIVER_SIGNALS_PAGE_SIZE).max(1);
     let page = requested_page.max(1).min(total_pages);
     (page, (page - 1) * QUIVER_SIGNALS_PAGE_SIZE)
+}
+
+fn dashboard_scheduler_cycle_window(requested_page: i64, total_cycles: i64) -> (i64, i64) {
+    let total_pages = ((total_cycles.max(0) + SCHEDULER_CYCLES_PAGE_SIZE - 1)
+        / SCHEDULER_CYCLES_PAGE_SIZE)
+        .max(1);
+    let page = requested_page.max(1).min(total_pages);
+    (page, (page - 1) * SCHEDULER_CYCLES_PAGE_SIZE)
 }
 
 fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&'static str> {
@@ -729,6 +738,7 @@ impl AppState {
         requested_execution_page: i64,
         requested_markov_page: i64,
         requested_quiver_page: i64,
+        requested_scheduler_page: i64,
     ) -> DashboardView {
         let overview = self.overview_payload().await.unwrap_or_else(|err| {
             error!("overview load failed: {err:#}");
@@ -840,11 +850,24 @@ impl AppState {
         } else {
             Vec::new()
         };
-        let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
-            self.scheduler_cycles(12).await.unwrap_or_else(|err| {
-                warn!("dashboard scheduler cycles degraded: {err:#}");
-                Vec::new()
+        let scheduler_cycle_total = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
+        {
+            self.scheduler_cycles_count().await.unwrap_or_else(|err| {
+                warn!("dashboard scheduler cycle count degraded: {err:#}");
+                0
             })
+        } else {
+            0
+        };
+        let (scheduler_page, scheduler_cycles_offset) =
+            dashboard_scheduler_cycle_window(requested_scheduler_page, scheduler_cycle_total);
+        let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+            self.scheduler_cycles_page(SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycles_offset)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard scheduler cycles degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -1051,6 +1074,9 @@ impl AppState {
             quiver_page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
+            scheduler_page,
+            scheduler_page_size: SCHEDULER_CYCLES_PAGE_SIZE,
+            scheduler_cycle_total,
             positions,
             orders,
             execution_fills,
@@ -2851,11 +2877,29 @@ impl AppState {
     }
 
     pub async fn scheduler_cycles(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        self.scheduler_cycles_page(limit, 0).await
+    }
+
+    pub async fn scheduler_cycles_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT * FROM scheduler_cycle_history ORDER BY started_at DESC, id DESC LIMIT {}",
-            clamp_limit(limit, 1, 100)
+            "SELECT id, started_at, completed_at, status, analysis_window_active,
+                    generated_decision, queue_status, notifications_status,
+                    broker_alerts_status, cycle_json
+             FROM scheduler_cycle_history
+             ORDER BY started_at DESC, id DESC
+             LIMIT {} OFFSET {}",
+            clamp_limit(limit, 1, 100),
+            offset.max(0).min(100_000)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn scheduler_cycles_count(&self) -> Result<i64> {
+        Ok(self
+            .first_json("SELECT COUNT(*) AS count FROM scheduler_cycle_history")
+            .await?
+            .and_then(|row| row.get("count").and_then(JsonValue::as_i64))
+            .unwrap_or(0))
     }
 
     pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
@@ -7556,5 +7600,18 @@ analysis_windows:
             (2, QUIVER_SIGNALS_PAGE_SIZE)
         );
         assert_eq!(dashboard_quiver_signal_window(0, 0), (1, 0));
+    }
+
+    #[test]
+    fn dashboard_scheduler_cycle_window_clamps_page_and_calculates_offset() {
+        assert_eq!(
+            dashboard_scheduler_cycle_window(2, 25),
+            (2, SCHEDULER_CYCLES_PAGE_SIZE)
+        );
+        assert_eq!(
+            dashboard_scheduler_cycle_window(9, 13),
+            (2, SCHEDULER_CYCLES_PAGE_SIZE)
+        );
+        assert_eq!(dashboard_scheduler_cycle_window(0, 0), (1, 0));
     }
 }

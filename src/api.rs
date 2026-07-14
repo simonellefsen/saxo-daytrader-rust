@@ -188,6 +188,7 @@ async fn index(
     let execution_page = normalize_execution_page(params.execution_page);
     let markov_page = normalize_markov_page(params.markov_page);
     let quiver_page = normalize_quiver_page(params.quiver_page);
+    let scheduler_page = normalize_scheduler_page(params.scheduler_page);
     info!(
         view = %active_view,
         locale = %localization.locale,
@@ -206,6 +207,7 @@ async fn index(
                 execution_page,
                 markov_page,
                 quiver_page,
+                scheduler_page,
             )
             .await,
         &base_path,
@@ -1334,6 +1336,10 @@ fn normalize_quiver_page(value: Option<i64>) -> i64 {
     value.unwrap_or(1).clamp(1, 1_000)
 }
 
+fn normalize_scheduler_page(value: Option<i64>) -> i64 {
+    value.unwrap_or(1).clamp(1, 1_000)
+}
+
 fn clean_setting(value: Option<String>, fallback: &str) -> String {
     value
         .map(|value| value.trim().to_string())
@@ -1440,5 +1446,13 @@ mod tests {
         assert_eq!(normalize_quiver_page(Some(-3)), 1);
         assert_eq!(normalize_quiver_page(Some(7)), 7);
         assert_eq!(normalize_quiver_page(Some(9_999)), 1_000);
+    }
+
+    #[test]
+    fn normalizes_scheduler_page_to_a_bounded_positive_value() {
+        assert_eq!(normalize_scheduler_page(None), 1);
+        assert_eq!(normalize_scheduler_page(Some(-3)), 1);
+        assert_eq!(normalize_scheduler_page(Some(7)), 7);
+        assert_eq!(normalize_scheduler_page(Some(9_999)), 1_000);
     }
 }

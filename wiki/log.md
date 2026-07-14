@@ -10,6 +10,12 @@ updated: 2026-07-13
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-14] performance | Server-side Scheduler Cycle pagination
+
+- The Execution tab now reads 12 scheduler-cycle rows at a time with a bounded offset, explicit total, and Previous/Next navigation.
+- The dashboard query has an explicit UI projection rather than `SELECT *`; the standalone Scheduler API retains its existing limit-based response behavior.
+- Page numbers clamp to the available history total, so arbitrary query parameters cannot force unbounded offsets.
+
 ## [2026-07-13] performance | Server-side Quiver signal pagination
 
 - The Quiver tab now reads 40 signals at a time from only the latest Quiver run, with a run-scoped count and Previous/Next navigation.
