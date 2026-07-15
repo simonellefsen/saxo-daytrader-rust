@@ -2702,7 +2702,13 @@ mod tests {
                 error_text TEXT,
                 broker_order_id TEXT,
                 execution_result_json TEXT,
-                currency TEXT
+                currency TEXT,
+                action TEXT,
+                symbol TEXT,
+                mode TEXT,
+                quantity REAL,
+                price_local REAL,
+                ledger_id INTEGER
             )",
         )
         .execute(&pool)
@@ -2726,6 +2732,85 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create execution-order event test table");
+        sqlx::query(
+            "CREATE TABLE execution_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                execution_order_id INTEGER NOT NULL,
+                broker_order_id TEXT,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                fill_status TEXT NOT NULL,
+                cumulative_quantity REAL NOT NULL,
+                delta_quantity REAL NOT NULL,
+                average_price_local REAL NOT NULL,
+                currency TEXT NOT NULL,
+                ledger_id INTEGER,
+                raw_payload_json TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create execution-fill test table");
+        sqlx::query(
+            "CREATE TABLE trade_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                isin TEXT,
+                figi TEXT,
+                instrument_name TEXT,
+                side TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                price_local REAL NOT NULL,
+                currency TEXT NOT NULL,
+                gross_amount_dkk REAL NOT NULL,
+                commission_dkk REAL NOT NULL,
+                commission_local REAL NOT NULL,
+                fx_conversion_dkk REAL NOT NULL,
+                tax_dkk REAL NOT NULL,
+                realised_gain_dkk REAL NOT NULL,
+                cost_basis_sold_dkk REAL NOT NULL,
+                cost_basis_sold_local REAL NOT NULL,
+                realised_gain_local REAL NOT NULL,
+                fx_gain_dkk REAL NOT NULL,
+                price_gain_dkk REAL NOT NULL,
+                sale_fx_rate_to_dkk REAL NOT NULL,
+                cost_basis_fx_rate_to_dkk REAL NOT NULL,
+                net_amount_dkk REAL NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                notes TEXT,
+                portfolio_before_json TEXT,
+                portfolio_after_json TEXT,
+                decision_context_json TEXT,
+                tax_year INTEGER,
+                batch_id TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create trade-ledger test table");
+        sqlx::query(
+            "CREATE TABLE import_batches (
+                batch_id TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create import-batch test table");
+        sqlx::query(
+            "CREATE TABLE currency_fx_rates (
+                currency_code TEXT NOT NULL,
+                base_currency TEXT NOT NULL,
+                rate_to_dkk REAL NOT NULL,
+                expires_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create FX-rate test table");
 
         AppState {
             config_path: PathBuf::from("saxo-order-claim-test.yaml"),
@@ -3032,6 +3117,183 @@ mod tests {
         )
         .expect("parse missing lookup payload");
         assert_eq!(event_payload["broker_visibility"], json!("not_found"));
+    }
+
+    #[tokio::test]
+    async fn final_fill_reconciliation_persists_one_ledger_and_fill_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132483', '{\"precheck\":true}', 'USD',
+                'BUY', 'AMD:xnas', 'live', 2, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working execution order");
+        let order = json!({
+            "id": 1,
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 2.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 2.0,
+                "ExecutionPrice": 101.25,
+                "Currency": "USD"
+            }
+        });
+
+        // This begins after a final Saxo fill payload has been received. It
+        // exercises only the local reconciliation and never loads a session.
+        record_broker_order_event(
+            &state,
+            &order,
+            "5039132483",
+            "broker_final_fill",
+            Some("FinalFill"),
+            Some("Confirmed"),
+            Some(2.0),
+            Some(101.25),
+            &broker_state,
+        )
+        .await
+        .expect("record final-fill broker event");
+        let first = sync_final_fill(&state, &order, "5039132483", 2.0, 101.25, &broker_state)
+            .await
+            .expect("reconcile final fill");
+        let ledger_id = first["ledger_id"].as_i64().expect("ledger id");
+        assert_eq!(first["status"], json!("executed"));
+        assert_eq!(first["fills"], json!(1));
+        assert_eq!(first["delta_quantity"], json!(2.0));
+
+        let stored_order = sqlx::query(
+            "SELECT status, error_text, price_local, currency, ledger_id, execution_result_json
+             FROM execution_orders WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read reconciled execution order");
+        assert_eq!(
+            stored_order.try_get::<String, _>("status").unwrap(),
+            "executed"
+        );
+        assert!(
+            stored_order
+                .try_get::<Option<String>, _>("error_text")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            stored_order.try_get::<f64, _>("price_local").unwrap(),
+            101.25
+        );
+        assert_eq!(
+            stored_order.try_get::<String, _>("currency").unwrap(),
+            "USD"
+        );
+        assert_eq!(
+            stored_order.try_get::<i64, _>("ledger_id").unwrap(),
+            ledger_id
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored_order
+                .try_get::<String, _>("execution_result_json")
+                .expect("broker-sync result"),
+        )
+        .expect("parse stored broker-sync result");
+        assert_eq!(result["precheck"], json!(true));
+        assert_eq!(
+            result["broker_sync"]["broker_payload"]["Status"],
+            json!("FinalFill")
+        );
+
+        let fill = sqlx::query(
+            "SELECT broker_order_id, symbol, side, fill_status, cumulative_quantity,
+                    delta_quantity, average_price_local, currency, ledger_id
+             FROM execution_fills WHERE execution_order_id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read final-fill record");
+        assert_eq!(
+            fill.try_get::<String, _>("broker_order_id").unwrap(),
+            "5039132483"
+        );
+        assert_eq!(fill.try_get::<String, _>("symbol").unwrap(), "AMD:xnas");
+        assert_eq!(fill.try_get::<String, _>("side").unwrap(), "BUY");
+        assert_eq!(
+            fill.try_get::<String, _>("fill_status").unwrap(),
+            "FinalFill"
+        );
+        assert_eq!(fill.try_get::<f64, _>("cumulative_quantity").unwrap(), 2.0);
+        assert_eq!(fill.try_get::<f64, _>("delta_quantity").unwrap(), 2.0);
+        assert_eq!(
+            fill.try_get::<f64, _>("average_price_local").unwrap(),
+            101.25
+        );
+        assert_eq!(fill.try_get::<String, _>("currency").unwrap(), "USD");
+        assert_eq!(fill.try_get::<i64, _>("ledger_id").unwrap(), ledger_id);
+
+        let ledger = sqlx::query(
+            "SELECT symbol, side, quantity, price_local, currency, mode, status,
+                    decision_context_json
+             FROM trade_ledger WHERE id = ?",
+        )
+        .bind(ledger_id)
+        .fetch_one(&state.pool)
+        .await
+        .expect("read reconciled ledger row");
+        assert_eq!(ledger.try_get::<String, _>("symbol").unwrap(), "AMD:xnas");
+        assert_eq!(ledger.try_get::<String, _>("side").unwrap(), "BUY");
+        assert_eq!(ledger.try_get::<f64, _>("quantity").unwrap(), 2.0);
+        assert_eq!(ledger.try_get::<f64, _>("price_local").unwrap(), 101.25);
+        assert_eq!(ledger.try_get::<String, _>("currency").unwrap(), "USD");
+        assert_eq!(ledger.try_get::<String, _>("mode").unwrap(), "live");
+        assert_eq!(ledger.try_get::<String, _>("status").unwrap(), "executed");
+        let ledger_context: JsonValue = serde_json::from_str(
+            &ledger
+                .try_get::<String, _>("decision_context_json")
+                .expect("ledger context"),
+        )
+        .expect("parse ledger context");
+        assert_eq!(
+            ledger_context["broker_sync"]["broker_payload"]["Status"],
+            json!("FinalFill")
+        );
+
+        // Replaying the same cumulative broker fill must not duplicate money
+        // movement, the execution-fill row, or the trade-ledger row.
+        let replay = sync_final_fill(&state, &order, "5039132483", 2.0, 101.25, &broker_state)
+            .await
+            .expect("reconcile duplicate final fill");
+        assert_eq!(replay["fills"], json!(0));
+        assert_eq!(replay["ledger_id"], json!(ledger_id));
+        let fill_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_fills")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count execution fills")
+            .try_get::<i64, _>("count")
+            .expect("execution fill count");
+        let ledger_count = sqlx::query("SELECT COUNT(*) AS count FROM trade_ledger")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count ledger rows")
+            .try_get::<i64, _>("count")
+            .expect("trade ledger count");
+        assert_eq!(fill_count, 1);
+        assert_eq!(ledger_count, 1);
     }
 
     #[test]

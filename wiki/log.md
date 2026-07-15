@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-15] testing | Database-backed final-fill reconciliation fixture
+
+- Added isolated SQLite coverage for a confirmed Saxo final fill after its broker response has already been received.
+- The fixture verifies one local fill record, one trade-ledger row, executed order state, price backfill, and persisted broker context.
+- Replaying the same cumulative fill records no additional ledger or execution-fill rows; the fixture never calls Saxo HTTP.
+
 ## [2026-07-15] testing | Database-backed broker-sync not-found fixture
 
 - Added an isolated SQLite fixture for the case where Saxo returns neither an active open order nor an audit-activity record.
