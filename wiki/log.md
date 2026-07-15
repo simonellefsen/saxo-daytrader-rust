@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-15] testing | Database-backed partial-to-final fill delta fixture
+
+- Added isolated SQLite coverage for a one-share partial fill already recorded locally before a later cumulative four-share `FinalFill`.
+- The final-fill reconciliation records only the three-share delta, preserves both ledger prices, completes the order, and remains idempotent on replay.
+- The fixture starts after broker response data is available and never calls Saxo HTTP.
+
 ## [2026-07-15] testing | Database-backed final-fill reconciliation fixture
 
 - Added isolated SQLite coverage for a confirmed Saxo final fill after its broker response has already been received.

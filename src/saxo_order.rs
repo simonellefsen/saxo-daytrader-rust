@@ -3296,6 +3296,231 @@ mod tests {
         assert_eq!(ledger_count, 1);
     }
 
+    #[tokio::test]
+    async fn partial_fill_delta_is_reconciled_once_when_later_final_fill_arrives_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132483', '{\"precheck\":true}', 'USD',
+                'BUY', 'AMD:xnas', 'live', 4, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed partially-filled execution order");
+        let order = json!({
+            "id": 1,
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 4.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let partial_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "PartiallyFilled",
+                "FilledAmount": 1.0,
+                "ExecutionPrice": 100.0,
+                "Currency": "USD"
+            }
+        });
+
+        // Model a one-share fill already persisted by an earlier reconciliation
+        // cycle. This test starts after broker responses exist and makes no HTTP.
+        record_broker_order_event(
+            &state,
+            &order,
+            "5039132483",
+            "broker_status_sync",
+            Some("PartiallyFilled"),
+            None,
+            Some(1.0),
+            Some(100.0),
+            &partial_state,
+        )
+        .await
+        .expect("record partial-fill broker event");
+        update_order_broker_status(
+            &state,
+            &order,
+            "broker_partially_filled",
+            &partial_state,
+            None,
+        )
+        .await
+        .expect("persist partial-fill broker status");
+        let partial_ledger_id =
+            insert_trade_ledger_for_fill(&state, &order, "BUY", 1.0, 100.0, "USD", &partial_state)
+                .await
+                .expect("record prior partial-fill ledger row");
+        insert_execution_fill(
+            &state,
+            &order,
+            "5039132483",
+            "PartialFill",
+            1.0,
+            1.0,
+            100.0,
+            "USD",
+            Some(partial_ledger_id),
+            &partial_state,
+        )
+        .await
+        .expect("record prior partial-fill row");
+
+        let final_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 4.0,
+                "ExecutionPrice": 101.25,
+                "Currency": "USD"
+            }
+        });
+        record_broker_order_event(
+            &state,
+            &order,
+            "5039132483",
+            "broker_final_fill",
+            Some("FinalFill"),
+            Some("Confirmed"),
+            Some(4.0),
+            Some(101.25),
+            &final_state,
+        )
+        .await
+        .expect("record final-fill broker event");
+        let final_fill = sync_final_fill(&state, &order, "5039132483", 4.0, 101.25, &final_state)
+            .await
+            .expect("reconcile remaining final-fill quantity");
+        let final_ledger_id = final_fill["ledger_id"].as_i64().expect("final ledger id");
+        assert_ne!(final_ledger_id, partial_ledger_id);
+        assert_eq!(final_fill["status"], json!("executed"));
+        assert_eq!(final_fill["fills"], json!(1));
+        assert_eq!(final_fill["synced_before"], json!(1.0));
+        assert_eq!(final_fill["delta_quantity"], json!(3.0));
+
+        let stored_order = sqlx::query(
+            "SELECT status, price_local, ledger_id, execution_result_json
+             FROM execution_orders WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read final execution order");
+        assert_eq!(
+            stored_order.try_get::<String, _>("status").unwrap(),
+            "executed"
+        );
+        assert_eq!(
+            stored_order.try_get::<f64, _>("price_local").unwrap(),
+            101.25
+        );
+        assert_eq!(
+            stored_order.try_get::<i64, _>("ledger_id").unwrap(),
+            final_ledger_id
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored_order
+                .try_get::<String, _>("execution_result_json")
+                .expect("broker-sync result"),
+        )
+        .expect("parse stored broker-sync result");
+        assert_eq!(result["precheck"], json!(true));
+        assert_eq!(
+            result["broker_sync"]["broker_payload"]["Status"],
+            json!("FinalFill")
+        );
+
+        let fills = sqlx::query(
+            "SELECT fill_status, cumulative_quantity, delta_quantity, average_price_local,
+                    ledger_id
+             FROM execution_fills WHERE execution_order_id = 1 ORDER BY id ASC",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read partial and final fill rows");
+        assert_eq!(fills.len(), 2);
+        assert_eq!(
+            fills[0].try_get::<String, _>("fill_status").unwrap(),
+            "PartialFill"
+        );
+        assert_eq!(
+            fills[0].try_get::<f64, _>("cumulative_quantity").unwrap(),
+            1.0
+        );
+        assert_eq!(fills[0].try_get::<f64, _>("delta_quantity").unwrap(), 1.0);
+        assert_eq!(
+            fills[0].try_get::<i64, _>("ledger_id").unwrap(),
+            partial_ledger_id
+        );
+        assert_eq!(
+            fills[1].try_get::<String, _>("fill_status").unwrap(),
+            "FinalFill"
+        );
+        assert_eq!(
+            fills[1].try_get::<f64, _>("cumulative_quantity").unwrap(),
+            4.0
+        );
+        assert_eq!(fills[1].try_get::<f64, _>("delta_quantity").unwrap(), 3.0);
+        assert_eq!(
+            fills[1].try_get::<f64, _>("average_price_local").unwrap(),
+            101.25
+        );
+        assert_eq!(
+            fills[1].try_get::<i64, _>("ledger_id").unwrap(),
+            final_ledger_id
+        );
+
+        let ledger_rows = sqlx::query(
+            "SELECT quantity, price_local FROM trade_ledger WHERE symbol = 'AMD:xnas'
+             ORDER BY id ASC",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read partial and final ledger rows");
+        assert_eq!(ledger_rows.len(), 2);
+        assert_eq!(ledger_rows[0].try_get::<f64, _>("quantity").unwrap(), 1.0);
+        assert_eq!(
+            ledger_rows[0].try_get::<f64, _>("price_local").unwrap(),
+            100.0
+        );
+        assert_eq!(ledger_rows[1].try_get::<f64, _>("quantity").unwrap(), 3.0);
+        assert_eq!(
+            ledger_rows[1].try_get::<f64, _>("price_local").unwrap(),
+            101.25
+        );
+
+        // A replay of the final cumulative quantity cannot produce a third
+        // accounting record after the partial and final rows are present.
+        let replay = sync_final_fill(&state, &order, "5039132483", 4.0, 101.25, &final_state)
+            .await
+            .expect("reconcile duplicate final fill");
+        assert_eq!(replay["fills"], json!(0));
+        assert_eq!(replay["delta_quantity"], json!(0.0));
+        assert_eq!(replay["ledger_id"], json!(final_ledger_id));
+        let fill_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_fills")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count execution fills")
+            .try_get::<i64, _>("count")
+            .expect("execution fill count");
+        let ledger_count = sqlx::query("SELECT COUNT(*) AS count FROM trade_ledger")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count ledger rows")
+            .try_get::<i64, _>("count")
+            .expect("trade ledger count");
+        assert_eq!(fill_count, 2);
+        assert_eq!(ledger_count, 2);
+    }
+
     #[test]
     fn splits_symbols_into_saxo_lookup_parts() {
         assert_eq!(
