@@ -2918,6 +2918,122 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn broker_lookup_miss_preserves_local_status_and_audits_not_found_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, error_text, broker_order_id, execution_result_json, currency
+            ) VALUES (1, 'broker_working', NULL, '5039132483', '{\"precheck\":true}', 'EUR')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working execution order");
+        let order = json!({
+            "id": 1,
+            "symbol": "ADS:xetr",
+            "status": "broker_working",
+            "currency": "EUR",
+            "execution_result_json": {"precheck": true}
+        });
+        let missing_state = broker_order_lookup_miss_state("5039132483");
+
+        // A missing open-order and activity lookup is not proof of expiry or fill.
+        // Preserve the local status and retain the broker-visibility evidence.
+        record_broker_order_event(
+            &state,
+            &order,
+            "5039132483",
+            "broker_sync_not_found",
+            Some("NotFound"),
+            None,
+            None,
+            None,
+            &missing_state,
+        )
+        .await
+        .expect("record missing broker lookup event");
+        update_order_broker_status(&state, &order, "broker_working", &missing_state, None)
+            .await
+            .expect("persist missing broker lookup state");
+
+        let stored = sqlx::query(
+            "SELECT status, error_text, execution_result_json
+             FROM execution_orders WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read unchanged execution order");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "broker_working"
+        );
+        assert!(
+            stored
+                .try_get::<Option<String>, _>("error_text")
+                .unwrap()
+                .is_none()
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("broker-sync result"),
+        )
+        .expect("parse stored broker-sync result");
+        assert_eq!(result["precheck"], json!(true));
+        assert_eq!(
+            result["broker_sync"]["broker_visibility"],
+            json!("not_found")
+        );
+        assert_eq!(result["broker_sync"]["activity_lookup"], json!("not_found"));
+
+        let event = sqlx::query(
+            "SELECT event_type, broker_order_id, broker_status, broker_substatus,
+                    broker_quantity, broker_price_local, raw_payload_json
+             FROM execution_order_events WHERE execution_order_id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read missing broker lookup event");
+        assert_eq!(
+            event.try_get::<String, _>("event_type").unwrap(),
+            "broker_sync_not_found"
+        );
+        assert_eq!(
+            event.try_get::<String, _>("broker_order_id").unwrap(),
+            "5039132483"
+        );
+        assert_eq!(
+            event.try_get::<String, _>("broker_status").unwrap(),
+            "NotFound"
+        );
+        assert!(
+            event
+                .try_get::<Option<String>, _>("broker_substatus")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            event
+                .try_get::<Option<f64>, _>("broker_quantity")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            event
+                .try_get::<Option<f64>, _>("broker_price_local")
+                .unwrap()
+                .is_none()
+        );
+        let event_payload: JsonValue = serde_json::from_str(
+            &event
+                .try_get::<String, _>("raw_payload_json")
+                .expect("missing lookup payload"),
+        )
+        .expect("parse missing lookup payload");
+        assert_eq!(event_payload["broker_visibility"], json!("not_found"));
+    }
+
     #[test]
     fn splits_symbols_into_saxo_lookup_parts() {
         assert_eq!(

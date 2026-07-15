@@ -10,6 +10,12 @@ updated: 2026-07-14
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-15] testing | Database-backed broker-sync not-found fixture
+
+- Added an isolated SQLite fixture for the case where Saxo returns neither an active open order nor an audit-activity record.
+- The local order remains `broker_working` with no error, while the missing broker visibility, lookup sources, broker order id, and audit event are retained for later reconciliation.
+- The test begins after the broker lookup result exists and makes no Saxo HTTP request.
+
 ## [2026-07-14] testing | Database-backed broker terminal-state fixture
 
 - Added an isolated SQLite fixture for the local persistence half of terminal broker synchronization.
