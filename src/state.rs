@@ -1488,6 +1488,20 @@ impl AppState {
     }
 
     pub async fn watchlists_payload(&self) -> Result<JsonValue> {
+        // Quote- and decision-derived entries older than this are dropped.
+        // The price monitor refreshes live symbols every few minutes, so an
+        // old portfolio_price_snapshots row is an orphan of a former holding,
+        // and recycling its sentiment ("Existing portfolio holding ...") into
+        // new decision prompts misleads the model into suggesting SELLs of
+        // positions the broker no longer holds.
+        let stale_after_days = yaml_i64(
+            &self.config,
+            &["strategy", "swing", "position_decision_stale_after_days"],
+        )
+        .unwrap_or(7)
+        .max(1);
+        let stale_cutoff = (Utc::now() - Duration::days(stale_after_days))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut seen = HashSet::new();
         let mut monitored = Vec::new();
         for row in self.position_items(250).await.unwrap_or_default() {
@@ -1504,7 +1518,10 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+            if symbol.is_empty() || text_value(&row, "updated_at") < stale_cutoff {
+                continue;
+            }
+            if !seen.insert(symbol.clone()) {
                 continue;
             }
             let mut item = row.as_object().cloned().unwrap_or_default();
@@ -1524,7 +1541,13 @@ impl AppState {
             }
             monitored.push(row);
         }
-        let decisions = self.latest_symbol_decisions().await.unwrap_or_default();
+        let decisions: HashMap<String, JsonValue> = self
+            .latest_symbol_decisions()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, decision)| text_value(decision, "created_at") >= stale_cutoff)
+            .collect();
         for (symbol, decision) in &decisions {
             if symbol.is_empty() || !seen.insert(symbol.clone()) {
                 continue;
@@ -1563,7 +1586,10 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+            if symbol.is_empty() || text_value(&row, "decision_created_at") < stale_cutoff {
+                continue;
+            }
+            if !seen.insert(symbol.clone()) {
                 continue;
             }
             let source = row
