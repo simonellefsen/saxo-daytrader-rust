@@ -135,7 +135,11 @@ strategy:
       - TSLA:xnas
     daily_indicators:
       enabled: true
-      max_symbols: 20
+      # 0 = full portfolio+watchlist universe (matches the Markov run, ~199
+      # symbols). A small cap starves BUY candidates of confluence evidence:
+      # the technical gate and Hermes then stand down every rotation into a
+      # name outside current holdings.
+      max_symbols: 0
       horizon_minutes: 1440
       sample_count: 260
       min_confluences: 3

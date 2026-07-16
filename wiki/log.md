@@ -10,6 +10,13 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-16] fix | Daily-indicator universe widened to the full watchlist
+
+- Verified the operator applied the broker-bootstrap SQL: 13 live positions now carry snapshot+lot rows (batch `broker-bootstrap-20260716T190000Z`), the 18 stale 2026-05-18 rows are excluded, and the max new unit cost (~11.8k DKK, ASML) stays under the 100k integrity threshold.
+- Raised `strategy.swing.daily_indicators.max_symbols` 20 → 0 (unlimited) in both configs, aligning the indicator universe with the Markov run (~199 portfolio+watchlist symbols, 199/172/27 nightly). The 20-symbol cap meant candidate BUYs outside current holdings never had technicals, so the confluence gate and Hermes stood down every rotation (DSV reports 170/174).
+- Prompt size stays bounded: `compact_indicator_context` already limits the decision prompt to the top 80 signals by confluence count; the Trading Manager gate reads per-symbol signals straight from the database.
+- Tonight's 23:45 Copenhagen run is the first full-universe pass; follow-up is confirming coverage and chart-API pacing.
+
 ## [2026-07-16] fix | Broker-authoritative cost-basis fallback for SELL fills
 
 - Found that `latest_position_cost_basis` only reads `position_snapshots`, whose latest rows date from the 2026-05-18 import — and BUY fills never write snapshots — so a SELL of ANY position acquired since (ARM, CSCO, AMAT, and even in-ledger DANSKE/CHEMM/AMGN buys) would book cost basis 0 and record the full sale proceeds as realised gain. With the flatten fix unblocking risk-off exits, this would have fired on the very next defensive SELL.
