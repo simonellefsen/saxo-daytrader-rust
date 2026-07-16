@@ -10,6 +10,13 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-16] fix | Broker-authoritative cost-basis fallback for SELL fills
+
+- Found that `latest_position_cost_basis` only reads `position_snapshots`, whose latest rows date from the 2026-05-18 import — and BUY fills never write snapshots — so a SELL of ANY position acquired since (ARM, CSCO, AMAT, and even in-ledger DANSKE/CHEMM/AMGN buys) would book cost basis 0 and record the full sale proceeds as realised gain. With the flatten fix unblocking risk-off exits, this would have fired on the very next defensive SELL.
+- Added a broker-authoritative fallback: when the local snapshot is missing or has no usable basis, the fill accounting derives basis from `broker_position_snapshots` open price (including costs when available) times quantity, FX-converted with the cached rate; if neither source exists it books zero but warns loudly. Stale zero-basis snapshot rows also defer to the live broker position.
+- Added fixtures: a full SELL final-fill reconciliation with no local snapshot (asserts the realised loss reflects the broker basis, not phantom gains) and a stale zero-basis snapshot deferring to the broker row. Full suite: 240 passed.
+- Prepared a broker-bootstrap SQL transaction (new import batch + snapshot/lot rows for the 13 live broker positions, stale May-18 rows marked excluded) — session permissions blocked applying it to the live database; it is staged for the operator.
+
 ## [2026-07-16] fix | Server-verified flatten-role SELL exits
 
 - Removed the `technical_gate` escape hatch that approved SELLs on the exact strategy role `FLATTEN` — a string the pipeline never emits (`risk_reduction_flatten` in practice), and a model-claimed label the gate should not have trusted anyway.

@@ -1834,17 +1834,71 @@ async fn latest_position_cost_basis(state: &AppState, symbol: &str) -> Result<Po
     ))
     .fetch_optional(&state.pool)
     .await?;
-    Ok(row
-        .as_ref()
-        .map(row_to_json)
-        .map(|row| PositionCostBasis {
-            quantity: value_f64(&row, "quantity"),
-            cost_basis_dkk: value_f64(&row, "cost_basis_dkk"),
-            cost_basis_local: value_f64(&row, "cost_basis_local"),
-            isin: json_text(&row, "isin"),
-            instrument_name: json_text(&row, "instrument_name"),
-        })
-        .unwrap_or_default())
+    let local = row.as_ref().map(row_to_json).map(|row| PositionCostBasis {
+        quantity: value_f64(&row, "quantity"),
+        cost_basis_dkk: value_f64(&row, "cost_basis_dkk"),
+        cost_basis_local: value_f64(&row, "cost_basis_local"),
+        isin: json_text(&row, "isin"),
+        instrument_name: json_text(&row, "instrument_name"),
+    });
+    if let Some(local) = local {
+        if local.quantity > 0.0 && local.cost_basis_dkk > 0.0 {
+            return Ok(local);
+        }
+    }
+    // Positions acquired outside the snapshot imports (broker-side buys or
+    // ledger buys that never wrote a snapshot) have no local basis; booking a
+    // zero basis would record the full sale proceeds as realised gain. Fall
+    // back to the broker-authoritative open price for the live position.
+    if let Some(broker) = broker_position_cost_basis(state, symbol).await? {
+        tracing::warn!(
+            "No usable local cost basis for {symbol}; using broker-authoritative open price as basis"
+        );
+        return Ok(broker);
+    }
+    tracing::warn!(
+        "No local or broker cost basis for {symbol}; SELL accounting will book a zero basis"
+    );
+    Ok(PositionCostBasis::default())
+}
+
+/// Broker-authoritative fallback basis: the open price (including costs when
+/// available) of the live broker position, converted to DKK via the cached FX
+/// rate for the position currency.
+async fn broker_position_cost_basis(
+    state: &AppState,
+    symbol: &str,
+) -> Result<Option<PositionCostBasis>> {
+    let row = sqlx::query(&format!(
+        "SELECT quantity, open_price_local, open_price_including_costs_local,
+                currency, isin, instrument_name
+         FROM broker_position_snapshots
+         WHERE symbol = '{}' AND quantity > 0
+         LIMIT 1",
+        sql_escape(symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(row) = row.as_ref().map(row_to_json) else {
+        return Ok(None);
+    };
+    let quantity = value_f64(&row, "quantity");
+    let open_price = Some(value_f64(&row, "open_price_including_costs_local"))
+        .filter(|price| *price > 0.0)
+        .unwrap_or_else(|| value_f64(&row, "open_price_local"));
+    if quantity <= 0.0 || open_price <= 0.0 {
+        return Ok(None);
+    }
+    let currency = json_text(&row, "currency").unwrap_or_else(|| "DKK".to_string());
+    let fx_rate = crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, &currency).await;
+    let cost_basis_local = open_price * quantity;
+    Ok(Some(PositionCostBasis {
+        quantity,
+        cost_basis_dkk: cost_basis_local * fx_rate,
+        cost_basis_local,
+        isin: json_text(&row, "isin"),
+        instrument_name: json_text(&row, "instrument_name"),
+    }))
 }
 
 async fn latest_batch_id(state: &AppState) -> Result<Option<String>> {
@@ -2828,6 +2882,22 @@ mod tests {
         .execute(&pool)
         .await
         .expect("create FX-rate test table");
+        sqlx::query(
+            "CREATE TABLE broker_position_snapshots (
+                symbol TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                open_price_local REAL,
+                open_price_including_costs_local REAL,
+                currency TEXT,
+                isin TEXT,
+                instrument_name TEXT,
+                can_be_closed INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create broker-position test table");
 
         AppState {
             config_path: PathBuf::from("saxo-order-claim-test.yaml"),
@@ -3681,6 +3751,137 @@ mod tests {
             .expect("trade ledger count");
         assert_eq!(fill_count, 1);
         assert_eq!(ledger_count, 1);
+    }
+
+    #[tokio::test]
+    async fn sell_final_fill_falls_back_to_broker_basis_when_local_snapshot_is_missing() {
+        let state = execution_order_test_state().await;
+        // No position_snapshots row exists for this symbol: the position was
+        // acquired outside the snapshot imports. Only the broker holds it.
+        sqlx::query(
+            "INSERT INTO broker_position_snapshots (
+                symbol, updated_at, quantity, open_price_local,
+                open_price_including_costs_local, currency, isin, instrument_name, can_be_closed
+            ) VALUES (
+                'ARM:xnas', '2026-07-16T18:31:00Z', 5, 370.684, 371.0,
+                'USD', 'US0420682058', 'ARM Holdings plc ADR', 1
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-authoritative position");
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132555', '{\"precheck\":true}', 'USD',
+                'SELL', 'ARM:xnas', 'live', 5, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working sell order");
+        let order = json!({
+            "id": 1,
+            "symbol": "ARM:xnas",
+            "action": "SELL",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 5.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 5.0,
+                "ExecutionPrice": 277.01,
+                "Currency": "USD"
+            }
+        });
+
+        let result = sync_final_fill(&state, &order, "5039132555", 5.0, 277.01, &broker_state)
+            .await
+            .expect("reconcile final sell fill without local snapshot");
+        let ledger_id = result["ledger_id"].as_i64().expect("sell ledger id");
+
+        let ledger = sqlx::query(
+            "SELECT isin, instrument_name, cost_basis_sold_dkk, cost_basis_sold_local,
+                    realised_gain_dkk, net_amount_dkk
+             FROM trade_ledger WHERE id = ?",
+        )
+        .bind(ledger_id)
+        .fetch_one(&state.pool)
+        .await
+        .expect("read reconciled sell ledger row");
+        // Basis comes from the broker open price including costs: 371.0 * 5
+        // shares in USD, converted with the static 7.0215 fallback rate.
+        let expected_basis_local = 371.0 * 5.0;
+        let expected_basis_dkk = expected_basis_local * 7.0215;
+        assert!(
+            (ledger.try_get::<f64, _>("cost_basis_sold_local").unwrap() - expected_basis_local)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (ledger.try_get::<f64, _>("cost_basis_sold_dkk").unwrap() - expected_basis_dkk).abs()
+                < 1e-6
+        );
+        // The realised loss must reflect the real basis instead of booking the
+        // full sale proceeds as gain against a zero basis.
+        let net = ledger.try_get::<f64, _>("net_amount_dkk").unwrap();
+        let realised = ledger.try_get::<f64, _>("realised_gain_dkk").unwrap();
+        assert!((realised - (net - expected_basis_dkk)).abs() < 1e-6);
+        assert!(realised < 0.0, "position sold under water must book a loss");
+        assert_eq!(
+            ledger.try_get::<String, _>("isin").unwrap(),
+            "US0420682058"
+        );
+        assert_eq!(
+            ledger.try_get::<String, _>("instrument_name").unwrap(),
+            "ARM Holdings plc ADR"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_zero_basis_snapshot_defers_to_broker_position() {
+        let state = execution_order_test_state().await;
+        // A stale snapshot row exists but carries no usable basis; the live
+        // broker position must win over it.
+        sqlx::query(
+            "INSERT INTO position_snapshots (
+                imported_at, instrument_name, symbol, isin, quantity, currency,
+                cost_basis_local, cost_basis_dkk, excluded
+            ) VALUES (
+                '2026-05-18T00:00:00Z', 'ARM Holdings plc ADR', 'ARM:xnas', NULL,
+                0, 'USD', 0, 0, 0
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed stale zero-quantity snapshot");
+        sqlx::query(
+            "INSERT INTO broker_position_snapshots (
+                symbol, updated_at, quantity, open_price_local,
+                open_price_including_costs_local, currency, isin, instrument_name, can_be_closed
+            ) VALUES (
+                'ARM:xnas', '2026-07-16T18:31:00Z', 5, 370.684, 371.0,
+                'USD', 'US0420682058', 'ARM Holdings plc ADR', 1
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-authoritative position");
+
+        let basis = latest_position_cost_basis(&state, "ARM:xnas")
+            .await
+            .expect("resolve cost basis");
+        assert_eq!(basis.quantity, 5.0);
+        assert!((basis.cost_basis_local - 1855.0).abs() < 1e-6);
+        assert!((basis.cost_basis_dkk - 1855.0 * 7.0215).abs() < 1e-6);
     }
 
     #[test]
