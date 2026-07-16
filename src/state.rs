@@ -1518,10 +1518,18 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || text_value(&row, "updated_at") < stale_cutoff {
+            if symbol.is_empty() || !seen.insert(symbol.clone()) {
                 continue;
             }
-            if !seen.insert(symbol.clone()) {
+            if text_value(&row, "updated_at") < stale_cutoff {
+                // Keep the symbol as a universe member (Markov and daily
+                // indicators build their asset lists from this payload), but
+                // drop the dead quote so it cannot masquerade as live data.
+                monitored.push(json!({
+                    "symbol": symbol,
+                    "quote_status": "stale_quote_dropped",
+                    "source": "price_snapshot_archive",
+                }));
                 continue;
             }
             let mut item = row.as_object().cloned().unwrap_or_default();
@@ -1586,10 +1594,20 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || text_value(&row, "decision_created_at") < stale_cutoff {
+            if symbol.is_empty() || !seen.insert(symbol.clone()) {
                 continue;
             }
-            if !seen.insert(symbol.clone()) {
+            if text_value(&row, "decision_created_at") < stale_cutoff {
+                // Historic sentiment defines most of the analysis universe
+                // (the 2026-05 snapshots span ~170 watchlist symbols), so the
+                // symbol stays a member — but its months-old sentiment,
+                // "existing portfolio holding" rationale, and prices are
+                // dropped instead of being recycled into prompts as current.
+                monitored.push(json!({
+                    "symbol": symbol,
+                    "quote_status": "stale_history",
+                    "source": "sentiment_archive",
+                }));
                 continue;
             }
             let source = row

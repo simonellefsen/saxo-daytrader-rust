@@ -13,9 +13,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 ## [2026-07-16] fix | Age-gate stale sentiment out of decision prompts
 
 - `watchlists_payload` merged four sources with no age gate: orphaned `portfolio_price_snapshots` rows (15 rows from 2026-05-07…06-26 — exactly the phantom former holdings NNIT, ORSTED, AMZN, PLTR, GOOGL, MSTR…), unbounded-age `latest_symbol_decisions` blobs, and `swing_sentiment_snapshots` whose 1,068 rows ALL date from 2026-05-05…08. This is what kept telling the model NNIT/ORSTED were "Existing portfolio holding" with 2026-06-24 quotes, producing five phantom SELL suggestions this week.
-- Entries older than `strategy.swing.position_decision_stale_after_days` (7d) are now dropped from all three derived sources; the backfilled `decision` annotations use the same filtered map. Live sources (current positions, fresh price rows, broker exposures) are untouched.
-- Side benefit: the Markov/daily-indicator universe (built from this payload) sheds the dead symbols, so nightly runs stop re-analyzing positions that left the book two months ago.
-- Full suite: 240 passed.
+- Entries older than `strategy.swing.position_decision_stale_after_days` (7d) are reduced to bare universe members (`{symbol, quote_status: stale_history}`): stale prices, sentiment, and decision blobs are stripped, and the backfilled `decision` annotations use an age-filtered map. Live sources (current positions, fresh price rows, broker exposures) are untouched.
+- Critical catch during live verification: the May sentiment archive IS the analysis universe — Markov's 199-asset nightly list is built from this payload, and a first version that dropped stale rows entirely shrank the live `all` category to 14 symbols. Membership is therefore preserved; only the stale data is removed. Follow-up: give the universe an explicit configured source instead of fossil sentiment rows.
+- Full suite: 240 passed; live payload verified after deploy (universe restored, phantom data gone).
 
 ## [2026-07-16] fix | Daily-indicator universe widened to the full watchlist
 
