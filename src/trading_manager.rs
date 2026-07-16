@@ -1107,6 +1107,28 @@ async fn run_for_report(
                 }
             }
         }
+        // Flatten-family SELLs are the model's risk-off exits. The role label
+        // alone never admits them: this process must independently confirm an
+        // under-water broker position or a negative Markov regime before a
+        // flatten may bypass neutral technical sentiment.
+        if !gate.approved && order.action == "SELL" && is_flatten_role(&order) {
+            match verified_risk_off_evidence(state, &order.symbol, Utc::now().date_naive()).await {
+                Some(evidence) => {
+                    gate = GateDecision {
+                        approved: true,
+                        reason: format!(
+                            "SELL flatten approved: model requested a risk-off exit and {evidence}."
+                        ),
+                    };
+                }
+                None => {
+                    gate.reason = format!(
+                        "{} Flatten fallback: no server-verified risk-off evidence (position is not under water and the Markov regime is not negative).",
+                        gate.reason
+                    );
+                }
+            }
+        }
         if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
@@ -1201,6 +1223,7 @@ async fn run_for_report(
             "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it. An operator override can resume BUYs for the current month and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
+            "SELL orders with a flatten-family strategy role (e.g. risk_reduction_flatten) can pass neutral technicals only when this process independently verifies risk-off evidence: an under-water broker position against a fresh verified close, or a fresh negative Markov regime signal. The role label alone never approves an order.",
             "SELL quantities are capped to the latest local holding quantity."
         ]
     });
@@ -1939,11 +1962,6 @@ fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) 
     let minimum = overlay_min_confluences
         .unwrap_or_else(|| value_f64(technical, "min_confluences").max(3.0) as i64)
         .max(1);
-    let strategy_role = order
-        .strategy_role
-        .as_deref()
-        .unwrap_or(&order.action)
-        .to_uppercase();
 
     match order.action.as_str() {
         "BUY" => {
@@ -1971,15 +1989,13 @@ fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) 
             }
         }
         "SELL" => {
-            if strategy_role == "FLATTEN"
-                || matches!(sentiment.as_str(), "SELL" | "UNDERWEIGHT")
-                || trend_bias == "bearish"
-            {
+            // A model-claimed flatten role never approves a SELL by itself;
+            // flatten-family exits go through the server-verified risk-off
+            // fallback at the call site instead.
+            if matches!(sentiment.as_str(), "SELL" | "UNDERWEIGHT") || trend_bias == "bearish" {
                 return GateDecision {
                     approved: true,
-                    reason:
-                        "SELL/FLATTEN approved by deteriorating technicals or explicit flatten role."
-                            .to_string(),
+                    reason: "SELL approved by deteriorating technicals.".to_string(),
                 };
             }
             GateDecision {
@@ -2152,6 +2168,88 @@ async fn latest_markov_signal(state: &AppState, symbol: &str) -> Result<Option<J
     );
     let row = sqlx::query(&sql).fetch_optional(&state.pool).await?;
     Ok(row.as_ref().map(row_to_json))
+}
+
+/// True when the model marked this order with a flatten-family strategy role
+/// (`flatten`, `risk_reduction_flatten`, `risk_reduce_flatten`, ...). The
+/// label only selects the server-verified risk-off fallback; it never
+/// approves anything on its own.
+fn is_flatten_role(order: &CandidateOrder) -> bool {
+    order
+        .strategy_role
+        .as_deref()
+        .is_some_and(|role| role.to_ascii_lowercase().contains("flatten"))
+}
+
+/// Server-verified evidence that a flatten-role SELL is a genuine risk-off
+/// exit: the broker-held position is under water against our own fresh
+/// daily-indicator close (both in the instrument's local currency), or the
+/// latest Markov regime signal for the symbol is negative. Returns a
+/// human-readable evidence description, or None when this process cannot
+/// independently confirm the model's risk-off claim.
+async fn verified_risk_off_evidence(
+    state: &AppState,
+    symbol: &str,
+    today: chrono::NaiveDate,
+) -> Option<String> {
+    let open_price = sqlx::query(&format!(
+        "SELECT open_price_local FROM broker_position_snapshots
+         WHERE symbol = '{}' AND quantity > 0 AND COALESCE(can_be_closed, 1) <> 0
+         LIMIT 1",
+        sql_escape(symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|row| row.try_get::<f64, _>("open_price_local").ok())
+    .filter(|price| *price > 0.0);
+    if let Some(open_price) = open_price {
+        let fresh_close = crate::daily_indicators::latest_indicator_signal(state, symbol)
+            .await
+            .ok()
+            .flatten()
+            .filter(|signal| signal.get("status").and_then(JsonValue::as_str) == Some("ok"))
+            .filter(|signal| {
+                signal
+                    .get("run_date")
+                    .and_then(JsonValue::as_str)
+                    .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+                    .is_some_and(|run_date| (today - run_date).num_days() <= INDICATOR_MAX_AGE_DAYS)
+            })
+            .map(|signal| value_f64(&signal, "close"))
+            .filter(|close| *close > 0.0);
+        if let Some(close) = fresh_close {
+            if close < open_price {
+                return Some(format!(
+                    "the position is under water (verified close {close:.2} below broker open price {open_price:.2}, local currency)"
+                ));
+            }
+        }
+    }
+    let markov = latest_markov_signal(state, symbol).await.ok().flatten()?;
+    if markov.get("status").and_then(JsonValue::as_str) != Some("ok") {
+        return None;
+    }
+    let fresh = markov
+        .get("run_date")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .is_some_and(|run_date| (today - run_date).num_days() <= INDICATOR_MAX_AGE_DAYS);
+    if !fresh {
+        return None;
+    }
+    let signed_signal = value_f64(&markov, "signed_signal");
+    if signed_signal < 0.0 {
+        let current_state = markov
+            .get("current_state")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("unknown");
+        return Some(format!(
+            "the Markov regime signal is negative ({signed_signal:.2}, state {current_state})"
+        ));
+    }
+    None
 }
 
 /// Fallback BUY gate: a fresh database-verified Markov long signal admits a
@@ -3840,6 +3938,249 @@ mod tests {
         assert!(technical_gate(&order("SELL", "SELL", "neutral", 1), None).approved);
         assert!(technical_gate(&order("SELL", "HOLD", "bearish", 1), None).approved);
         assert!(!technical_gate(&order("SELL", "HOLD", "bullish", 3), None).approved);
+    }
+
+    fn flatten_order(strategy_role: &str) -> CandidateOrder {
+        CandidateOrder::from_json(json!({
+            "symbol": "ARM:xnas",
+            "action": "SELL",
+            "quantity": 5,
+            "order_type": "Market",
+            "estimated_value_dkk": 23000,
+            "strategy_key": format!("test:flatten:{strategy_role}"),
+            "strategy_role": strategy_role,
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "sentiment": "HOLD",
+                    "trend_bias": "neutral",
+                    "confluence_count": 1,
+                    "min_confluences": 3
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn recognizes_flatten_family_strategy_roles() {
+        assert!(is_flatten_role(&flatten_order("risk_reduction_flatten")));
+        assert!(is_flatten_role(&flatten_order("risk_reduce_flatten")));
+        assert!(is_flatten_role(&flatten_order("FLATTEN")));
+        assert!(!is_flatten_role(&flatten_order("rebalance_underweight")));
+        assert!(!is_flatten_role(&order("SELL", "HOLD", "neutral", 1)));
+    }
+
+    #[test]
+    fn sell_gate_never_trusts_the_flatten_label_alone() {
+        // The model-claimed flatten role must not bypass neutral technicals in
+        // the pure gate; only the server-verified risk-off fallback may admit it.
+        let gate = technical_gate(&flatten_order("risk_reduction_flatten"), None);
+        assert!(!gate.approved, "{}", gate.reason);
+        let gate = technical_gate(&flatten_order("FLATTEN"), None);
+        assert!(!gate.approved, "{}", gate.reason);
+    }
+
+    async fn risk_off_test_state() -> AppState {
+        static INSTALL_DRIVERS: Once = Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory risk-off test database");
+        for statement in [
+            "CREATE TABLE broker_position_snapshots (
+                symbol TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                open_price_local REAL,
+                can_be_closed INTEGER
+            )",
+            "CREATE TABLE daily_indicator_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                run_date TEXT NOT NULL
+            )",
+            "CREATE TABLE daily_indicator_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                run_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                close REAL,
+                sma20 REAL,
+                sma50 REAL,
+                sma200 REAL,
+                rsi14 REAL,
+                macd REAL,
+                macd_signal REAL,
+                macd_histogram REAL,
+                atr14 REAL,
+                resistance REAL,
+                reward_risk REAL,
+                trend_bias TEXT,
+                sentiment TEXT,
+                confluence_count INTEGER,
+                min_confluences INTEGER,
+                confluences_json TEXT
+            )",
+            "CREATE TABLE markov_signal_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                run_date TEXT NOT NULL
+            )",
+            "CREATE TABLE markov_asset_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                run_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_state TEXT,
+                current_close REAL,
+                signed_signal REAL,
+                direction TEXT,
+                conviction REAL
+            )",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("create risk-off test table");
+        }
+
+        AppState {
+            config_path: PathBuf::from("risk-off-test.yaml"),
+            config: serde_yaml::from_str("execution:\n  mode: live\n  adapter: saxo\n")
+                .expect("parse risk-off test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn flatten_fallback_requires_server_verified_risk_off_evidence() {
+        let state = risk_off_test_state().await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
+
+        // No broker position and no Markov signal: the model's claim alone
+        // produces no evidence.
+        assert!(
+            verified_risk_off_evidence(&state, "ARM:xnas", today)
+                .await
+                .is_none()
+        );
+
+        sqlx::query(
+            "INSERT INTO daily_indicator_runs (created_at, run_date)
+             VALUES ('2026-07-15T21:45:00Z', '2026-07-15')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed indicator run");
+        sqlx::query(
+            "INSERT INTO broker_position_snapshots (symbol, updated_at, quantity, open_price_local, can_be_closed)
+             VALUES ('ARM:xnas', '2026-07-16T18:31:00Z', 5, 165.0, 1),
+                    ('CSCO:xnas', '2026-07-16T18:31:00Z', 14, 50.0, 1)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker positions");
+        sqlx::query(
+            "INSERT INTO daily_indicator_signals (run_id, symbol, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
+             VALUES (1, 'ARM:xnas', '2026-07-15', 'ok', 147.2, 'neutral', 'HOLD', 1, 3),
+                    (1, 'CSCO:xnas', '2026-07-15', 'ok', 60.0, 'neutral', 'HOLD', 1, 3)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed indicator signals");
+        sqlx::query(
+            "INSERT INTO markov_signal_runs (created_at, run_date)
+             VALUES ('2026-07-15T21:32:00Z', '2026-07-15')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed markov run");
+        sqlx::query(
+            "INSERT INTO markov_asset_signals (run_id, symbol, run_date, status, current_state, current_close, signed_signal, direction, conviction)
+             VALUES (1, 'CSCO:xnas', '2026-07-15', 'ok', 'Bull', 60.0, 0.31, 'long', 0.6),
+                    (1, 'NNIT:xcse', '2026-07-15', 'ok', 'Bear', 38.0, -0.32, 'short', 0.5)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed markov signals");
+
+        // Under-water broker position against a fresh verified close.
+        let arm = verified_risk_off_evidence(&state, "ARM:xnas", today).await;
+        assert!(
+            arm.as_deref().is_some_and(|e| e.contains("under water")),
+            "{arm:?}"
+        );
+
+        // Profitable position with a positive Markov regime: no evidence.
+        assert!(
+            verified_risk_off_evidence(&state, "CSCO:xnas", today)
+                .await
+                .is_none()
+        );
+
+        // A fresh negative Markov regime qualifies even without a broker row.
+        let nnit = verified_risk_off_evidence(&state, "NNIT:xcse", today).await;
+        assert!(
+            nnit.as_deref().is_some_and(|e| e.contains("Markov")),
+            "{nnit:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn flatten_fallback_ignores_stale_signals() {
+        let state = risk_off_test_state().await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
+
+        sqlx::query(
+            "INSERT INTO daily_indicator_runs (created_at, run_date)
+             VALUES ('2026-07-05T21:45:00Z', '2026-07-05')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed stale indicator run");
+        sqlx::query(
+            "INSERT INTO broker_position_snapshots (symbol, updated_at, quantity, open_price_local, can_be_closed)
+             VALUES ('ARM:xnas', '2026-07-16T18:31:00Z', 5, 165.0, 1)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker position");
+        sqlx::query(
+            "INSERT INTO daily_indicator_signals (run_id, symbol, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
+             VALUES (1, 'ARM:xnas', '2026-07-05', 'ok', 100.0, 'neutral', 'HOLD', 1, 3)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed stale indicator signal");
+        sqlx::query(
+            "INSERT INTO markov_signal_runs (created_at, run_date)
+             VALUES ('2026-07-05T21:32:00Z', '2026-07-05')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed stale markov run");
+        sqlx::query(
+            "INSERT INTO markov_asset_signals (run_id, symbol, run_date, status, current_state, current_close, signed_signal, direction, conviction)
+             VALUES (1, 'ARM:xnas', '2026-07-05', 'ok', 'Bear', 100.0, -0.4, 'short', 0.5)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed stale markov signal");
+
+        // Both the deep under-water close and the negative regime are older
+        // than the freshness window, so neither may authorize the exit.
+        assert!(
+            verified_risk_off_evidence(&state, "ARM:xnas", today)
+                .await
+                .is_none()
+        );
     }
 
     #[test]

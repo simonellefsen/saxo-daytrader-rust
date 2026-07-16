@@ -3,12 +3,31 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-14
+updated: 2026-07-16
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-16] fix | Server-verified flatten-role SELL exits
+
+- Removed the `technical_gate` escape hatch that approved SELLs on the exact strategy role `FLATTEN` — a string the pipeline never emits (`risk_reduction_flatten` in practice), and a model-claimed label the gate should not have trusted anyway.
+- Added a server-verified risk-off fallback in `run_for_report`: when a flatten-family SELL is blocked on neutral technicals, it is approved only if this process independently confirms the broker position is under water (fresh daily-indicator close below the broker open price, local currency) or the latest Markov regime signal is negative; both checks enforce the 5-day freshness window.
+- Documented the behavior in manager JSON execution notes; added pure-gate tests (flatten label alone never approves) and database-backed fixtures for the under-water, profitable-with-positive-regime, negative-regime-only, and stale-signal cases. Full suite: 238 passed.
+
+## [2026-07-16] roadmap | Live-system week review: blocked risk-off exits, phantom holdings, stale lots
+
+- Reviewed the other agent's 25 commits since 2026-07-11 (per-tab lazy loads, server pagination, DB-metadata redaction, deploy provenance, fail-closed scheduled reports, execution-queue admission guards, Hermes preflight/advice-delta/counterfactuals, candidate scoring waterfall, and ten workflow-test fixtures) and audited the live system (image `20260715215717`, pods healthy, all signal pipelines fresh).
+- Week performance (2026-07-09 → 07-16): portfolio 283.7k → 259.3k DKK (−24.4k, −8.6%); month P/L −35.1k against the goal baseline; July realised +12,293 DKK (ADI +9,937, NVDA +2,356) on 20 trades, so the bleed is unrealised decay in the open book. Last executed trade was 2026-07-14; reports 171–175 approved zero orders.
+- Root causes added as roadmap rows: (P0) `technical_gate`'s flatten escape hatch requires exactly `FLATTEN` while the model emits `risk_reduction_flatten`, so the ARM:xnas risk-off SELL (−4,221 DKK unrealised) was skipped twice on "HOLD with neutral trend"; (P0) prompts recycle stale decision-history sentiment, so NNIT/ORSTED still read "Existing portfolio holding" with 2026-06-24 quotes and produced 5 phantom SELL suggestions the broker-authoritative guard had to block; (P1) `position_lots` still hold the full May-18 book (18 symbols, ~740k basis incl. TSLA×163/NOVOb×235) while the broker holds a different 13-symbol portfolio — the next outside-ledger SELL re-creates the cost-basis corruption class repaired 2026-07-08; (P1) the nightly indicator universe is only 20 symbols, so candidate BUYs like DSV:xcse always fail confluence and Hermes stands them down; (P2) `monthly_loss_halt_dkk` was loosened −10k → −50k in e80621e without a documented rationale.
+- Refreshed the Hermes "unstick the experiment review queue" row: five proposals now sit in `pending_review`, oldest 2026-06-16; aging alerts fire but nothing closes the loop.
+
+## [2026-07-15] testing | Database-backed SELL final-fill cost-basis fixture
+
+- Added isolated SQLite coverage for a confirmed four-share SELL final fill using the latest local `position_snapshots` cost basis.
+- The fixture verifies pro-rated local/DKK basis, the XNAS minimum commission, net proceeds, realised P/L, instrument identity, execution-fill linkage, and replay idempotency.
+- It starts after broker response data is available and never calls Saxo HTTP.
 
 ## [2026-07-15] testing | Database-backed partial-to-final fill delta fixture
 
