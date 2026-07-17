@@ -63,9 +63,13 @@ const APP_SCRIPT: &str = r#"
         const payload = await response.json();
         const report = payload.report || {};
         const status = report.status || "";
-        if (status && status !== "xai_deferred" && status !== "pending") {
-          const id = report.id ? `&report_id=${encodeURIComponent(report.id)}` : "";
-          window.location.href = `${base}/?view=decisions${id}`;
+        const id = report.id ? String(report.id) : "";
+        const baselineId = pending.dataset.baselineReportId || "";
+        const baselineStatus = pending.dataset.baselineReportStatus || "";
+        const changed = id !== baselineId || status !== baselineStatus;
+        if (changed && status && status !== "xai_deferred" && status !== "pending") {
+          const suffix = id ? `&report_id=${encodeURIComponent(id)}` : "";
+          window.location.href = `${base}/?view=decisions${suffix}`;
         }
       } catch (_) {
       }
@@ -1606,11 +1610,24 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .iter()
         .find(|row| matches!(text(row, "status").as_str(), "xai_deferred" | "pending"))
         .cloned();
-    let report_generation_pending = pending_report.is_some();
+    let report_generation_pending = pending_report.is_some() || data.manual_report_in_flight;
     let pending_report_id = pending_report
         .as_ref()
         .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
         .unwrap_or(0);
+    // Baseline for the completion poll: the newest report at render time.
+    // The poll only navigates when the latest report differs from this,
+    // so a spawned manual run cannot cause a reload loop while it works.
+    let baseline_report_id = data
+        .reports
+        .first()
+        .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
+        .unwrap_or(0);
+    let baseline_report_status = data
+        .reports
+        .first()
+        .map(|row| text(row, "status"))
+        .unwrap_or_default();
     let generate_label = if report_generation_pending {
         "Generating Report..."
     } else {
@@ -1675,8 +1692,14 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div {
                     class: "notice-banner",
                     "data-decision-report-pending": "true",
+                    "data-baseline-report-id": "{baseline_report_id}",
+                    "data-baseline-report-status": "{baseline_report_status}",
                     strong { "Decision report is running" }
-                    span { "Report #{pending_report_id} is still pending. The page will refresh when it completes or fails." }
+                    if pending_report.is_some() {
+                        span { "Report #{pending_report_id} is still pending. The page will refresh when it completes or fails." }
+                    } else {
+                        span { "A manual report is being generated in the background. The page will refresh when it completes or fails." }
+                    }
                 }
             }
             div { class: "mini-grid decision-summary-grid",

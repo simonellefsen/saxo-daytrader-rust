@@ -48,6 +48,7 @@ pub struct DashboardView {
     pub execution_fills: Vec<JsonValue>,
     pub execution_events: Vec<JsonValue>,
     pub reports: Vec<JsonValue>,
+    pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<JsonValue>,
     pub journal_entries: Vec<JsonValue>,
     pub scheduler_cycles: Vec<JsonValue>,

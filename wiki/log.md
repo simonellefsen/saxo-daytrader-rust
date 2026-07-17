@@ -10,6 +10,13 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-17] fix | Manual decision report runs detached (10s connection drop)
+
+- Operator report: Generate Report died after ~10s with ERR_CONNECTION_CLOSED on the ngrok URL. Root cause: the action handler ran the entire pipeline — prompt build, OpenRouter call (600s budget), Trading Manager, execution queue — synchronously inside one HTTP request through the OAuth-wrapped ngrok tunnel. It only ever "responded fast" before because the dead API key made OpenRouter 401 instantly; with a real key the multi-minute request outlived some hop's timeout, and the disconnect made axum cancel the whole pipeline mid-flight.
+- The handler now claims a single manual-report slot (`manual_report_claim` runtime setting, 15-minute stale takeover; double-clicks refused), spawns the pipeline detached with `tokio::spawn`, and redirects to the decisions view immediately. A dropped browser connection can no longer cancel report generation.
+- The decisions view shows the existing "running" banner whenever a claim is fresh (`manual_report_in_flight` on `DashboardView`), and the completion poll is baseline-aware: it records the newest report id+status at render and only navigates when the latest report differs — the old status-only poll would have reload-looped every 4s while a spawned run worked.
+- Tests: claim exclusivity + release, stale-claim takeover. Full suite: 249 passed.
+
 ## [2026-07-17] feature | OpenRouter API key rotation via Settings
 
 - Decision reports failed all day with OpenRouter HTTP 401 "User not found" after the operator rotated the API key: the running pods bake `ENV:OPENROUTER_API_KEY` from a deploy-time secret, so a rotation used to require re-running the deploy script with the new env value.

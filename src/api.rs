@@ -1092,14 +1092,41 @@ async fn action_generate_decision_report_with_mode(
     state: Arc<AppState>,
     mode: DecisionReportActionMode,
 ) -> Response {
-    match xai_decision::submit_manual_decision_report(&state).await {
+    // The full pipeline (prompt build, provider call with a 600s budget,
+    // Trading Manager, execution queue) takes minutes — far longer than the
+    // browser/tunnel keeps a request open, and a dropped connection would
+    // cancel the pipeline mid-flight. Run it detached and return at once;
+    // the decisions view polls until the new report lands.
+    match state.claim_manual_decision_report().await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("manual decision report already in flight; not starting another");
+            return redirect_to_app(&state, "/?view=decisions").into_response();
+        }
+        Err(err) => {
+            error!("manual decision report claim failed: {err:#}");
+            return json_result(Err(err));
+        }
+    }
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        run_manual_decision_report_pipeline(&task_state, mode).await;
+        if let Err(err) = task_state.release_manual_decision_report_claim().await {
+            warn!("releasing manual decision report claim failed: {err:#}");
+        }
+    });
+    redirect_to_app(&state, "/?view=decisions").into_response()
+}
+
+async fn run_manual_decision_report_pipeline(state: &AppState, mode: DecisionReportActionMode) {
+    match xai_decision::submit_manual_decision_report(state).await {
         Ok(report) => {
             let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
             let mut immediate = json!({"status": decision_report_action_skip_status(mode)});
             if decision_report_action_runs_immediate_pipeline(mode, &report) {
-                let manager = run_trading_manager_cycle(&state).await;
+                let manager = run_trading_manager_cycle(state).await;
                 let execution = match &manager {
-                    Ok(_) => run_saxo_execution_queue(&state).await,
+                    Ok(_) => run_saxo_execution_queue(state).await,
                     Err(err) => Err(anyhow::anyhow!(
                         "Trading Manager failed before execution: {err:#}"
                     )),
@@ -1129,13 +1156,11 @@ async fn action_generate_decision_report_with_mode(
                     .unwrap_or("unknown"),
                 dry_run = mode == DecisionReportActionMode::DryRun,
                 immediate = %immediate,
-                "manual deferred xAI decision report submitted"
+                "manual xAI decision report pipeline completed"
             );
-            redirect_to_app(&state, &format!("/?view=decisions&report_id={id}")).into_response()
         }
         Err(err) => {
             error!("manual decision report generation failed: {err:#}");
-            json_result(Err(err))
         }
     }
 }

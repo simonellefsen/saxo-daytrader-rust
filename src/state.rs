@@ -1104,6 +1104,7 @@ impl AppState {
             execution_fills,
             execution_events,
             reports,
+            manual_report_in_flight: self.manual_decision_report_in_flight().await,
             decision_pulse_statuses,
             journal_entries,
             scheduler_cycles,
@@ -4604,6 +4605,60 @@ impl AppState {
             .filter(|key| !key.is_empty())
     }
 
+    /// Claims the single manual decision-report slot. Returns false when a
+    /// fresh claim is already held, so double-clicks and concurrent operators
+    /// cannot start overlapping manual pipelines. A claim older than the
+    /// stale window is treated as abandoned (crashed task) and taken over.
+    pub async fn claim_manual_decision_report(&self) -> Result<bool> {
+        const STALE_AFTER_SECONDS: i64 = 900;
+        if let Some(existing) = self.runtime_setting("manual_report_claim").await? {
+            let fresh = existing
+                .get("started_at")
+                .and_then(JsonValue::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|started| {
+                    Utc::now().signed_duration_since(started.with_timezone(&Utc))
+                        < Duration::seconds(STALE_AFTER_SECONDS)
+                })
+                .unwrap_or(false);
+            if fresh {
+                return Ok(false);
+            }
+        }
+        let value = json!({
+            "started_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        });
+        self.save_runtime_setting("manual_report_claim", &value)
+            .await?;
+        Ok(true)
+    }
+
+    pub async fn release_manual_decision_report_claim(&self) -> Result<()> {
+        sqlx::query("DELETE FROM runtime_settings WHERE key = 'manual_report_claim'")
+            .execute(&self.pool)
+            .await
+            .context("releasing manual decision report claim")?;
+        Ok(())
+    }
+
+    /// True while a spawned manual decision-report pipeline holds a fresh
+    /// claim — drives the dashboard's pending banner and button state.
+    pub async fn manual_decision_report_in_flight(&self) -> bool {
+        const STALE_AFTER_SECONDS: i64 = 900;
+        match self.runtime_setting("manual_report_claim").await {
+            Ok(Some(existing)) => existing
+                .get("started_at")
+                .and_then(JsonValue::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|started| {
+                    Utc::now().signed_duration_since(started.with_timezone(&Utc))
+                        < Duration::seconds(STALE_AFTER_SECONDS)
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Saves (or, for an empty submission, clears) the runtime API-key
     /// override. Returns the masked status only — the key is never echoed.
     pub async fn save_ai_api_key(&self, api_key: &str) -> Result<JsonValue> {
@@ -7130,6 +7185,40 @@ mod tests {
         assert_eq!(status["source"], json!("missing"));
         assert_eq!(status["masked"], JsonValue::Null);
         assert_eq!(state.effective_ai_api_key().await, None);
+    }
+
+    #[tokio::test]
+    async fn manual_report_claim_is_exclusive_until_released() {
+        let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
+
+        assert!(!state.manual_decision_report_in_flight().await);
+        assert!(state.claim_manual_decision_report().await.expect("claim"));
+        assert!(state.manual_decision_report_in_flight().await);
+        // A second click while the pipeline runs must not start another.
+        assert!(!state.claim_manual_decision_report().await.expect("re-claim"));
+
+        state
+            .release_manual_decision_report_claim()
+            .await
+            .expect("release claim");
+        assert!(!state.manual_decision_report_in_flight().await);
+        assert!(state.claim_manual_decision_report().await.expect("claim again"));
+    }
+
+    #[tokio::test]
+    async fn stale_manual_report_claim_is_taken_over() {
+        let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
+        // A claim from a crashed task, older than the stale window.
+        state
+            .save_runtime_setting(
+                "manual_report_claim",
+                &json!({"started_at": "2026-07-17T00:00:00Z"}),
+            )
+            .await
+            .expect("seed stale claim");
+
+        assert!(!state.manual_decision_report_in_flight().await);
+        assert!(state.claim_manual_decision_report().await.expect("take over"));
     }
 
     #[test]
