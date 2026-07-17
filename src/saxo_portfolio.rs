@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
@@ -83,17 +86,93 @@ pub async fn refresh_broker_snapshots(state: &AppState) -> Result<JsonValue> {
     save_broker_balance(state, &updated_at, &balance_payload).await?;
     save_broker_account(state, &updated_at, &session, &accounts_payload).await?;
 
+    let divergences = match local_broker_quantity_divergences(state, &positions).await {
+        Ok(divergences) => divergences,
+        Err(error) => {
+            tracing::warn!("local/broker quantity divergence check failed: {error:#}");
+            Vec::new()
+        }
+    };
+    if !divergences.is_empty() {
+        tracing::warn!(
+            count = divergences.len(),
+            details = %serde_json::to_string(&divergences).unwrap_or_default(),
+            "Local position book diverges from broker open quantities"
+        );
+    }
+
     info!(
         positions = positions.len(),
         exposures = exposures.len(),
+        quantity_divergences = divergences.len(),
         "Saxo broker read model refreshed"
     );
     Ok(json!({
         "status": "ok",
         "updated_at": updated_at,
         "positions": positions.len(),
-        "exposures": exposures.len()
+        "exposures": exposures.len(),
+        "quantity_divergences": divergences
     }))
+}
+
+/// Compares the local position book against the broker positions just fetched
+/// and returns one entry per symbol whose open quantity differs. The local
+/// book is maintained at fill time, so any divergence means the book missed a
+/// fill, a corporate action, or an out-of-band broker change — exactly the
+/// states where SELL accounting and flat-position gates go wrong silently.
+async fn local_broker_quantity_divergences(
+    state: &AppState,
+    broker_positions: &[BrokerPositionRow],
+) -> Result<Vec<JsonValue>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT symbol, quantity
+         FROM position_snapshots
+         WHERE excluded = 0
+         ORDER BY imported_at DESC, id DESC",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("reading local position book for divergence check")?;
+    let mut local: HashMap<String, f64> = HashMap::new();
+    for row in &rows {
+        let Ok(symbol) = row.try_get::<String, _>("symbol") else {
+            continue;
+        };
+        let quantity = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
+        // First row per symbol is the latest snapshot, matching the basis reader.
+        local.entry(symbol).or_insert(quantity);
+    }
+    let mut divergences = Vec::new();
+    let mut broker_symbols: HashSet<&str> = HashSet::new();
+    for position in broker_positions {
+        broker_symbols.insert(position.symbol.as_str());
+        let local_quantity = local.get(&position.symbol).copied().unwrap_or(0.0);
+        if (local_quantity - position.quantity).abs() > 1e-6 {
+            divergences.push(json!({
+                "symbol": position.symbol,
+                "local_quantity": local_quantity,
+                "broker_quantity": position.quantity
+            }));
+        }
+    }
+    for (symbol, quantity) in &local {
+        if *quantity > 1e-6 && !broker_symbols.contains(symbol.as_str()) {
+            divergences.push(json!({
+                "symbol": symbol,
+                "local_quantity": quantity,
+                "broker_quantity": 0.0
+            }));
+        }
+    }
+    divergences.sort_by(|left, right| {
+        left["symbol"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["symbol"].as_str().unwrap_or_default())
+    });
+    Ok(divergences)
 }
 
 fn parse_broker_positions(payload: &JsonValue) -> Vec<BrokerPositionRow> {
@@ -583,5 +662,97 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].symbol, "AJG:xnys");
         assert_eq!(rows[0].profit_loss_on_trade, 5.5);
+    }
+
+    fn broker_row(symbol: &str, quantity: f64) -> BrokerPositionRow {
+        BrokerPositionRow {
+            symbol: symbol.to_string(),
+            instrument_name: symbol.to_string(),
+            isin: None,
+            uic: None,
+            asset_type: None,
+            quantity,
+            currency: Some("USD".to_string()),
+            open_price_local: 100.0,
+            open_price_including_costs_local: 100.5,
+            execution_time_open: None,
+            value_date: None,
+            market_state: None,
+            can_be_closed: true,
+            raw_payload: json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn flags_quantity_divergence_between_local_book_and_broker() {
+        use std::{path::PathBuf, sync::Once};
+
+        use sqlx::any::AnyPoolOptions;
+
+        static INSTALL_DRIVERS: Once = Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory divergence test database");
+        sqlx::query(
+            "CREATE TABLE position_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                imported_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                excluded INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create position-snapshot test table");
+        // AMD has an older superseded row (99) plus the current row (10):
+        // only the latest row per symbol may be compared. NNIT is local-only
+        // (sold at the broker), ARM is broker-only (bought outside the book),
+        // and AJG matches exactly.
+        for (imported_at, symbol, quantity, excluded) in [
+            ("2026-07-01T00:00:00Z", "AMD:xnas", 99.0, 0),
+            ("2026-07-16T00:00:00Z", "AMD:xnas", 10.0, 0),
+            ("2026-07-16T00:00:00Z", "NNIT:xcse", 5.0, 0),
+            ("2026-07-16T00:00:00Z", "AJG:xnys", 2.0, 0),
+            ("2026-07-16T00:00:00Z", "ORSTED:xcse", 7.0, 1),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO position_snapshots (imported_at, symbol, quantity, excluded)
+                 VALUES ('{imported_at}', '{symbol}', {quantity}, {excluded})"
+            ))
+            .execute(&pool)
+            .await
+            .expect("seed position snapshot");
+        }
+        let state = AppState {
+            config_path: PathBuf::from("saxo-portfolio-divergence-test.yaml"),
+            config: serde_yaml::from_str("saxo:\n  environment: sim\n")
+                .expect("parse divergence test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+        let broker_positions = vec![
+            broker_row("AMD:xnas", 8.0),
+            broker_row("AJG:xnys", 2.0),
+            broker_row("ARM:xnas", 5.0),
+        ];
+
+        let divergences = local_broker_quantity_divergences(&state, &broker_positions)
+            .await
+            .expect("run divergence check");
+
+        assert_eq!(divergences.len(), 3);
+        assert_eq!(divergences[0]["symbol"], json!("AMD:xnas"));
+        assert_eq!(divergences[0]["local_quantity"], json!(10.0));
+        assert_eq!(divergences[0]["broker_quantity"], json!(8.0));
+        assert_eq!(divergences[1]["symbol"], json!("ARM:xnas"));
+        assert_eq!(divergences[1]["local_quantity"], json!(0.0));
+        assert_eq!(divergences[1]["broker_quantity"], json!(5.0));
+        assert_eq!(divergences[2]["symbol"], json!("NNIT:xcse"));
+        assert_eq!(divergences[2]["local_quantity"], json!(5.0));
+        assert_eq!(divergences[2]["broker_quantity"], json!(0.0));
     }
 }

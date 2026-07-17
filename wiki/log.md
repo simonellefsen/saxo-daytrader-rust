@@ -10,6 +10,12 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-17] fix | Local-vs-broker quantity divergence alert
+
+- `refresh_broker_snapshots` now runs `local_broker_quantity_divergences` on every scheduler cycle: the latest local `position_snapshots` quantity per symbol (excluded = 0, matching the basis reader's semantics) is compared against the broker positions just fetched, in both directions — broker positions the local book under/over-states AND local positions the broker no longer holds. Divergences are logged as a structured warning and returned in the refresh result (`quantity_divergences`).
+- This is the watchdog for the fill-time book keeping landed earlier today: any missed fill, corporate action, or out-of-band broker change now surfaces within one 10-minute cycle instead of silently corrupting SELL accounting or the flat-position starter gate.
+- Housekeeping: the host disk hit 100% (118 MiB free) from accumulated Docker build cache; pruned 113.9 GB of build cache plus 27 GB of unused images (all rebuildable), restoring 130 GiB free. Cluster pods were unaffected (their images live in the k8s node's containerd store).
+
 ## [2026-07-17] fix | Fills maintain the local position book
 
 - Verified overnight: the 2026-07-16 23:47 indicator run covered 199 symbols (up from 20), confirming the widened universe landed correctly.
