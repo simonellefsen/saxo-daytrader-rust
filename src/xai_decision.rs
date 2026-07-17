@@ -97,7 +97,7 @@ async fn submit_deferred_report(
     let model = state.effective_xai_model().await?;
     let request_json = build_chat_request(state, &prompt, &model)?;
 
-    let Some(api_key) = ai_api_key(state) else {
+    let Some(api_key) = ai_api_key(state).await else {
         let report = insert_xai_error_report(
             state,
             &created_at,
@@ -340,7 +340,7 @@ async fn poll_one_deferred_report(
     state: &AppState,
     pending: &PendingDeferredReport,
 ) -> Result<JsonValue> {
-    let Some(api_key) = yaml_string(&state.config, &["xai", "api_key"]) else {
+    let Some(api_key) = ai_api_key(state).await else {
         let key_name = ai_api_key_env_name(state);
         return Ok(json!({
             "status": "pending",
@@ -1920,8 +1920,10 @@ fn ai_provider(state: &AppState) -> String {
         .to_lowercase()
 }
 
-fn ai_api_key(state: &AppState) -> Option<String> {
-    yaml_string(&state.config, &["xai", "api_key"])
+async fn ai_api_key(state: &AppState) -> Option<String> {
+    // Runtime override from Settings wins over the config/env value so a
+    // rotated key takes effect without a redeploy.
+    state.effective_ai_api_key().await
 }
 
 fn ai_api_key_env_name(state: &AppState) -> &'static str {

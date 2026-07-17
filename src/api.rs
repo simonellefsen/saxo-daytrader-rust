@@ -18,7 +18,7 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
+        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
@@ -84,6 +84,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             post(update_localization_settings),
         )
         .route("/api/settings/ai", post(update_ai_settings))
+        .route("/api/settings/ai-key", post(update_ai_api_key))
         .route("/api/saxo/auth/status", get(saxo_auth_status))
         .route(
             "/api/saxo/auth/start",
@@ -451,6 +452,31 @@ async fn update_ai_settings(
         }
         Err(err) => {
             warn!("AI settings update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+async fn update_ai_api_key(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<AiApiKeyRequest>,
+) -> Response {
+    // The submitted key must never reach logs or the response body; only
+    // the masked status is observable.
+    match state
+        .save_ai_api_key(request.api_key.as_deref().unwrap_or(""))
+        .await
+    {
+        Ok(status) => {
+            info!(
+                source = %status.get("source").and_then(JsonValue::as_str).unwrap_or(""),
+                configured = status.get("configured").and_then(JsonValue::as_bool).unwrap_or(false),
+                "AI API key override updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("AI API key update failed: {err:#}");
             json_result(Err(err))
         }
     }

@@ -4545,7 +4545,89 @@ impl AppState {
                 }
             }
         }
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("api_key".to_string(), self.ai_api_key_status_value().await?);
+        }
         Ok(value)
+    }
+
+    /// Masked status of the AI provider API key. Never contains the key
+    /// itself — only whether one is configured, where it comes from, and a
+    /// short masked preview so the operator can recognize which key is live.
+    pub async fn ai_api_key_status_value(&self) -> Result<JsonValue> {
+        let override_entry = self.runtime_setting("ai_api_key").await?;
+        let override_key = override_entry
+            .as_ref()
+            .and_then(|entry| entry.get("api_key"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string);
+        let config_key = yaml_string(&self.config, &["xai", "api_key"])
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty());
+        let (source, key) = if let Some(key) = override_key {
+            ("runtime", Some(key))
+        } else if let Some(key) = config_key {
+            ("config", Some(key))
+        } else {
+            ("missing", None)
+        };
+        Ok(json!({
+            "configured": key.is_some(),
+            "source": source,
+            "masked": key.as_deref().map(mask_api_key),
+            "updated_at": override_entry
+                .as_ref()
+                .and_then(|entry| entry.get("updated_at"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        }))
+    }
+
+    /// The AI provider API key the process should use right now: the
+    /// runtime override saved from Settings wins over the config/env value,
+    /// so a rotated key takes effect without a redeploy.
+    pub async fn effective_ai_api_key(&self) -> Option<String> {
+        if let Ok(Some(saved)) = self.runtime_setting("ai_api_key").await {
+            if let Some(key) = saved
+                .get("api_key")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+            {
+                return Some(key.to_string());
+            }
+        }
+        yaml_string(&self.config, &["xai", "api_key"])
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+    }
+
+    /// Saves (or, for an empty submission, clears) the runtime API-key
+    /// override. Returns the masked status only — the key is never echoed.
+    pub async fn save_ai_api_key(&self, api_key: &str) -> Result<JsonValue> {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            sqlx::query("DELETE FROM runtime_settings WHERE key = 'ai_api_key'")
+                .execute(&self.pool)
+                .await
+                .context("clearing AI API key override")?;
+            return self.ai_api_key_status_value().await;
+        }
+        if api_key.len() > 400 {
+            anyhow::bail!("API key is too long");
+        }
+        if !api_key.chars().all(|ch| ch.is_ascii_graphic()) {
+            anyhow::bail!("API key contains whitespace or non-printable characters");
+        }
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let value = json!({
+            "api_key": api_key,
+            "updated_at": updated_at
+        });
+        self.save_runtime_setting("ai_api_key", &value).await?;
+        self.ai_api_key_status_value().await
     }
 
     pub async fn save_ai_settings(&self, model: &str) -> Result<JsonValue> {
@@ -4556,9 +4638,11 @@ impl AppState {
         if model.len() > 160 {
             anyhow::bail!("AI model is too long");
         }
+        // '~' is OpenRouter's floating-alias prefix (e.g. ~openai/gpt-5) and
+        // must round-trip unmodified.
         if !model
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | ':'))
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | ':' | '~'))
         {
             anyhow::bail!("AI model contains unsupported characters");
         }
@@ -5612,6 +5696,19 @@ impl AppState {
     async fn select_json(&self, sql: &str) -> Result<Vec<JsonValue>> {
         let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_json).collect())
+    }
+}
+
+/// Short recognizable preview of an API key: first 6 + last 4 characters
+/// for long keys, fully redacted for short ones.
+fn mask_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() >= 16 {
+        let head: String = chars[..6].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
+    } else {
+        "•••".to_string()
     }
 }
 
@@ -6948,6 +7045,108 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn runtime_settings_test_state(config_yaml: &str) -> AppState {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory runtime-settings test database");
+        sqlx::query(
+            "CREATE TABLE runtime_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create runtime-settings test table");
+        AppState {
+            config_path: std::path::PathBuf::from("runtime-settings-test.yaml"),
+            config: serde_yaml::from_str(config_yaml).expect("parse runtime-settings test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn ai_api_key_override_wins_over_config_and_is_never_echoed() {
+        let state = runtime_settings_test_state(
+            "xai:\n  provider: openrouter\n  api_key: sk-or-old-config-key-1234\n",
+        )
+        .await;
+
+        // Before any override the config key is effective.
+        assert_eq!(
+            state.effective_ai_api_key().await.as_deref(),
+            Some("sk-or-old-config-key-1234")
+        );
+        let status = state
+            .ai_api_key_status_value()
+            .await
+            .expect("read initial key status");
+        assert_eq!(status["source"], json!("config"));
+        assert_eq!(status["configured"], json!(true));
+
+        // Saving a rotated key makes it effective immediately, and the
+        // returned status carries only a masked preview.
+        let status = state
+            .save_ai_api_key("  sk-or-v1-new-rotated-key-5678  ")
+            .await
+            .expect("save rotated key");
+        assert_eq!(
+            state.effective_ai_api_key().await.as_deref(),
+            Some("sk-or-v1-new-rotated-key-5678")
+        );
+        assert_eq!(status["source"], json!("runtime"));
+        let masked = status["masked"].as_str().expect("masked preview");
+        assert_eq!(masked, "sk-or-…5678");
+        assert!(!status.to_string().contains("sk-or-v1-new-rotated-key-5678"));
+
+        // Clearing the override falls back to the config key.
+        let status = state.save_ai_api_key("").await.expect("clear override");
+        assert_eq!(status["source"], json!("config"));
+        assert_eq!(
+            state.effective_ai_api_key().await.as_deref(),
+            Some("sk-or-old-config-key-1234")
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_api_key_rejects_non_printable_input_and_reports_missing() {
+        let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
+
+        assert!(state.save_ai_api_key("bad key with spaces").await.is_err());
+        assert!(state.save_ai_api_key("bad\nkey").await.is_err());
+
+        let status = state
+            .ai_api_key_status_value()
+            .await
+            .expect("read missing key status");
+        assert_eq!(status["configured"], json!(false));
+        assert_eq!(status["source"], json!("missing"));
+        assert_eq!(status["masked"], JsonValue::Null);
+        assert_eq!(state.effective_ai_api_key().await, None);
+    }
+
+    #[test]
+    fn masked_api_key_never_reveals_short_keys() {
+        assert_eq!(mask_api_key("sk-or-v1-abcdefgh-9999"), "sk-or-…9999");
+        assert_eq!(mask_api_key("short-key"), "•••");
+    }
+
+    #[tokio::test]
+    async fn ai_model_setting_accepts_openrouter_floating_alias() {
+        let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
+        let saved = state
+            .save_ai_settings("~openai/gpt-5.6-terra")
+            .await
+            .expect("save floating-alias model");
+        assert_eq!(saved["model"], json!("~openai/gpt-5.6-terra"));
+    }
 
     #[test]
     fn hermes_context_self_check_marks_complete_when_all_sources_seen() {

@@ -267,6 +267,23 @@ fn UserMenu(
     let ai_model = fallback_text(&ai_settings, "model", "openai/gpt-5.5");
     let ai_source = fallback_text(&ai_settings, "source", "config");
     let ai_config_model = fallback_text(&ai_settings, "config_model", "openai/gpt-5.5");
+    let key_status = ai_settings.get("api_key").cloned().unwrap_or_default();
+    let key_source = fallback_text(&key_status, "source", "missing");
+    let key_hint = if key_status
+        .get("configured")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        let masked = fallback_text(&key_status, "masked", "•••");
+        let updated = key_status
+            .get("updated_at")
+            .and_then(JsonValue::as_str)
+            .map(|value| format!(" · updated {value}"))
+            .unwrap_or_default();
+        format!("Active key: {masked} · source: {key_source}{updated}")
+    } else {
+        "No API key configured — decision reports cannot be submitted.".to_string()
+    };
     rsx! {
         details { class: "user-menu",
             summary {
@@ -297,6 +314,19 @@ fn UserMenu(
                     }
                     div { class: "settings-hint", "Active: {ai_model} · source: {ai_source} · config: {ai_config_model}" }
                     button { class: "button", r#type: "submit", "Save AI model" }
+                }
+                form { method: "post", action: "/api/settings/ai-key", class: "settings-form settings-form-wide",
+                    input { r#type: "hidden", name: "return_to", value: "{return_to}" }
+                    label { "OpenRouter API key"
+                        input {
+                            r#type: "password",
+                            name: "api_key",
+                            placeholder: "sk-or-… (leave empty to clear the override)",
+                            autocomplete: "off",
+                        }
+                    }
+                    div { class: "settings-hint", "{key_hint}" }
+                    button { class: "button", r#type: "submit", "Save API key" }
                 }
                 form { method: "post", action: "/api/settings/localization", class: "settings-form",
                     input { r#type: "hidden", name: "return_to", value: "{return_to}" }

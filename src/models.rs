@@ -189,6 +189,12 @@ pub struct AiSettingsRequest {
     pub return_to: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct AiApiKeyRequest {
+    pub api_key: Option<String>,
+    pub return_to: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SaxoCallbackParams {
     pub code: Option<String>,

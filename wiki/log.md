@@ -10,6 +10,14 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-17] feature | OpenRouter API key rotation via Settings
+
+- Decision reports failed all day with OpenRouter HTTP 401 "User not found" after the operator rotated the API key: the running pods bake `ENV:OPENROUTER_API_KEY` from a deploy-time secret, so a rotation used to require re-running the deploy script with the new env value.
+- Settings now has an "OpenRouter API key" password field posting to `/api/settings/ai-key`. The key is stored as a `runtime_settings` override (`ai_api_key`) and `effective_ai_api_key` makes both AI call sites (decision submit + deferred poll) prefer it over the config/env value — a rotated key takes effect immediately, no redeploy. Submitting an empty field clears the override back to config.
+- The key is never echoed: status surfaces only `{configured, source, masked (first 6 + last 4), updated_at}`, the request struct derives no Debug, and the handler logs source/configured only. Validation rejects whitespace/non-printable input.
+- Also fixed in passing: the AI model validation now accepts OpenRouter's `~` floating-alias prefix (e.g. `~openai/gpt-5`), which the character allowlist previously rejected.
+- Tests: override-wins-over-config + never-echoed, reject-invalid + missing-status, mask behavior, `~` alias round-trip. Full suite: 247 passed.
+
 ## [2026-07-17] fix | Local-vs-broker quantity divergence alert
 
 - `refresh_broker_snapshots` now runs `local_broker_quantity_divergences` on every scheduler cycle: the latest local `position_snapshots` quantity per symbol (excluded = 0, matching the basis reader's semantics) is compared against the broker positions just fetched, in both directions — broker positions the local book under/over-states AND local positions the broker no longer holds. Divergences are logged as a structured warning and returned in the refresh result (`quantity_divergences`).
