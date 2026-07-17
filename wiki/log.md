@@ -10,6 +10,14 @@ updated: 2026-07-16
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-17] fix | Fills maintain the local position book
+
+- Verified overnight: the 2026-07-16 23:47 indicator run covered 199 symbols (up from 20), confirming the widened universe landed correctly.
+- Closed the root cause behind the recurring zero-basis class: `sync_final_fill` now calls `apply_fill_to_local_book` for every reconciled fill delta. BUY fills add quantity and commission-inclusive basis to the current `position_snapshots` row (creating it — batch-linked, FK-safe — when the position is new) and insert an idempotent `position_lots` row (`buy-fill:{order}:{ledger}`, `source_type = 'buy_fill'`). SELL fills remove quantity and prorated basis, so a full exit leaves quantity 0 and a later re-buy cannot inherit the dead position's basis.
+- Ordering is deliberate: the trade ledger reads the pre-sale basis first, then the book is decremented — and the fill-delta guard makes replays no-ops, so the book never double-moves.
+- New positions reuse the latest import batch (FK to `import_batches`), so `latest_position_quantity`'s latest-batch filter keeps seeing the whole book; a dedicated `fill-sync-*` batch is created only on an empty database.
+- Tests: extended the SELL idempotency test with decrement assertions and added `buy_final_fill_writes_local_snapshot_and_lot_without_http` + `buy_final_fill_tops_up_existing_snapshot_in_place`. Full suite: 242 passed.
+
 ## [2026-07-16] fix | Age-gate stale sentiment out of decision prompts
 
 - `watchlists_payload` merged four sources with no age gate: orphaned `portfolio_price_snapshots` rows (15 rows from 2026-05-07…06-26 — exactly the phantom former holdings NNIT, ORSTED, AMZN, PLTR, GOOGL, MSTR…), unbounded-age `latest_symbol_decisions` blobs, and `swing_sentiment_snapshots` whose 1,068 rows ALL date from 2026-05-05…08. This is what kept telling the model NNIT/ORSTED were "Existing portfolio holding" with 2026-06-24 quotes, producing five phantom SELL suggestions this week.

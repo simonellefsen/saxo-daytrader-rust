@@ -1432,6 +1432,16 @@ async fn sync_final_fill(
             broker_state,
         )
         .await?;
+        apply_fill_to_local_book(
+            state,
+            order,
+            &side,
+            delta_quantity,
+            average_price_local,
+            &currency,
+            new_ledger_id,
+        )
+        .await?;
         ledger_id = Some(new_ledger_id);
         inserted_fill = 1;
         // Backfill the order row so the UI shows the fill price for market
@@ -1899,6 +1909,204 @@ async fn broker_position_cost_basis(
         isin: json_text(&row, "isin"),
         instrument_name: json_text(&row, "instrument_name"),
     }))
+}
+
+/// Applies a broker fill to the local position book (position_snapshots +
+/// position_lots) so positions this system opens carry a real local cost
+/// basis instead of depending on the broker fallback at SELL time. BUY fills
+/// add quantity and commission-inclusive basis (creating the snapshot and a
+/// lot when the position is new); SELL fills remove quantity and prorated
+/// basis so subsequent proration stays correct across re-buys.
+async fn apply_fill_to_local_book(
+    state: &AppState,
+    order: &JsonValue,
+    side: &str,
+    delta_quantity: f64,
+    average_price_local: f64,
+    currency: &str,
+    ledger_id: i64,
+) -> Result<()> {
+    if delta_quantity <= 0.0 || average_price_local <= 0.0 {
+        return Ok(());
+    }
+    let symbol = order_text(order, "symbol");
+    let order_id = value_i64(order, "id");
+    let snapshot = sqlx::query(&format!(
+        "SELECT id, quantity, cost_basis_local, cost_basis_dkk
+         FROM position_snapshots
+         WHERE symbol = '{}' AND excluded = 0
+         ORDER BY imported_at DESC, id DESC
+         LIMIT 1",
+        sql_escape(&symbol)
+    ))
+    .fetch_optional(&state.pool)
+    .await?
+    .as_ref()
+    .map(row_to_json);
+
+    if side == "SELL" {
+        let Some(snapshot) = snapshot else {
+            tracing::warn!(
+                "SELL fill for {symbol} has no local snapshot to decrement; the trade ledger basis came from the broker fallback"
+            );
+            return Ok(());
+        };
+        let held = value_f64(&snapshot, "quantity");
+        if held <= 0.0 {
+            return Ok(());
+        }
+        let remaining = (held - delta_quantity).max(0.0);
+        let fraction = remaining / held;
+        sqlx::query(&format!(
+            "UPDATE position_snapshots
+             SET quantity = {remaining},
+                 cost_basis_local = {},
+                 cost_basis_dkk = {}
+             WHERE id = {}",
+            value_f64(&snapshot, "cost_basis_local") * fraction,
+            value_f64(&snapshot, "cost_basis_dkk") * fraction,
+            value_i64(&snapshot, "id")
+        ))
+        .execute(&state.pool)
+        .await
+        .context("decrementing local position snapshot for SELL fill")?;
+        return Ok(());
+    }
+
+    let fx_rate = crate::fx::cached_or_static_fx_rate_to_dkk(&state.pool, currency).await;
+    let gross_local = average_price_local * delta_quantity;
+    let gross_dkk = gross_local * fx_rate;
+    let commission_dkk = commission_dkk_for_fill(order, gross_dkk, currency);
+    let commission_local = if fx_rate.abs() > f64::EPSILON {
+        commission_dkk / fx_rate
+    } else {
+        0.0
+    };
+    let basis_local = gross_local + commission_local;
+    let basis_dkk = gross_dkk + commission_dkk;
+    let now = now_iso();
+    let batch_id = fill_sync_batch_id(state).await?;
+    let raw_payload = serde_json::to_string(&json!({
+        "source": "fill_sync",
+        "execution_order_id": order_id,
+        "ledger_id": ledger_id,
+        "delta_quantity": delta_quantity,
+        "average_price_local": average_price_local,
+        "commission_dkk": commission_dkk,
+        "currency": currency,
+        "fx_rate_to_dkk": fx_rate
+    }))?;
+
+    match snapshot {
+        Some(snapshot) => {
+            let new_quantity = value_f64(&snapshot, "quantity").max(0.0) + delta_quantity;
+            let new_basis_local = value_f64(&snapshot, "cost_basis_local") + basis_local;
+            let new_basis_dkk = value_f64(&snapshot, "cost_basis_dkk") + basis_dkk;
+            sqlx::query(&format!(
+                "UPDATE position_snapshots
+                 SET quantity = {new_quantity},
+                     cost_basis_local = {new_basis_local},
+                     cost_basis_dkk = {new_basis_dkk},
+                     open_price_local = {}
+                 WHERE id = {}",
+                new_basis_local / new_quantity,
+                value_i64(&snapshot, "id")
+            ))
+            .execute(&state.pool)
+            .await
+            .context("adding BUY fill to local position snapshot")?;
+        }
+        None => {
+            let instrument_name =
+                json_text(order, "instrument_name").unwrap_or_else(|| symbol.clone());
+            let isin_sql = sql_opt_text(json_text(order, "isin").as_deref());
+            sqlx::query(&format!(
+                "INSERT INTO position_snapshots (
+                    batch_id, imported_at, instrument_name, symbol, isin, quantity, currency,
+                    open_price_local, current_price_local, cost_basis_local, cost_basis_dkk,
+                    market_value_local, market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk,
+                    allocation_pct, status, account_name, asset_class, market_status,
+                    value_date, source_csv, excluded, raw_payload_json
+                ) VALUES (
+                    '{}', '{}', '{}', '{}', {}, {}, '{}', {}, {}, {}, {}, {}, {}, 0, 0, 0,
+                    'Open', 'Fill-Sync', 'Stock', 'Open', '{}', 'fill_sync', 0, '{}'
+                )",
+                sql_escape(&batch_id),
+                sql_escape(&now),
+                sql_escape(&instrument_name),
+                sql_escape(&symbol),
+                isin_sql,
+                delta_quantity,
+                sql_escape(currency),
+                basis_local / delta_quantity,
+                average_price_local,
+                basis_local,
+                basis_dkk,
+                gross_local,
+                gross_dkk,
+                sql_escape(&now),
+                sql_escape(&raw_payload)
+            ))
+            .execute(&state.pool)
+            .await
+            .context("creating local position snapshot for BUY fill")?;
+        }
+    }
+
+    let instrument_name = json_text(order, "instrument_name").unwrap_or_else(|| symbol.clone());
+    sqlx::query(&format!(
+        "INSERT INTO position_lots (
+            lot_id, batch_id, created_at, acquired_at, symbol, isin, instrument_name,
+            quantity_original, currency, cost_basis_total_local, cost_basis_total_dkk,
+            fx_rate_to_dkk, source_type, source_reference, raw_payload_json
+        ) VALUES (
+            'buy-fill:{order_id}:{ledger_id}', '{}', '{}', '{}', '{}', {}, '{}', {}, '{}',
+            {}, {}, {}, 'buy_fill', 'execution_order:{order_id}', '{}'
+        )
+        ON CONFLICT (lot_id) DO NOTHING",
+        sql_escape(&batch_id),
+        sql_escape(&now),
+        sql_escape(&now),
+        sql_escape(&symbol),
+        sql_opt_text(json_text(order, "isin").as_deref()),
+        sql_escape(&instrument_name),
+        delta_quantity,
+        sql_escape(currency),
+        basis_local,
+        basis_dkk,
+        fx_rate,
+        sql_escape(&raw_payload)
+    ))
+    .execute(&state.pool)
+    .await
+    .context("recording position lot for BUY fill")?;
+    Ok(())
+}
+
+/// Batch id used for fill-sync snapshot/lot rows. Reuses the latest import
+/// batch so latest-batch queries keep seeing the whole book; creates a
+/// dedicated batch only when the database has none yet.
+async fn fill_sync_batch_id(state: &AppState) -> Result<String> {
+    if let Some(batch) = latest_batch_id(state).await? {
+        return Ok(batch);
+    }
+    let now = now_iso();
+    let batch_id = format!("fill-sync-{}", Utc::now().format("%Y%m%dT%H%M%SZ"));
+    sqlx::query(&format!(
+        "INSERT INTO import_batches (
+            batch_id, imported_at, source_csv, source_position_count,
+            imported_position_count, excluded_position_count, notes
+        ) VALUES (
+            '{}', '{}', 'fill_sync', 0, 0, 0,
+            'Batch created by broker fill sync for positions opened outside any import.'
+        )",
+        sql_escape(&batch_id),
+        sql_escape(&now)
+    ))
+    .execute(&state.pool)
+    .await
+    .context("creating fill-sync import batch")?;
+    Ok(batch_id)
 }
 
 async fn latest_batch_id(state: &AppState) -> Result<Option<String>> {
@@ -2848,24 +3056,68 @@ mod tests {
         sqlx::query(
             "CREATE TABLE position_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT,
                 imported_at TEXT NOT NULL,
                 instrument_name TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 isin TEXT,
                 quantity REAL NOT NULL,
                 currency TEXT NOT NULL,
+                open_price_local REAL,
+                current_price_local REAL,
                 cost_basis_local REAL,
                 cost_basis_dkk REAL NOT NULL,
-                excluded INTEGER NOT NULL DEFAULT 0
+                market_value_local REAL,
+                market_value_dkk REAL,
+                unrealised_pnl_dkk REAL,
+                daily_pnl_dkk REAL,
+                allocation_pct REAL,
+                status TEXT,
+                account_name TEXT,
+                asset_class TEXT,
+                market_status TEXT,
+                value_date TEXT,
+                source_csv TEXT,
+                excluded INTEGER NOT NULL DEFAULT 0,
+                exclusion_reason TEXT,
+                raw_payload_json TEXT
             )",
         )
         .execute(&pool)
         .await
         .expect("create position-snapshot test table");
         sqlx::query(
+            "CREATE TABLE position_lots (
+                lot_id TEXT PRIMARY KEY,
+                batch_id TEXT,
+                created_at TEXT NOT NULL,
+                acquired_at TEXT,
+                symbol TEXT NOT NULL,
+                isin TEXT,
+                figi TEXT,
+                instrument_name TEXT,
+                quantity_original REAL NOT NULL,
+                currency TEXT NOT NULL,
+                cost_basis_total_local REAL,
+                cost_basis_total_dkk REAL NOT NULL,
+                fx_rate_to_dkk REAL NOT NULL,
+                source_type TEXT NOT NULL,
+                source_reference TEXT,
+                raw_payload_json TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create position-lot test table");
+        sqlx::query(
             "CREATE TABLE import_batches (
                 batch_id TEXT PRIMARY KEY,
-                imported_at TEXT NOT NULL
+                imported_at TEXT NOT NULL,
+                source_csv TEXT,
+                source_position_count INTEGER,
+                imported_position_count INTEGER,
+                excluded_position_count INTEGER,
+                notes TEXT
             )",
         )
         .execute(&pool)
@@ -3731,12 +3983,32 @@ mod tests {
         );
         assert_eq!(fill.try_get::<i64, _>("ledger_id").unwrap(), ledger_id);
 
+        // The local book must shrink with the sale: 10 - 4 = 6 shares keep
+        // 6/10 of the original basis.
+        let snapshot = sqlx::query(
+            "SELECT quantity, cost_basis_local, cost_basis_dkk
+             FROM position_snapshots WHERE symbol = 'AMD:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read decremented position snapshot");
+        assert!((snapshot.try_get::<f64, _>("quantity").unwrap() - 6.0).abs() < 1e-9);
+        assert!((snapshot.try_get::<f64, _>("cost_basis_local").unwrap() - 480.0).abs() < 1e-6);
+        assert!((snapshot.try_get::<f64, _>("cost_basis_dkk").unwrap() - 3370.32).abs() < 1e-6);
+
         let replay = sync_final_fill(&state, &order, "5039132484", 4.0, 150.0, &broker_state)
             .await
             .expect("reconcile duplicate final sell fill");
         assert_eq!(replay["fills"], json!(0));
         assert_eq!(replay["delta_quantity"], json!(0.0));
         assert_eq!(replay["ledger_id"], json!(ledger_id));
+        let replayed_snapshot = sqlx::query(
+            "SELECT quantity FROM position_snapshots WHERE symbol = 'AMD:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read snapshot after replay");
+        assert!((replayed_snapshot.try_get::<f64, _>("quantity").unwrap() - 6.0).abs() < 1e-9);
         let fill_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_fills")
             .fetch_one(&state.pool)
             .await
@@ -3751,6 +4023,200 @@ mod tests {
             .expect("trade ledger count");
         assert_eq!(fill_count, 1);
         assert_eq!(ledger_count, 1);
+    }
+
+    #[tokio::test]
+    async fn buy_final_fill_writes_local_snapshot_and_lot_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132485', '{\"precheck\":true}', 'USD',
+                'BUY', 'AMD:xnas', 'live', 2, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working buy order");
+        let order = json!({
+            "id": 1,
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 2.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 2.0,
+                "ExecutionPrice": 101.25,
+                "Currency": "USD"
+            }
+        });
+
+        let first = sync_final_fill(&state, &order, "5039132485", 2.0, 101.25, &broker_state)
+            .await
+            .expect("reconcile final buy fill");
+        assert_eq!(first["fills"], json!(1));
+        let ledger_id = first["ledger_id"].as_i64().expect("buy ledger id");
+
+        // The buy must open a local position: 2 x 101.25 USD plus the minimum
+        // Nasdaq commission (3 USD = 21.0645 DKK at the static rate).
+        let snapshot = sqlx::query(
+            "SELECT quantity, currency, cost_basis_local, cost_basis_dkk, open_price_local
+             FROM position_snapshots WHERE symbol = 'AMD:xnas' AND excluded = 0",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read created position snapshot");
+        assert!((snapshot.try_get::<f64, _>("quantity").unwrap() - 2.0).abs() < 1e-9);
+        assert_eq!(snapshot.try_get::<String, _>("currency").unwrap(), "USD");
+        assert!((snapshot.try_get::<f64, _>("cost_basis_local").unwrap() - 205.5).abs() < 1e-6);
+        assert!((snapshot.try_get::<f64, _>("cost_basis_dkk").unwrap() - 1442.91825).abs() < 1e-6);
+        assert!((snapshot.try_get::<f64, _>("open_price_local").unwrap() - 102.75).abs() < 1e-6);
+
+        let lot = sqlx::query(
+            "SELECT lot_id, quantity_original, cost_basis_total_local, cost_basis_total_dkk,
+                    source_type, source_reference
+             FROM position_lots WHERE symbol = 'AMD:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read created position lot");
+        assert_eq!(
+            lot.try_get::<String, _>("lot_id").unwrap(),
+            format!("buy-fill:1:{ledger_id}")
+        );
+        assert!((lot.try_get::<f64, _>("quantity_original").unwrap() - 2.0).abs() < 1e-9);
+        assert!((lot.try_get::<f64, _>("cost_basis_total_local").unwrap() - 205.5).abs() < 1e-6);
+        assert!(
+            (lot.try_get::<f64, _>("cost_basis_total_dkk").unwrap() - 1442.91825).abs() < 1e-6
+        );
+        assert_eq!(lot.try_get::<String, _>("source_type").unwrap(), "buy_fill");
+        assert_eq!(
+            lot.try_get::<String, _>("source_reference").unwrap(),
+            "execution_order:1"
+        );
+
+        // A later SELL now finds a usable local basis, so realised gains are
+        // measured against real cost instead of zero.
+        let basis = latest_position_cost_basis(&state, "AMD:xnas")
+            .await
+            .expect("read basis after buy fill");
+        assert!((basis.quantity - 2.0).abs() < 1e-9);
+        assert!((basis.cost_basis_local - 205.5).abs() < 1e-6);
+
+        // Replaying the same cumulative fill must not grow the book.
+        let replay = sync_final_fill(&state, &order, "5039132485", 2.0, 101.25, &broker_state)
+            .await
+            .expect("reconcile duplicate buy fill");
+        assert_eq!(replay["fills"], json!(0));
+        let snapshot_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM position_snapshots WHERE excluded = 0")
+                .fetch_one(&state.pool)
+                .await
+                .expect("count snapshots")
+                .try_get::<i64, _>("count")
+                .expect("snapshot count");
+        let lot_count = sqlx::query("SELECT COUNT(*) AS count FROM position_lots")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count lots")
+            .try_get::<i64, _>("count")
+            .expect("lot count");
+        assert_eq!(snapshot_count, 1);
+        assert_eq!(lot_count, 1);
+        let replayed = sqlx::query(
+            "SELECT quantity FROM position_snapshots WHERE symbol = 'AMD:xnas' AND excluded = 0",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read snapshot after buy replay");
+        assert!((replayed.try_get::<f64, _>("quantity").unwrap() - 2.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn buy_final_fill_tops_up_existing_snapshot_in_place() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO position_snapshots (
+                imported_at, instrument_name, symbol, isin, quantity, currency,
+                cost_basis_local, cost_basis_dkk, excluded
+            ) VALUES (
+                '2026-07-15T00:00:00Z', 'AMD Inc.', 'AMD:xnas', 'US0079031078',
+                10, 'USD', 800, 5617.2, 0
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed existing position snapshot");
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132486', '{\"precheck\":true}', 'USD',
+                'BUY', 'AMD:xnas', 'live', 2, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed broker-working top-up buy order");
+        let order = json!({
+            "id": 1,
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 2.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let broker_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 2.0,
+                "ExecutionPrice": 101.25,
+                "Currency": "USD"
+            }
+        });
+
+        sync_final_fill(&state, &order, "5039132486", 2.0, 101.25, &broker_state)
+            .await
+            .expect("reconcile top-up buy fill");
+
+        // The existing snapshot row grows in place instead of forking a
+        // second row: 10 + 2 shares, 800 + 205.5 USD basis.
+        let snapshot_count =
+            sqlx::query("SELECT COUNT(*) AS count FROM position_snapshots WHERE excluded = 0")
+                .fetch_one(&state.pool)
+                .await
+                .expect("count snapshots")
+                .try_get::<i64, _>("count")
+                .expect("snapshot count");
+        assert_eq!(snapshot_count, 1);
+        let snapshot = sqlx::query(
+            "SELECT quantity, cost_basis_local, cost_basis_dkk, open_price_local
+             FROM position_snapshots WHERE symbol = 'AMD:xnas' AND excluded = 0",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read topped-up position snapshot");
+        assert!((snapshot.try_get::<f64, _>("quantity").unwrap() - 12.0).abs() < 1e-9);
+        assert!((snapshot.try_get::<f64, _>("cost_basis_local").unwrap() - 1005.5).abs() < 1e-6);
+        assert!((snapshot.try_get::<f64, _>("cost_basis_dkk").unwrap() - 7060.11825).abs() < 1e-6);
+        assert!(
+            (snapshot.try_get::<f64, _>("open_price_local").unwrap() - 1005.5 / 12.0).abs() < 1e-6
+        );
     }
 
     #[tokio::test]
