@@ -3,12 +3,19 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-16
+updated: 2026-07-21
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-21] fix | Fail closed on ambiguous Saxo order placement
+
+- Placement errors containing `TradeNotCompleted`, `timed out`, or `timeout` now move the order to `broker_state_unknown` rather than `execution_failed`. The queue cannot claim or resubmit that order automatically.
+- The stored audit payload retains the completed precheck, sanitized order payload, stable `ExternalReference`, and the `x-request-id` used for placement; account scope is excluded from the diagnostic payload.
+- Unknown SELL placement keeps its local reservation, while the Execution view and Overview integrity check show it as a warning. A dedicated `broker_state_unknown` event records the uncertainty for later broker/ENS reconciliation.
+- Follow-up remains broker-authored reconciliation by activity/open-order lookup or ENS replay before the hold is cleared. The runtime intentionally does not infer that an absent response means the broker did not receive the order.
 
 ## [2026-07-17] fix | Manual decision report runs detached (10s connection drop)
 

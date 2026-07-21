@@ -28,6 +28,9 @@ const ACTIVE_SELL_STATUSES: &[&str] = &[
     "broker_amended",
     "broker_partially_filled",
     "broker_replace_requested",
+    // A placement timeout can still have reached Saxo. Keep a SELL reservation
+    // until an operator reconciles it instead of permitting a duplicate SELL.
+    "broker_state_unknown",
     "waiting_for_market_open",
     "waiting_for_cash_settlement",
     "waiting_for_virtual_cash_budget",
@@ -301,7 +304,12 @@ pub(crate) async fn outstanding_order_count(state: &AppState) -> Result<i64> {
     let statuses = ACTIVE_SELL_STATUSES
         .iter()
         .chain(BROKER_SYNC_STATUSES)
-        .filter(|status| !matches!(**status, "waiting_for_market_open" | "pending_approval"))
+        .filter(|status| {
+            !matches!(
+                **status,
+                "waiting_for_market_open" | "pending_approval" | "broker_state_unknown"
+            )
+        })
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .map(|status| format!("'{}'", sql_escape(status)))
@@ -717,7 +725,36 @@ async fn execute_order(
             .await;
         }
     };
-    let broker_result = place_order(state, session, order_id, &request_payload).await?;
+    let request_id = placement_request_id(order_id);
+    let broker_result = match place_order(state, session, &request_id, &request_payload).await {
+        Ok(result) => result,
+        Err(err) if placement_error_is_state_unknown(&err) => {
+            let error_text = format!(
+                "Saxo order placement outcome is unknown; automatic retry is blocked pending broker reconciliation: {err}"
+            );
+            return fail_order(
+                state,
+                order_id,
+                "broker_state_unknown",
+                &error_text,
+                &json!({
+                    "adapter": "saxo",
+                    "precheck": precheck,
+                    "payload": sanitized_order_payload(&request_payload),
+                    "placement_uncertainty": {
+                        "classification": "broker_state_unknown",
+                        "request_id": request_id,
+                        "external_reference": external_reference(order_id),
+                        "retry_blocked": true,
+                        "next_action": "Reconcile the order in Saxo before any manual retry.",
+                        "error": err.to_string()
+                    }
+                }),
+            )
+            .await;
+        }
+        Err(err) => return Err(err),
+    };
     let broker_order_id = broker_order_id(&broker_result);
     let execution_result = json!({
         "precheck": precheck,
@@ -1073,19 +1110,37 @@ async fn precheck_order(
 async fn place_order(
     state: &AppState,
     session: &JsonValue,
-    order_id: i64,
+    request_id: &str,
     payload: &JsonValue,
 ) -> Result<JsonValue> {
-    let request_id = format!("saxo-rust-{order_id}-{}", Utc::now().format("%Y%m%d%H%M%S"));
     saxo_post_json(
         state,
         session,
         "/trade/v2/orders",
-        Some(&request_id),
+        Some(request_id),
         payload,
         "Order placement",
     )
     .await
+}
+
+fn placement_request_id(order_id: i64) -> String {
+    format!("saxo-rust-{order_id}-{}", Utc::now().format("%Y%m%d%H%M%S"))
+}
+
+/// An order placement response can be absent even after Saxo accepted the request.
+/// Do not make these errors retryable automatically: the stored request id and
+/// ExternalReference are the operator's reconciliation handles.
+fn placement_error_is_state_unknown(error: &anyhow::Error) -> bool {
+    placement_error_text_is_state_unknown(&error.to_string())
+}
+
+fn placement_error_text_is_state_unknown(error_text: &str) -> bool {
+    let lower = error_text.to_ascii_lowercase();
+    lower.contains("tradenotcompleted")
+        || lower.contains("trade not completed")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
 }
 
 async fn saxo_get_json(
@@ -1348,10 +1403,10 @@ async fn fail_order(
         state,
         order_id,
         None,
-        if status == "invalid_quantity" {
-            "invalid_quantity"
-        } else {
-            "execution_order_failed"
+        match status {
+            "invalid_quantity" => "invalid_quantity",
+            "broker_state_unknown" => "broker_state_unknown",
+            _ => "execution_order_failed",
         },
         payload,
     )
@@ -2962,6 +3017,7 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 status TEXT NOT NULL,
                 error_text TEXT,
+                approved_at TEXT,
                 broker_order_id TEXT,
                 execution_result_json TEXT,
                 currency TEXT,
@@ -3230,6 +3286,94 @@ mod tests {
                 .try_get::<Option<String>, _>("broker_order_id")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_placement_holds_order_and_sell_reservation_without_requeueing() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, action, symbol, quantity, error_text, broker_order_id
+             ) VALUES (1, 'submitting_to_broker', 'SELL', 'AMD:xnas', 3, NULL, NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed uncertain SELL placement");
+
+        let request_payload = sanitized_order_payload(&json!({
+            "AccountKey": "must-not-be-stored",
+            "ExternalReference": "saxo-daytrader:1"
+        }));
+        assert!(request_payload.get("AccountKey").is_none());
+
+        let result = fail_order(
+            &state,
+            1,
+            "broker_state_unknown",
+            "Saxo order placement outcome is unknown; automatic retry is blocked pending broker reconciliation: Order placement failed: TradeNotCompleted",
+            &json!({
+                "payload": request_payload,
+                "placement_uncertainty": {
+                    "request_id": "saxo-rust-1-20260721190000",
+                    "external_reference": "saxo-daytrader:1",
+                    "retry_blocked": true
+                }
+            }),
+        )
+        .await
+        .expect("record uncertain placement");
+
+        assert_eq!(result["status"], json!("broker_state_unknown"));
+        assert!(
+            !claim_order_for_submission(&state, 1)
+                .await
+                .expect("unknown placement must not be claimable")
+        );
+        assert_eq!(
+            active_sell_reservations(&state, "AMD:xnas", 2)
+                .await
+                .expect("read active SELL reservation"),
+            3.0
+        );
+
+        let stored = sqlx::query(
+            "SELECT status, error_text, execution_result_json
+             FROM execution_orders WHERE id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read uncertain placement");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "broker_state_unknown"
+        );
+        assert!(
+            stored
+                .try_get::<String, _>("error_text")
+                .unwrap()
+                .contains("automatic retry is blocked")
+        );
+        let payload: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("uncertain placement payload"),
+        )
+        .expect("parse uncertain placement payload");
+        assert_eq!(
+            payload["placement_uncertainty"]["external_reference"],
+            json!("saxo-daytrader:1")
+        );
+
+        let event = sqlx::query(
+            "SELECT event_type FROM execution_order_events WHERE execution_order_id = 1",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read uncertain placement event");
+        assert_eq!(
+            event.try_get::<String, _>("event_type").unwrap(),
+            "broker_state_unknown"
         );
     }
 
@@ -4837,6 +4981,22 @@ execution:
         );
 
         assert_eq!(first, duplicate);
+    }
+
+    #[test]
+    fn holds_only_ambiguous_saxo_placement_errors() {
+        assert!(placement_error_text_is_state_unknown(
+            "Order placement failed: TradeNotCompleted: response deferred"
+        ));
+        assert!(placement_error_text_is_state_unknown(
+            "error sending request: operation timed out"
+        ));
+        assert!(!placement_error_text_is_state_unknown(
+            "Order placement failed: Invalid price increment"
+        ));
+        assert!(!placement_error_text_is_state_unknown(
+            "Order placement failed: HTTP 401 Unauthorized"
+        ));
     }
 
     #[test]

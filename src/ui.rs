@@ -4934,7 +4934,9 @@ fn quote_operation_health(
 
 fn execution_status_class(status: &str) -> &'static str {
     let lower = status.to_ascii_lowercase();
-    if lower.contains("failed")
+    if lower == "broker_state_unknown" {
+        "status warn-status"
+    } else if lower.contains("failed")
         || lower.contains("rejected")
         || lower.contains("invalid")
         || lower.contains("cancelled")
@@ -4955,6 +4957,8 @@ fn execution_status_class(status: &str) -> &'static str {
 fn execution_reason_class(reason: &str) -> &'static str {
     if reason == "Broker working" {
         "status good-status"
+    } else if reason == "Broker state unknown" {
+        "status warn-status"
     } else {
         "status detail-status"
     }
@@ -5008,6 +5012,11 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     }
     if !detail.is_empty() {
         lines.push(format!("detail: {detail}"));
+    } else if status == "broker_state_unknown" {
+        lines.push(
+            "detail: Saxo may have received the placement request; automatic retry is blocked until broker reconciliation."
+                .to_string(),
+        );
     } else if status == "broker_working" {
         lines.push(
             "detail: order accepted by Saxo; waiting for broker status/fill sync".to_string(),
@@ -5132,7 +5141,9 @@ fn execution_event_tooltip(row: &JsonValue, status: &str, reason: &str, detail: 
 fn classify_execution_detail(status: &str, detail: &str) -> String {
     let lower_status = status.to_ascii_lowercase();
     let lower_detail = detail.to_ascii_lowercase();
-    if let Some(reason) = saxo_precheck_reason(detail) {
+    if lower_status == "broker_state_unknown" {
+        "Broker state unknown".to_string()
+    } else if let Some(reason) = saxo_precheck_reason(detail) {
         reason
     } else if lower_detail.contains("sell blocked before saxo precheck") {
         "Sell guard".to_string()
@@ -6184,6 +6195,32 @@ mod tests {
                 &execution_status_detail(&row)
             )
             .contains("Expired unfilled")
+        );
+    }
+
+    #[test]
+    fn classifies_unknown_broker_placement_as_a_retry_blocking_warning() {
+        let row = json!({
+            "status": "broker_state_unknown",
+            "error_text": "Saxo order placement outcome is unknown; automatic retry is blocked pending broker reconciliation: Order placement failed: TradeNotCompleted"
+        });
+
+        assert_eq!(execution_status_reason(&row), "Broker state unknown");
+        assert_eq!(
+            execution_status_class("broker_state_unknown"),
+            "status warn-status"
+        );
+        assert_eq!(
+            execution_reason_class(&execution_status_reason(&row)),
+            "status warn-status"
+        );
+        assert!(
+            execution_status_tooltip(
+                &row,
+                &execution_status_reason(&row),
+                &execution_status_detail(&row)
+            )
+            .contains("automatic retry is blocked")
         );
     }
 

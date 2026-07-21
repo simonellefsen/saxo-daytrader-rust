@@ -2247,7 +2247,8 @@ impl AppState {
                 "SELECT id, created_at, symbol, action, status, quantity, currency, \
                         limit_price_local, ledger_id, broker_order_id, error_text \
                  FROM execution_orders \
-                 WHERE (status IN ('broker_working', 'submitted_to_broker', \
+                 WHERE status = 'broker_state_unknown' \
+                    OR (status IN ('broker_working', 'submitted_to_broker', \
                                    'broker_partially_filled', 'broker_replace_requested', \
                                    'broker_cancel_requested', 'pending_execution', \
                                    'waiting_for_market_open', \
@@ -2272,7 +2273,7 @@ impl AppState {
             warnings.push(json!({
                 "code": "stale_or_unreconciled_execution_orders",
                 "severity": "warning",
-                "message": "Some execution orders are still pending with stale timestamps or executed without a linked ledger row.",
+                "message": "Some execution orders are still pending, have an unresolved broker placement outcome, or executed without a linked ledger row.",
                 "count": unreconciled_orders.len()
             }));
         }
