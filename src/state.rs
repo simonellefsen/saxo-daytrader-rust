@@ -3630,7 +3630,7 @@ impl AppState {
 
     pub async fn hermes_execution_failures(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, currency, estimated_value_dkk, approval_required, strategy_type, strategy_session, strategy_key, strategy_role, error_text
+            "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, currency, estimated_value_dkk, approval_required, strategy_type, strategy_session, strategy_key, strategy_role, error_text, execution_result_json
              FROM execution_orders
              WHERE error_text IS NOT NULL OR lower(status) LIKE '%failed%' OR lower(status) LIKE '%error%' OR lower(status) LIKE '%rejected%'
              ORDER BY created_at DESC, id DESC

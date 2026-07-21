@@ -24,6 +24,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - No exact match keeps the order blocked, preserves any SELL reservation, and records `broker_state_unknown_not_found` with the lookup context. Audit payloads stored for this workflow recursively remove account, client, user, and handler identity fields.
 - The audit endpoint has no documented `ExternalReference` query parameter, so this is an exact local comparison against a bounded activity response. ENS replay or paginated audit history remains the later coverage improvement for unusually busy histories.
 
+## [2026-07-21] feature | Normalized Saxo execution failure taxonomy
+
+- Local Saxo execution failures now persist a safe `error_taxonomy` beside the raw diagnostic: stable code, short label, remediation, and retry policy. Categories cover ambiguous broker state, session expiry, rate limits, commission setup, cash, tick/price, quantity, holdings, instrument tradability, market closure, terminal broker outcomes, and an explicit unknown fallback.
+- The Execution Queue now prefers the persisted label and adds category, next step, and retry policy to the existing status tooltip. Historical rows retain the prior text-based display behavior until they next receive a new execution result.
+- Broker-sync terminal outcomes now carry the same taxonomy. Hermes's redacted preflight failure bundle selects the stored allow-listed code before its legacy string matcher, so raw broker error text remains excluded from Hermes context.
+
 ## [2026-07-17] fix | Manual decision report runs detached (10s connection drop)
 
 - Operator report: Generate Report died after ~10s with ERR_CONNECTION_CLOSED on the ngrok URL. Root cause: the action handler ran the entire pipeline — prompt build, OpenRouter call (600s budget), Trading Manager, execution queue — synchronously inside one HTTP request through the OAuth-wrapped ngrok tunnel. It only ever "responded fast" before because the dead API key made OpenRouter 401 instantly; with a real key the multi-minute request outlived some hop's timeout, and the disconnect made axum cancel the whole pipeline mid-flight.

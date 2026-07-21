@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_at, yaml_bool, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
+    saxo_error::classify_execution_error,
     saxo_portfolio::refresh_broker_snapshots,
     state::AppState,
 };
@@ -744,6 +745,12 @@ async fn sync_one_broker_order(
 
     if is_terminal_failure_status(&broker_status) {
         let status = local_terminal_status(&broker_status);
+        if let Some(object) = enriched_state.as_object_mut() {
+            object.insert(
+                "error_taxonomy".to_string(),
+                classify_execution_error(&status, &broker_failure_detail(broker_payload)),
+            );
+        }
         update_order_broker_status(state, order, status, &enriched_state, None).await?;
         return Ok(json!({
             "status": status,
@@ -1587,7 +1594,9 @@ async fn mark_waiting_for_market(
     error_text: &str,
     market: &JsonValue,
 ) -> Result<JsonValue> {
-    let payload_text = serde_json::to_string(market)?;
+    let taxonomy = classify_execution_error("waiting_for_market_open", error_text);
+    let result = json!({"error_taxonomy": taxonomy, "market": market});
+    let payload_text = serde_json::to_string(&result)?;
     let sql = format!(
         "UPDATE execution_orders
          SET status = 'waiting_for_market_open', error_text = '{}', execution_result_json = '{}'
@@ -1602,11 +1611,11 @@ async fn mark_waiting_for_market(
         order_id,
         None,
         "waiting_for_market_open",
-        &json!({"error": error_text, "market": market}),
+        &json!({"error": error_text, "error_taxonomy": taxonomy, "market": market}),
     )
     .await?;
     Ok(
-        json!({"status": "waiting_for_market_open", "order_id": order_id, "error": error_text, "market": market}),
+        json!({"status": "waiting_for_market_open", "order_id": order_id, "error": error_text, "error_taxonomy": taxonomy, "market": market}),
     )
 }
 
@@ -1656,7 +1665,13 @@ async fn fail_order(
     payload: &JsonValue,
 ) -> Result<JsonValue> {
     let now = now_iso();
-    let payload_text = serde_json::to_string(payload)?;
+    let taxonomy = classify_execution_error(status, error_text);
+    let mut result_payload = payload.clone();
+    if !result_payload.is_object() {
+        result_payload = json!({});
+    }
+    result_payload["error_taxonomy"] = taxonomy.clone();
+    let payload_text = serde_json::to_string(&result_payload)?;
     let sql = format!(
         "UPDATE execution_orders
          SET status = '{}', approved_at = '{}', error_text = '{}', execution_result_json = '{}'
@@ -1677,10 +1692,15 @@ async fn fail_order(
             "broker_state_unknown" => "broker_state_unknown",
             _ => "execution_order_failed",
         },
-        payload,
+        &result_payload,
     )
     .await?;
-    Ok(json!({"status": status, "order_id": order_id, "error": error_text}))
+    Ok(json!({
+        "status": status,
+        "order_id": order_id,
+        "error": error_text,
+        "error_taxonomy": taxonomy
+    }))
 }
 
 async fn insert_order_event(
@@ -2012,6 +2032,13 @@ async fn update_order_broker_status(
         result = json!({});
     }
     result["broker_sync"] = broker_state.clone();
+    if matches!(
+        status,
+        "execution_failed" | "broker_cancelled" | "broker_expired" | "broker_done_for_day"
+    ) {
+        result["error_taxonomy"] =
+            classify_execution_error(status, &broker_failure_detail(broker_payload(broker_state)));
+    }
     let payload_text = serde_json::to_string(&result)?;
     let ledger_sql = ledger_id
         .map(|value| format!(", ledger_id = {value}"))
@@ -2020,9 +2047,8 @@ async fn update_order_broker_status(
         status,
         "execution_failed" | "broker_cancelled" | "broker_expired" | "broker_done_for_day"
     ) {
-        let broker_payload = broker_payload(broker_state);
-        let status_text = broker_status_text(broker_payload).unwrap_or_else(|| status.to_string());
-        format!(", error_text = '{}'", sql_escape(&status_text))
+        let detail = broker_failure_detail(broker_payload(broker_state));
+        format!(", error_text = '{}'", sql_escape(&detail))
     } else {
         ", error_text = NULL".to_string()
     };
@@ -2053,6 +2079,12 @@ async fn update_order_broker_status(
         .await
         .context("updating Saxo execution order broker status")?;
     Ok(())
+}
+
+fn broker_failure_detail(payload: &JsonValue) -> String {
+    extract_saxo_error(payload)
+        .or_else(|| broker_status_text(payload))
+        .unwrap_or_else(|| "Saxo broker reported a terminal order failure".to_string())
 }
 
 async fn record_broker_order_event(
@@ -3678,6 +3710,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn failed_order_persists_safe_taxonomy_for_ui_and_learning() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (id, status, action, symbol, quantity)
+             VALUES (19, 'submitting_to_broker', 'BUY', 'DEMANT:xcse', 1)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed order with precheck failure");
+
+        fail_order(
+            &state,
+            19,
+            "execution_failed",
+            "Order precheck failed: Tick size increment is invalid",
+            &json!({"adapter": "saxo", "precheck": {"ErrorInfo": {"Message": "Tick size increment is invalid"}}}),
+        )
+        .await
+        .expect("persist categorized failure");
+
+        let stored =
+            sqlx::query("SELECT execution_result_json FROM execution_orders WHERE id = 19")
+                .fetch_one(&state.pool)
+                .await
+                .expect("read stored failure");
+        let result: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("stored failure diagnostics"),
+        )
+        .expect("parse stored failure diagnostics");
+        assert_eq!(result["error_taxonomy"]["code"], json!("tick_size"));
+        assert_eq!(
+            result["error_taxonomy"]["retry_policy"],
+            json!("review_and_resubmit")
+        );
+
+        let event = sqlx::query(
+            "SELECT raw_payload_json FROM execution_order_events WHERE execution_order_id = 19",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read failure event");
+        let event_payload: JsonValue = serde_json::from_str(
+            &event
+                .try_get::<String, _>("raw_payload_json")
+                .expect("stored failure event diagnostics"),
+        )
+        .expect("parse failure event diagnostics");
+        assert_eq!(event_payload["error_taxonomy"]["code"], json!("tick_size"));
+    }
+
     #[test]
     fn audit_activity_lookup_requires_an_exact_external_reference() {
         let payload = json!({
@@ -3978,6 +4063,7 @@ mod tests {
         )
         .expect("parse stored broker-sync result");
         assert_eq!(result["precheck"], json!(true));
+        assert_eq!(result["error_taxonomy"]["code"], json!("order_expired"));
         assert_eq!(
             result["broker_sync"]["broker_payload"]["Status"],
             json!("Expired")

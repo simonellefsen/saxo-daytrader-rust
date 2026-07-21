@@ -4978,6 +4978,12 @@ fn execution_status_reason(row: &JsonValue) -> String {
     if text(row, "lifecycle_state") == "expiry_pending_broker_sync" {
         return "Expiry sync pending".to_string();
     }
+    if let Some(taxonomy) = execution_error_taxonomy(row) {
+        let label = text(&taxonomy, "label");
+        if !label.is_empty() {
+            return label;
+        }
+    }
     let status = text(row, "status");
     let detail = execution_status_detail(row);
     classify_execution_detail(&status, &detail)
@@ -4995,6 +5001,20 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     }
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
+    }
+    if let Some(taxonomy) = execution_error_taxonomy(row) {
+        let code = text(&taxonomy, "code");
+        if !code.is_empty() {
+            lines.push(format!("category: {code}"));
+        }
+        let remediation = text(&taxonomy, "remediation");
+        if !remediation.is_empty() {
+            lines.push(format!("next step: {remediation}"));
+        }
+        let retry_policy = text(&taxonomy, "retry_policy");
+        if !retry_policy.is_empty() {
+            lines.push(format!("retry: {retry_policy}"));
+        }
     }
     let lifecycle_state = text(row, "lifecycle_state");
     if !lifecycle_state.is_empty() {
@@ -5036,6 +5056,11 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
         ));
     }
     lines.join("\n")
+}
+
+fn execution_error_taxonomy(row: &JsonValue) -> Option<JsonValue> {
+    diagnostic_payload(row, "execution_result_json")
+        .and_then(|payload| payload.get("error_taxonomy").cloned())
 }
 
 fn execution_broker_sync_text(row: &JsonValue, key: &str) -> String {
@@ -6242,6 +6267,32 @@ mod tests {
             "Insufficient cash for requested buy order"
         );
         assert_eq!(execution_status_reason(&row), "Insufficient cash");
+    }
+
+    #[test]
+    fn execution_status_prefers_persisted_saxo_taxonomy_and_remediation() {
+        let row = json!({
+            "status": "execution_failed",
+            "error_text": "Order precheck failed: limit price outside allowed range",
+            "execution_result_json": {
+                "error_taxonomy": {
+                    "code": "tick_size",
+                    "label": "Invalid tick size",
+                    "remediation": "Recalculate the limit price using Saxo's instrument tick scheme.",
+                    "retry_policy": "review_and_resubmit"
+                }
+            }
+        });
+
+        assert_eq!(execution_status_reason(&row), "Invalid tick size");
+        let tooltip = execution_status_tooltip(
+            &row,
+            &execution_status_reason(&row),
+            &execution_status_detail(&row),
+        );
+        assert!(tooltip.contains("category: tick_size"));
+        assert!(tooltip.contains("next step: Recalculate the limit price"));
+        assert!(tooltip.contains("retry: review_and_resubmit"));
     }
 
     #[test]

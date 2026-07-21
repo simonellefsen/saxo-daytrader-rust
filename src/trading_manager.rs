@@ -1547,7 +1547,8 @@ fn compact_hermes_preflight_failures(rows: &[JsonValue]) -> Vec<JsonValue> {
                 "action": row.get("action").cloned().unwrap_or(JsonValue::Null),
                 "order_type": row.get("order_type").cloned().unwrap_or(JsonValue::Null),
                 "status": row.get("status").cloned().unwrap_or(JsonValue::Null),
-                "failure_signature": classify_execution_failure_signature(row)
+                "failure_signature": persisted_execution_failure_signature(row)
+                    .or_else(|| classify_execution_failure_signature(row))
                     .unwrap_or_else(|| "unclassified_execution_failure".to_string()),
             })
         })
@@ -2790,6 +2791,38 @@ fn matching_instrument_quarantine<'a>(
     })
 }
 
+fn persisted_execution_failure_signature(row: &JsonValue) -> Option<String> {
+    let payload = row.get("execution_result_json")?;
+    let payload = match payload {
+        JsonValue::String(value) => serde_json::from_str::<JsonValue>(value).ok()?,
+        value => value.clone(),
+    };
+    let code = payload
+        .get("error_taxonomy")
+        .and_then(|taxonomy| taxonomy.get("code"))
+        .and_then(JsonValue::as_str)?;
+    matches!(
+        code,
+        "broker_state_unknown"
+            | "broker_cancelled"
+            | "broker_rejected"
+            | "commission_setup"
+            | "done_for_day"
+            | "insufficient_cash"
+            | "instrument_not_tradable"
+            | "market_closed"
+            | "order_expired"
+            | "position_quantity"
+            | "price_invalid"
+            | "quantity"
+            | "rate_limited"
+            | "session_expired"
+            | "tick_size"
+            | "unknown"
+    )
+    .then(|| code.to_string())
+}
+
 fn classify_execution_failure_signature(row: &JsonValue) -> Option<String> {
     let status = text(row, "status").to_lowercase();
     let combined = format!(
@@ -3923,6 +3956,29 @@ mod tests {
         );
         assert!(!encoded.contains("bearer-secret-must-not-leak"));
         assert!(!encoded.contains("error_text"));
+    }
+
+    #[test]
+    fn hermes_preflight_prefers_persisted_saxo_failure_taxonomy() {
+        let rows = vec![json!({
+            "created_at": "2026-07-21T10:00:00Z",
+            "symbol": "DEMANT:xcse",
+            "action": "BUY",
+            "order_type": "Limit",
+            "status": "execution_failed",
+            "error_text": "opaque broker response",
+            "execution_result_json": {
+                "error_taxonomy": {"code": "commission_setup"}
+            }
+        })];
+
+        let compact = compact_hermes_preflight_failures(&rows);
+        assert_eq!(compact[0]["failure_signature"], json!("commission_setup"));
+        assert!(
+            !serde_json::to_string(&compact)
+                .expect("serialize compact Hermes failures")
+                .contains("opaque broker response")
+        );
     }
 
     #[test]
