@@ -3526,6 +3526,7 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
     let hermes_order = hermes.get("order_advice").unwrap_or(&null);
     let technical = attribution.get("technical").unwrap_or(&null);
     let markov = attribution.get("markov").unwrap_or(&null);
+    let capital = attribution.get("capital_budget").unwrap_or(&null);
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -3580,39 +3581,76 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
         ));
     }
     if !technical.is_null() {
+        let reward_risk = value_f64(technical, "reward_risk");
+        let reward_risk = if reward_risk > 0.0 {
+            format!(
+                " · RR {}",
+                crate::localization::format_number(reward_risk, 2, prefs)
+            )
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "Daily indicators: {} · {} · trend {} · confluence {}/{} · RR {}",
+            "Daily indicators ({}): {} · {} · trend {} · confluence {}/{}{}",
+            attribution_evidence_source(technical),
             fallback_text(technical, "run_date", "n/a"),
             fallback_text(technical, "sentiment", "n/a"),
             fallback_text(technical, "trend_bias", "n/a"),
             text_or(technical, "confluence_count", "0"),
             text_or(technical, "min_confluences", "0"),
-            crate::localization::format_number(value_f64(technical, "reward_risk"), 2, prefs)
+            reward_risk,
         ));
-        let error = text(technical, "error_text");
-        if !error.is_empty() {
-            lines.push(format!(
-                "Daily indicator error: {}",
-                truncate_chars(&error, 260)
-            ));
-        }
     }
     if !markov.is_null() {
+        let probabilities_available =
+            value_f64(markov, "bull_prob") > 0.0 || value_f64(markov, "bear_prob") > 0.0;
+        let probabilities = if probabilities_available {
+            format!(
+                " · bull {} · bear {}",
+                format_pct(value_f64(markov, "bull_prob"), prefs),
+                format_pct(value_f64(markov, "bear_prob"), prefs)
+            )
+        } else {
+            String::new()
+        };
         lines.push(format!(
-            "Markov: {} · state {} · direction {} · signal {} · bull {} · bear {}",
+            "Markov ({}): {} · state {} · direction {} · signal {}{}",
+            attribution_evidence_source(markov),
             fallback_text(markov, "run_date", "n/a"),
             fallback_text(markov, "current_state", "n/a"),
             fallback_text(markov, "direction", "n/a"),
             format_signed_pct(value_f64(markov, "signed_signal"), prefs),
-            format_pct(value_f64(markov, "bull_prob"), prefs),
-            format_pct(value_f64(markov, "bear_prob"), prefs)
+            probabilities,
         ));
-        let error = text(markov, "error_text");
-        if !error.is_empty() {
-            lines.push(format!("Markov error: {}", truncate_chars(&error, 260)));
-        }
+    }
+    if !capital.is_null() {
+        lines.push(format!(
+            "Capital (manager snapshot): cash {} · buffer {} · BUY budget {} · remaining deployment {}{}",
+            format_dkk(value_f64(capital, "cash_balance_dkk"), prefs),
+            format_dkk(value_f64(capital, "required_cash_buffer_dkk"), prefs),
+            format_dkk(value_f64(capital, "available_buy_budget_dkk"), prefs),
+            format_dkk(value_f64(capital, "remaining_deployment_capacity_dkk"), prefs),
+            if capital
+                .get("reinvestment_pressure_active")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                " · reinvestment pressure active"
+            } else {
+                ""
+            }
+        ));
     }
     lines.join("\n")
+}
+
+fn attribution_evidence_source(value: &JsonValue) -> &'static str {
+    match text(value, "evidence_source").as_str() {
+        "manager_final" => "manager final",
+        "manager_preflight" => "manager preflight",
+        "latest_fallback" => "latest fallback",
+        _ => "legacy",
+    }
 }
 
 #[component]
@@ -6241,6 +6279,63 @@ mod tests {
             execution_attribution_label(&review_row),
             ("Review overrode".to_string(), "bad-text")
         );
+    }
+
+    #[test]
+    fn execution_attribution_detail_labels_manager_snapshot_evidence() {
+        let row = json!({
+            "attribution": {
+                "delta": "manager_only",
+                "report": {
+                    "id": 185,
+                    "pulse_label": "US Open +1h15",
+                    "model": "openrouter/fusion",
+                    "created_at": "2026-07-21T14:15:00Z"
+                },
+                "trading_manager": {
+                    "run_id": 92,
+                    "status": "completed",
+                    "manager_key": "scheduled",
+                    "decision": {"manager_decision": "approved"}
+                },
+                "hermes": {
+                    "advice_id": 31,
+                    "status": "completed",
+                    "recommendation": "conservative",
+                    "order_advice": {"action": "allow"}
+                },
+                "technical": {
+                    "evidence_source": "manager_final",
+                    "run_date": "2026-07-21",
+                    "sentiment": "BUY",
+                    "trend_bias": "bullish",
+                    "confluence_count": 4,
+                    "min_confluences": 3
+                },
+                "markov": {
+                    "evidence_source": "manager_preflight",
+                    "run_date": "2026-07-21",
+                    "current_state": "Bull",
+                    "direction": "long",
+                    "signed_signal": 0.548
+                },
+                "capital_budget": {
+                    "cash_balance_dkk": 18_075.0,
+                    "required_cash_buffer_dkk": 5_658.0,
+                    "available_buy_budget_dkk": 12_417.0,
+                    "remaining_deployment_capacity_dkk": 18_000.0,
+                    "reinvestment_pressure_active": true
+                }
+            }
+        });
+
+        let detail = execution_attribution_detail(&row, &default_prefs());
+
+        assert!(detail.contains("Daily indicators (manager final)"));
+        assert!(detail.contains("Markov (manager preflight)"));
+        assert!(detail.contains("Capital (manager snapshot)"));
+        assert!(detail.contains("reinvestment pressure active"));
+        assert!(!detail.contains("RR 0"));
     }
 
     #[test]

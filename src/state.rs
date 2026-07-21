@@ -605,6 +605,69 @@ fn matching_order_advice(
         .cloned()
 }
 
+fn matching_manager_preflight_candidate(
+    manager_run: &JsonValue,
+    strategy_key: &str,
+    symbol: &str,
+    action: &str,
+) -> JsonValue {
+    manager_run
+        .get("manager_json")
+        .and_then(|value| value.get("hermes_preflight"))
+        .and_then(|value| value.get("candidate_waterfall"))
+        .and_then(|value| matching_order_advice(Some(value), strategy_key, symbol, action))
+        .unwrap_or(JsonValue::Null)
+}
+
+fn compact_attribution_technical(value: &JsonValue, evidence_source: &str) -> JsonValue {
+    if !value.is_object() || json_text(value, "status") != "ok" {
+        return JsonValue::Null;
+    }
+    json!({
+        "evidence_source": evidence_source,
+        "run_date": json_text(value, "run_date"),
+        "sentiment": json_text(value, "sentiment"),
+        "trend_bias": json_text(value, "trend_bias"),
+        "confluence_count": value_i64(value, "confluence_count"),
+        "min_confluences": value_i64(value, "min_confluences"),
+        "reward_risk": value_f64(value, "reward_risk"),
+    })
+}
+
+fn compact_attribution_markov(value: &JsonValue, evidence_source: &str) -> JsonValue {
+    if !value.is_object() || json_text(value, "status") != "ok" {
+        return JsonValue::Null;
+    }
+    json!({
+        "evidence_source": evidence_source,
+        "run_date": json_text(value, "run_date"),
+        "current_state": json_text(value, "current_state"),
+        "direction": json_text(value, "direction"),
+        "signed_signal": value_f64(value, "signed_signal"),
+        "conviction": value_f64(value, "conviction"),
+        "bull_prob": value_f64(value, "bull_prob"),
+        "bear_prob": value_f64(value, "bear_prob"),
+    })
+}
+
+fn compact_attribution_capital(value: &JsonValue) -> JsonValue {
+    if !value.is_object() {
+        return JsonValue::Null;
+    }
+    json!({
+        "evidence_source": "manager_run",
+        "cash_balance_dkk": value_f64(value, "cash_balance_dkk"),
+        "cash_pct": value_f64(value, "cash_pct"),
+        "required_cash_buffer_dkk": value_f64(value, "required_cash_buffer_dkk"),
+        "available_buy_budget_dkk": value_f64(value, "available_buy_budget_dkk"),
+        "remaining_deployment_capacity_dkk": value_f64(value, "remaining_deployment_capacity_dkk"),
+        "reinvestment_pressure_active": value
+            .get("reinvestment_pressure_active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+    })
+}
+
 fn attribution_delta_label(
     hermes_order: &JsonValue,
     manager_order: &JsonValue,
@@ -2641,8 +2704,51 @@ impl AppState {
             })
             .unwrap_or(JsonValue::Null);
 
-        let technical = self.latest_indicator_signal_summary(&symbol).await?;
-        let markov = self.latest_markov_signal_summary(&symbol).await?;
+        let preflight_candidate =
+            matching_manager_preflight_candidate(&manager_run, &strategy_key, &symbol, &action);
+        let technical = compact_attribution_technical(
+            manager_order
+                .get("final_technical")
+                .unwrap_or(&JsonValue::Null),
+            "manager_final",
+        );
+        let technical = if technical.is_null() {
+            let preflight = compact_attribution_technical(
+                preflight_candidate
+                    .get("technical")
+                    .unwrap_or(&JsonValue::Null),
+                "manager_preflight",
+            );
+            if preflight.is_null() {
+                compact_attribution_technical(
+                    &self.latest_indicator_signal_summary(&symbol).await?,
+                    "latest_fallback",
+                )
+            } else {
+                preflight
+            }
+        } else {
+            technical
+        };
+        let markov = compact_attribution_markov(
+            preflight_candidate
+                .get("markov")
+                .unwrap_or(&JsonValue::Null),
+            "manager_preflight",
+        );
+        let markov = if markov.is_null() {
+            compact_attribution_markov(
+                &self.latest_markov_signal_summary(&symbol).await?,
+                "latest_fallback",
+            )
+        } else {
+            markov
+        };
+        let capital = manager_run
+            .get("manager_json")
+            .and_then(|value| value.get("capital_budget"))
+            .map(compact_attribution_capital)
+            .unwrap_or(JsonValue::Null);
         let delta = attribution_delta_label(&hermes_order, &manager_order, order);
 
         Ok(json!({
@@ -2670,6 +2776,7 @@ impl AppState {
             },
             "technical": technical,
             "markov": markov,
+            "capital_budget": capital,
         }))
     }
 
@@ -7633,6 +7740,80 @@ mod tests {
 
         let fallback = matching_order_advice(Some(&advice), "", "AMD:XNAS", "buy").unwrap();
         assert_eq!(json_text(&fallback, "reason"), "strategy-key match");
+    }
+
+    #[test]
+    fn execution_attribution_prefers_persisted_manager_snapshots() {
+        let manager_run = json!({
+            "manager_json": {
+                "capital_budget": {
+                    "cash_balance_dkk": 18_075.0,
+                    "cash_pct": 0.064,
+                    "required_cash_buffer_dkk": 5_658.0,
+                    "available_buy_budget_dkk": 12_417.0,
+                    "remaining_deployment_capacity_dkk": 18_000.0,
+                    "reinvestment_pressure_active": true,
+                    "unrelated_sensitive_value": "excluded"
+                },
+                "hermes_preflight": {
+                    "candidate_waterfall": [{
+                        "strategy_key": "open|AMD:xnas|BUY|primary",
+                        "symbol": "AMD:xnas",
+                        "action": "BUY",
+                        "technical": {
+                            "status": "ok",
+                            "run_date": "2026-07-21",
+                            "sentiment": "BUY",
+                            "trend_bias": "bullish",
+                            "confluence_count": 4,
+                            "min_confluences": 3
+                        },
+                        "markov": {
+                            "status": "ok",
+                            "run_date": "2026-07-21",
+                            "current_state": "Bull",
+                            "direction": "long",
+                            "signed_signal": 0.548,
+                            "conviction": 0.78
+                        }
+                    }]
+                }
+            }
+        });
+        let final_technical = json!({
+            "status": "ok",
+            "run_date": "2026-07-21",
+            "sentiment": "HOLD",
+            "trend_bias": "neutral",
+            "confluence_count": 1,
+            "min_confluences": 3
+        });
+
+        let candidate = matching_manager_preflight_candidate(
+            &manager_run,
+            "open|AMD:xnas|BUY|primary",
+            "AMD:xnas",
+            "BUY",
+        );
+        let technical = compact_attribution_technical(&final_technical, "manager_final");
+        let markov = compact_attribution_markov(
+            candidate.get("markov").unwrap_or(&JsonValue::Null),
+            "manager_preflight",
+        );
+        let capital = compact_attribution_capital(
+            manager_run["manager_json"]
+                .get("capital_budget")
+                .expect("persisted capital budget"),
+        );
+
+        assert_eq!(json_text(&technical, "evidence_source"), "manager_final");
+        assert_eq!(json_text(&technical, "sentiment"), "HOLD");
+        assert_eq!(json_text(&markov, "evidence_source"), "manager_preflight");
+        assert_eq!(json_text(&markov, "direction"), "long");
+        assert_eq!(value_f64(&markov, "signed_signal"), 0.548);
+        assert_eq!(json_text(&capital, "evidence_source"), "manager_run");
+        assert_eq!(value_f64(&capital, "available_buy_budget_dkk"), 12_417.0);
+        assert!(capital.get("unrelated_sensitive_value").is_none());
     }
 
     #[test]

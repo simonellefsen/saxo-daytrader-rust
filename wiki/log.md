@@ -10,6 +10,12 @@ updated: 2026-07-21
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-21] improvement | Report-time execution attribution
+
+- Execution-order details now prefer immutable Trading Manager evidence: the final database-verified technical gate result, the candidate's stored Markov preflight, and the manager-time capital budget.
+- For historical rows that predate these snapshots, the dashboard may still read a current signal, but it labels that value `latest fallback` rather than presenting it as report-time evidence.
+- The compact attribution omits raw Hermes rationale, broker payloads, execution errors, and unrelated manager fields. It adds no broker or provider calls and cannot change order execution.
+
 ## [2026-07-21] fix | Fail closed on ambiguous Saxo order placement
 
 - Placement errors containing `TradeNotCompleted`, `timed out`, or `timeout` now move the order to `broker_state_unknown` rather than `execution_failed`. The queue cannot claim or resubmit that order automatically.
