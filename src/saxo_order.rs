@@ -3861,6 +3861,185 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sell_partial_fill_then_final_delta_prorates_cost_basis_without_http() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO position_snapshots (
+                imported_at, instrument_name, symbol, isin, quantity, currency,
+                cost_basis_local, cost_basis_dkk, excluded
+            ) VALUES (
+                '2026-07-18T00:00:00Z', 'AMD Inc.', 'AMD:xnas', 'US0079031078',
+                10, 'USD', 800, 5617.2, 0
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed local position with usable cost basis");
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, broker_order_id, execution_result_json, currency,
+                action, symbol, mode, quantity, price_local
+            ) VALUES (
+                1, 'broker_working', '5039132488', '{\"precheck\":true}', 'USD',
+                'SELL', 'AMD:xnas', 'live', 4, NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed partially-filled sell order");
+        let order = json!({
+            "id": 1,
+            "symbol": "AMD:xnas",
+            "action": "SELL",
+            "mode": "live",
+            "status": "broker_working",
+            "quantity": 4.0,
+            "currency": "USD",
+            "execution_result_json": {"precheck": true}
+        });
+        let partial_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "PartiallyFilled",
+                "FilledAmount": 1.0,
+                "ExecutionPrice": 100.0,
+                "Currency": "USD"
+            }
+        });
+
+        // Model the one-share partial fill that an earlier broker-sync pass
+        // has already reconciled. Its local-book update is essential: the
+        // final cumulative fill must use the remaining nine-share basis.
+        let partial_ledger_id =
+            insert_trade_ledger_for_fill(&state, &order, "SELL", 1.0, 100.0, "USD", &partial_state)
+                .await
+                .expect("record partial sell ledger row");
+        insert_execution_fill(
+            &state,
+            &order,
+            "5039132488",
+            "PartialFill",
+            1.0,
+            1.0,
+            100.0,
+            "USD",
+            Some(partial_ledger_id),
+            &partial_state,
+        )
+        .await
+        .expect("record partial sell fill");
+        apply_fill_to_local_book(&state, &order, "SELL", 1.0, 100.0, "USD", partial_ledger_id)
+            .await
+            .expect("decrement local book for partial sell fill");
+
+        let after_partial = sqlx::query(
+            "SELECT quantity, cost_basis_local, cost_basis_dkk
+             FROM position_snapshots WHERE symbol = 'AMD:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read local book after partial sell fill");
+        assert!((after_partial.try_get::<f64, _>("quantity").unwrap() - 9.0).abs() < 1e-9);
+        assert!(
+            (after_partial.try_get::<f64, _>("cost_basis_local").unwrap() - 720.0).abs() < 1e-6
+        );
+        assert!(
+            (after_partial.try_get::<f64, _>("cost_basis_dkk").unwrap() - 5055.48).abs() < 1e-6
+        );
+
+        let final_state = json!({
+            "source": "test_fixture",
+            "broker_payload": {
+                "Status": "FinalFill",
+                "SubStatus": "Confirmed",
+                "FilledAmount": 4.0,
+                "ExecutionPrice": 150.0,
+                "Currency": "USD"
+            }
+        });
+        let final_fill = sync_final_fill(&state, &order, "5039132488", 4.0, 150.0, &final_state)
+            .await
+            .expect("reconcile remaining final sell fill");
+        let final_ledger_id = final_fill["ledger_id"]
+            .as_i64()
+            .expect("final sell ledger id");
+        assert_ne!(final_ledger_id, partial_ledger_id);
+        assert_eq!(final_fill["fills"], json!(1));
+        assert_eq!(final_fill["synced_before"], json!(1.0));
+        assert_eq!(final_fill["delta_quantity"], json!(3.0));
+
+        let ledger_rows = sqlx::query(
+            "SELECT quantity, cost_basis_sold_local, cost_basis_sold_dkk
+             FROM trade_ledger WHERE symbol = 'AMD:xnas' ORDER BY id ASC",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read partial and final sell ledger rows");
+        assert_eq!(ledger_rows.len(), 2);
+        assert_eq!(ledger_rows[0].try_get::<f64, _>("quantity").unwrap(), 1.0);
+        assert!(
+            (ledger_rows[0]
+                .try_get::<f64, _>("cost_basis_sold_local")
+                .unwrap()
+                - 80.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (ledger_rows[0]
+                .try_get::<f64, _>("cost_basis_sold_dkk")
+                .unwrap()
+                - 561.72)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(ledger_rows[1].try_get::<f64, _>("quantity").unwrap(), 3.0);
+        assert!(
+            (ledger_rows[1]
+                .try_get::<f64, _>("cost_basis_sold_local")
+                .unwrap()
+                - 240.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (ledger_rows[1]
+                .try_get::<f64, _>("cost_basis_sold_dkk")
+                .unwrap()
+                - 1685.16)
+                .abs()
+                < 1e-6
+        );
+
+        // Across partial and final deltas, four shares consume exactly 4/10
+        // of the original basis. The remaining six shares keep 6/10.
+        let after_final = sqlx::query(
+            "SELECT quantity, cost_basis_local, cost_basis_dkk
+             FROM position_snapshots WHERE symbol = 'AMD:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read local book after final sell fill");
+        assert!((after_final.try_get::<f64, _>("quantity").unwrap() - 6.0).abs() < 1e-9);
+        assert!((after_final.try_get::<f64, _>("cost_basis_local").unwrap() - 480.0).abs() < 1e-6);
+        assert!((after_final.try_get::<f64, _>("cost_basis_dkk").unwrap() - 3370.32).abs() < 1e-6);
+
+        let replay = sync_final_fill(&state, &order, "5039132488", 4.0, 150.0, &final_state)
+            .await
+            .expect("replay final cumulative sell fill");
+        assert_eq!(replay["fills"], json!(0));
+        assert_eq!(replay["delta_quantity"], json!(0.0));
+        assert_eq!(replay["ledger_id"], json!(final_ledger_id));
+        let fill_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_fills")
+            .fetch_one(&state.pool)
+            .await
+            .expect("count execution fills")
+            .try_get::<i64, _>("count")
+            .expect("execution fill count");
+        assert_eq!(fill_count, 2);
+    }
+
+    #[tokio::test]
     async fn sell_final_fill_uses_latest_position_basis_and_is_idempotent_without_http() {
         let state = execution_order_test_state().await;
         sqlx::query(

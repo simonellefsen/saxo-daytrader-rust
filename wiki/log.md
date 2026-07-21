@@ -886,3 +886,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Verified that the configured Saxo SIM account carries an independent EUR capital balance, while the dashboard and buy limits use the bounded DKK strategy ledger configured under `portfolio.initial_cash_dkk` and `portfolio.virtual_cap_dkk`.
 - Added the explicit `portfolio.broker_cash_reconciliation_enabled` opt-in. It defaults to `false`; broker balance snapshots remain available for execution and audit, but the Overview only compares absolute broker cash when both books are intentionally the same.
 - This removes the false multi-million-DKK `broker_cash_drift` warning without weakening position, fill, exposure, or strategy-ledger integrity checks.
+
+## [2026-07-21] testing | SELL partial-to-final fill reconciliation
+
+- Added a database-backed, no-HTTP regression fixture for a SELL that first reconciles one partial share and later reaches a four-share final cumulative fill.
+- The fixture verifies each delta consumes the correct fraction of the then-current basis, the remaining local book retains the correct six-share basis, and a replay of the final fill creates no extra fill or sale.
