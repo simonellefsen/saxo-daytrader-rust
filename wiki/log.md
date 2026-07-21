@@ -946,3 +946,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Hardened the existing provider/schema dry-run action so its persisted lifecycle is explicitly non-actionable: `dry_run_xai_deferred`, `dry_run_completed`, and `dry_run_error` are distinct from live report statuses for both OpenRouter and deferred xAI flows.
 - The normalized dry-run artifact records its local safety boundary, the Decisions UI keeps a dry deferred run pending until its real terminal state, and the Trading Manager status gate rejects dry-run completion even if the scheduler sees it later.
 - Added pure regression coverage for dry-run normalized output and Trading Manager rejection alongside the existing immediate-pipeline guard. No Saxo or Hermes mutation path is invoked by this mode.
+
+## [2026-07-21] improvement | Staged execution failure diagnostics
+
+- Execution failures now persist a small, sanitized `failure_stage` alongside the existing taxonomy: local validation, request build, local precheck guard, Saxo precheck, Saxo placement, or queue execution fallback.
+- The Execution Queue and Order Events surface the stage as a compact label and in their existing tooltips and safe diagnostics, so `execution_failed` no longer hides whether Saxo was contacted.
+- Non-ambiguous Saxo placement errors now persist their precheck context and placement stage directly rather than relying on the queue's generic error catch.

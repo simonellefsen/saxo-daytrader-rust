@@ -3453,6 +3453,8 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = text(&row, "status");
     let detail = execution_status_detail(&row);
     let reason = execution_status_reason(&row);
+    let failure_stage = execution_failure_stage(&row);
+    let failure_stage_label = execution_failure_stage_label(&failure_stage);
     let tooltip = execution_status_tooltip(&row, &reason, &detail);
     let reason_class = execution_reason_class(&reason);
     let status_class = execution_status_class(&status);
@@ -3479,6 +3481,9 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 span { class: "{status_class}", title: "{tooltip}", "{status}" }
                 if !reason.is_empty() {
                     span { class: "{reason_class}", title: "{tooltip}", "{reason}" }
+                }
+                if !failure_stage_label.is_empty() {
+                    span { class: "status detail-status", title: "{tooltip}", "{failure_stage_label}" }
                 }
             }
             td { "{format_quantity(value_f64(&row, \"quantity\"), &prefs)}" }
@@ -3711,6 +3716,8 @@ fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = fallback_text(&row, "broker_status", &text(&row, "status"));
     let detail = execution_event_detail(&row);
     let reason = execution_event_reason(&row);
+    let failure_stage = execution_event_failure_stage(&row);
+    let failure_stage_label = execution_failure_stage_label(&failure_stage);
     let status_class = execution_status_class(&status);
     let reason_class = execution_reason_class(&reason);
     let tooltip = execution_event_tooltip(&row, &status, &reason, &detail);
@@ -3723,6 +3730,9 @@ fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 span { class: "{status_class}", title: "{tooltip}", "{status}" }
                 if !reason.is_empty() {
                     span { class: "{reason_class}", title: "{tooltip}", "{reason}" }
+                }
+                if !failure_stage_label.is_empty() {
+                    span { class: "status detail-status", title: "{tooltip}", "{failure_stage_label}" }
                 }
             }
             td { class: "muted error-cell",
@@ -5152,6 +5162,11 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
     }
+    let failure_stage = execution_failure_stage(row);
+    let failure_stage_label = execution_failure_stage_label(&failure_stage);
+    if !failure_stage_label.is_empty() {
+        lines.push(format!("stage: {failure_stage_label} ({failure_stage})"));
+    }
     if let Some(taxonomy) = execution_error_taxonomy(row) {
         let code = text(&taxonomy, "code");
         if !code.is_empty() {
@@ -5211,6 +5226,34 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
 fn execution_error_taxonomy(row: &JsonValue) -> Option<JsonValue> {
     diagnostic_payload(row, "execution_result_json")
         .and_then(|payload| payload.get("error_taxonomy").cloned())
+}
+
+fn execution_failure_stage(row: &JsonValue) -> String {
+    diagnostic_payload(row, "execution_result_json")
+        .and_then(|payload| payload.get("failure_stage").cloned())
+        .and_then(|value| value.as_str().map(str::trim).map(ToString::to_string))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn execution_event_failure_stage(row: &JsonValue) -> String {
+    diagnostic_payload(row, "raw_payload_json")
+        .and_then(|payload| payload.get("failure_stage").cloned())
+        .and_then(|value| value.as_str().map(str::trim).map(ToString::to_string))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn execution_failure_stage_label(stage: &str) -> &'static str {
+    match stage {
+        "local_validation" => "Local validation",
+        "precheck_guard" => "Local precheck guard",
+        "request_build" => "Order request build",
+        "precheck" => "Saxo precheck",
+        "placement" => "Saxo placement",
+        "execution" => "Queue execution",
+        _ => "",
+    }
 }
 
 fn execution_broker_sync_text(row: &JsonValue, key: &str) -> String {
@@ -5306,6 +5349,11 @@ fn execution_event_tooltip(row: &JsonValue, status: &str, reason: &str, detail: 
     }
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
+    }
+    let failure_stage = execution_event_failure_stage(row);
+    let failure_stage_label = execution_failure_stage_label(&failure_stage);
+    if !failure_stage_label.is_empty() {
+        lines.push(format!("stage: {failure_stage_label} ({failure_stage})"));
     }
     if !detail.is_empty() {
         lines.push(format!("detail: {detail}"));
@@ -6524,6 +6572,7 @@ mod tests {
             "status": "execution_failed",
             "error_text": "Order precheck failed: limit price outside allowed range",
             "execution_result_json": {
+                "failure_stage": "precheck",
                 "error_taxonomy": {
                     "code": "tick_size",
                     "label": "Invalid tick size",
@@ -6540,6 +6589,7 @@ mod tests {
             &execution_status_detail(&row),
         );
         assert!(tooltip.contains("category: tick_size"));
+        assert!(tooltip.contains("stage: Saxo precheck (precheck)"));
         assert!(tooltip.contains("next step: Recalculate the limit price"));
         assert!(tooltip.contains("retry: review_and_resubmit"));
     }
@@ -6551,7 +6601,8 @@ mod tests {
             "event_type": "broker_sync",
             "status": "execution_failed",
             "message": "Saxo placement failed",
-            "error_text": "HTTP 401 Unauthorized while placing order"
+            "error_text": "HTTP 401 Unauthorized while placing order",
+            "raw_payload_json": {"failure_stage": "placement"}
         });
 
         assert_eq!(execution_event_reason(&row), "Saxo auth");
@@ -6564,6 +6615,22 @@ mod tests {
             )
             .contains("order: 119")
         );
+        assert!(
+            execution_event_tooltip(
+                &row,
+                "execution_failed",
+                "Saxo auth",
+                &execution_event_detail(&row)
+            )
+            .contains("stage: Saxo placement (placement)")
+        );
+    }
+
+    #[test]
+    fn labels_known_execution_failure_stages_without_guessing_unknown_values() {
+        assert_eq!(execution_failure_stage_label("precheck"), "Saxo precheck");
+        assert_eq!(execution_failure_stage_label("placement"), "Saxo placement");
+        assert_eq!(execution_failure_stage_label("unrecognized"), "");
     }
 
     #[test]

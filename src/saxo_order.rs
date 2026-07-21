@@ -180,7 +180,11 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
                     order_id,
                     "execution_failed",
                     &err.to_string(),
-                    &json!({"adapter": "saxo", "error": err.to_string()}),
+                    &json!({
+                        "adapter": "saxo",
+                        "failure_stage": "execution",
+                        "error": err.to_string()
+                    }),
                 )
                 .await?;
                 processed.push(result);
@@ -908,7 +912,10 @@ async fn execute_order(
             order_id,
             "invalid_quantity",
             "Order quantity must be at least 1 whole share",
-            &json!({"quantity": value_f64(order, "quantity")}),
+            &json!({
+                "failure_stage": "local_validation",
+                "quantity": value_f64(order, "quantity")
+            }),
         )
         .await;
     }
@@ -962,6 +969,7 @@ async fn execute_order(
                 "execution_failed",
                 &error_text,
                 &json!({
+                    "failure_stage": "precheck_guard",
                     "sell_guard": {
                         "requested_quantity": quantity,
                         "held_quantity": held_quantity,
@@ -982,7 +990,24 @@ async fn execute_order(
         None
     };
     let request_payload =
-        build_order_payload(state, session, order, quantity, closing_position).await?;
+        match build_order_payload(state, session, order, quantity, closing_position).await {
+            Ok(payload) => payload,
+            Err(err) => {
+                return fail_order(
+                    state,
+                    order_id,
+                    "execution_failed",
+                    &err.to_string(),
+                    &json!({
+                        "adapter": "saxo",
+                        "failure_stage": "request_build",
+                        "error": err.to_string(),
+                        "broker_position": closing_position.map(sanitized_broker_position)
+                    }),
+                )
+                .await;
+            }
+        };
     let precheck = match precheck_order(state, session, &request_payload).await {
         Ok(precheck) => precheck,
         Err(err) => {
@@ -993,6 +1018,7 @@ async fn execute_order(
                 &err.to_string(),
                 &json!({
                     "adapter": "saxo",
+                    "failure_stage": "precheck",
                     "error": err.to_string(),
                     "payload": sanitized_order_payload(&request_payload),
                     "broker_position": closing_position.map(sanitized_broker_position)
@@ -1015,6 +1041,7 @@ async fn execute_order(
                 &error_text,
                 &json!({
                     "adapter": "saxo",
+                    "failure_stage": "placement",
                     "precheck": precheck,
                     "payload": sanitized_order_payload(&request_payload),
                     "placement_uncertainty": {
@@ -1029,7 +1056,23 @@ async fn execute_order(
             )
             .await;
         }
-        Err(err) => return Err(err),
+        Err(err) => {
+            return fail_order(
+                state,
+                order_id,
+                "execution_failed",
+                &err.to_string(),
+                &json!({
+                    "adapter": "saxo",
+                    "failure_stage": "placement",
+                    "error": err.to_string(),
+                    "precheck": precheck,
+                    "payload": sanitized_order_payload(&request_payload),
+                    "broker_position": closing_position.map(sanitized_broker_position)
+                }),
+            )
+            .await;
+        }
     };
     let broker_order_id = broker_order_id(&broker_result);
     let execution_result = json!({
@@ -3726,7 +3769,11 @@ mod tests {
             19,
             "execution_failed",
             "Order precheck failed: Tick size increment is invalid",
-            &json!({"adapter": "saxo", "precheck": {"ErrorInfo": {"Message": "Tick size increment is invalid"}}}),
+            &json!({
+                "adapter": "saxo",
+                "failure_stage": "precheck",
+                "precheck": {"ErrorInfo": {"Message": "Tick size increment is invalid"}}
+            }),
         )
         .await
         .expect("persist categorized failure");
@@ -3747,6 +3794,7 @@ mod tests {
             result["error_taxonomy"]["retry_policy"],
             json!("review_and_resubmit")
         );
+        assert_eq!(result["failure_stage"], json!("precheck"));
 
         let event = sqlx::query(
             "SELECT raw_payload_json FROM execution_order_events WHERE execution_order_id = 19",
@@ -3761,6 +3809,7 @@ mod tests {
         )
         .expect("parse failure event diagnostics");
         assert_eq!(event_payload["error_taxonomy"]["code"], json!("tick_size"));
+        assert_eq!(event_payload["failure_stage"], json!("precheck"));
     }
 
     #[test]
