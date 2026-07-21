@@ -917,3 +917,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a configured soft-loss tier at `strategy.capital.monthly_loss_soft_reduce_dkk` (-25,000 DKK) with `monthly_loss_soft_buy_multiplier` (0.50); it reduces the entire Trading Manager BUY budget only between that floor and the existing hard halt at -50,000 DKK.
 - The manager persists the effective and unreduced budgets plus tier state, the Cash Deployment panel explains the active reduction, and decision prompts/Hermes preflight receive the same constrained BUY budget.
 - Invalid, disabled, or reversed loss floors fail closed by leaving the soft tier inactive; hard-halt semantics, operator hard-halt override behavior, and SELL eligibility are unchanged.
+
+## [2026-07-21] improvement | Candidate waterfall final technical evidence
+
+- Fixed a decision-report audit ambiguity where the Candidate Scoring Waterfall rendered only the preflight technical snapshot even after the Trading Manager replaced it with a fresh database-verified daily indicator result.
+- Manager outcomes now persist a compact final technical snapshot without raw model rationale, broker payloads, or error text. The waterfall renders the final signal, retains the preflight value as context, and explains the deterministic BUY or SELL condition behind a technical-gate block.

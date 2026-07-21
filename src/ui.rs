@@ -1857,6 +1857,10 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     let action = text(&row, "action");
     let market = row.get("market").cloned().unwrap_or(JsonValue::Null);
     let technical = row.get("technical").cloned().unwrap_or(JsonValue::Null);
+    let final_technical = row
+        .get("final_technical")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     let markov = row.get("markov").cloned().unwrap_or(JsonValue::Null);
     let hermes = row.get("hermes").cloned().unwrap_or(JsonValue::Null);
     let outcome = text(&row, "outcome");
@@ -1886,16 +1890,12 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     } else {
         format!("{} closed", fallback_text(&market, "exchange", "market"))
     };
-    let technical_label = if text(&technical, "status") == "unavailable" {
-        "unavailable".to_string()
+    let preflight_technical_label = candidate_technical_label(&technical);
+    let final_technical_recorded = text(&final_technical, "status") == "ok";
+    let technical_label = if final_technical_recorded {
+        candidate_technical_label(&final_technical)
     } else {
-        format!(
-            "{} / {} / {}/{}",
-            fallback_text(&technical, "sentiment", "n/a"),
-            fallback_text(&technical, "trend_bias", "n/a"),
-            value_i64(&technical, "confluence_count"),
-            value_i64(&technical, "min_confluences"),
-        )
+        preflight_technical_label.clone()
     };
     let markov_label = if text(&markov, "status") == "unavailable" {
         "unavailable".to_string()
@@ -1917,6 +1917,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     };
     let hermes_effect = fallback_text(&hermes, "effect", "not recorded").replace('_', " ");
     let gate_code = text(&row, "gate_code").replace('_', " ");
+    let gate_detail = candidate_gate_detail(&row, &final_technical, final_technical_recorded);
     let requested_quantity = value_f64(&hermes, "requested_quantity");
     let resulting_quantity = value_f64(&hermes, "resulting_quantity");
     let hermes_label = if requested_quantity > 0.0 {
@@ -1933,12 +1934,70 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         tr {
             td { strong { "{symbol}" } span { class: "muted block", "{action}" } }
             td { "{market_label}" }
-            td { "{technical_label}" }
+            td {
+                "{technical_label}"
+                if final_technical_recorded {
+                    span { class: "muted block", "preflight: {preflight_technical_label}" }
+                } else {
+                    span { class: "muted block", "preflight only" }
+                }
+            }
             td { "{markov_label}" }
             td { "{hermes_label}" }
             td { span { class: outcome_class, "{outcome}" } }
-            td { "{gate_code}" }
+            td {
+                "{gate_code}"
+                if !gate_detail.is_empty() {
+                    span { class: "muted block", "{gate_detail}" }
+                }
+            }
         }
+    }
+}
+
+fn candidate_technical_label(technical: &JsonValue) -> String {
+    if text(technical, "status") != "ok" {
+        return "unavailable".to_string();
+    }
+    let confluences = value_i64(technical, "confluence_count");
+    let minimum = value_i64(technical, "min_confluences");
+    if minimum <= 0 {
+        return format!(
+            "{} / {}",
+            fallback_text(technical, "sentiment", "n/a"),
+            fallback_text(technical, "trend_bias", "n/a"),
+        );
+    }
+    format!(
+        "{} / {} / {}/{}",
+        fallback_text(technical, "sentiment", "n/a"),
+        fallback_text(technical, "trend_bias", "n/a"),
+        confluences,
+        minimum,
+    )
+}
+
+fn candidate_gate_detail(
+    row: &JsonValue,
+    final_technical: &JsonValue,
+    final_technical_recorded: bool,
+) -> String {
+    if text(row, "gate_code") != "technical" {
+        return String::new();
+    }
+    if !final_technical_recorded {
+        return "Final technical snapshot was not recorded for this legacy run.".to_string();
+    }
+    let sentiment = fallback_text(final_technical, "sentiment", "HOLD");
+    let trend = fallback_text(final_technical, "trend_bias", "neutral");
+    match text(row, "action").as_str() {
+        "BUY" => format!(
+            "Final {sentiment}/{trend}; BUY needs BUY or OVERWEIGHT, bullish trend, and enough confluences."
+        ),
+        "SELL" => format!(
+            "Final {sentiment}/{trend}; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
+        ),
+        _ => "Final technical result did not satisfy the action gate.".to_string(),
     }
 }
 
@@ -5952,6 +6011,36 @@ mod tests {
         assert_eq!(format_dkk(1234.4, &prefs), "1,234 DKK");
         assert_eq!(format_pct(0.125, &prefs), "12.5%");
         assert_eq!(format_pct(12.5, &prefs), "12.5%");
+    }
+
+    #[test]
+    fn waterfall_technical_gate_explains_final_verified_sell_signal() {
+        let row = json!({"action": "SELL", "gate_code": "technical"});
+        let final_technical = json!({
+            "status": "ok",
+            "sentiment": "HOLD",
+            "trend_bias": "neutral",
+            "confluence_count": 1,
+            "min_confluences": 3,
+        });
+
+        assert_eq!(
+            candidate_technical_label(&final_technical),
+            "HOLD / neutral / 1/3"
+        );
+        assert_eq!(
+            candidate_gate_detail(&row, &final_technical, true),
+            "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
+        );
+    }
+
+    #[test]
+    fn waterfall_technical_gate_labels_legacy_runs_without_final_snapshot() {
+        let row = json!({"action": "BUY", "gate_code": "technical"});
+        assert_eq!(
+            candidate_gate_detail(&row, &JsonValue::Null, false),
+            "Final technical snapshot was not recorded for this legacy run."
+        );
     }
 
     #[test]

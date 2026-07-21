@@ -274,6 +274,52 @@ fn compact_candidate_technical(value: &JsonValue) -> JsonValue {
     })
 }
 
+fn compact_candidate_final_technical(value: &JsonValue) -> JsonValue {
+    let technical = value.get("final_technical").unwrap_or(&JsonValue::Null);
+    if technical.is_object() {
+        return json!({
+            "status": json_text(technical, "status"),
+            "source": json_text(technical, "source"),
+            "run_date": json_text(technical, "run_date"),
+            "sentiment": json_text(technical, "sentiment"),
+            "trend_bias": json_text(technical, "trend_bias"),
+            "confluence_count": value_i64(technical, "confluence_count"),
+            "min_confluences": value_i64(technical, "min_confluences"),
+        });
+    }
+    legacy_final_technical_from_gate_reason(value).unwrap_or(JsonValue::Null)
+}
+
+/// Recover only the known, deterministic SELL gate result from pre-persistence
+/// manager runs. This never exposes the stored reason text to the dashboard.
+fn legacy_final_technical_from_gate_reason(value: &JsonValue) -> Option<JsonValue> {
+    let reason = json_text(value, "technical_gate");
+    let normalized = reason.trim().to_ascii_lowercase();
+    let remainder = normalized.strip_prefix("sell not approved; technical sentiment is ")?;
+    let (sentiment, trend) = remainder.split_once(" with ")?;
+    let (trend, _) = trend.split_once(" trend.")?;
+    let sentiment = match sentiment {
+        "sell" => "SELL",
+        "underweight" => "UNDERWEIGHT",
+        "hold" => "HOLD",
+        "overweight" => "OVERWEIGHT",
+        "buy" => "BUY",
+        _ => return None,
+    };
+    if !matches!(trend, "bullish" | "neutral" | "bearish") {
+        return None;
+    }
+    Some(json!({
+        "status": "ok",
+        "source": "recorded_gate_reason",
+        "run_date": "",
+        "sentiment": sentiment,
+        "trend_bias": trend,
+        "confluence_count": 0,
+        "min_confluences": 0,
+    }))
+}
+
 fn compact_candidate_markov(value: &JsonValue) -> JsonValue {
     let markov = value.get("markov").unwrap_or(&JsonValue::Null);
     json!({
@@ -352,6 +398,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
                     "action": json_text(row, "action"),
                     "outcome": outcome,
                     "gate_code": candidate_gate_code(row),
+                    "final_technical": compact_candidate_final_technical(row),
                 }),
             );
         }
@@ -374,6 +421,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "quantity": value_f64(&row, "quantity"),
             "market": compact_candidate_market(&row),
             "technical": compact_candidate_technical(&row),
+            "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "markov": compact_candidate_markov(&row),
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -400,6 +448,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "quantity": 0.0,
             "market": {"exchange": "", "exchange_open": false, "risk_excluded": false, "quarantine_active": false},
             "technical": {"status": "unavailable", "sentiment": "", "trend_bias": "", "confluence_count": 0, "min_confluences": 0},
+            "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "markov": {"status": "unavailable", "fresh": false, "direction": "", "signed_signal": 0.0, "age_days": 0},
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -7910,6 +7959,15 @@ analysis_windows:
                     "strategy_key": "swing:NVDA:xnas:BUY",
                     "symbol": "NVDA:xnas",
                     "action": "BUY",
+                    "final_technical": {
+                        "status": "ok",
+                        "source": "daily_indicators_db",
+                        "run_date": "2026-07-13",
+                        "sentiment": "HOLD",
+                        "trend_bias": "neutral",
+                        "confluence_count": 1,
+                        "min_confluences": 3
+                    },
                     "technical_gate": "Hermes advisory rejected because do not render this"
                 }]
             }
@@ -7921,8 +7979,32 @@ analysis_windows:
         assert_eq!(waterfall["candidates"][0]["symbol"], "NVDA:xnas");
         assert_eq!(waterfall["candidates"][0]["gate_code"], "hermes_advice");
         assert_eq!(waterfall["candidates"][0]["hermes"]["effect"], "reduced");
+        assert_eq!(
+            waterfall["candidates"][0]["final_technical"]["sentiment"],
+            "HOLD"
+        );
+        assert_eq!(
+            waterfall["candidates"][0]["final_technical"]["source"],
+            "daily_indicators_db"
+        );
         assert!(!waterfall.to_string().contains("do not render this"));
         assert!(!waterfall.to_string().contains("technical_gate"));
+    }
+
+    #[test]
+    fn candidate_waterfall_recovers_only_known_legacy_sell_gate_evidence() {
+        let technical = compact_candidate_final_technical(&json!({
+            "technical_gate": "SELL not approved; technical sentiment is HOLD with neutral trend. (database-verified daily indicators)"
+        }));
+        assert_eq!(technical["status"], "ok");
+        assert_eq!(technical["source"], "recorded_gate_reason");
+        assert_eq!(technical["sentiment"], "HOLD");
+        assert_eq!(technical["trend_bias"], "neutral");
+
+        let untrusted = compact_candidate_final_technical(&json!({
+            "technical_gate": "Hermes advisory rejected because do not render this"
+        }));
+        assert!(untrusted.is_null());
     }
 
     #[test]

@@ -1247,6 +1247,7 @@ async fn run_for_report(
             "symbol": order.symbol,
             "action": order.action,
             "gate_code": "approved",
+            "final_technical": compact_hermes_preflight_technical(order),
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
@@ -2954,6 +2955,10 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         "symbol": order.symbol,
         "action": order.action,
         "gate_code": candidate_gate_reason_code(reason),
+        // The final gate may have replaced model-provided technical metadata
+        // with a fresh database signal. Persist only compact safe fields so the
+        // audit UI can explain the decision without raw inputs.
+        "final_technical": compact_hermes_preflight_technical(order),
         "technical_gate": reason,
     })
 }
