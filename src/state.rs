@@ -2086,36 +2086,47 @@ impl AppState {
             )
             .await
         {
-            let broker_currency = text_value(&broker_cash, "currency")
-                .if_empty_then(|| Some("DKK".to_string()))
-                .unwrap_or_else(|| "DKK".to_string());
-            let broker_cash_local = value_f64(&broker_cash, "cash_available_for_trading")
-                .max(value_f64(&broker_cash, "cash_balance"));
-            let broker_fx =
-                crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_currency).await;
-            let broker_cash_dkk = broker_cash_local * broker_fx;
-            if broker_cash_local.abs() > 1e-9
-                && money_mismatch_exceeds_tolerance(
-                    ledger_cash,
-                    broker_cash_dkk,
-                    INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK,
-                    INTEGRITY_BROKER_CASH_REL_TOLERANCE,
-                )
-            {
-                warnings.push(json!({
-                    "code": "broker_cash_drift",
-                    "severity": "warning",
-                    "message": "Ledger-derived cash differs from the latest Saxo broker cash snapshot; settlement timing can explain some drift.",
-                    "ledger_cash_balance_dkk": ledger_cash,
-                    "broker_cash_balance_dkk": broker_cash_dkk,
-                    "broker_cash_local": broker_cash_local,
-                    "broker_currency": broker_currency,
-                    "difference_dkk": ledger_cash - broker_cash_dkk,
-                    "broker_updated_at": broker_cash.get("updated_at").cloned().unwrap_or(JsonValue::Null)
-                }));
-                checks.insert("broker_cash".to_string(), json!("warning"));
+            if !broker_cash_reconciliation_enabled(&self.config) {
+                // Saxo SIM is often a large broker account while the application tracks a
+                // deliberately bounded DKK strategy book. Comparing their absolute cash
+                // values produces a false integrity warning. Keep the broker snapshot for
+                // execution/audit, but require an explicit opt-in before reconciling it.
+                checks.insert(
+                    "broker_cash".to_string(),
+                    json!("skipped_independent_strategy_ledger"),
+                );
             } else {
-                checks.insert("broker_cash".to_string(), json!("ok"));
+                let broker_currency = text_value(&broker_cash, "currency")
+                    .if_empty_then(|| Some("DKK".to_string()))
+                    .unwrap_or_else(|| "DKK".to_string());
+                let broker_cash_local = value_f64(&broker_cash, "cash_available_for_trading")
+                    .max(value_f64(&broker_cash, "cash_balance"));
+                let broker_fx =
+                    crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_currency).await;
+                let broker_cash_dkk = broker_cash_local * broker_fx;
+                if broker_cash_local.abs() > 1e-9
+                    && money_mismatch_exceeds_tolerance(
+                        ledger_cash,
+                        broker_cash_dkk,
+                        INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK,
+                        INTEGRITY_BROKER_CASH_REL_TOLERANCE,
+                    )
+                {
+                    warnings.push(json!({
+                        "code": "broker_cash_drift",
+                        "severity": "warning",
+                        "message": "Ledger-derived cash differs from the latest Saxo broker cash snapshot; settlement timing can explain some drift.",
+                        "ledger_cash_balance_dkk": ledger_cash,
+                        "broker_cash_balance_dkk": broker_cash_dkk,
+                        "broker_cash_local": broker_cash_local,
+                        "broker_currency": broker_currency,
+                        "difference_dkk": ledger_cash - broker_cash_dkk,
+                        "broker_updated_at": broker_cash.get("updated_at").cloned().unwrap_or(JsonValue::Null)
+                    }));
+                    checks.insert("broker_cash".to_string(), json!("warning"));
+                } else {
+                    checks.insert("broker_cash".to_string(), json!("ok"));
+                }
             }
         } else {
             checks.insert("broker_cash".to_string(), json!("skipped_no_snapshot"));
@@ -5874,6 +5885,10 @@ fn overview_integrity_issue_key(issue: &JsonValue) -> String {
     )
 }
 
+fn broker_cash_reconciliation_enabled(config: &YamlValue) -> bool {
+    yaml_bool(config, &["portfolio", "broker_cash_reconciliation_enabled"]).unwrap_or(false)
+}
+
 fn integrity_key_part(value: &str) -> String {
     value
         .trim()
@@ -7195,14 +7210,24 @@ mod tests {
         assert!(state.claim_manual_decision_report().await.expect("claim"));
         assert!(state.manual_decision_report_in_flight().await);
         // A second click while the pipeline runs must not start another.
-        assert!(!state.claim_manual_decision_report().await.expect("re-claim"));
+        assert!(
+            !state
+                .claim_manual_decision_report()
+                .await
+                .expect("re-claim")
+        );
 
         state
             .release_manual_decision_report_claim()
             .await
             .expect("release claim");
         assert!(!state.manual_decision_report_in_flight().await);
-        assert!(state.claim_manual_decision_report().await.expect("claim again"));
+        assert!(
+            state
+                .claim_manual_decision_report()
+                .await
+                .expect("claim again")
+        );
     }
 
     #[tokio::test]
@@ -7218,7 +7243,12 @@ mod tests {
             .expect("seed stale claim");
 
         assert!(!state.manual_decision_report_in_flight().await);
-        assert!(state.claim_manual_decision_report().await.expect("take over"));
+        assert!(
+            state
+                .claim_manual_decision_report()
+                .await
+                .expect("take over")
+        );
     }
 
     #[test]
@@ -7336,6 +7366,18 @@ mod tests {
             hermes_counterfactual_quote_metrics("HOLD", 2.0, 100.0, 90.0),
             None
         );
+    }
+
+    #[test]
+    fn broker_cash_reconciliation_requires_explicit_opt_in() {
+        let default_config: YamlValue =
+            serde_yaml::from_str("portfolio: {}").expect("parse default portfolio config");
+        let enabled_config: YamlValue =
+            serde_yaml::from_str("portfolio:\n  broker_cash_reconciliation_enabled: true\n")
+                .expect("parse enabled broker cash config");
+
+        assert!(!broker_cash_reconciliation_enabled(&default_config));
+        assert!(broker_cash_reconciliation_enabled(&enabled_config));
     }
 
     #[test]

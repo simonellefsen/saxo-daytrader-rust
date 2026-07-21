@@ -4002,12 +4002,11 @@ mod tests {
         assert_eq!(replay["fills"], json!(0));
         assert_eq!(replay["delta_quantity"], json!(0.0));
         assert_eq!(replay["ledger_id"], json!(ledger_id));
-        let replayed_snapshot = sqlx::query(
-            "SELECT quantity FROM position_snapshots WHERE symbol = 'AMD:xnas'",
-        )
-        .fetch_one(&state.pool)
-        .await
-        .expect("read snapshot after replay");
+        let replayed_snapshot =
+            sqlx::query("SELECT quantity FROM position_snapshots WHERE symbol = 'AMD:xnas'")
+                .fetch_one(&state.pool)
+                .await
+                .expect("read snapshot after replay");
         assert!((replayed_snapshot.try_get::<f64, _>("quantity").unwrap() - 6.0).abs() < 1e-9);
         let fill_count = sqlx::query("SELECT COUNT(*) AS count FROM execution_fills")
             .fetch_one(&state.pool)
@@ -4096,9 +4095,7 @@ mod tests {
         );
         assert!((lot.try_get::<f64, _>("quantity_original").unwrap() - 2.0).abs() < 1e-9);
         assert!((lot.try_get::<f64, _>("cost_basis_total_local").unwrap() - 205.5).abs() < 1e-6);
-        assert!(
-            (lot.try_get::<f64, _>("cost_basis_total_dkk").unwrap() - 1442.91825).abs() < 1e-6
-        );
+        assert!((lot.try_get::<f64, _>("cost_basis_total_dkk").unwrap() - 1442.91825).abs() < 1e-6);
         assert_eq!(lot.try_get::<String, _>("source_type").unwrap(), "buy_fill");
         assert_eq!(
             lot.try_get::<String, _>("source_reference").unwrap(),
@@ -4302,10 +4299,7 @@ mod tests {
         let realised = ledger.try_get::<f64, _>("realised_gain_dkk").unwrap();
         assert!((realised - (net - expected_basis_dkk)).abs() < 1e-6);
         assert!(realised < 0.0, "position sold under water must book a loss");
-        assert_eq!(
-            ledger.try_get::<String, _>("isin").unwrap(),
-            "US0420682058"
-        );
+        assert_eq!(ledger.try_get::<String, _>("isin").unwrap(), "US0420682058");
         assert_eq!(
             ledger.try_get::<String, _>("instrument_name").unwrap(),
             "ARM Holdings plc ADR"

@@ -880,3 +880,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.
 - Added a warning-level quantity drift check between `broker_instrument_exposures` and `broker_position_snapshots`.
 - New broker exposure integrity warnings receive stable issue keys, so the acknowledgement lifecycle can track them without hiding the underlying drift.
+
+## [2026-07-21] improvement | Independent broker cash-book guard
+
+- Verified that the configured Saxo SIM account carries an independent EUR capital balance, while the dashboard and buy limits use the bounded DKK strategy ledger configured under `portfolio.initial_cash_dkk` and `portfolio.virtual_cap_dkk`.
+- Added the explicit `portfolio.broker_cash_reconciliation_enabled` opt-in. It defaults to `false`; broker balance snapshots remain available for execution and audit, but the Overview only compares absolute broker cash when both books are intentionally the same.
+- This removes the false multi-million-DKK `broker_cash_drift` warning without weakening position, fill, exposure, or strategy-ledger integrity checks.

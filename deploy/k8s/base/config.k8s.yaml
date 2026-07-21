@@ -23,6 +23,10 @@ portfolio:
   database_path: ledger.db
   initial_cash_dkk: 9770.17
   virtual_cap_dkk: 250000.0
+  # Saxo SIM holds a separate EUR broker account. The DKK strategy ledger is
+  # intentionally bounded, so absolute broker-cash reconciliation is invalid.
+  # Set true only when both values represent the same capital book.
+  broker_cash_reconciliation_enabled: false
 
 market_data:
   refresh_interval_seconds: 300

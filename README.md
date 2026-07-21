@@ -270,6 +270,8 @@ The project is driven by [config.yaml](/Users/lindau/codex/daytrader/config.yaml
 - `database_path`: SQLite database path, usually `ledger.db`.
 - `database_url`: optional PostgreSQL DSN. In Kubernetes this is set to `ENV:DATABASE_URL` and takes precedence over `database_path`.
 - `initial_cash_dkk`: starting cash balance used for cash-aware portfolio value and buy-side limits. Buys reduce it, sells increase it through recorded `net_amount_dkk`.
+- `virtual_cap_dkk`: upper bound for the strategy's independently tracked capital book. It does not alter the broker account balance.
+- `broker_cash_reconciliation_enabled`: default `false`. Set this to `true` only when the DKK strategy ledger and the selected Saxo account represent the same capital book. Broker snapshots are always retained for execution and audit; this flag controls only the absolute-cash integrity comparison.
 
 ### `market_data`
 
