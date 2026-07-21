@@ -67,7 +67,7 @@ const APP_SCRIPT: &str = r#"
         const baselineId = pending.dataset.baselineReportId || "";
         const baselineStatus = pending.dataset.baselineReportStatus || "";
         const changed = id !== baselineId || status !== baselineStatus;
-        if (changed && status && status !== "xai_deferred" && status !== "pending") {
+        if (changed && status && status !== "xai_deferred" && status !== "dry_run_xai_deferred" && status !== "pending") {
           const suffix = id ? `&report_id=${encodeURIComponent(id)}` : "";
           window.location.href = `${base}/?view=decisions${suffix}`;
         }
@@ -1619,7 +1619,12 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let pending_report = data
         .reports
         .iter()
-        .find(|row| matches!(text(row, "status").as_str(), "xai_deferred" | "pending"))
+        .find(|row| {
+            matches!(
+                text(row, "status").as_str(),
+                "xai_deferred" | "dry_run_xai_deferred" | "pending"
+            )
+        })
         .cloned();
     let report_generation_pending = pending_report.is_some() || data.manual_report_in_flight;
     let pending_report_id = pending_report
@@ -1684,6 +1689,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             class: "button secondary",
                             r#type: "submit",
                             disabled: report_generation_pending,
+                            title: "Validate the provider response and parser without creating Trading Manager or Saxo work",
                             "data-pending-label": "Generating Dry Run...",
                             "{dry_run_label}"
                         }

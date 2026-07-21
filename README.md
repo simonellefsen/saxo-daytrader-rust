@@ -37,6 +37,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - OpenRouter-backed decision engine using `openai/gpt-5.5`
 - Structured JSON decision reports with step-by-step rationale, watchlist focus, and suggested trades
 - Decision report persistence with prompt, raw response, parsed report, and error tracking
+- Non-mutating Decision Report dry runs with distinct persisted statuses; they validate provider output and parsing but cannot enter Trading Manager or Saxo execution
 - APScheduler-based background worker for recurring analysis cycles
 - Exchange-calendar driven market hours, holiday closures, and daylight-saving aware session timing
 - Simulation execution queue with immutable ledger updates

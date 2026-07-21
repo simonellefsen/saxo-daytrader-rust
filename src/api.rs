@@ -1119,7 +1119,13 @@ async fn action_generate_decision_report_with_mode(
 }
 
 async fn run_manual_decision_report_pipeline(state: &AppState, mode: DecisionReportActionMode) {
-    match xai_decision::submit_manual_decision_report(state).await {
+    let report_result = match mode {
+        DecisionReportActionMode::Live => xai_decision::submit_manual_decision_report(state).await,
+        DecisionReportActionMode::DryRun => {
+            xai_decision::submit_manual_dry_run_decision_report(state).await
+        }
+    };
+    match report_result {
         Ok(report) => {
             let id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
             let mut immediate = json!({"status": decision_report_action_skip_status(mode)});

@@ -3493,6 +3493,11 @@ mod tests {
 
         for report in [
             scheduled_report("deferred", "2026-07-14T09:00:00Z", "us_open"),
+            scheduled_report(
+                "dry_run_completed",
+                "2026-07-14T09:00:00Z",
+                "manual:2026-07-14T09:00:00Z",
+            ),
             scheduled_report("completed", "2026-07-14T07:59:59Z", "us_open"),
             scheduled_report("completed", "not-a-timestamp", "us_open"),
             scheduled_report("completed", "2026-07-14T09:00:00Z", ""),

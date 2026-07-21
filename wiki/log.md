@@ -940,3 +940,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Fixed a decision-report audit ambiguity where the Candidate Scoring Waterfall rendered only the preflight technical snapshot even after the Trading Manager replaced it with a fresh database-verified daily indicator result.
 - Manager outcomes now persist a compact final technical snapshot without raw model rationale, broker payloads, or error text. The waterfall renders the final signal, retains the preflight value as context, and explains the deterministic BUY or SELL condition behind a technical-gate block.
+
+## [2026-07-21] fix | Decision report dry-run scheduler safety
+
+- Hardened the existing provider/schema dry-run action so its persisted lifecycle is explicitly non-actionable: `dry_run_xai_deferred`, `dry_run_completed`, and `dry_run_error` are distinct from live report statuses for both OpenRouter and deferred xAI flows.
+- The normalized dry-run artifact records its local safety boundary, the Decisions UI keeps a dry deferred run pending until its real terminal state, and the Trading Manager status gate rejects dry-run completion even if the scheduler sees it later.
+- Added pure regression coverage for dry-run normalized output and Trading Manager rejection alongside the existing immediate-pipeline guard. No Saxo or Hermes mutation path is invoked by this mode.

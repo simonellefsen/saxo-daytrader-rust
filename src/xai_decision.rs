@@ -33,6 +33,42 @@ struct PendingDeferredReport {
     request_id: String,
     request_json: JsonValue,
     report_json: JsonValue,
+    mode: DecisionReportSubmissionMode,
+}
+
+/// Dry-run reports must remain distinguishable from live reports at every
+/// persistence step. The Trading Manager only accepts live terminal statuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionReportSubmissionMode {
+    Live,
+    DryRun,
+}
+
+impl DecisionReportSubmissionMode {
+    fn completed_status(self) -> &'static str {
+        match self {
+            Self::Live => "completed",
+            Self::DryRun => "dry_run_completed",
+        }
+    }
+
+    fn deferred_status(self) -> &'static str {
+        match self {
+            Self::Live => "xai_deferred",
+            Self::DryRun => "dry_run_xai_deferred",
+        }
+    }
+
+    fn error_status(self) -> &'static str {
+        match self {
+            Self::Live => "xai_error",
+            Self::DryRun => "dry_run_error",
+        }
+    }
+
+    fn is_dry_run(self) -> bool {
+        self == Self::DryRun
+    }
 }
 
 /// One scheduler step for AI decision reports.
@@ -52,15 +88,34 @@ pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
 }
 
 pub async fn submit_manual_decision_report(state: &AppState) -> Result<JsonValue> {
+    submit_manual_decision_report_with_mode(state, DecisionReportSubmissionMode::Live).await
+}
+
+pub async fn submit_manual_dry_run_decision_report(state: &AppState) -> Result<JsonValue> {
+    submit_manual_decision_report_with_mode(state, DecisionReportSubmissionMode::DryRun).await
+}
+
+async fn submit_manual_decision_report_with_mode(
+    state: &AppState,
+    mode: DecisionReportSubmissionMode,
+) -> Result<JsonValue> {
     let pulse = DecisionPulse {
         key: format!("manual:{}", Utc::now().format("%Y-%m-%dT%H:%M:%SZ")),
-        label: "Manual Decision Report".to_string(),
-        kind: "manual".to_string(),
+        label: if mode.is_dry_run() {
+            "Manual Decision Report (Dry Run)".to_string()
+        } else {
+            "Manual Decision Report".to_string()
+        },
+        kind: if mode.is_dry_run() {
+            "manual_dry_run".to_string()
+        } else {
+            "manual".to_string()
+        },
         target_at_utc: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
     };
-    submit_deferred_report(state, &pulse, true).await
+    submit_deferred_report(state, &pulse, true, mode).await
 }
 
 async fn submit_due_scheduled_reports(state: &AppState) -> Result<Vec<JsonValue>> {
@@ -81,7 +136,10 @@ async fn submit_due_scheduled_reports(state: &AppState) -> Result<Vec<JsonValue>
             }));
             continue;
         }
-        submitted.push(submit_deferred_report(state, &pulse, false).await?);
+        submitted.push(
+            submit_deferred_report(state, &pulse, false, DecisionReportSubmissionMode::Live)
+                .await?,
+        );
     }
     Ok(submitted)
 }
@@ -90,6 +148,7 @@ async fn submit_deferred_report(
     state: &AppState,
     pulse: &DecisionPulse,
     manual: bool,
+    mode: DecisionReportSubmissionMode,
 ) -> Result<JsonValue> {
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt = build_decision_prompt(state, pulse, manual).await?;
@@ -105,6 +164,7 @@ async fn submit_deferred_report(
             &model,
             &prompt,
             &request_json,
+            mode,
             &format!(
                 "{} is missing; decision report was not submitted.",
                 ai_api_key_env_name(state)
@@ -147,6 +207,7 @@ async fn submit_deferred_report(
             &model,
             &prompt,
             &outbound_request,
+            mode,
             &format!("{provider} decision submit failed with HTTP {status}: {response_excerpt}"),
         )
         .await?;
@@ -169,6 +230,7 @@ async fn submit_deferred_report(
                 &model,
                 &prompt,
                 &outbound_request,
+                mode,
                 &format!(
                     "{provider} decision submit returned invalid JSON despite HTTP {status}: {err}; response excerpt: {response_excerpt}"
                 ),
@@ -203,6 +265,7 @@ async fn submit_deferred_report(
                 "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 "mode": "chat_completion"
             }),
+            mode,
         ) {
             Ok(report_json) => report_json,
             Err(err) => {
@@ -215,6 +278,7 @@ async fn submit_deferred_report(
                     &prompt,
                     &outbound_request,
                     Some(&response_json),
+                    mode,
                     &format!(
                         "{provider} decision report response could not be normalized into strict JSON: {err:#}; message content excerpt: {content_excerpt}"
                     ),
@@ -234,7 +298,7 @@ async fn submit_deferred_report(
             &created_at,
             pulse,
             model.clone(),
-            "completed",
+            mode.completed_status(),
             Some(response_id),
             &prompt,
             &outbound_request,
@@ -257,7 +321,7 @@ async fn submit_deferred_report(
         .ok_or_else(|| anyhow!("xAI deferred submit response did not include request_id"))?;
 
     let report_json = json!({
-        "status": "xai_deferred",
+        "status": mode.deferred_status(),
         "created_at": created_at,
         "report_title": pulse.label,
         "analysis_pulse": pulse_to_json(pulse),
@@ -268,24 +332,29 @@ async fn submit_deferred_report(
             "mode": "deferred_chat_completion"
         },
         "strategy_plan": {
-            "status": "xai_deferred",
+            "status": mode.deferred_status(),
             "selected_assets": [],
             "swing_orders": [],
             "suggested_trades": [],
             "notes": ["Waiting for xAI deferred completion before strategy planning."]
         },
         "suggested_trades": [],
-        "execution_notes": [
-            "Deferred xAI request submitted. The scheduler will poll for completion.",
-            "The Trading Manager will only act after this report becomes completed."
-        ]
+        "execution_notes": if mode.is_dry_run() {
+            json!(["Deferred xAI dry run submitted. The scheduler will poll for completion without Trading Manager or Saxo execution."])
+        } else {
+            json!([
+                "Deferred xAI request submitted. The scheduler will poll for completion.",
+                "The Trading Manager will only act after this report becomes completed."
+            ])
+        },
+        "execution_safety": report_execution_safety(mode)
     });
     let row = insert_decision_report(
         state,
         &created_at,
         pulse,
         model,
-        "xai_deferred",
+        mode.deferred_status(),
         Some(request_id),
         &prompt,
         &outbound_request,
@@ -308,9 +377,9 @@ async fn poll_pending_deferred_reports(state: &AppState) -> Result<Vec<JsonValue
         return Ok(Vec::new());
     }
     let rows = sqlx::query(
-        "SELECT id, request_json, response_json, report_json, response_id
+        "SELECT id, status, request_json, response_json, report_json, response_id
          FROM decision_reports
-         WHERE status = 'xai_deferred'
+         WHERE status IN ('xai_deferred', 'dry_run_xai_deferred')
          ORDER BY created_at ASC, id ASC
          LIMIT 10",
     )
@@ -379,6 +448,7 @@ async fn poll_one_deferred_report(
         mark_deferred_report_error(
             state,
             pending.id,
+            pending.mode,
             &format!("xAI deferred poll failed with HTTP {status}: {response_body}"),
         )
         .await?;
@@ -398,7 +468,7 @@ async fn poll_one_deferred_report(
             let error_text = format!(
                 "xAI deferred completion response could not be normalized into strict JSON: {err:#}; message content excerpt: {content_excerpt}"
             );
-            mark_deferred_report_error(state, pending.id, &error_text).await?;
+            mark_deferred_report_error(state, pending.id, pending.mode, &error_text).await?;
             return Ok(json!({
                 "status": "error",
                 "report_id": pending.id,
@@ -407,7 +477,14 @@ async fn poll_one_deferred_report(
             }));
         }
     };
-    update_completed_report(state, pending.id, &response_json, &report_json).await?;
+    update_completed_report(
+        state,
+        pending.id,
+        pending.mode,
+        &response_json,
+        &report_json,
+    )
+    .await?;
     info!(
         report_id = pending.id,
         request_id = pending.request_id,
@@ -418,7 +495,7 @@ async fn poll_one_deferred_report(
         "completed xAI deferred decision report"
     );
     Ok(json!({
-        "status": "completed",
+        "status": pending.mode.completed_status(),
         "report_id": pending.id,
         "request_id": pending.request_id,
         "response_id": response_json.get("id").cloned().unwrap_or(JsonValue::Null)
@@ -438,6 +515,7 @@ fn completed_report_json(
             "request_id": pending.request_id,
             "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }),
+        pending.mode,
     )
 }
 
@@ -447,6 +525,7 @@ fn completed_report_json_from_parts(
     response_json: &JsonValue,
     provider_key: &str,
     provider_metadata: JsonValue,
+    mode: DecisionReportSubmissionMode,
 ) -> Result<JsonValue> {
     let content = response_json
         .get("choices")
@@ -469,12 +548,19 @@ fn completed_report_json_from_parts(
         .unwrap_or(JsonValue::Null);
     let scope_enforcement = enforce_completed_report_scope(&mut parsed, &pulse);
     if let Some(obj) = parsed.as_object_mut() {
-        obj.insert("status".to_string(), JsonValue::from("completed"));
+        obj.insert(
+            "status".to_string(),
+            JsonValue::from(mode.completed_status()),
+        );
         obj.entry("created_at".to_string())
             .or_insert_with(|| JsonValue::from(created_at));
         obj.entry("analysis_pulse".to_string()).or_insert(pulse);
         obj.insert("market_scope_enforcement".to_string(), scope_enforcement);
         obj.insert(provider_key.to_string(), provider_metadata);
+        obj.insert(
+            "execution_safety".to_string(),
+            report_execution_safety(mode),
+        );
         if !obj.contains_key("strategy_plan") {
             let suggested = obj
                 .get("suggested_trades")
@@ -522,6 +608,22 @@ fn request_capital_plan(request_json: &JsonValue) -> Option<JsonValue> {
                 .find_map(|payload| payload.get("capital_plan").cloned())
         })
         .or_else(|| request_json.get("capital_plan").cloned())
+}
+
+fn report_execution_safety(mode: DecisionReportSubmissionMode) -> JsonValue {
+    match mode {
+        DecisionReportSubmissionMode::Live => json!({
+            "mode": "live",
+            "trading_manager": "eligible_after_completion",
+            "execution_queue": "eligible_after_manager_approval"
+        }),
+        DecisionReportSubmissionMode::DryRun => json!({
+            "mode": "dry_run",
+            "trading_manager": "blocked",
+            "execution_queue": "blocked",
+            "reason": "Operator dry run validates the provider response and parser only."
+        }),
+    }
 }
 
 fn enforce_completed_report_scope(report: &mut JsonValue, pulse: &JsonValue) -> JsonValue {
@@ -1673,6 +1775,7 @@ async fn insert_xai_error_report(
     model: &str,
     prompt: &JsonValue,
     request_json: &JsonValue,
+    mode: DecisionReportSubmissionMode,
     error_text: &str,
 ) -> Result<JsonValue> {
     insert_xai_error_report_with_response(
@@ -1683,6 +1786,7 @@ async fn insert_xai_error_report(
         prompt,
         request_json,
         None,
+        mode,
         error_text,
     )
     .await
@@ -1696,23 +1800,25 @@ async fn insert_xai_error_report_with_response(
     prompt: &JsonValue,
     request_json: &JsonValue,
     response_json: Option<&JsonValue>,
+    mode: DecisionReportSubmissionMode,
     error_text: &str,
 ) -> Result<JsonValue> {
     let report_json = json!({
-        "status": "xai_error",
+        "status": mode.error_status(),
         "created_at": created_at,
         "report_title": pulse.label,
         "analysis_pulse": pulse_to_json(pulse),
         "strategy_plan": {"status": "xai_error", "swing_orders": [], "suggested_trades": []},
         "suggested_trades": [],
-        "execution_notes": [error_text]
+        "execution_notes": [error_text],
+        "execution_safety": report_execution_safety(mode)
     });
     insert_decision_report(
         state,
         created_at,
         pulse,
         model.to_string(),
-        "xai_error",
+        mode.error_status(),
         None,
         prompt,
         request_json,
@@ -1803,6 +1909,7 @@ async fn insert_decision_report(
 async fn update_completed_report(
     state: &AppState,
     report_id: i64,
+    mode: DecisionReportSubmissionMode,
     response_json: &JsonValue,
     report_json: &JsonValue,
 ) -> Result<()> {
@@ -1812,12 +1919,13 @@ async fn update_completed_report(
         .unwrap_or("");
     let sql = format!(
         "UPDATE decision_reports
-         SET status = 'completed',
+         SET status = '{}',
              response_id = '{}',
              response_json = '{}',
              report_json = '{}',
              error_text = NULL
          WHERE id = {}",
+        sql_escape(mode.completed_status()),
         sql_escape(response_id),
         sql_escape(&serde_json::to_string(response_json)?),
         sql_escape(&serde_json::to_string(report_json)?),
@@ -1833,10 +1941,12 @@ async fn update_completed_report(
 async fn mark_deferred_report_error(
     state: &AppState,
     report_id: i64,
+    mode: DecisionReportSubmissionMode,
     error_text: &str,
 ) -> Result<()> {
     let sql = format!(
-        "UPDATE decision_reports SET status = 'xai_error', error_text = '{}' WHERE id = {}",
+        "UPDATE decision_reports SET status = '{}', error_text = '{}' WHERE id = {}",
+        sql_escape(mode.error_status()),
         sql_escape(error_text),
         report_id.max(0)
     );
@@ -1867,6 +1977,10 @@ fn decode_pending_report(row: &JsonValue) -> Result<PendingDeferredReport> {
         request_id,
         request_json,
         report_json,
+        mode: match text(row, "status").as_str() {
+            "dry_run_xai_deferred" => DecisionReportSubmissionMode::DryRun,
+            _ => DecisionReportSubmissionMode::Live,
+        },
     })
 }
 
@@ -2234,6 +2348,7 @@ mod tests {
             request_id: "req-1".to_string(),
             request_json: json!({}),
             report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "europe_open_followup:2026-05-11"}}),
+            mode: DecisionReportSubmissionMode::Live,
         };
         let response = json!({
             "id": "chatcmpl-1",
@@ -2242,6 +2357,27 @@ mod tests {
         let report = completed_report_json(&pending, &response).unwrap();
         assert_eq!(report["status"], "completed");
         assert_eq!(report["strategy_plan"]["status"], "completed");
+    }
+
+    #[test]
+    fn dry_run_completion_is_explicitly_non_actionable() {
+        let pending = PendingDeferredReport {
+            id: 1,
+            request_id: "req-dry-run".to_string(),
+            request_json: json!({}),
+            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "manual:2026-05-11T08:15:00Z"}}),
+            mode: DecisionReportSubmissionMode::DryRun,
+        };
+        let response = json!({
+            "id": "chatcmpl-dry-run",
+            "choices": [{"message": {"content": "{\"report_title\":\"Dry run\",\"suggested_trades\":[]}"}}]
+        });
+
+        let report = completed_report_json(&pending, &response).unwrap();
+
+        assert_eq!(report["status"], "dry_run_completed");
+        assert_eq!(report["execution_safety"]["trading_manager"], "blocked");
+        assert_eq!(report["execution_safety"]["execution_queue"], "blocked");
     }
 
     #[test]
@@ -2256,6 +2392,7 @@ mod tests {
                 ]
             }),
             report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "us_open_followup:2026-05-11"}}),
+            mode: DecisionReportSubmissionMode::Live,
         };
         let response = json!({
             "id": "chatcmpl-1",
