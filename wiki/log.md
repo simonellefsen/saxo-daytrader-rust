@@ -891,3 +891,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added a database-backed, no-HTTP regression fixture for a SELL that first reconciles one partial share and later reaches a four-share final cumulative fill.
 - The fixture verifies each delta consumes the correct fraction of the then-current basis, the remaining local book retains the correct six-share basis, and a replay of the final fill creates no extra fill or sale.
+
+## [2026-07-21] improvement | Tiered monthly-loss guardrail
+
+- Added a configured soft-loss tier at `strategy.capital.monthly_loss_soft_reduce_dkk` (-25,000 DKK) with `monthly_loss_soft_buy_multiplier` (0.50); it reduces the entire Trading Manager BUY budget only between that floor and the existing hard halt at -50,000 DKK.
+- The manager persists the effective and unreduced budgets plus tier state, the Cash Deployment panel explains the active reduction, and decision prompts/Hermes preflight receive the same constrained BUY budget.
+- Invalid, disabled, or reversed loss floors fail closed by leaving the soft tier inactive; hard-halt semantics, operator hard-halt override behavior, and SELL eligibility are unchanged.

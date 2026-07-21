@@ -119,6 +119,7 @@ struct CapitalBudget {
     reinvestment_pressure_threshold_pct: f64,
     required_cash_buffer_dkk: f64,
     available_cash_above_buffer_dkk: f64,
+    unreduced_available_buy_budget_dkk: f64,
     available_buy_budget_dkk: f64,
     remaining_deployment_capacity_dkk: f64,
     excess_cash_pct: f64,
@@ -528,16 +529,18 @@ fn with_hermes_advice_manager_outcomes(
     delta
 }
 
-/// Monthly-loss circuit breaker: when the month's P/L (batch-scoped goal
-/// tracking baseline) breaches the configured floor, new BUYs are suspended
-/// while SELLs stay allowed. Reinvestment pressure otherwise keeps deploying
-/// cash straight through a losing month.
+/// Monthly-loss circuit breaker: a soft loss band reduces new BUY capacity,
+/// while the hard floor suspends BUYs altogether. SELLs stay allowed in both
+/// bands so defensive exits are never blocked by the capital guardrail.
 #[derive(Clone, Debug, PartialEq)]
 struct MonthlyLossBuyHalt {
     active: bool,
     threshold_breached: bool,
     month_pnl_dkk: f64,
     threshold_dkk: f64,
+    soft_threshold_dkk: f64,
+    soft_buy_multiplier: f64,
+    soft_reduction_active: bool,
     override_active: bool,
     override_value: JsonValue,
 }
@@ -548,6 +551,17 @@ async fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> Monthl
         &["strategy", "capital", "monthly_loss_halt_dkk"],
     )
     .unwrap_or(-10_000.0);
+    let soft_threshold_dkk = yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_soft_reduce_dkk"],
+    )
+    .unwrap_or(-25_000.0);
+    let soft_buy_multiplier = yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_soft_buy_multiplier"],
+    )
+    .unwrap_or(0.5)
+    .clamp(0.0, 1.0);
     let month_pnl_dkk = overview
         .get("goal_tracking")
         .and_then(|value| value.get("periods"))
@@ -570,12 +584,17 @@ async fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> Monthl
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let threshold_breached = monthly_loss_threshold_breached(month_pnl_dkk, threshold_dkk);
+    let soft_reduction_active =
+        monthly_loss_soft_reduction_active(month_pnl_dkk, soft_threshold_dkk, threshold_dkk);
     MonthlyLossBuyHalt {
         // A non-negative threshold disables the breaker.
         active: threshold_breached && !override_active,
         threshold_breached,
         month_pnl_dkk,
         threshold_dkk,
+        soft_threshold_dkk,
+        soft_buy_multiplier,
+        soft_reduction_active,
         override_active,
         override_value,
     }
@@ -583,6 +602,21 @@ async fn monthly_loss_buy_halt(state: &AppState, overview: &JsonValue) -> Monthl
 
 fn monthly_loss_threshold_breached(month_pnl_dkk: f64, threshold_dkk: f64) -> bool {
     threshold_dkk < 0.0 && month_pnl_dkk <= threshold_dkk
+}
+
+fn monthly_loss_soft_reduction_active(
+    month_pnl_dkk: f64,
+    soft_threshold_dkk: f64,
+    hard_threshold_dkk: f64,
+) -> bool {
+    // The soft band must be a real, less-severe negative loss floor above a
+    // configured hard halt. Invalid or disabled values must not silently
+    // change deployment capacity.
+    hard_threshold_dkk < 0.0
+        && soft_threshold_dkk < 0.0
+        && soft_threshold_dkk > hard_threshold_dkk
+        && month_pnl_dkk <= soft_threshold_dkk
+        && month_pnl_dkk > hard_threshold_dkk
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -666,6 +700,16 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     });
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
     let buy_halt = monthly_loss_buy_halt(state, &overview).await;
+    if buy_halt.soft_reduction_active {
+        capital_budget.apply_buy_multiplier(buy_halt.soft_buy_multiplier);
+        warn!(
+            month_pnl_dkk = buy_halt.month_pnl_dkk,
+            soft_threshold_dkk = buy_halt.soft_threshold_dkk,
+            buy_multiplier = buy_halt.soft_buy_multiplier,
+            available_buy_budget_dkk = capital_budget.available_buy_budget_dkk,
+            "monthly-loss soft guardrail reduced cycle-wide BUY budget"
+        );
+    }
     if buy_halt.active {
         warn!(
             month_pnl_dkk = buy_halt.month_pnl_dkk,
@@ -1179,6 +1223,9 @@ async fn run_for_report(
             "threshold_breached": buy_halt.threshold_breached,
             "month_pnl_dkk": buy_halt.month_pnl_dkk,
             "threshold_dkk": buy_halt.threshold_dkk,
+            "soft_threshold_dkk": buy_halt.soft_threshold_dkk,
+            "soft_buy_multiplier": buy_halt.soft_buy_multiplier,
+            "soft_reduction_active": buy_halt.soft_reduction_active,
             "override_active": buy_halt.override_active,
             "override": buy_halt.override_value,
         },
@@ -1220,7 +1267,7 @@ async fn run_for_report(
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
-            "New BUYs are suspended while the monthly-loss circuit breaker is active; SELLs are never blocked by it. An operator override can resume BUYs for the current month and remains visible in manager JSON.",
+            "The monthly-loss guardrail halves (by configuration) the cycle-wide BUY budget in its soft-loss band and suspends BUYs at the hard floor; SELLs are never blocked. An operator override can resume BUYs for the current month after the hard floor and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
             "SELL orders with a flatten-family strategy role (e.g. risk_reduction_flatten) can pass neutral technicals only when this process independently verifies risk-off evidence: an under-water broker position against a fresh verified close, or a fresh negative Markov regime signal. The role label alone never approves an order.",
@@ -1381,6 +1428,9 @@ async fn hermes_decision_preflight_bundle(
             "threshold_breached": buy_halt.threshold_breached,
             "month_pnl_dkk": buy_halt.month_pnl_dkk,
             "threshold_dkk": buy_halt.threshold_dkk,
+            "soft_threshold_dkk": buy_halt.soft_threshold_dkk,
+            "soft_buy_multiplier": buy_halt.soft_buy_multiplier,
+            "soft_reduction_active": buy_halt.soft_reduction_active,
             "override_active": buy_halt.override_active,
         },
         "open_exchange_codes": open_codes,
@@ -3086,6 +3136,7 @@ fn capital_budget_from_overview(
         reinvestment_pressure_threshold_pct,
         required_cash_buffer_dkk,
         available_cash_above_buffer_dkk,
+        unreduced_available_buy_budget_dkk: available_buy_budget_dkk,
         available_buy_budget_dkk,
         remaining_deployment_capacity_dkk,
         excess_cash_pct,
@@ -3099,6 +3150,13 @@ impl CapitalBudget {
             (self.available_buy_budget_dkk - estimated_value_dkk.max(0.0)).max(0.0);
     }
 
+    fn apply_buy_multiplier(&mut self, multiplier: f64) {
+        self.available_buy_budget_dkk *= multiplier.clamp(0.0, 1.0);
+        self.reinvestment_pressure_active = self.excess_cash_pct
+            >= self.reinvestment_pressure_threshold_pct
+            && self.available_buy_budget_dkk > 0.0;
+    }
+
     fn to_json(self) -> JsonValue {
         json!({
             "cash_balance_dkk": self.cash_balance_dkk,
@@ -3110,6 +3168,7 @@ impl CapitalBudget {
             "reinvestment_pressure_threshold_pct": self.reinvestment_pressure_threshold_pct,
             "required_cash_buffer_dkk": self.required_cash_buffer_dkk,
             "available_cash_above_buffer_dkk": self.available_cash_above_buffer_dkk,
+            "unreduced_available_buy_budget_dkk": self.unreduced_available_buy_budget_dkk,
             "available_buy_budget_dkk": self.available_buy_budget_dkk,
             "remaining_deployment_capacity_dkk": self.remaining_deployment_capacity_dkk,
             "excess_cash_pct": self.excess_cash_pct,
@@ -4481,6 +4540,49 @@ mod tests {
         assert!(monthly_loss_threshold_breached(-12_000.0, -10_000.0));
         assert!(!monthly_loss_threshold_breached(-9_999.0, -10_000.0));
         assert!(!monthly_loss_threshold_breached(-12_000.0, 0.0));
+    }
+
+    #[test]
+    fn monthly_loss_soft_band_only_applies_between_valid_loss_floors() {
+        assert!(monthly_loss_soft_reduction_active(
+            -30_000.0, -25_000.0, -50_000.0
+        ));
+        assert!(!monthly_loss_soft_reduction_active(
+            -24_999.0, -25_000.0, -50_000.0
+        ));
+        assert!(!monthly_loss_soft_reduction_active(
+            -50_000.0, -25_000.0, -50_000.0
+        ));
+        assert!(!monthly_loss_soft_reduction_active(
+            -30_000.0, -60_000.0, -50_000.0
+        ));
+        assert!(!monthly_loss_soft_reduction_active(
+            -30_000.0, -25_000.0, 0.0
+        ));
+    }
+
+    #[test]
+    fn monthly_loss_soft_band_reduces_only_effective_buy_budget() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 250000.0,
+                "cash_balance_dkk": 50000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            }
+        });
+        let mut budget = capital_budget_from_overview(&overview, None);
+        budget.apply_buy_multiplier(0.5);
+        assert_eq!(budget.unreduced_available_buy_budget_dkk, 20_000.0);
+        assert_eq!(budget.available_buy_budget_dkk, 10_000.0);
+        assert_eq!(budget.available_cash_above_buffer_dkk, 20_000.0);
+        assert!(budget.reinvestment_pressure_active);
     }
 
     #[test]

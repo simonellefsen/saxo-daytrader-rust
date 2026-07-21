@@ -787,6 +787,17 @@ fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue
         &["strategy", "capital", "monthly_loss_halt_dkk"],
     )
     .unwrap_or(-10_000.0);
+    let monthly_loss_soft_reduce_dkk = crate::config::yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_soft_reduce_dkk"],
+    )
+    .unwrap_or(-25_000.0);
+    let monthly_loss_soft_buy_multiplier = crate::config::yaml_f64(
+        &state.config,
+        &["strategy", "capital", "monthly_loss_soft_buy_multiplier"],
+    )
+    .unwrap_or(0.5)
+    .clamp(0.0, 1.0);
     capital_planning_context_inner(
         overview,
         max_commission_pct_per_side,
@@ -799,6 +810,8 @@ fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue
             "XOSL": floor("xosl"),
         }),
         monthly_loss_halt_dkk,
+        monthly_loss_soft_reduce_dkk,
+        monthly_loss_soft_buy_multiplier,
     )
 }
 
@@ -807,6 +820,8 @@ fn capital_planning_context_inner(
     max_commission_pct_per_side: f64,
     min_economical_buy_dkk: JsonValue,
     monthly_loss_halt_dkk: f64,
+    monthly_loss_soft_reduce_dkk: f64,
+    monthly_loss_soft_buy_multiplier: f64,
 ) -> JsonValue {
     let summary = overview
         .get("portfolio_summary")
@@ -835,7 +850,7 @@ fn capital_planning_context_inner(
     };
     let available_cash_above_buffer_dkk = (cash_balance_dkk - required_cash_buffer_dkk).max(0.0);
     let remaining_deployment_capacity_dkk = (deployment_cap_dkk - invested_value_dkk).max(0.0);
-    let available_buy_budget_dkk =
+    let unreduced_available_buy_budget_dkk =
         available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
     let cash_pct = if total_value_dkk > 0.0 {
         cash_balance_dkk / total_value_dkk
@@ -843,14 +858,25 @@ fn capital_planning_context_inner(
         0.0
     };
     let excess_cash_pct = (cash_pct - min_cash_buffer_pct).max(0.0);
-    let reinvestment_pressure_active =
-        excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
     let month_pnl_dkk = overview
         .get("goal_tracking")
         .and_then(|value| value.get("periods"))
         .and_then(|value| value.get("month"))
         .map(|value| value_f64(value, "pnl_dkk"))
         .unwrap_or(0.0);
+    let hard_halt_active = monthly_loss_halt_dkk < 0.0 && month_pnl_dkk <= monthly_loss_halt_dkk;
+    let soft_reduction_active = monthly_loss_soft_reduction_active(
+        month_pnl_dkk,
+        monthly_loss_soft_reduce_dkk,
+        monthly_loss_halt_dkk,
+    );
+    let available_buy_budget_dkk = if soft_reduction_active {
+        unreduced_available_buy_budget_dkk * monthly_loss_soft_buy_multiplier
+    } else {
+        unreduced_available_buy_budget_dkk
+    };
+    let reinvestment_pressure_active =
+        excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
     json!({
         "cash_balance_dkk": cash_balance_dkk,
         "total_market_value_dkk": total_value_dkk,
@@ -862,6 +888,7 @@ fn capital_planning_context_inner(
         "required_cash_buffer_dkk": required_cash_buffer_dkk,
         "available_cash_above_buffer_dkk": available_cash_above_buffer_dkk,
         "remaining_deployment_capacity_dkk": remaining_deployment_capacity_dkk,
+        "unreduced_available_buy_budget_dkk": unreduced_available_buy_budget_dkk,
         "available_buy_budget_dkk": available_buy_budget_dkk,
         "excess_cash_pct": excess_cash_pct,
         "reinvestment_pressure": {
@@ -879,11 +906,32 @@ fn capital_planning_context_inner(
         "monthly_loss_circuit_breaker": {
             "month_pnl_dkk": month_pnl_dkk,
             "halt_threshold_dkk": monthly_loss_halt_dkk,
-            "active": monthly_loss_halt_dkk < 0.0 && month_pnl_dkk <= monthly_loss_halt_dkk,
-            "instruction": "When active, the manager suspends all new BUYs regardless of signals; focus on risk reduction and document candidates for later."
+            "soft_reduce_threshold_dkk": monthly_loss_soft_reduce_dkk,
+            "soft_buy_multiplier": monthly_loss_soft_buy_multiplier,
+            "soft_reduction_active": soft_reduction_active,
+            "active": hard_halt_active,
+            "instruction": if hard_halt_active {
+                "The manager suspends all new BUYs regardless of signals; focus on risk reduction and document candidates for later."
+            } else if soft_reduction_active {
+                "The manager has reduced the cycle-wide BUY budget by the configured soft-loss multiplier. Use only the reduced available_buy_budget_dkk and prefer the strongest independent candidates."
+            } else {
+                "The monthly-loss guardrail is inactive. Preserve the cash policy and size BUYs within available_buy_budget_dkk."
+            }
         },
         "cash_policy": "Preserve the required cash buffer, avoid margin, and size any BUY recommendations within available_buy_budget_dkk.",
     })
+}
+
+fn monthly_loss_soft_reduction_active(
+    month_pnl_dkk: f64,
+    soft_threshold_dkk: f64,
+    hard_threshold_dkk: f64,
+) -> bool {
+    hard_threshold_dkk < 0.0
+        && soft_threshold_dkk < 0.0
+        && soft_threshold_dkk > hard_threshold_dkk
+        && month_pnl_dkk <= soft_threshold_dkk
+        && month_pnl_dkk > hard_threshold_dkk
 }
 
 fn market_scope_for_pulse(
@@ -2279,6 +2327,8 @@ mod tests {
             0.003,
             json!({"XNAS_XNYS": 7021.0}),
             -10000.0,
+            -5000.0,
+            0.5,
         );
         assert_eq!(
             context["required_cash_buffer_dkk"],
@@ -2309,7 +2359,8 @@ mod tests {
             "settings": {"cash_buffer": {"min_cash_buffer_pct": 0.02, "max_deployment_pct": 0.98}},
             "goal_tracking": {"periods": {"month": {"pnl_dkk": -23070.0}}}
         });
-        let context = capital_planning_context_inner(&overview, 0.003, json!({}), -10000.0);
+        let context =
+            capital_planning_context_inner(&overview, 0.003, json!({}), -10000.0, -5000.0, 0.5);
         assert_eq!(
             context["monthly_loss_circuit_breaker"]["active"],
             JsonValue::from(true)
@@ -2317,6 +2368,43 @@ mod tests {
         assert_eq!(
             context["monthly_loss_circuit_breaker"]["month_pnl_dkk"],
             JsonValue::from(-23070.0)
+        );
+    }
+
+    #[test]
+    fn capital_context_reduces_buy_budget_in_monthly_loss_soft_band() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 250000.0,
+                "cash_balance_dkk": 50000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            },
+            "goal_tracking": {"periods": {"month": {"pnl_dkk": -30000.0}}}
+        });
+        let context =
+            capital_planning_context_inner(&overview, 0.003, json!({}), -50_000.0, -25_000.0, 0.5);
+        assert_eq!(
+            context["unreduced_available_buy_budget_dkk"],
+            JsonValue::from(20_000.0)
+        );
+        assert_eq!(
+            context["available_buy_budget_dkk"],
+            JsonValue::from(10_000.0)
+        );
+        assert_eq!(
+            context["monthly_loss_circuit_breaker"]["soft_reduction_active"],
+            JsonValue::from(true)
+        );
+        assert_eq!(
+            context["monthly_loss_circuit_breaker"]["active"],
+            JsonValue::from(false)
         );
     }
 }

@@ -547,6 +547,9 @@ struct CashDeploymentSummary {
     breaker_override_active: bool,
     breaker_month_pnl_dkk: f64,
     breaker_threshold_dkk: f64,
+    breaker_soft_reduction_active: bool,
+    breaker_soft_threshold_dkk: f64,
+    breaker_soft_buy_multiplier: f64,
     breaker_override_month_key: String,
     breaker_override_updated_at: String,
     breaker_override_notes: String,
@@ -585,12 +588,14 @@ fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> 
                         strong { "Reason" }
                         span { "{summary.description}" }
                     }
-                    if summary.breaker_threshold_breached {
+                    if summary.breaker_threshold_breached || summary.breaker_soft_reduction_active {
                         div { class: "event cash-diagnostic-reason",
                             strong { "Monthly-loss circuit breaker" }
                             span {
                                 if summary.breaker_active {
                                     "BUYs are suspended because month P/L {format_dkk(summary.breaker_month_pnl_dkk, &prefs)} breached the {format_dkk(summary.breaker_threshold_dkk, &prefs)} floor."
+                                } else if summary.breaker_soft_reduction_active {
+                                    "BUY budget is reduced to {format_pct(summary.breaker_soft_buy_multiplier, &prefs)} because month P/L {format_dkk(summary.breaker_month_pnl_dkk, &prefs)} reached the {format_dkk(summary.breaker_soft_threshold_dkk, &prefs)} soft-loss floor. SELLs are unchanged."
                                 } else if summary.breaker_override_active {
                                     "Threshold is breached, but an operator override resumed BUYs for {summary.breaker_override_month_key}."
                                 } else {
@@ -681,6 +686,12 @@ fn cash_deployment_summary(
             .unwrap_or(false),
         breaker_month_pnl_dkk: value_f64(&breaker, "month_pnl_dkk"),
         breaker_threshold_dkk: value_f64(&breaker, "threshold_dkk"),
+        breaker_soft_reduction_active: breaker
+            .get("soft_reduction_active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        breaker_soft_threshold_dkk: value_f64(&breaker, "soft_threshold_dkk"),
+        breaker_soft_buy_multiplier: value_f64(&breaker, "soft_buy_multiplier"),
         breaker_override_month_key: text(&breaker_override, "month_key"),
         breaker_override_updated_at: format_timestamp(
             &text(&breaker_override, "updated_at"),
@@ -6582,6 +6593,33 @@ mod tests {
         assert_eq!(summary.breaker_override_month_key, "2026-07");
         assert_eq!(summary.breaker_month_pnl_dkk, -12000.0);
         assert_eq!(summary.breaker_threshold_dkk, -10000.0);
+    }
+
+    #[test]
+    fn summarizes_monthly_loss_soft_reduction_from_manager_run() {
+        let latest_run = json!({
+            "created_at": "2026-07-21T08:00:00Z",
+            "status": "completed_no_orders",
+            "manager_json": {
+                "monthly_loss_circuit_breaker": {
+                    "active": false,
+                    "threshold_breached": false,
+                    "month_pnl_dkk": -30000.0,
+                    "threshold_dkk": -50000.0,
+                    "soft_threshold_dkk": -25000.0,
+                    "soft_buy_multiplier": 0.5,
+                    "soft_reduction_active": true,
+                    "override_active": false
+                }
+            }
+        });
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert!(!summary.breaker_active);
+        assert!(!summary.breaker_threshold_breached);
+        assert!(summary.breaker_soft_reduction_active);
+        assert_eq!(summary.breaker_soft_threshold_dkk, -25000.0);
+        assert_eq!(summary.breaker_soft_buy_multiplier, 0.5);
     }
 
     #[test]

@@ -103,8 +103,13 @@ strategy:
     max_deployment_pct: 0.98
     min_cash_buffer_pct: 0.02
     reinvestment_pressure_threshold_pct: 0.05
+    # Reduce the cycle-wide BUY budget while the monthly P/L is between this
+    # floor and the hard halt. It must be a less-severe negative number than
+    # monthly_loss_halt_dkk; invalid/disabled bands do not reduce deployment.
+    monthly_loss_soft_reduce_dkk: -25000
+    monthly_loss_soft_buy_multiplier: 0.50
     # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
-    # floor; SELLs are never blocked. Set >= 0 to disable.
+    # hard floor; SELLs are never blocked. Set >= 0 to disable both loss tiers.
     monthly_loss_halt_dkk: -50000
   markov:
     enabled: true
