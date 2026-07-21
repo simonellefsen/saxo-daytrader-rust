@@ -668,6 +668,39 @@ fn compact_attribution_capital(value: &JsonValue) -> JsonValue {
     })
 }
 
+fn compact_execution_ledger_outcome(
+    order: &JsonValue,
+    summary: &JsonValue,
+    evidence_source: &str,
+) -> JsonValue {
+    let fill_count = value_i64(summary, "fill_count");
+    if fill_count <= 0 {
+        return JsonValue::Null;
+    }
+    let ledger_entry_count = value_i64(summary, "ledger_entry_count");
+    let filled_quantity = value_f64(summary, "filled_quantity");
+    let target_quantity = value_f64(order, "quantity");
+    json!({
+        "evidence_source": evidence_source,
+        "status": if ledger_entry_count >= fill_count {
+            "reconciled"
+        } else {
+            "pending_ledger_reconciliation"
+        },
+        "side": json_text(order, "action").to_uppercase(),
+        "fill_count": fill_count,
+        "ledger_entry_count": ledger_entry_count,
+        "filled_quantity": filled_quantity,
+        "target_quantity": target_quantity,
+        "fully_filled": target_quantity > 0.0 && filled_quantity + 1e-9 >= target_quantity,
+        "last_fill_at": json_text(summary, "last_fill_at"),
+        "commission_dkk": value_f64(summary, "commission_dkk"),
+        "tax_dkk": value_f64(summary, "tax_dkk"),
+        "realised_gain_dkk": value_f64(summary, "realised_gain_dkk"),
+        "cost_basis_sold_dkk": value_f64(summary, "cost_basis_sold_dkk"),
+    })
+}
+
 fn attribution_delta_label(
     hermes_order: &JsonValue,
     manager_order: &JsonValue,
@@ -2749,6 +2782,16 @@ impl AppState {
             .and_then(|value| value.get("capital_budget"))
             .map(compact_attribution_capital)
             .unwrap_or(JsonValue::Null);
+        let ledger_outcome = match self.execution_order_ledger_outcome(order).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    order_id = value_i64(order, "id"),
+                    "execution ledger attribution degraded: {err:#}"
+                );
+                JsonValue::Null
+            }
+        };
         let delta = attribution_delta_label(&hermes_order, &manager_order, order);
 
         Ok(json!({
@@ -2777,7 +2820,62 @@ impl AppState {
             "technical": technical,
             "markov": markov,
             "capital_budget": capital,
+            "ledger_outcome": ledger_outcome,
         }))
+    }
+
+    async fn execution_order_ledger_outcome(&self, order: &JsonValue) -> Result<JsonValue> {
+        let order_id = value_i64(order, "id");
+        let status = json_text(order, "status");
+        let ledger_id = value_i64(order, "ledger_id");
+        if order_id <= 0 || (ledger_id <= 0 && status != "broker_partially_filled") {
+            return Ok(JsonValue::Null);
+        }
+
+        let fill_summary = self
+            .first_json(&format!(
+                "SELECT COUNT(f.id) AS fill_count,
+                        COUNT(l.id) AS ledger_entry_count,
+                        COALESCE(SUM(f.delta_quantity), 0) AS filled_quantity,
+                        MAX(f.created_at) AS last_fill_at,
+                        COALESCE(SUM(l.commission_dkk), 0) AS commission_dkk,
+                        COALESCE(SUM(l.tax_dkk), 0) AS tax_dkk,
+                        COALESCE(SUM(l.realised_gain_dkk), 0) AS realised_gain_dkk,
+                        COALESCE(SUM(l.cost_basis_sold_dkk), 0) AS cost_basis_sold_dkk
+                 FROM execution_fills f
+                 LEFT JOIN trade_ledger l ON l.id = f.ledger_id
+                 WHERE f.execution_order_id = {}",
+                order_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        let outcome = compact_execution_ledger_outcome(order, &fill_summary, "reconciled_fills");
+        if !outcome.is_null() || ledger_id <= 0 {
+            return Ok(outcome);
+        }
+
+        let legacy_ledger = self
+            .first_json(&format!(
+                "SELECT 1 AS fill_count,
+                        1 AS ledger_entry_count,
+                        quantity AS filled_quantity,
+                        created_at AS last_fill_at,
+                        commission_dkk,
+                        tax_dkk,
+                        realised_gain_dkk,
+                        cost_basis_sold_dkk
+                 FROM trade_ledger
+                 WHERE id = {}
+                 LIMIT 1",
+                ledger_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        Ok(compact_execution_ledger_outcome(
+            order,
+            &legacy_ledger,
+            "legacy_order_ledger",
+        ))
     }
 
     async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
@@ -7814,6 +7912,102 @@ mod tests {
         assert_eq!(json_text(&capital, "evidence_source"), "manager_run");
         assert_eq!(value_f64(&capital, "available_buy_budget_dkk"), 12_417.0);
         assert!(capital.get("unrelated_sensitive_value").is_none());
+    }
+
+    #[test]
+    fn execution_ledger_attribution_aggregates_reconciled_sell_fills() {
+        let order = json!({"action": "SELL", "quantity": 4.0});
+        let summary = json!({
+            "fill_count": 2,
+            "ledger_entry_count": 2,
+            "filled_quantity": 4.0,
+            "last_fill_at": "2026-07-21T18:00:00Z",
+            "commission_dkk": 21.0,
+            "tax_dkk": 0.0,
+            "realised_gain_dkk": 1_234.5,
+            "cost_basis_sold_dkk": 6_500.0
+        });
+
+        let outcome = compact_execution_ledger_outcome(&order, &summary, "reconciled_fills");
+
+        assert_eq!(json_text(&outcome, "status"), "reconciled");
+        assert_eq!(json_text(&outcome, "side"), "SELL");
+        assert_eq!(json_text(&outcome, "evidence_source"), "reconciled_fills");
+        assert_eq!(value_i64(&outcome, "fill_count"), 2);
+        assert_eq!(value_f64(&outcome, "realised_gain_dkk"), 1_234.5);
+        assert_eq!(
+            outcome.get("fully_filled").and_then(JsonValue::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn execution_ledger_outcome_reads_reconciled_fill_rows() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE execution_fills (
+                id INTEGER PRIMARY KEY,
+                execution_order_id INTEGER NOT NULL,
+                ledger_id INTEGER,
+                delta_quantity REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution-fill attribution table");
+        sqlx::query(
+            "CREATE TABLE trade_ledger (
+                id INTEGER PRIMARY KEY,
+                commission_dkk REAL NOT NULL,
+                tax_dkk REAL NOT NULL,
+                realised_gain_dkk REAL NOT NULL,
+                cost_basis_sold_dkk REAL NOT NULL,
+                quantity REAL NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create ledger attribution table");
+        sqlx::query(
+            "INSERT INTO trade_ledger (
+                id, commission_dkk, tax_dkk, realised_gain_dkk,
+                cost_basis_sold_dkk, quantity, created_at
+            ) VALUES
+                (10, 4.0, 0.0, 300.0, 1200.0, 1.0, '2026-07-21T17:00:00Z'),
+                (11, 5.0, 0.0, 500.0, 1800.0, 2.0, '2026-07-21T18:00:00Z')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed ledger attribution rows");
+        sqlx::query(
+            "INSERT INTO execution_fills (
+                id, execution_order_id, ledger_id, delta_quantity, created_at
+            ) VALUES
+                (1, 42, 10, 1.0, '2026-07-21T17:00:00Z'),
+                (2, 42, 11, 2.0, '2026-07-21T18:00:00Z')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed execution-fill attribution rows");
+
+        let outcome = state
+            .execution_order_ledger_outcome(&json!({
+                "id": 42,
+                "ledger_id": 11,
+                "status": "executed",
+                "action": "SELL",
+                "quantity": 3.0
+            }))
+            .await
+            .expect("read reconciled ledger outcome");
+
+        assert_eq!(json_text(&outcome, "evidence_source"), "reconciled_fills");
+        assert_eq!(value_i64(&outcome, "fill_count"), 2);
+        assert_eq!(value_f64(&outcome, "filled_quantity"), 3.0);
+        assert_eq!(value_f64(&outcome, "commission_dkk"), 9.0);
+        assert_eq!(value_f64(&outcome, "realised_gain_dkk"), 800.0);
     }
 
     #[test]

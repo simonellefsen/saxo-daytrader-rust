@@ -3527,6 +3527,7 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
     let technical = attribution.get("technical").unwrap_or(&null);
     let markov = attribution.get("markov").unwrap_or(&null);
     let capital = attribution.get("capital_budget").unwrap_or(&null);
+    let ledger_outcome = attribution.get("ledger_outcome").unwrap_or(&null);
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -3640,6 +3641,52 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
                 ""
             }
         ));
+    }
+    if !ledger_outcome.is_null() {
+        let source = match text(ledger_outcome, "evidence_source").as_str() {
+            "reconciled_fills" => "reconciled fills",
+            "legacy_order_ledger" => "legacy order ledger",
+            _ => "ledger",
+        };
+        let filled = format_quantity(value_f64(ledger_outcome, "filled_quantity"), prefs);
+        let target = format_quantity(value_f64(ledger_outcome, "target_quantity"), prefs);
+        let completion = if ledger_outcome
+            .get("fully_filled")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+        {
+            "fully filled"
+        } else {
+            "partially filled"
+        };
+        if text(ledger_outcome, "side").eq_ignore_ascii_case("SELL") {
+            lines.push(format!(
+                "Realised outcome ({}): {} / {} filled · {} · P/L {} · commission {}{}",
+                source,
+                filled,
+                target,
+                completion,
+                format_dkk(value_f64(ledger_outcome, "realised_gain_dkk"), prefs),
+                format_dkk(value_f64(ledger_outcome, "commission_dkk"), prefs),
+                if value_f64(ledger_outcome, "tax_dkk") > 0.0 {
+                    format!(
+                        " · tax {}",
+                        format_dkk(value_f64(ledger_outcome, "tax_dkk"), prefs)
+                    )
+                } else {
+                    String::new()
+                }
+            ));
+        } else {
+            lines.push(format!(
+                "Position-book outcome ({}): {} / {} filled · {} · commission {}",
+                source,
+                filled,
+                target,
+                completion,
+                format_dkk(value_f64(ledger_outcome, "commission_dkk"), prefs),
+            ));
+        }
     }
     lines.join("\n")
 }
@@ -6325,6 +6372,16 @@ mod tests {
                     "available_buy_budget_dkk": 12_417.0,
                     "remaining_deployment_capacity_dkk": 18_000.0,
                     "reinvestment_pressure_active": true
+                },
+                "ledger_outcome": {
+                    "evidence_source": "reconciled_fills",
+                    "side": "SELL",
+                    "filled_quantity": 4.0,
+                    "target_quantity": 4.0,
+                    "fully_filled": true,
+                    "realised_gain_dkk": 1_234.5,
+                    "commission_dkk": 21.0,
+                    "tax_dkk": 0.0
                 }
             }
         });
@@ -6335,6 +6392,8 @@ mod tests {
         assert!(detail.contains("Markov (manager preflight)"));
         assert!(detail.contains("Capital (manager snapshot)"));
         assert!(detail.contains("reinvestment pressure active"));
+        assert!(detail.contains("Realised outcome (reconciled fills)"));
+        assert!(detail.contains("fully filled"));
         assert!(!detail.contains("RR 0"));
     }
 

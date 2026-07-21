@@ -10,6 +10,12 @@ updated: 2026-07-21
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-21] improvement | Reconciled fill outcome attribution
+
+- The Execution attribution disclosure now aggregates linked `execution_fills` and `trade_ledger` entries for an order. SELLs show realised P/L and recorded costs; BUYs show a position-book update rather than a fabricated P/L.
+- The projection reports fill quantity, completion, and source. Multi-fill orders use the reconciled aggregate; legacy rows with only `execution_orders.ledger_id` are marked as such; unreconciled/partial states are not presented as final results.
+- This is a local database read only. It does not query Saxo, calculate mark-to-market returns, expose broker payloads, or influence order placement.
+
 ## [2026-07-21] improvement | Report-time execution attribution
 
 - Execution-order details now prefer immutable Trading Manager evidence: the final database-verified technical gate result, the candidate's stored Markov preflight, and the manager-time capital budget.
