@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, Utc};
 use reqwest::{StatusCode, header};
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
@@ -221,10 +221,17 @@ pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
     }
 
     let rows = broker_sync_orders(state).await?;
-    if rows.is_empty() {
-        return Ok(
-            json!({"status": "ok", "checked": 0, "updated": 0, "fills": 0, "processed": []}),
-        );
+    let unknown_rows = unknown_broker_state_orders(state).await?;
+    if rows.is_empty() && unknown_rows.is_empty() {
+        return Ok(json!({
+            "status": "ok",
+            "checked": 0,
+            "unknown_checked": 0,
+            "unknown_resolved": 0,
+            "updated": 0,
+            "fills": 0,
+            "processed": []
+        }));
     }
 
     let session = state
@@ -261,6 +268,38 @@ pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
             }
         }
     }
+    let mut unknown_checked = 0;
+    let mut unknown_resolved = 0;
+    for order in unknown_rows {
+        unknown_checked += 1;
+        match reconcile_unknown_broker_order(state, &session, &client_key, &order).await {
+            Ok(result) => {
+                if result
+                    .get("resolved")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                {
+                    unknown_resolved += 1;
+                    updated += 1;
+                }
+                processed.push(result);
+            }
+            Err(err) => {
+                let order_id = value_i64(&order, "id");
+                let symbol = order_text(&order, "symbol");
+                warn!(
+                    order_id,
+                    symbol, "Saxo unknown-placement reconciliation failed: {err:#}"
+                );
+                processed.push(json!({
+                    "status": "error",
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "error": err.to_string()
+                }));
+            }
+        }
+    }
     let broker_read_model = if updated > 0 {
         match refresh_broker_snapshots(state).await {
             Ok(value) => value,
@@ -275,6 +314,8 @@ pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
     Ok(json!({
         "status": "ok",
         "checked": processed.len(),
+        "unknown_checked": unknown_checked,
+        "unknown_resolved": unknown_resolved,
         "updated": updated,
         "fills": fills,
         "processed": processed,
@@ -363,6 +404,234 @@ async fn broker_sync_orders(state: &AppState) -> Result<Vec<JsonValue>> {
     .await
     .context("fetching Saxo broker orders pending sync")?;
     Ok(rows.iter().map(row_to_json).collect())
+}
+
+async fn unknown_broker_state_orders(state: &AppState) -> Result<Vec<JsonValue>> {
+    let rows = sqlx::query(
+        "SELECT * FROM execution_orders
+         WHERE mode = 'live'
+           AND adapter = 'saxo'
+           AND status = 'broker_state_unknown'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 20",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("fetching Saxo execution orders with unknown broker placement state")?;
+    Ok(rows.iter().map(row_to_json).collect())
+}
+
+/// Reconcile an ambiguous placement without issuing any broker mutation. Saxo's
+/// audit feed supports bounded historical reads but not an ExternalReference
+/// query parameter, so an exact local match is required before assigning a
+/// broker OrderId or advancing the local order state.
+async fn reconcile_unknown_broker_order(
+    state: &AppState,
+    session: &JsonValue,
+    client_key: &str,
+    order: &JsonValue,
+) -> Result<JsonValue> {
+    let order_id = value_i64(order, "id");
+    let symbol = order_text(order, "symbol");
+    let external_reference = unknown_placement_external_reference(order);
+    let from_datetime = unknown_placement_from_datetime(order);
+    let Some(activity_state) = fetch_broker_order_activity_by_external_reference(
+        state,
+        session,
+        client_key,
+        &external_reference,
+        &from_datetime,
+    )
+    .await?
+    else {
+        let observation = json!({
+            "source": "cs/v1/audit/orderactivities",
+            "broker_visibility": "external_reference_not_found",
+            "external_reference": external_reference,
+            "from_datetime": from_datetime,
+            "last_sync_at": now_iso(),
+            "retry_blocked": true,
+            "broker_visibility_note": "No exact ExternalReference match was returned by Saxo audit activities; local retry remains blocked."
+        });
+        record_unknown_broker_state_observation(
+            state,
+            order,
+            "broker_state_unknown_not_found",
+            &observation,
+        )
+        .await?;
+        return Ok(json!({
+            "status": "not_found",
+            "resolved": false,
+            "order_id": order_id,
+            "symbol": symbol,
+            "external_reference": external_reference
+        }));
+    };
+
+    let broker_payload = broker_payload(&activity_state);
+    let broker_order_id = broker_order_id(broker_payload).ok_or_else(|| {
+        anyhow!(
+            "Saxo audit activity matched ExternalReference {} but has no OrderId",
+            external_reference
+        )
+    })?;
+    mark_unknown_broker_order_identified(state, order, &broker_order_id, &activity_state).await?;
+    Ok(json!({
+        "status": "submitted_to_broker",
+        "resolved": true,
+        "order_id": order_id,
+        "symbol": symbol,
+        "broker_order_id": broker_order_id,
+        "external_reference": external_reference
+    }))
+}
+
+async fn fetch_broker_order_activity_by_external_reference(
+    state: &AppState,
+    session: &JsonValue,
+    client_key: &str,
+    external_reference: &str,
+    from_datetime: &str,
+) -> Result<Option<JsonValue>> {
+    let payload = saxo_get_json_optional(
+        state,
+        session,
+        "/cs/v1/audit/orderactivities",
+        &[
+            ("AccountKey", account_key(state, session)?),
+            ("ClientKey", client_key.to_string()),
+            ("EntryType", "All".to_string()),
+            ("FromDateTime", from_datetime.to_string()),
+            ("$top", "500".to_string()),
+        ],
+        "Saxo order activity external-reference lookup",
+    )
+    .await?;
+    let activity = payload
+        .as_ref()
+        .and_then(|payload| activity_for_external_reference(payload, external_reference));
+    Ok(activity.map(|broker_payload| {
+        json!({
+            "source": "cs/v1/audit/orderactivities",
+            "broker_visibility": "external_reference_activity",
+            "activity_lookup": "found",
+            "external_reference": external_reference,
+            "broker_payload": sanitized_broker_activity(&broker_payload),
+            "last_sync_at": now_iso()
+        })
+    }))
+}
+
+fn activity_for_external_reference(
+    payload: &JsonValue,
+    external_reference: &str,
+) -> Option<JsonValue> {
+    payload
+        .get("Data")
+        .and_then(JsonValue::as_array)
+        .and_then(|items| {
+            items.iter().find_map(|activity| {
+                json_text(activity, "ExternalReference").and_then(|candidate| {
+                    (candidate.trim() == external_reference).then(|| activity.clone())
+                })
+            })
+        })
+}
+
+fn unknown_placement_external_reference(order: &JsonValue) -> String {
+    order
+        .get("execution_result_json")
+        .and_then(|result| result.get("placement_uncertainty"))
+        .and_then(|value| json_text(value, "external_reference"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| external_reference(value_i64(order, "id")))
+}
+
+fn unknown_placement_from_datetime(order: &JsonValue) -> String {
+    DateTime::parse_from_rfc3339(&order_text(order, "created_at"))
+        .map(|value| value.with_timezone(&Utc) - ChronoDuration::seconds(5))
+        .unwrap_or_else(|_| Utc::now() - ChronoDuration::days(14))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+async fn record_unknown_broker_state_observation(
+    state: &AppState,
+    order: &JsonValue,
+    event_type: &str,
+    observation: &JsonValue,
+) -> Result<()> {
+    let order_id = value_i64(order, "id");
+    let mut result = order
+        .get("execution_result_json")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !result.is_object() {
+        result = json!({});
+    }
+    result["broker_reconciliation"] = observation.clone();
+    let payload_text = serde_json::to_string(&result)?;
+    let updated = sqlx::query(&format!(
+        "UPDATE execution_orders
+         SET execution_result_json = '{}'
+         WHERE id = {} AND status = 'broker_state_unknown'",
+        sql_escape(&payload_text),
+        order_id
+    ))
+    .execute(&state.pool)
+    .await
+    .context("recording unknown Saxo placement reconciliation observation")?;
+    if updated.rows_affected() != 1 {
+        return Err(anyhow!(
+            "execution order {order_id} is no longer broker_state_unknown while recording reconciliation observation"
+        ));
+    }
+    insert_order_event(state, order_id, None, event_type, observation).await
+}
+
+async fn mark_unknown_broker_order_identified(
+    state: &AppState,
+    order: &JsonValue,
+    broker_order_id: &str,
+    broker_state: &JsonValue,
+) -> Result<()> {
+    let order_id = value_i64(order, "id");
+    let mut result = order
+        .get("execution_result_json")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    if !result.is_object() {
+        result = json!({});
+    }
+    result["broker_reconciliation"] = broker_state.clone();
+    let payload_text = serde_json::to_string(&result)?;
+    let updated = sqlx::query(&format!(
+        "UPDATE execution_orders
+         SET status = 'submitted_to_broker',
+             broker_order_id = '{}',
+             execution_result_json = '{}',
+             error_text = NULL
+         WHERE id = {} AND status = 'broker_state_unknown'",
+        sql_escape(broker_order_id),
+        sql_escape(&payload_text),
+        order_id
+    ))
+    .execute(&state.pool)
+    .await
+    .context("recording Saxo broker order identified from unknown placement")?;
+    if updated.rows_affected() != 1 {
+        return Err(anyhow!(
+            "execution order {order_id} is no longer broker_state_unknown while recording broker reconciliation"
+        ));
+    }
+    insert_order_event(
+        state,
+        order_id,
+        Some(broker_order_id),
+        "broker_state_reconciled",
+        broker_state,
+    )
+    .await
 }
 
 async fn sync_one_broker_order(
@@ -2978,6 +3247,36 @@ fn sanitized_order_payload(payload: &JsonValue) -> JsonValue {
     sanitized
 }
 
+fn sanitized_broker_activity(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in map {
+                if matches!(
+                    key.to_ascii_lowercase().as_str(),
+                    "accountkey"
+                        | "accountid"
+                        | "account_id"
+                        | "clientkey"
+                        | "clientid"
+                        | "client_id"
+                        | "userid"
+                        | "user_id"
+                        | "handledby"
+                ) {
+                    continue;
+                }
+                sanitized.insert(key.clone(), sanitized_broker_activity(value));
+            }
+            JsonValue::Object(sanitized)
+        }
+        JsonValue::Array(items) => {
+            JsonValue::Array(items.iter().map(sanitized_broker_activity).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 fn sanitized_broker_position(position: &BrokerPosition) -> JsonValue {
     json!({
         "quantity": position.quantity,
@@ -3024,6 +3323,8 @@ mod tests {
                 action TEXT,
                 symbol TEXT,
                 mode TEXT,
+                adapter TEXT,
+                created_at TEXT,
                 quantity REAL,
                 price_local REAL,
                 ledger_id INTEGER
@@ -3374,6 +3675,233 @@ mod tests {
         assert_eq!(
             event.try_get::<String, _>("event_type").unwrap(),
             "broker_state_unknown"
+        );
+    }
+
+    #[test]
+    fn audit_activity_lookup_requires_an_exact_external_reference() {
+        let payload = json!({
+            "Data": [
+                {"OrderId": "503900001", "ExternalReference": "saxo-daytrader:17-extra"},
+                {"OrderId": "503900002", "ExternalReference": "saxo-daytrader:17"}
+            ]
+        });
+
+        let matched = activity_for_external_reference(&payload, "saxo-daytrader:17")
+            .expect("exact external reference should match");
+        assert_eq!(matched["OrderId"], json!("503900002"));
+        assert!(activity_for_external_reference(&payload, "saxo-daytrader:1").is_none());
+    }
+
+    #[test]
+    fn broker_activity_sanitization_removes_identity_fields_recursively() {
+        let activity = json!({
+            "OrderId": "503900002",
+            "ExternalReference": "saxo-daytrader:17",
+            "AccountKey": "account-secret",
+            "ClientKey": "client-secret",
+            "Nested": {
+                "AccountId": "account-id",
+                "HandledBy": "operator",
+                "Keep": true
+            },
+            "Items": [{"UserId": "user-id", "Status": "Placed"}]
+        });
+
+        let sanitized = sanitized_broker_activity(&activity);
+        assert_eq!(sanitized["OrderId"], json!("503900002"));
+        assert_eq!(sanitized["ExternalReference"], json!("saxo-daytrader:17"));
+        assert_eq!(sanitized["Nested"]["Keep"], json!(true));
+        assert_eq!(sanitized["Items"][0]["Status"], json!("Placed"));
+        assert!(sanitized.get("AccountKey").is_none());
+        assert!(sanitized.get("ClientKey").is_none());
+        assert!(sanitized["Nested"].get("AccountId").is_none());
+        assert!(sanitized["Nested"].get("HandledBy").is_none());
+        assert!(sanitized["Items"][0].get("UserId").is_none());
+    }
+
+    #[tokio::test]
+    async fn matched_unknown_placement_records_broker_identity_without_replaying_order() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, action, symbol, mode, adapter, created_at, quantity,
+                error_text, execution_result_json
+             ) VALUES (
+                17, 'broker_state_unknown', 'BUY', 'AMD:xnas', 'live', 'saxo',
+                '2026-07-21T19:00:00Z', 1, 'ambiguous Saxo placement',
+                '{\"placement_uncertainty\":{\"external_reference\":\"saxo-daytrader:17\",\"retry_blocked\":true}}'
+             )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed unknown placement");
+        let order = json!({
+            "id": 17,
+            "status": "broker_state_unknown",
+            "execution_result_json": {
+                "placement_uncertainty": {
+                    "external_reference": "saxo-daytrader:17",
+                    "retry_blocked": true
+                }
+            }
+        });
+        let broker_state = json!({
+            "source": "cs/v1/audit/orderactivities",
+            "broker_visibility": "external_reference_activity",
+            "external_reference": "saxo-daytrader:17",
+            "broker_payload": sanitized_broker_activity(&json!({
+                "OrderId": "503900002",
+                "ExternalReference": "saxo-daytrader:17",
+                "AccountKey": "must-not-persist"
+            }))
+        });
+
+        mark_unknown_broker_order_identified(&state, &order, "503900002", &broker_state)
+            .await
+            .expect("attach known broker order");
+
+        let stored = sqlx::query(
+            "SELECT status, broker_order_id, error_text, execution_result_json
+             FROM execution_orders WHERE id = 17",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read reconciled order");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "submitted_to_broker"
+        );
+        assert_eq!(
+            stored.try_get::<String, _>("broker_order_id").unwrap(),
+            "503900002"
+        );
+        assert!(
+            stored
+                .try_get::<Option<String>, _>("error_text")
+                .unwrap()
+                .is_none()
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("reconciliation result"),
+        )
+        .expect("parse reconciliation result");
+        assert_eq!(
+            result["broker_reconciliation"]["broker_payload"]["OrderId"],
+            json!("503900002")
+        );
+        assert!(
+            result["broker_reconciliation"]["broker_payload"]
+                .get("AccountKey")
+                .is_none()
+        );
+
+        let event = sqlx::query(
+            "SELECT event_type, broker_order_id
+             FROM execution_order_events WHERE execution_order_id = 17",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read reconciliation event");
+        assert_eq!(
+            event.try_get::<String, _>("event_type").unwrap(),
+            "broker_state_reconciled"
+        );
+        assert_eq!(
+            event
+                .try_get::<Option<String>, _>("broker_order_id")
+                .unwrap(),
+            Some("503900002".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn unmatched_unknown_placement_stays_blocked_and_audited() {
+        let state = execution_order_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, action, symbol, mode, adapter, created_at, quantity,
+                error_text, execution_result_json
+             ) VALUES (
+                18, 'broker_state_unknown', 'SELL', 'AMD:xnas', 'live', 'saxo',
+                '2026-07-21T19:00:00Z', 2, 'automatic retry is blocked',
+                '{\"placement_uncertainty\":{\"external_reference\":\"saxo-daytrader:18\",\"retry_blocked\":true}}'
+             )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed unknown placement");
+        let order = json!({
+            "id": 18,
+            "status": "broker_state_unknown",
+            "execution_result_json": {
+                "placement_uncertainty": {
+                    "external_reference": "saxo-daytrader:18",
+                    "retry_blocked": true
+                }
+            }
+        });
+        let observation = json!({
+            "source": "cs/v1/audit/orderactivities",
+            "broker_visibility": "external_reference_not_found",
+            "external_reference": "saxo-daytrader:18",
+            "retry_blocked": true
+        });
+
+        record_unknown_broker_state_observation(
+            &state,
+            &order,
+            "broker_state_unknown_not_found",
+            &observation,
+        )
+        .await
+        .expect("record no-match reconciliation observation");
+
+        let stored = sqlx::query(
+            "SELECT status, broker_order_id, error_text, execution_result_json
+             FROM execution_orders WHERE id = 18",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read unknown placement");
+        assert_eq!(
+            stored.try_get::<String, _>("status").unwrap(),
+            "broker_state_unknown"
+        );
+        assert!(
+            stored
+                .try_get::<Option<String>, _>("broker_order_id")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            stored
+                .try_get::<String, _>("error_text")
+                .unwrap()
+                .contains("automatic retry is blocked")
+        );
+        let result: JsonValue = serde_json::from_str(
+            &stored
+                .try_get::<String, _>("execution_result_json")
+                .expect("reconciliation observation"),
+        )
+        .expect("parse reconciliation observation");
+        assert_eq!(
+            result["broker_reconciliation"]["retry_blocked"],
+            json!(true)
+        );
+
+        let event = sqlx::query(
+            "SELECT event_type FROM execution_order_events WHERE execution_order_id = 18",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read no-match observation event");
+        assert_eq!(
+            event.try_get::<String, _>("event_type").unwrap(),
+            "broker_state_unknown_not_found"
         );
     }
 

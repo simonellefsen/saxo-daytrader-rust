@@ -17,6 +17,13 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Unknown SELL placement keeps its local reservation, while the Execution view and Overview integrity check show it as a warning. A dedicated `broker_state_unknown` event records the uncertainty for later broker/ENS reconciliation.
 - Follow-up remains broker-authored reconciliation by activity/open-order lookup or ENS replay before the hold is cleared. The runtime intentionally does not infer that an absent response means the broker did not receive the order.
 
+## [2026-07-21] feature | Broker-audit reconciliation for ambiguous Saxo placements
+
+- Each normal Saxo broker-sync cycle now separately scans a bounded set of `broker_state_unknown` orders. It makes a read-only `cs/v1/audit/orderactivities` request from the order creation time (with a 14-day fallback), and matches the locally retained `ExternalReference` exactly before doing anything to the local order.
+- A confirmed activity attaches its Saxo `OrderId`, moves the local record to `submitted_to_broker`, and records a `broker_state_reconciled` event. Existing order-status sync can then continue normally; the runtime never replays the original placement.
+- No exact match keeps the order blocked, preserves any SELL reservation, and records `broker_state_unknown_not_found` with the lookup context. Audit payloads stored for this workflow recursively remove account, client, user, and handler identity fields.
+- The audit endpoint has no documented `ExternalReference` query parameter, so this is an exact local comparison against a bounded activity response. ENS replay or paginated audit history remains the later coverage improvement for unusually busy histories.
+
 ## [2026-07-17] fix | Manual decision report runs detached (10s connection drop)
 
 - Operator report: Generate Report died after ~10s with ERR_CONNECTION_CLOSED on the ngrok URL. Root cause: the action handler ran the entire pipeline — prompt build, OpenRouter call (600s budget), Trading Manager, execution queue — synchronously inside one HTTP request through the OAuth-wrapped ngrok tunnel. It only ever "responded fast" before because the dead API key made OpenRouter 401 instantly; with a real key the multi-minute request outlived some hop's timeout, and the disconnect made axum cancel the whole pipeline mid-flight.
