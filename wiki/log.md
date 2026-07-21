@@ -10,6 +10,12 @@ updated: 2026-07-21
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-21] fix | Versioned analysis-universe source
+
+- Replaced the hidden dependency on 2026-05 archived sentiment rows for Markov, daily-indicator, and decision-report membership with a 197-symbol `market_data.watchlists.universe_symbols` catalog in both local and Kubernetes configuration.
+- Current broker positions, fresh reports, and `extra_symbols` remain additive. Symbol deduplication is now case-normalized, so a live `AMD:xnas` position cannot coexist with an archived/configured `amd:xnas` entry.
+- Historical price and sentiment rows remain a warning-level membership fallback only for installations whose configured universe is empty; stale content itself remains excluded from prompt evidence. The watchlist payload exposes its universe source and configured/additive counts for audit.
+
 ## [2026-07-21] improvement | Reconciled fill outcome attribution
 
 - The Execution attribution disclosure now aggregates linked `execution_fills` and `trade_ledger` entries for an order. SELLs show realised P/L and recorded costs; BUYs show a position-book update rather than a fabricated P/L.

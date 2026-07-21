@@ -1648,11 +1648,23 @@ impl AppState {
         .max(1);
         let stale_cutoff = (Utc::now() - Duration::days(stale_after_days))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let configured_universe = configured_watchlist_universe_symbols(&self.config);
+        // A versioned universe is the durable source of candidate membership.
+        // Position, broker, fresh report, and explicit extra-watch inputs remain
+        // additive. The archived sentiment table is only a migration fallback
+        // for an installation that has not configured its universe yet.
+        let legacy_archive_fallback = configured_universe.is_empty();
+        if legacy_archive_fallback {
+            warn!(
+                "watchlist universe is not configured; retaining archived sentiment membership as a temporary fallback"
+            );
+        }
+        let configured_extra_symbols = configured_extra_watch_symbols(&self.config);
         let mut seen = HashSet::new();
         let mut monitored = Vec::new();
         for row in self.position_items(250).await.unwrap_or_default() {
             let symbol = text_value(&row, "symbol");
-            if seen.insert(symbol) {
+            if !symbol.is_empty() && seen.insert(watchlist_symbol_key(&symbol)) {
                 monitored.push(row);
             }
         }
@@ -1664,18 +1676,23 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+            if symbol.is_empty() {
                 continue;
             }
             if text_value(&row, "updated_at") < stale_cutoff {
-                // Keep the symbol as a universe member (Markov and daily
-                // indicators build their asset lists from this payload), but
-                // drop the dead quote so it cannot masquerade as live data.
-                monitored.push(json!({
-                    "symbol": symbol,
-                    "quote_status": "stale_quote_dropped",
-                    "source": "price_snapshot_archive",
-                }));
+                if legacy_archive_fallback && seen.insert(watchlist_symbol_key(&symbol)) {
+                    // Keep the symbol as a universe member only while
+                    // migrating installations without a configured universe.
+                    // The dead quote itself never masquerades as live data.
+                    monitored.push(json!({
+                        "symbol": symbol,
+                        "quote_status": "stale_quote_dropped",
+                        "source": "price_snapshot_archive",
+                    }));
+                }
+                continue;
+            }
+            if !seen.insert(watchlist_symbol_key(&symbol)) {
                 continue;
             }
             let mut item = row.as_object().cloned().unwrap_or_default();
@@ -1690,7 +1707,7 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(symbol) {
+            if symbol.is_empty() || !seen.insert(watchlist_symbol_key(&symbol)) {
                 continue;
             }
             monitored.push(row);
@@ -1703,7 +1720,7 @@ impl AppState {
             .filter(|(_, decision)| text_value(decision, "created_at") >= stale_cutoff)
             .collect();
         for (symbol, decision) in &decisions {
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+            if symbol.is_empty() || !seen.insert(watchlist_symbol_key(symbol)) {
                 continue;
             }
             let source = decision.get("source").cloned().unwrap_or_else(|| json!({}));
@@ -1740,20 +1757,23 @@ impl AppState {
             .unwrap_or_default()
         {
             let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+            if symbol.is_empty() {
                 continue;
             }
             if text_value(&row, "decision_created_at") < stale_cutoff {
-                // Historic sentiment defines most of the analysis universe
-                // (the 2026-05 snapshots span ~170 watchlist symbols), so the
-                // symbol stays a member — but its months-old sentiment,
-                // "existing portfolio holding" rationale, and prices are
-                // dropped instead of being recycled into prompts as current.
-                monitored.push(json!({
-                    "symbol": symbol,
-                    "quote_status": "stale_history",
-                    "source": "sentiment_archive",
-                }));
+                if legacy_archive_fallback && seen.insert(watchlist_symbol_key(&symbol)) {
+                    // Historic sentiment is a temporary membership fallback
+                    // only. Its prices, rationale, and sentiment stay out of
+                    // prompts and decision evidence.
+                    monitored.push(json!({
+                        "symbol": symbol,
+                        "quote_status": "stale_history",
+                        "source": "sentiment_archive",
+                    }));
+                }
+                continue;
+            }
+            if !seen.insert(watchlist_symbol_key(&symbol)) {
                 continue;
             }
             let source = row
@@ -1793,6 +1813,23 @@ impl AppState {
                 "region": exchange_region(&symbol),
             }));
         }
+        let mut configured_symbols_added = 0usize;
+        for symbol in configured_universe {
+            if seen.insert(watchlist_symbol_key(&symbol)) {
+                monitored.push(configured_watchlist_row(
+                    &symbol,
+                    "configured_analysis_universe",
+                ));
+                configured_symbols_added += 1;
+            }
+        }
+        let mut extra_symbols_added = 0usize;
+        for symbol in configured_extra_symbols {
+            if seen.insert(watchlist_symbol_key(&symbol)) {
+                monitored.push(configured_watchlist_row(&symbol, "configured_extra_watch"));
+                extra_symbols_added += 1;
+            }
+        }
         for item in &mut monitored {
             let symbol = text_value(item, "symbol");
             if let Some(obj) = item.as_object_mut() {
@@ -1831,6 +1868,12 @@ impl AppState {
         Ok(json!({
             "generated_at": Utc::now().to_rfc3339(),
             "cache_ttl_seconds": 300,
+            "universe": {
+                "source": if legacy_archive_fallback { "legacy_sentiment_archive_fallback" } else { "configured_analysis_universe" },
+                "configured_symbol_count": configured_watchlist_universe_symbols(&self.config).len(),
+                "configured_symbols_added": configured_symbols_added,
+                "extra_symbols_added": extra_symbols_added,
+            },
             "categories": [
                 {"key": "all", "label": "All monitored", "target_limit": monitored.len(), "total_universe": monitored.len(), "items": monitored},
                 {"key": "nordic", "label": "Nordics", "target_limit": nordic_limit, "total_universe": nordic.len(), "items": nordic},
@@ -6977,6 +7020,90 @@ fn exchange_code(symbol: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Returns the versioned, source-controlled analysis universe. It deliberately
+/// does not read historical report, sentiment, or quote tables: those tables
+/// describe observations, not the set of assets the system is meant to study.
+fn configured_watchlist_universe_symbols(config: &YamlValue) -> Vec<String> {
+    configured_watchlist_symbols_at(
+        config,
+        &["market_data", "watchlists", "universe_symbols"],
+        false,
+    )
+}
+
+/// Extra watches are candidates in addition to the main universe. Their
+/// mapping form may carry an ISIN for Saxo resolution; membership needs only
+/// the explicit symbol.
+fn configured_extra_watch_symbols(config: &YamlValue) -> Vec<String> {
+    configured_watchlist_symbols_at(
+        config,
+        &["market_data", "watchlists", "extra_symbols"],
+        true,
+    )
+}
+
+fn configured_watchlist_symbols_at(
+    config: &YamlValue,
+    keys: &[&str],
+    accept_mapping_symbols: bool,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    crate::config::yaml_at(config, keys)
+        .and_then(YamlValue::as_sequence)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .as_str()
+                        .or_else(|| {
+                            accept_mapping_symbols
+                                .then(|| entry.get("symbol").and_then(YamlValue::as_str))
+                                .flatten()
+                        })
+                        .and_then(normalize_watchlist_symbol)
+                })
+                .filter(|symbol| seen.insert(watchlist_symbol_key(symbol)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_watchlist_symbol(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (base, exchange) = trimmed
+        .split_once(':')
+        .map(|(base, exchange)| (base.trim(), Some(exchange.trim())))
+        .unwrap_or((trimmed, None));
+    if base.is_empty() || exchange.is_some_and(str::is_empty) {
+        return None;
+    }
+    Some(match exchange {
+        Some(exchange) => format!(
+            "{}:{}",
+            base.to_ascii_uppercase(),
+            exchange.to_ascii_lowercase()
+        ),
+        None => base.to_ascii_uppercase(),
+    })
+}
+
+fn watchlist_symbol_key(symbol: &str) -> String {
+    symbol.trim().to_ascii_lowercase()
+}
+
+fn configured_watchlist_row(symbol: &str, source: &str) -> JsonValue {
+    json!({
+        "symbol": symbol,
+        "instrument_name": instrument_name_for_symbol(symbol),
+        "quote_status": "configured_universe",
+        "source": source,
+    })
+}
+
 fn enrich_execution_order_lifecycle(order: &mut JsonValue, market_rows: &[JsonValue]) {
     let status = json_text(order, "status").to_ascii_lowercase();
     let active_broker_order = matches!(
@@ -7370,6 +7497,36 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_watchlist_universe_is_versioned_and_case_normalized() {
+        let config: YamlValue = serde_yaml::from_str(
+            r#"
+market_data:
+  watchlists:
+    universe_symbols:
+      - amd:XNAS
+      - AMD:xnas
+      - "  DSV:XCSE  "
+      - ""
+    extra_symbols:
+      - symbol: SPCX:xnas
+        isin: US84615Q1031
+      - rklb:XNAS
+      - symbol: ""
+"#,
+        )
+        .expect("parse watchlist universe config");
+
+        assert_eq!(
+            configured_watchlist_universe_symbols(&config),
+            vec!["AMD:xnas".to_string(), "DSV:xcse".to_string()]
+        );
+        assert_eq!(
+            configured_extra_watch_symbols(&config),
+            vec!["SPCX:xnas".to_string(), "RKLB:xnas".to_string()]
+        );
+    }
 
     async fn runtime_settings_test_state(config_yaml: &str) -> AppState {
         static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();

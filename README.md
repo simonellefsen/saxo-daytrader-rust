@@ -282,6 +282,7 @@ The project is driven by [config.yaml](/Users/lindau/codex/daytrader/config.yaml
 - `watchlists.us_limit`: target number of US names shown in the watchlist.
 - `watchlists.eu_limit`: target number of continental Europe / Euronext names shown in the watchlist.
 - `watchlists.global_limit`: number of combined US/Europe names supplied to decision-report context.
+- `watchlists.universe_symbols`: versioned, source-controlled candidate membership for Markov, daily indicators, and decision reports. Current broker positions and `extra_symbols` are always additive. Keep this list populated; an empty list activates a warning-level legacy archive fallback for migration only.
 - `rss.market_feeds`: RSS feeds for company/market headlines.
 - `rss.macro_feeds`: RSS feeds for macro and central-bank headlines.
 - `rss.crypto_feeds`: RSS feeds included in macro pulse context for crypto/risk-appetite signals.

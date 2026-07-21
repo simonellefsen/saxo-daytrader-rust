@@ -12,6 +12,7 @@ The linked method describes a module that fetches daily OHLCV, labels each day B
 ## Runtime Contract
 
 - The scheduler runs the skill once per configured local trading day after `strategy.markov.daily_time`.
+- Asset membership comes from the versioned `market_data.watchlists.universe_symbols` configuration, with current broker positions and `extra_symbols` added automatically. Historical report, quote, and sentiment tables are observations, not the intended source of membership; they are retained only as a warning-level migration fallback when no configured universe exists.
 - The default label rule is a 20-trading-day rolling return:
   - `Bull` when return is `>= +5%`
   - `Bear` when return is `<= -5%`
