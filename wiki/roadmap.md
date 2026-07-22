@@ -225,7 +225,7 @@ Hermes should become a useful advisory layer that learns from evidence without b
 - Add "proposal impact" tracking: when Hermes blocks or reduces an order, follow the hypothetical outcome versus the executed path.
 - Give Hermes access to normalized report outcomes: report completed, manager queued, broker submitted, filled/expired/failed, and next-day/weekly P/L attribution.
 - Add a daily "lessons pending review" queue for Hermes proposed actions that are not formal experiments.
-- Add explicit duplicate detection for Hermes proposed experiments, including semantically equivalent variable paths.
+- Exact duplicate detection landed 2026-07-10 and is shared by the protected HTTP adapter and Hermes MCP tool as of 2026-07-22. A deliberately small, explicit related-family map now flags the two cash-buffer paths as advisory review context before insert; it does not auto-merge, reject, approve, or activate a different variable. Remaining work: add another family only with evidence that its paths are truly interchangeable, then keep the final lifecycle decision with the operator.
 - Add baseline promotion evidence packs: before/after metrics, affected reports/orders, drawdown, Sharpe, cash utilization, and failure count.
 - Add a "one-variable audit" view that shows which live or SIM setting currently differs from baseline and why.
 - Keep conservative mode as default for report-time advice; only consider stronger modes after dry-run, paper, and SIM evidence is strong.

@@ -977,3 +977,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The digest shows only safe audit metadata, review-age counts, and the configured
   stale-closure window. It is a notification only and cannot change a proposal,
   strategy configuration, baseline, or broker action.
+
+## [2026-07-22] Hermes governance | Shared proposal pre-insert review
+
+- Unified exact duplicate inspection across the protected Hermes HTTP adapter and the MCP `create_experiment_proposal` tool; active or pending proposals with the same normalized variable path are rejected consistently before insert.
+- Added a deliberately narrow `cash_buffer_policy` related-family signal for the two supported cash-buffer paths. It returns safe metadata for active/pending sibling proposals but is advisory only: it cannot merge, reject, approve, activate, or otherwise change a different experiment.
+- The returned review context excludes raw evidence, provider payloads, strategy configuration, and broker data. Hermes must put an exact duplicate candidate in reflection proposed actions instead of retrying proposal creation.

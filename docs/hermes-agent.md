@@ -423,7 +423,7 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflect
 - Write exactly one concise reflection.
 - Create at most one pending-review experiment proposal when the day produced a concrete learning that can be tested safely with exactly one changed variable.
 - Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.cash_buffer_pct`, and `strategy.swing.daily_indicators.min_confluences`.
-- Avoid duplicate proposals for the same `changed_variable_path`; if evidence is insufficient or a duplicate exists, record the candidate in `proposed_actions` instead of creating an experiment.
+- Avoid duplicate proposals for the same `changed_variable_path`; exact active/pending matches are rejected by both the protected HTTP adapter and MCP tool. A small explicit set of related variable families returns advisory review context only (currently the two cash-buffer paths); do not treat that signal as permission to merge, reject, or activate a different variable. If evidence is insufficient or an exact duplicate exists, record the candidate in `proposed_actions` instead of creating an experiment.
 
 After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.
 
@@ -433,7 +433,7 @@ After submitting the run, the CronJob waits for a reflection with the expected `
 - Read `get_decision_reports`, `get_end_of_day_reports`, `get_markov_signals`, and `get_quiver_signals` before proposing strategy changes.
 - Analyze the last week against the goal contract.
 - Write exactly one reflection.
-- Create one pending-review experiment proposal when the week contains enough evidence and no duplicate active/pending proposal already covers the same variable.
+- Create one pending-review experiment proposal when the week contains enough evidence and no duplicate active/pending proposal already covers the same variable. Review advisory related-family context before submitting; it never changes a lifecycle state automatically.
 - Change exactly one variable when proposing an experiment.
 - Avoid `/api/saxo/*`, Saxo tokens, account keys, broker mutation endpoints, and Kubernetes secret mutation.
 
@@ -676,7 +676,7 @@ status.
 
 Write exactly one concise reflection. If today's evidence contains a concrete
 safe-to-test learning, create at most one pending-review one-variable experiment
-proposal. If evidence is insufficient or a duplicate proposal already exists,
+proposal. If evidence is insufficient or an exact duplicate proposal already exists,
 put the candidate in proposed_actions.
 Do not request Saxo tokens or secrets. Do not propose live order mutations.
 ```
@@ -688,8 +688,8 @@ Review the last 7 days of daytrader decisions, strategy journals, execution orde
 fills, skipped trades, precheck failures, and portfolio metrics.
 
 Use the goal contract exactly. Create one pending-review strategy or prompt
-variable proposal when evidence supports it and no duplicate active/pending
-proposal exists.
+variable proposal when evidence supports it and no exact duplicate active/pending
+proposal exists. Treat related-family context as an operator-review signal only.
 Do not request Saxo tokens or secrets. Do not propose live order mutations.
 If evidence is insufficient, create a reflection with no experiment and record
 the strongest candidate in proposed_actions.

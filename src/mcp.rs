@@ -203,7 +203,33 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
         "create_experiment_proposal" => {
             let request = serde_json::from_value::<HermesExperimentRequest>(arguments)
                 .context("parsing create_experiment_proposal arguments")?;
-            state.record_hermes_experiment(&request).await?
+            if request.hypothesis.trim().is_empty()
+                || request.changed_variable_path.trim().is_empty()
+            {
+                return Ok(tool_error_value(json!({
+                    "status": "error",
+                    "detail": "hypothesis and changed_variable_path are required"
+                })));
+            }
+            let review_context = state
+                .inspect_hermes_experiment_proposal(&request.changed_variable_path)
+                .await?;
+            if let Some(existing) = review_context
+                .get("exact_duplicate")
+                .filter(|value| !value.is_null())
+            {
+                return Ok(tool_error_value(json!({
+                    "status": "duplicate",
+                    "detail": "An active or pending Hermes experiment already covers this changed_variable_path. Record the candidate in reflection proposed_actions instead of creating a duplicate proposal.",
+                    "changed_variable_path": request.changed_variable_path.trim(),
+                    "existing_experiment": existing,
+                    "review_context": review_context,
+                })));
+            }
+            json!({
+                "experiment": state.record_hermes_experiment(&request).await?,
+                "review_context": review_context,
+            })
         }
         "create_decision_advice" => {
             let request = serde_json::from_value::<HermesDecisionAdviceRequest>(arguments)
@@ -357,7 +383,7 @@ fn mcp_tools() -> Vec<JsonValue> {
         ),
         tool_schema(
             "create_experiment_proposal",
-            "Create one pending-review strategy experiment proposal. The proposal must change exactly one variable.",
+            "Create one pending-review strategy experiment proposal. The proposal must change exactly one variable. Exact active/pending path duplicates are rejected; related configured variable families are returned as advisory review context only.",
             json!({
                 "type": "object",
                 "required": [
@@ -476,6 +502,20 @@ fn tool_error(message: &str) -> JsonValue {
                 "text": message
             }
         ],
+        "isError": true
+    })
+}
+
+fn tool_error_value(value: JsonValue) -> JsonValue {
+    let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+    json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text
+            }
+        ],
+        "structuredContent": value,
         "isError": true
     })
 }

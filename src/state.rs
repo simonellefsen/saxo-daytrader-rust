@@ -4156,24 +4156,63 @@ impl AppState {
         if changed_variable_path.is_empty() {
             return Ok(None);
         }
-        let active_statuses = HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES
-            .iter()
-            .copied()
-            .filter(|status| hermes_experiment_status_blocks_duplicate(status))
-            .map(|status| format!("'{}'", sql_escape(status)))
-            .collect::<Vec<_>>()
-            .join(", ");
         self.first_json(&format!(
             "SELECT id, created_at, status, changed_variable_path, hypothesis, source_session_id
              FROM strategy_experiments
              WHERE LOWER(changed_variable_path) = LOWER('{}')
                AND status IN ({})
              ORDER BY created_at DESC, id DESC
-             LIMIT 1",
+            LIMIT 1",
             sql_escape(&changed_variable_path),
-            active_statuses
+            hermes_experiment_duplicate_blocking_statuses_sql()
         ))
         .await
+    }
+
+    /// Inspect a proposal before inserting it through either the protected HTTP
+    /// adapter or the Hermes MCP tool. Exact path matches are blocking; related
+    /// variable families are an operator-review signal only.
+    pub async fn inspect_hermes_experiment_proposal(
+        &self,
+        changed_variable_path: &str,
+    ) -> Result<JsonValue> {
+        let normalized_changed_variable_path =
+            normalize_hermes_experiment_variable_path(changed_variable_path);
+        let exact_duplicate = self
+            .find_duplicate_hermes_experiment(&normalized_changed_variable_path)
+            .await?;
+        let review_family = hermes_experiment_review_family(&normalized_changed_variable_path);
+        let related_active_or_pending_experiments = match review_family {
+            Some(review_family) => self
+                .select_json(&format!(
+                    "SELECT id, created_at, status, changed_variable_path, hypothesis, source_session_id
+                     FROM strategy_experiments
+                     WHERE status IN ({})
+                       AND LOWER(changed_variable_path) <> LOWER('{}')
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT 100",
+                    hermes_experiment_duplicate_blocking_statuses_sql(),
+                    sql_escape(&normalized_changed_variable_path),
+                ))
+                .await?
+                .into_iter()
+                .filter(|experiment| {
+                    hermes_experiment_review_family(&json_text(
+                        experiment,
+                        "changed_variable_path",
+                    )) == Some(review_family)
+                })
+                .take(10)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        Ok(json!({
+            "normalized_changed_variable_path": normalized_changed_variable_path,
+            "exact_duplicate": exact_duplicate,
+            "review_family": review_family,
+            "related_active_or_pending_experiments": related_active_or_pending_experiments,
+            "related_family_is_advisory": true,
+        }))
     }
 
     pub async fn hermes_decision_advice_by_session(
@@ -7123,8 +7162,30 @@ const HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES: &[&str] = &[
     "ready_for_promotion",
 ];
 
+const HERMES_EXPERIMENT_REVIEW_FAMILIES: &[(&str, &str)] = &[
+    ("strategy.capital.min_cash_buffer_pct", "cash_buffer_policy"),
+    ("strategy.swing.cash_buffer_pct", "cash_buffer_policy"),
+];
+
 fn normalize_hermes_experiment_variable_path(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn hermes_experiment_review_family(value: &str) -> Option<&'static str> {
+    let normalized = normalize_hermes_experiment_variable_path(value);
+    HERMES_EXPERIMENT_REVIEW_FAMILIES
+        .iter()
+        .find_map(|(path, family)| (*path == normalized).then_some(*family))
+}
+
+fn hermes_experiment_duplicate_blocking_statuses_sql() -> String {
+    HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES
+        .iter()
+        .copied()
+        .filter(|status| hermes_experiment_status_blocks_duplicate(status))
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn hermes_experiment_status_blocks_duplicate(status: &str) -> bool {
@@ -8693,6 +8754,93 @@ analysis_windows:
             ),
             "strategy.swing.daily_indicators.min_confluences"
         );
+    }
+
+    #[test]
+    fn maps_only_explicit_hermes_experiment_review_families() {
+        assert_eq!(
+            hermes_experiment_review_family("strategy.capital.min_cash_buffer_pct"),
+            Some("cash_buffer_policy")
+        );
+        assert_eq!(
+            hermes_experiment_review_family(" Strategy.Swing.Cash_Buffer_Pct "),
+            Some("cash_buffer_policy")
+        );
+        assert_eq!(
+            hermes_experiment_review_family("strategy.capital.max_positions"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn hermes_experiment_preinsert_review_distinguishes_exact_and_related_proposals() {
+        let state = runtime_settings_test_state("hermes:\n  experiments: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE strategy_experiments (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                changed_variable_path TEXT NOT NULL,
+                hypothesis TEXT NOT NULL,
+                source_session_id TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create strategy experiments table");
+        for (id, status, path) in [
+            (
+                "exact-pending",
+                "pending_review",
+                "Strategy.Capital.Min_Cash_Buffer_Pct",
+            ),
+            (
+                "related-active",
+                "active_sim",
+                "strategy.swing.cash_buffer_pct",
+            ),
+            (
+                "related-terminal",
+                "expired_stale",
+                "strategy.swing.cash_buffer_pct",
+            ),
+            (
+                "unrelated-pending",
+                "pending_review",
+                "strategy.swing.daily_indicators.min_confluences",
+            ),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO strategy_experiments (id, created_at, status, changed_variable_path, hypothesis)
+                 VALUES ('{}', '2026-07-22T09:00:00Z', '{}', '{}', 'test')",
+                sql_escape(id),
+                sql_escape(status),
+                sql_escape(path),
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed experiment proposal");
+        }
+
+        let review = state
+            .inspect_hermes_experiment_proposal("strategy.capital.min_cash_buffer_pct")
+            .await
+            .expect("inspect proposal");
+
+        assert_eq!(review["exact_duplicate"]["id"], json!("exact-pending"));
+        assert_eq!(review["review_family"], json!("cash_buffer_policy"));
+        assert_eq!(
+            review["related_active_or_pending_experiments"],
+            json!([{
+                "id": "related-active",
+                "created_at": "2026-07-22T09:00:00Z",
+                "status": "active_sim",
+                "changed_variable_path": "strategy.swing.cash_buffer_pct",
+                "hypothesis": "test",
+                "source_session_id": null,
+            }])
+        );
+        assert_eq!(review["related_family_is_advisory"], json!(true));
     }
 
     #[test]

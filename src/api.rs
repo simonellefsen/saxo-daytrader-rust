@@ -942,32 +942,38 @@ async fn create_hermes_experiment(
         )
             .into_response();
     }
-    match state
-        .find_duplicate_hermes_experiment(&request.changed_variable_path)
+    let review_context = match state
+        .inspect_hermes_experiment_proposal(&request.changed_variable_path)
         .await
     {
-        Ok(Some(existing)) => {
-            warn!(
-                changed_variable_path = %request.changed_variable_path,
-                existing_experiment_id = %existing.get("id").and_then(JsonValue::as_str).unwrap_or(""),
-                "Hermes duplicate experiment proposal rejected"
-            );
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "status": "duplicate",
-                    "detail": "An active or pending Hermes experiment already covers this changed_variable_path. Record the candidate in reflection proposed_actions instead of creating a duplicate proposal.",
-                    "changed_variable_path": request.changed_variable_path.trim(),
-                    "existing_experiment": existing
-                })),
-            )
-                .into_response();
-        }
-        Ok(None) => {}
+        Ok(review_context) => review_context,
         Err(err) => return json_result(Err(err)),
+    };
+    if let Some(existing) = review_context
+        .get("exact_duplicate")
+        .filter(|value| !value.is_null())
+    {
+        warn!(
+            changed_variable_path = %request.changed_variable_path,
+            existing_experiment_id = %existing.get("id").and_then(JsonValue::as_str).unwrap_or(""),
+            "Hermes duplicate experiment proposal rejected"
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "status": "duplicate",
+                "detail": "An active or pending Hermes experiment already covers this changed_variable_path. Record the candidate in reflection proposed_actions instead of creating a duplicate proposal.",
+                "changed_variable_path": request.changed_variable_path.trim(),
+                "existing_experiment": existing
+            })),
+        )
+            .into_response();
     }
     match state.record_hermes_experiment(&request).await {
-        Ok(value) => {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("review_context".to_string(), review_context);
+            }
             info!(
                 changed_variable_path = %request.changed_variable_path,
                 "Hermes experiment proposal recorded"
