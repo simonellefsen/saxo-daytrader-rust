@@ -379,25 +379,59 @@ async fn execution_failure_burst_alert(state: &AppState) -> Result<Option<SlackA
     let latest_created_at = row
         .try_get::<String, _>("latest_created_at")
         .unwrap_or_else(|_| "unknown".to_string());
+    let latest_failure = sqlx::query(&format!(
+        "SELECT execution_result_json
+         FROM execution_orders
+         WHERE id = {}",
+        latest_id
+    ))
+    .fetch_optional(&state.pool)
+    .await
+    .context("loading latest execution failure taxonomy")?
+    .map(|row| row_to_json(&row))
+    .and_then(|row| execution_failure_taxonomy(&row));
+    let latest_failure_label = latest_failure
+        .as_ref()
+        .and_then(|taxonomy| optional_text(taxonomy, "label"))
+        .unwrap_or_else(|| "Unclassified execution failure".to_string());
+    let latest_failure_code = latest_failure
+        .as_ref()
+        .and_then(|taxonomy| optional_text(taxonomy, "code"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let latest_failure_remediation = latest_failure
+        .as_ref()
+        .and_then(|taxonomy| optional_text(taxonomy, "remediation"));
+    let latest_failure_retry_policy = latest_failure
+        .as_ref()
+        .and_then(|taxonomy| optional_text(taxonomy, "retry_policy"));
+    let mut lines = vec![
+        "Repeated broker/local execution failures detected.".to_string(),
+        String::new(),
+        format!("Failures: {failure_count} in the last {window_hours}h"),
+        format!("Threshold: {threshold}"),
+        format!("Latest execution order ID: {latest_id}"),
+        format!("Latest failure time: {latest_created_at}"),
+        format!("Latest category: {latest_failure_label} ({latest_failure_code})"),
+    ];
+    if let Some(remediation) = latest_failure_remediation {
+        lines.push(format!("Recommended action: {remediation}"));
+    }
+    if let Some(retry_policy) = latest_failure_retry_policy {
+        lines.push(format!("Retry policy: {retry_policy}"));
+    }
     Ok(Some(operational_alert(
         "execution_failure_burst",
         format!("ops:execution_failure_burst:latest:{latest_id}"),
         "high",
         "Execution failure burst".to_string(),
-        vec![
-            "Repeated broker/local execution failures detected.".to_string(),
-            String::new(),
-            format!("Failures: {failure_count} in the last {window_hours}h"),
-            format!("Threshold: {threshold}"),
-            format!("Latest execution order ID: {latest_id}"),
-            format!("Latest failure time: {latest_created_at}"),
-        ],
+        lines,
         json!({
             "failure_count": failure_count,
             "threshold": threshold,
             "window_hours": window_hours,
             "latest_execution_order_id": latest_id,
             "latest_created_at": latest_created_at,
+            "latest_failure_taxonomy": latest_failure,
         }),
     )))
 }
@@ -1022,7 +1056,6 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
     let quantity = value_f64(row, "quantity");
     let estimated_value = value_f64(row, "estimated_value_dkk");
     let broker_order_id = fallback_text(row, "broker_order_id", "n/a");
-    let error_text = fallback_text(row, "error_text", "n/a");
     let subject = format!("{subject_prefix} for {symbol}");
     let mut lines = vec![
         subject.clone(),
@@ -1037,7 +1070,28 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
         format!("Broker Order ID: {broker_order_id}"),
     ];
     if status == "execution_failed" {
-        lines.push(format!("Error: {error_text}"));
+        let taxonomy = execution_failure_taxonomy(row);
+        let label = taxonomy
+            .as_ref()
+            .and_then(|taxonomy| optional_text(taxonomy, "label"))
+            .unwrap_or_else(|| "Unclassified execution failure".to_string());
+        let code = taxonomy
+            .as_ref()
+            .and_then(|taxonomy| optional_text(taxonomy, "code"))
+            .unwrap_or_else(|| "unknown".to_string());
+        lines.push(format!("Failure category: {label} ({code})"));
+        if let Some(remediation) = taxonomy
+            .as_ref()
+            .and_then(|taxonomy| optional_text(taxonomy, "remediation"))
+        {
+            lines.push(format!("Recommended action: {remediation}"));
+        }
+        if let Some(retry_policy) = taxonomy
+            .as_ref()
+            .and_then(|taxonomy| optional_text(taxonomy, "retry_policy"))
+        {
+            lines.push(format!("Retry policy: {retry_policy}"));
+        }
     }
     let alert_key = if status == "execution_failed" {
         format!("execution_failed:{id}")
@@ -1065,6 +1119,11 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
                 "estimated_value_dkk": estimated_value,
                 "broker_order_id": row.get("broker_order_id").cloned().unwrap_or(JsonValue::Null),
                 "ledger_id": row.get("ledger_id").cloned().unwrap_or(JsonValue::Null),
+                "failure_taxonomy": if status == "execution_failed" {
+                    execution_failure_taxonomy(row)
+                } else {
+                    None
+                },
             }
         }),
     })
@@ -1222,6 +1281,25 @@ fn execution_source_label(row: &JsonValue) -> String {
     }
 }
 
+/// Extracts only the allow-listed fields from the persisted Saxo error
+/// taxonomy. Raw broker diagnostics and local error text must never enter a
+/// Slack alert payload.
+fn execution_failure_taxonomy(row: &JsonValue) -> Option<JsonValue> {
+    let taxonomy = row
+        .get("execution_result_json")
+        .and_then(|payload| payload.get("error_taxonomy"))?;
+    let code = optional_text(taxonomy, "code")?;
+    let label = optional_text(taxonomy, "label")?;
+    let remediation = optional_text(taxonomy, "remediation")?;
+    let retry_policy = optional_text(taxonomy, "retry_policy")?;
+    Some(json!({
+        "code": code,
+        "label": label,
+        "remediation": remediation,
+        "retry_policy": retry_policy,
+    }))
+}
+
 fn execution_success_prefix(source: &str) -> &str {
     if source == "Execution" {
         "Trade executed"
@@ -1283,6 +1361,28 @@ mod tests {
     fn formats_integer_and_fractional_quantities() {
         assert_eq!(format_quantity(20.0), "20");
         assert_eq!(format_quantity(1.23456), "1.2346");
+    }
+
+    #[test]
+    fn execution_failure_taxonomy_keeps_slack_payloads_safe() {
+        let row = json!({
+            "error_text": "Authorization: Bearer super-secret-token; raw broker diagnostics",
+            "execution_result_json": {
+                "error_taxonomy": {
+                    "code": "tick_size",
+                    "label": "Invalid tick size",
+                    "remediation": "Recalculate the limit or stop price using Saxo's instrument tick scheme.",
+                    "retry_policy": "review_and_resubmit",
+                    "raw_broker_body": "must not leave the execution record"
+                }
+            }
+        });
+
+        let taxonomy = execution_failure_taxonomy(&row).expect("safe taxonomy");
+        assert_eq!(taxonomy["code"], "tick_size");
+        assert_eq!(taxonomy["retry_policy"], "review_and_resubmit");
+        assert!(!taxonomy.to_string().contains("super-secret-token"));
+        assert!(!taxonomy.to_string().contains("raw_broker_body"));
     }
 
     #[test]

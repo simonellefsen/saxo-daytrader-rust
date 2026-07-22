@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-21
+updated: 2026-07-22
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-22: Routed sanitized Saxo execution taxonomy into Slack failure alerts. Per-order failures and failure-burst alerts now include only the stable category, label, remediation, and retry policy; raw broker diagnostics and local error text remain in the protected execution record and are not sent to Slack.
 - 2026-07-21: Hardened the Decision Report dry-run lifecycle. Dry runs now use explicit `dry_run_xai_deferred`, `dry_run_completed`, and `dry_run_error` statuses from provider submission through polling, persist a compact safety boundary in the sanitized report, and are rejected by the Trading Manager status gate. This closes the prior timing gap where a background scheduler could have seen a dry run as an ordinary completed report after the immediate manual path correctly skipped it.
 - 2026-07-21: Added a tiered monthly-loss guardrail. While monthly P/L is between the configured `monthly_loss_soft_reduce_dkk` (-25,000 DKK) and hard `monthly_loss_halt_dkk` (-50,000 DKK) floors, the Trading Manager halves the whole-cycle BUY budget through `monthly_loss_soft_buy_multiplier` (0.50); the hard floor still blocks new BUYs and SELLs remain unblocked. The effective budget and tier status are persisted in manager runs, exposed in Cash Deployment, and included in the decision prompt/Hermes preflight. Invalid or disabled floor ordering does not activate the soft tier.
 - 2026-07-16: Server-verified flatten-role SELL exits. The technical gate's blind `FLATTEN` escape hatch (which the model's actual `risk_reduction_flatten` role never matched) is replaced by a call-site fallback: flatten-family SELLs blocked on neutral technicals are approved only when the process independently verifies an under-water broker position against a fresh indicator close or a fresh negative Markov regime signal. Covered by pure-gate and database-backed fixtures (under-water, profitable+positive-regime, negative-regime-only, and stale-signal cases).
@@ -182,7 +183,7 @@ These are specific changes that could improve the quality of trading decisions w
 | Order lifecycle reconciler | Reconcile local orders with Saxo open orders, audit activities, fills, expiries, and cancellations every scheduler cycle. Visibility slices landed 2026-07-09: active DayOrders now show expected exchange-calendar expiry, broker-sync provenance records open-order vs audit-activity vs missing-lookup state, and overdue active DayOrders are flagged in row tooltips, overview integrity, the Operations banner, the Overview Integrity panel, and scheduler-driven Slack alerts as expiry-sync-pending without mutating broker state. | Fewer stuck `broker_working` or stale local statuses. |
 | Tick and currency normalizer | Centralize price rounding, display currency, order currency, and estimated DKK conversion. | Prevent DKK/USD display mistakes and tick-size rejections. |
 | Session health preflight | Before reports and queue processing, assert access token, refresh token, account key, and environment are valid. | Avoid false trade failures caused by reauth drift. |
-| Saxo error taxonomy | Landed 2026-07-21: every newly recorded local Saxo execution failure now persists an identity-safe taxonomy object (stable code, label, remediation, retry policy) alongside the raw diagnostic. It covers broker-state uncertainty, session expiry, rate limits, commissions, cash, tick/price, quantity/holdings, instrument, market, terminal broker status, and unknown. Execution tooltips show the taxonomy, broker-sync terminal states persist it, and Hermes preflight consumes only allow-listed taxonomy codes before falling back to the legacy classifier for historical rows. Follow-up: route the same category into Slack failure alerts and add documented Saxo error-code mappings as live evidence accumulates. | Better UI and Hermes learning from execution failures without exposing raw broker error text. |
+| Saxo error taxonomy | Landed 2026-07-21/22: every newly recorded local Saxo execution failure persists an identity-safe taxonomy object (stable code, label, remediation, retry policy) alongside the raw diagnostic. It covers broker-state uncertainty, session expiry, rate limits, commissions, cash, tick/price, quantity/holdings, instrument, market, terminal broker status, and unknown. Execution tooltips, Hermes preflight, per-order Slack failure alerts, and burst alerts consume only allow-listed taxonomy fields; raw broker diagnostics and local error text remain outside Slack. Follow-up: add documented Saxo error-code mappings as live evidence accumulates. | Better UI, operations, and Hermes learning from execution failures without exposing raw broker error text. |
 
 ### Saxo OpenAPI Capabilities To Adopt (reviewed 2026-07-11)
 

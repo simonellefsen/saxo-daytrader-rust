@@ -958,3 +958,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The active Rust runtime does not read `strategy.capital.cash_buffer`; it was a Python scheduler compatibility setting that could preserve a zero-cash-buffer value from 2026-05-05.
 - Startup now deletes that exact retired key idempotently after ensuring the runtime settings table. Active AI key/model settings and the short-lived manual-report claim remain untouched.
 - Added a database-backed regression test that seeds both a retired cash-buffer setting and an active model setting, then verifies only the retired key is removed.
+
+## [2026-07-22] safety | Sanitized Saxo failure alerts
+
+- Routed the persisted Saxo execution error taxonomy into individual Slack failure alerts and execution-failure burst alerts.
+- Alerts now send only the allow-listed category, label, remediation, and retry policy; raw broker diagnostics and local error text remain in protected execution records and are not included in Slack payloads.
+- Added regression coverage proving taxonomy extraction excludes arbitrary raw fields and secret-like error text.
