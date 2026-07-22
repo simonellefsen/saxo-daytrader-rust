@@ -970,3 +970,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added the terminal `expired_stale` lifecycle status for proposals that remain in `pending_review` beyond the configured 30-day review window.
 - Each scheduler transition records its actor, reason, and threshold in `approval_json`; only still-pending rows are eligible, so approved, active, SIM, promoted, and broker paths remain unchanged.
 - The existing 14-day Slack/dashboard warning remains the earlier operator signal, while expiry prevents indefinite duplicate-blocking proposal backlog.
+## [2026-07-22] Hermes governance | Weekly proposal review digest
+
+- Added a once-per-local-ISO-week Monday 09:00 sanitized Slack digest for current
+  `pending_review` experiment proposals.
+- The digest shows only safe audit metadata, review-age counts, and the configured
+  stale-closure window. It is a notification only and cannot change a proposal,
+  strategy configuration, baseline, or broker action.

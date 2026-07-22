@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use chrono_tz::Tz;
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
 
@@ -255,6 +256,24 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
             state,
             &mut alerts,
             hermes_pending_experiment_review_alert(state).await?,
+        )
+        .await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_digest_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(
+            state,
+            &mut alerts,
+            hermes_pending_experiment_review_digest_alert(state).await?,
         )
         .await?;
     }
@@ -977,6 +996,186 @@ fn hermes_experiment_review_summary_line(row: &JsonValue, now: DateTime<Utc>) ->
     format!("- {id}: {variable}, created {created_at} ({age_days}d), source {source}")
 }
 
+async fn hermes_pending_experiment_review_digest_alert(
+    state: &AppState,
+) -> Result<Option<SlackAlert>> {
+    let timezone = yaml_string(&state.config, &["notifications", "timezone"])
+        .and_then(|value| value.parse::<Tz>().ok())
+        .unwrap_or(chrono_tz::Europe::Copenhagen);
+    let weekday_local = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_digest_weekday_local",
+        ],
+    )
+    .unwrap_or(1)
+    .clamp(1, 7) as u32;
+    let hour_local = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_digest_hour_local",
+        ],
+    )
+    .unwrap_or(9)
+    .clamp(0, 23) as u32;
+    let review_stale_days = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_stale_days",
+        ],
+    )
+    .unwrap_or(14)
+    .max(1);
+    let expiry_days = yaml_i64(
+        &state.config,
+        &["hermes", "experiments", "auto_expire_pending_review_days"],
+    )
+    .unwrap_or(30)
+    .max(1);
+    let limit = yaml_i64(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
+            "hermes_pending_experiment_review_digest_limit",
+        ],
+    )
+    .unwrap_or(10)
+    .clamp(1, 50);
+    let now = Utc::now();
+    if !hermes_experiment_review_digest_is_due(now, timezone, weekday_local, hour_local) {
+        return Ok(None);
+    }
+    let cutoff = (now - Duration::days(review_stale_days))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let summary = sqlx::query(&format!(
+        "SELECT COUNT(*) AS pending_count,
+                SUM(CASE WHEN created_at <= '{}' THEN 1 ELSE 0 END) AS overdue_count
+         FROM strategy_experiments
+         WHERE status = 'pending_review'",
+        sql_escape(&cutoff),
+    ))
+    .fetch_one(&state.pool)
+    .await
+    .context("counting Hermes experiment review digest")?;
+    let pending_count = summary.try_get::<i64, _>("pending_count").unwrap_or(0);
+    if pending_count <= 0 {
+        return Ok(None);
+    }
+    let overdue_count = summary
+        .try_get::<i64, _>("overdue_count")
+        .unwrap_or(0)
+        .max(0);
+
+    let rows = sqlx::query(&format!(
+        "SELECT id, created_at, status, changed_variable_path, source_session_id
+         FROM strategy_experiments
+         WHERE status = 'pending_review'
+         ORDER BY created_at ASC, id ASC
+         LIMIT {}",
+        limit
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading Hermes experiment review digest")?;
+    let rows = rows.iter().map(row_to_json).collect::<Vec<_>>();
+    Ok(
+        hermes_pending_experiment_review_digest_alert_from_rows_with_counts(
+            &rows,
+            pending_count as usize,
+            overdue_count as usize,
+            review_stale_days,
+            expiry_days,
+            now,
+            timezone,
+        ),
+    )
+}
+
+fn hermes_experiment_review_digest_is_due(
+    now: DateTime<Utc>,
+    timezone: Tz,
+    weekday_local: u32,
+    hour_local: u32,
+) -> bool {
+    let local = now.with_timezone(&timezone);
+    local.weekday().number_from_monday() == weekday_local && local.hour() >= hour_local
+}
+
+fn hermes_pending_experiment_review_digest_alert_from_rows_with_counts(
+    rows: &[JsonValue],
+    pending_count: usize,
+    overdue_count: usize,
+    review_stale_days: i64,
+    expiry_days: i64,
+    now: DateTime<Utc>,
+    timezone: Tz,
+) -> Option<SlackAlert> {
+    let pending = rows
+        .iter()
+        .filter(|row| fallback_text(row, "status", "") == "pending_review")
+        .collect::<Vec<_>>();
+    if pending.is_empty() || pending_count == 0 {
+        return None;
+    }
+    let mut ids = pending
+        .iter()
+        .map(|row| fallback_text(row, "id", "unknown"))
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    let variable_paths = pending
+        .iter()
+        .filter_map(|row| optional_text(row, "changed_variable_path"))
+        .collect::<Vec<_>>();
+    let local = now.with_timezone(&timezone);
+    let iso_week = local.iso_week();
+    let week_label = format!("{}-W{:02}", iso_week.year(), iso_week.week());
+    let row_lines = pending
+        .iter()
+        .take(8)
+        .map(|row| hermes_experiment_review_summary_line(row, now))
+        .collect::<Vec<_>>();
+
+    let mut lines = vec![
+        "Weekly Hermes experiment review digest. These are proposal artifacts only; this digest cannot alter a strategy, baseline, or broker state.".to_string(),
+        String::new(),
+        format!("Pending proposals: {pending_count}"),
+        format!("Overdue for review (>= {review_stale_days}d): {overdue_count}"),
+        format!("Automatic closure: {expiry_days}d as expired_stale"),
+        String::new(),
+        "Review, reject, or merge duplicates before the configured closure window.".to_string(),
+    ];
+    if !row_lines.is_empty() {
+        lines.push(String::new());
+        lines.push("Oldest pending proposals:".to_string());
+        lines.extend(row_lines);
+    }
+
+    Some(operational_alert(
+        "hermes_pending_experiment_review_digest",
+        format!("ops:hermes_pending_experiment_review_digest:{week_label}"),
+        if overdue_count > 0 { "medium" } else { "low" },
+        "Hermes experiment review digest".to_string(),
+        lines,
+        json!({
+            "week": week_label,
+            "pending_count": pending_count,
+            "overdue_count": overdue_count,
+            "review_stale_days": review_stale_days,
+            "expiry_days": expiry_days,
+            "experiment_ids": ids,
+            "changed_variable_paths": variable_paths,
+        }),
+    ))
+}
+
 fn operational_alert(
     kind: &str,
     scope_key: String,
@@ -1687,5 +1886,106 @@ mod tests {
         );
         assert!(!alert.message_text.contains("must_not"));
         assert!(!alert.payload.to_string().contains("raw_payload"));
+    }
+
+    #[test]
+    fn sends_hermes_review_digest_on_configured_local_weekday_after_due_hour() {
+        let timezone = chrono_tz::Europe::Copenhagen;
+        let monday_after_due = DateTime::parse_from_rfc3339("2026-07-20T07:15:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let monday_before_due = DateTime::parse_from_rfc3339("2026-07-20T06:59:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let tuesday_after_due = DateTime::parse_from_rfc3339("2026-07-21T07:15:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert!(hermes_experiment_review_digest_is_due(
+            monday_after_due,
+            timezone,
+            1,
+            9
+        ));
+        assert!(!hermes_experiment_review_digest_is_due(
+            monday_before_due,
+            timezone,
+            1,
+            9
+        ));
+        assert!(!hermes_experiment_review_digest_is_due(
+            tuesday_after_due,
+            timezone,
+            1,
+            9
+        ));
+    }
+
+    #[test]
+    fn builds_sanitized_hermes_pending_review_digest() {
+        let now = DateTime::parse_from_rfc3339("2026-07-20T07:15:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let alert = hermes_pending_experiment_review_digest_alert_from_rows_with_counts(
+            &[
+                json!({
+                    "id": "strategy-experiment-old",
+                    "created_at": "2026-07-01T12:00:00Z",
+                    "status": "pending_review",
+                    "changed_variable_path": "strategy.swing.daily_indicators.min_confluences",
+                    "source_session_id": "weekly-reflection-2026-06-27",
+                    "raw_payload_json": {"must_not": "surface"}
+                }),
+                json!({
+                    "id": "strategy-experiment-fresh",
+                    "created_at": "2026-07-18T12:00:00Z",
+                    "status": "pending_review",
+                    "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                    "source_session_id": "daily-eod-reflection-2026-07-18"
+                }),
+                json!({
+                    "id": "strategy-experiment-closed",
+                    "created_at": "2026-06-01T12:00:00Z",
+                    "status": "expired_stale",
+                    "changed_variable_path": "execution.min_trade_value_dkk"
+                }),
+            ],
+            7,
+            3,
+            14,
+            30,
+            now,
+            chrono_tz::Europe::Copenhagen,
+        )
+        .expect("alert");
+
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(alert.subject, "Hermes experiment review digest");
+        assert!(alert.scope_key.ends_with("2026-W30"));
+        assert!(alert.message_text.contains("Pending proposals: 7"));
+        assert!(
+            alert
+                .message_text
+                .contains("Overdue for review (>= 14d): 3")
+        );
+        assert!(
+            alert
+                .message_text
+                .contains("Automatic closure: 30d as expired_stale")
+        );
+        assert!(
+            alert
+                .message_text
+                .contains("strategy.swing.daily_indicators.min_confluences")
+        );
+        assert!(!alert.message_text.contains("must_not"));
+        assert!(!alert.payload.to_string().contains("raw_payload"));
+        assert!(
+            !alert
+                .payload
+                .to_string()
+                .contains("strategy-experiment-closed")
+        );
     }
 }

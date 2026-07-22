@@ -259,6 +259,21 @@ does not alter config, overlays, baselines, or broker behavior. Configure it
 under `hermes.experiments.auto_expire_pending_review_enabled` and
 `hermes.experiments.auto_expire_pending_review_days`.
 
+### Weekly Proposal Review Digest
+
+The scheduler sends one sanitized Slack digest for currently pending Hermes
+proposals at the configured local Monday review window (default Monday 09:00,
+`Europe/Copenhagen`). It lists proposal ids, variable paths, creation age, and
+source sessions, distinguishes rows overdue for the 14-day review threshold,
+and repeats the 30-day `expired_stale` closure policy. It does not include raw
+Hermes payloads, broker data, or secrets, and it cannot transition a proposal
+or affect a strategy/broker action.
+
+Configure this digest under
+`notifications.alerts.hermes_pending_experiment_review_digest_*`. Its ISO
+weekday uses `1` for Monday through `7` for Sunday. The alert scope is the
+local ISO week, so a successful delivery occurs at most once per week.
+
 The create-proposal endpoint rejects a new proposal with `409 Conflict` when an
 active or pending experiment already uses the same `changed_variable_path`
 (case-insensitive after trimming). Hermes should then record the duplicate

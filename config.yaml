@@ -581,6 +581,12 @@ notifications:
     hermes_pending_experiment_review_enabled: true
     hermes_pending_experiment_review_stale_days: 14
     hermes_pending_experiment_review_limit: 10
+    # One compact operator review list after the weekly reflection cycle.
+    # Weekdays use ISO numbering: Monday=1 through Sunday=7.
+    hermes_pending_experiment_review_digest_enabled: true
+    hermes_pending_experiment_review_digest_weekday_local: 1
+    hermes_pending_experiment_review_digest_hour_local: 9
+    hermes_pending_experiment_review_digest_limit: 10
   alert_suppression:
     enabled: true
     low_cooldown_minutes: 240
