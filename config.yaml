@@ -522,6 +522,13 @@ openfigi:
   base_url: https://api.openfigi.com/v3
   timeout_seconds: 10
 
+hermes:
+  experiments:
+    # Alerts begin after 14 days; proposals not reviewed after 30 days are
+    # closed as expired_stale without changing a strategy baseline or runtime.
+    auto_expire_pending_review_enabled: true
+    auto_expire_pending_review_days: 30
+
 notifications:
   daily_summary_enabled: false
   weekly_summary_enabled: false

@@ -226,6 +226,7 @@ The tab also exposes operator-only lifecycle actions. These actions update `stra
 Supported lifecycle transitions:
 
 - `pending_review` -> `approved_paper` or `rejected`
+- `pending_review` -> `expired_stale` only through the scheduler when the configured review window elapses; this is terminal and cannot activate an overlay or baseline
 - `approved_paper` -> `active_paper` or `rejected`
 - `active_paper` -> `approved_sim`, `paper_failed`, or `rejected`
 - `approved_sim` -> `active_sim` or `rejected`
@@ -250,6 +251,13 @@ evidence blobs, broker payloads, and secrets.
 The Hermes dashboard also shows each proposal's age in the Experiment Proposals
 table and highlights `pending_review` rows after the same 14-day review
 threshold.
+
+To prevent the review queue from becoming permanent backlog, the scheduler
+closes only `pending_review` proposals as `expired_stale` after the separately
+configured 30-day default. The transition records `scheduler` as its actor and
+does not alter config, overlays, baselines, or broker behavior. Configure it
+under `hermes.experiments.auto_expire_pending_review_enabled` and
+`hermes.experiments.auto_expire_pending_review_days`.
 
 The create-proposal endpoint rejects a new proposal with `409 Conflict` when an
 active or pending experiment already uses the same `changed_variable_path`
@@ -557,6 +565,7 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 stateDiagram-v2
   [*] --> pending_review
   pending_review --> rejected
+  pending_review --> expired_stale
   pending_review --> approved_paper
   approved_paper --> active_paper
   active_paper --> paper_failed

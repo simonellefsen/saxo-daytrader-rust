@@ -841,6 +841,7 @@ fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&
     match (current_status, action.trim()) {
         ("pending_review", "approve_paper") => Some("approved_paper"),
         ("pending_review", "reject") => Some("rejected"),
+        ("pending_review", "expire_stale") => Some("expired_stale"),
         ("approved_paper", "activate_paper") => Some("active_paper"),
         ("approved_paper", "reject") => Some("rejected"),
         ("active_paper", "approve_sim") => Some("approved_sim"),
@@ -4004,6 +4005,99 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    /// Closes unreviewed Hermes proposals after a deliberately longer period
+    /// than the alert threshold. This only changes pending review records; it
+    /// never changes an approved experiment, a baseline, configuration, or a
+    /// broker-facing path.
+    pub async fn expire_stale_hermes_experiments(&self) -> Result<JsonValue> {
+        let enabled = yaml_bool(
+            &self.config,
+            &[
+                "hermes",
+                "experiments",
+                "auto_expire_pending_review_enabled",
+            ],
+        )
+        .unwrap_or(true);
+        let stale_after_days = yaml_i64(
+            &self.config,
+            &["hermes", "experiments", "auto_expire_pending_review_days"],
+        )
+        .unwrap_or(30)
+        .max(1);
+        if !enabled {
+            return Ok(json!({
+                "status": "disabled",
+                "expired_count": 0,
+                "stale_after_days": stale_after_days,
+            }));
+        }
+        self.expire_stale_hermes_experiments_at(Utc::now(), stale_after_days)
+            .await
+    }
+
+    async fn expire_stale_hermes_experiments_at(
+        &self,
+        now: DateTime<Utc>,
+        stale_after_days: i64,
+    ) -> Result<JsonValue> {
+        let stale_after_days = stale_after_days.max(1);
+        let cutoff = (now - Duration::days(stale_after_days))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let experiments = self
+            .select_json(&format!(
+                "SELECT id, created_at, changed_variable_path
+                 FROM strategy_experiments
+                 WHERE status = 'pending_review'
+                   AND created_at <= '{}'
+                 ORDER BY created_at ASC, id ASC",
+                sql_escape(&cutoff)
+            ))
+            .await?;
+        let recorded_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut expired = Vec::new();
+        for experiment in experiments {
+            let id = json_text(&experiment, "id");
+            if id.is_empty() {
+                continue;
+            }
+            let approval = json!({
+                "action": "expire_stale",
+                "from_status": "pending_review",
+                "to_status": "expired_stale",
+                "actor": "scheduler",
+                "notes": "Proposal exceeded the configured pending-review window and was closed without activation.",
+                "recorded_at": recorded_at,
+                "stale_after_days": stale_after_days,
+            });
+            let result = sqlx::query(&format!(
+                "UPDATE strategy_experiments
+                 SET status = 'expired_stale', approval_json = '{}'
+                 WHERE id = '{}'
+                   AND status = 'pending_review'",
+                sql_escape(&serde_json::to_string(&approval)?),
+                sql_escape(&id)
+            ))
+            .execute(&self.pool)
+            .await
+            .context("expiring stale Hermes experiment proposal")?;
+            if result.rows_affected() == 1 {
+                expired.push(json!({
+                    "id": id,
+                    "created_at": experiment.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                    "changed_variable_path": experiment.get("changed_variable_path").cloned().unwrap_or(JsonValue::Null),
+                }));
+            }
+        }
+        Ok(json!({
+            "status": "ok",
+            "stale_after_days": stale_after_days,
+            "cutoff": cutoff,
+            "expired_count": expired.len(),
+            "expired": expired,
+        }))
     }
 
     pub async fn record_hermes_experiment(
@@ -8479,6 +8573,10 @@ analysis_windows:
             hermes_experiment_next_status("pending_review", "promote"),
             None
         );
+        assert_eq!(
+            hermes_experiment_next_status("pending_review", "expire_stale"),
+            Some("expired_stale")
+        );
     }
 
     #[test]
@@ -8499,11 +8597,92 @@ analysis_windows:
             "paper_failed",
             "sim_failed",
             "failed",
+            "expired_stale",
             "promoted",
             "",
         ] {
             assert!(!hermes_experiment_status_blocks_duplicate(status));
         }
+    }
+
+    #[tokio::test]
+    async fn expires_only_stale_pending_hermes_experiments() {
+        let state = runtime_settings_test_state("hermes:\n  experiments: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE strategy_experiments (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                changed_variable_path TEXT NOT NULL,
+                approval_json TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create strategy experiments table");
+        for (id, created_at, status) in [
+            ("old-pending", "2026-06-01T12:00:00Z", "pending_review"),
+            ("fresh-pending", "2026-06-25T12:00:00Z", "pending_review"),
+            ("old-approved", "2026-06-01T12:00:00Z", "approved_paper"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO strategy_experiments (id, created_at, status, changed_variable_path)
+                 VALUES ('{}', '{}', '{}', 'strategy.swing.daily_indicators.min_confluences')",
+                sql_escape(id),
+                sql_escape(created_at),
+                sql_escape(status),
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed experiment");
+        }
+
+        let now = DateTime::parse_from_rfc3339("2026-07-01T12:00:00Z")
+            .expect("valid now")
+            .with_timezone(&Utc);
+        let result = state
+            .expire_stale_hermes_experiments_at(now, 30)
+            .await
+            .expect("expire stale pending proposal");
+        assert_eq!(result["expired_count"], json!(1));
+        assert_eq!(result["expired"][0]["id"], json!("old-pending"));
+
+        let rows = state
+            .select_json(
+                "SELECT id, status, approval_json
+                 FROM strategy_experiments ORDER BY id ASC",
+            )
+            .await
+            .expect("read experiment statuses");
+        let old_pending = rows
+            .iter()
+            .find(|row| json_text(row, "id") == "old-pending")
+            .expect("old pending row");
+        assert_eq!(old_pending["status"], json!("expired_stale"));
+        assert_eq!(old_pending["approval_json"]["actor"], json!("scheduler"));
+        assert_eq!(
+            old_pending["approval_json"]["action"],
+            json!("expire_stale")
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| json_text(row, "id") == "fresh-pending")
+                .expect("fresh pending row")["status"],
+            json!("pending_review")
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| json_text(row, "id") == "old-approved")
+                .expect("old approved row")["status"],
+            json!("approved_paper")
+        );
+        assert_eq!(
+            state
+                .expire_stale_hermes_experiments_at(now, 30)
+                .await
+                .expect("repeated expiry is safe")["expired_count"],
+            json!(0)
+        );
     }
 
     #[test]

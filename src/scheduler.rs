@@ -83,6 +83,28 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         warn!("scheduler heartbeat persistence failed: {err:#}");
     }
     let step_started = Instant::now();
+    let hermes_experiment_expiry = match state.expire_stale_hermes_experiments().await {
+        Ok(value) => {
+            let expired_count = value
+                .get("expired_count")
+                .and_then(JsonValue::as_u64)
+                .unwrap_or(0);
+            if expired_count > 0 {
+                info!(expired_count, "expired stale Hermes experiment proposals");
+            }
+            value
+        }
+        Err(err) => {
+            warn!("Hermes experiment expiry failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(
+        &mut step_durations,
+        "hermes_experiment_expiry",
+        step_started,
+    );
+    let step_started = Instant::now();
     let saxo = maintain_saxo_session(state).await;
     record_step_duration(&mut step_durations, "saxo_session", step_started);
     let step_started = Instant::now();
@@ -262,6 +284,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "runtime": "rust",
         "duration_ms": duration_ms,
         "step_durations": step_durations,
+        "hermes_experiment_expiry": hermes_experiment_expiry,
         "saxo_session": saxo,
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,

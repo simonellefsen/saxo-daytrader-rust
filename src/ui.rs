@@ -3794,6 +3794,7 @@ fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
         | "ready_for_promotion"
         | "promoted" => "status good-status",
         "rejected" | "paper_failed" | "sim_failed" | "failed" => "status bad-status",
+        "expired_stale" => "status warn-status",
         _ => "status",
     };
     let experiment_id = text(&row, "id");

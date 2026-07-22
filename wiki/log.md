@@ -964,3 +964,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Routed the persisted Saxo execution error taxonomy into individual Slack failure alerts and execution-failure burst alerts.
 - Alerts now send only the allow-listed category, label, remediation, and retry policy; raw broker diagnostics and local error text remain in protected execution records and are not included in Slack payloads.
 - Added regression coverage proving taxonomy extraction excludes arbitrary raw fields and secret-like error text.
+
+## [2026-07-22] Hermes governance | Expire stale pending proposals
+
+- Added the terminal `expired_stale` lifecycle status for proposals that remain in `pending_review` beyond the configured 30-day review window.
+- Each scheduler transition records its actor, reason, and threshold in `approval_json`; only still-pending rows are eligible, so approved, active, SIM, promoted, and broker paths remain unchanged.
+- The existing 14-day Slack/dashboard warning remains the earlier operator signal, while expiry prevents indefinite duplicate-blocking proposal backlog.
