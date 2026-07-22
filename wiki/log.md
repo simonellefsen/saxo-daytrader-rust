@@ -952,3 +952,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Execution failures now persist a small, sanitized `failure_stage` alongside the existing taxonomy: local validation, request build, local precheck guard, Saxo precheck, Saxo placement, or queue execution fallback.
 - The Execution Queue and Order Events surface the stage as a compact label and in their existing tooltips and safe diagnostics, so `execution_failed` no longer hides whether Saxo was contacted.
 - Non-ambiguous Saxo placement errors now persist their precheck context and placement stage directly rather than relying on the queue's generic error catch.
+
+## [2026-07-22] data hygiene | Retire legacy cash-buffer runtime override
+
+- The active Rust runtime does not read `strategy.capital.cash_buffer`; it was a Python scheduler compatibility setting that could preserve a zero-cash-buffer value from 2026-05-05.
+- Startup now deletes that exact retired key idempotently after ensuring the runtime settings table. Active AI key/model settings and the short-lived manual-report claim remain untouched.
+- Added a database-backed regression test that seeds both a retired cash-buffer setting and an active model setting, then verifies only the retired key is removed.

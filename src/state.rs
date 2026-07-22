@@ -56,6 +56,7 @@ const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
+const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &["strategy.capital.cash_buffer"];
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -5537,6 +5538,13 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating runtime settings table")?;
+        let retired_settings = self.purge_retired_runtime_settings().await?;
+        if retired_settings > 0 {
+            info!(
+                count = retired_settings,
+                "removed retired legacy runtime settings"
+            );
+        }
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS price_monitor_status (
                 singleton_key TEXT PRIMARY KEY,
@@ -6025,6 +6033,24 @@ impl AppState {
             ));
         }
         Ok(None)
+    }
+
+    /// Removes database settings that were only read by the retired Python
+    /// scheduler. Keeping one would make a future compatibility refactor able
+    /// to resurrect an unreviewed trading override.
+    async fn purge_retired_runtime_settings(&self) -> Result<u64> {
+        let keys = RETIRED_RUNTIME_SETTING_KEYS
+            .iter()
+            .map(|key| format!("'{}'", sql_escape(key)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let result = sqlx::query(&format!(
+            "DELETE FROM runtime_settings WHERE key IN ({keys})"
+        ))
+        .execute(&self.pool)
+        .await
+        .context("removing retired legacy runtime settings")?;
+        Ok(result.rows_affected())
     }
 
     async fn save_runtime_setting(&self, key: &str, value: &JsonValue) -> Result<()> {
@@ -7594,6 +7620,52 @@ market_data:
         assert_eq!(
             state.effective_ai_api_key().await.as_deref(),
             Some("sk-or-old-config-key-1234")
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_retired_runtime_settings_removes_only_the_legacy_cash_buffer() {
+        let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
+        state
+            .save_runtime_setting(
+                "strategy.capital.cash_buffer",
+                &json!({"min_cash_buffer_pct": 0.0, "max_deployment_pct": 1.0}),
+            )
+            .await
+            .expect("seed retired cash-buffer override");
+        state
+            .save_runtime_setting("ai_model", &json!({"model": "openrouter/fusion"}))
+            .await
+            .expect("seed active model override");
+
+        assert_eq!(
+            state
+                .purge_retired_runtime_settings()
+                .await
+                .expect("purge retired settings"),
+            1
+        );
+        assert!(
+            state
+                .runtime_setting("strategy.capital.cash_buffer")
+                .await
+                .expect("read retired setting")
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .runtime_setting("ai_model")
+                .await
+                .expect("read active setting")
+                .expect("active setting remains")["model"],
+            json!("openrouter/fusion")
+        );
+        assert_eq!(
+            state
+                .purge_retired_runtime_settings()
+                .await
+                .expect("repeat purge is safe"),
+            0
         );
     }
 
