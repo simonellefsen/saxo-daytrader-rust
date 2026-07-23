@@ -5,7 +5,8 @@ use serde_json::{Map, Value as JsonValue};
 
 use crate::{
     localization::{
-        LocalizationPrefs, format_money, format_percent, format_quantity, format_timestamp,
+        LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
+        format_timestamp,
     },
     models::DashboardView,
 };
@@ -2675,6 +2676,9 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
                     span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
                     span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
+                    if !data.hermes_baseline_evidence_pack.is_null() {
+                        span { class: "pill", "Baseline evidence: {text_or(&data.hermes_baseline_evidence_pack, \"status\", \"n/a\")}" }
+                    }
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
                     span { class: "pill", "Advised reports: {advised_reports}" }
                     span { class: "pill", "Changed: {changed_reports}" }
@@ -2700,6 +2704,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: "muted", "Promote a successful paper/SIM experiment to create one. Decision prompts will include it once present." }
                 }
             }
+            HermesBaselineEvidencePack { pack: data.hermes_baseline_evidence_pack.clone(), prefs: prefs.clone() }
             div { class: "table-wrap",
                 h3 { "One-Variable Audit" }
                 p { class: "muted", "Read-only view of the promoted baseline artifact and the exact experiment overlay the Trading Manager will consider. An overlay is limited to paper/SIM-eligible queue creation and never rewrites configuration or activates live trading." }
@@ -3921,6 +3926,144 @@ fn HermesOneVariableAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
             td {
                 span { class: "event-message", title: "{scope}", "{manager_state}" }
             }
+        }
+    }
+}
+
+#[component]
+fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text_or(&pack, "status", "unavailable");
+    let status_class = match status.as_str() {
+        "observing" => "status good-status",
+        "awaiting_post_promotion_observation" | "source_experiment_unavailable" => {
+            "status warn-status"
+        }
+        _ => "status",
+    };
+    let baseline = pack.get("baseline").cloned().unwrap_or(JsonValue::Null);
+    let experiment = pack.get("experiment").cloned().unwrap_or(JsonValue::Null);
+    let activity = pack
+        .get("affected_activity")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let evaluation = experiment
+        .get("evaluation_window")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let post_promotion = pack
+        .get("post_promotion")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let baseline_id = text_or(&baseline, "id", "n/a");
+    let variable = text_or(&baseline, "variable", "n/a");
+    let activated_at = format_timestamp(&text(&baseline, "activated_at"), &prefs);
+    let experiment_return = format_optional_percentage_points(
+        evaluation.get("return_pct").and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    let post_return = format_optional_percentage_points(
+        post_promotion.get("return_pct").and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    let post_drawdown = format_optional_percentage_points(
+        post_promotion
+            .get("max_drawdown_pct")
+            .and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    let post_sharpe = post_promotion
+        .get("sharpe_zero_rf_annualized")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_number(value, 2, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    rsx! {
+        div { class: "table-wrap",
+            h3 { "Baseline Promotion Evidence" }
+            p { class: "muted", "Read-only local observations for the promoted experiment. They do not prove causality, rewrite configuration, or mean the promoted audit record is active in live trading." }
+            if status == "no_active_baseline" {
+                div { class: "event",
+                    span { class: "muted", "No active baseline audit record has evidence to summarize." }
+                }
+            } else {
+                div { class: "event",
+                    strong { class: "mono", "{variable}" }
+                    span { "Baseline {baseline_id} · promoted {activated_at}" }
+                    span { class: "{status_class}", "{status}" }
+                }
+                div { class: "mini-grid",
+                    MetricCard { label: "Overlay manager runs", value: text_or(&activity, "manager_run_count", "0"), tone: "" }
+                    MetricCard { label: "Linked reports", value: text_or(&activity, "report_count", "0"), tone: "" }
+                    MetricCard { label: "Execution failures", value: text_or(&activity, "failed_order_count", "0"), tone: if value_i64(&activity, "failed_order_count") > 0 { "bad-text" } else { "good-text" } }
+                    MetricCard { label: "Experiment return", value: experiment_return, tone: "" }
+                    MetricCard { label: "Post-promotion return", value: post_return, tone: "" }
+                    MetricCard { label: "Post-promotion drawdown", value: post_drawdown, tone: "" }
+                    MetricCard { label: "Post-promotion Sharpe", value: post_sharpe, tone: "" }
+                    MetricCard { label: "Post observations", value: text_or(&post_promotion, "observation_count", "0"), tone: "" }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead {
+                            tr {
+                                th { "Window" }
+                                th { "Observations" }
+                                th { "Start Value" }
+                                th { "End Value" }
+                                th { "Cash Use" }
+                                th { "Max Drawdown" }
+                            }
+                        }
+                        tbody {
+                            HermesBaselineEvidenceWindowRow { label: "Experiment evaluation", metrics: evaluation, prefs: prefs.clone() }
+                            HermesBaselineEvidenceWindowRow { label: "After promotion", metrics: post_promotion, prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn HermesBaselineEvidenceWindowRow(
+    label: &'static str,
+    metrics: JsonValue,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let observation_count = text_or(&metrics, "observation_count", "0");
+    let start_value = metrics
+        .get("start_total_market_value_dkk")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let end_value = metrics
+        .get("end_total_market_value_dkk")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let start_cash_use = format_optional_percentage_points(
+        metrics
+            .get("start_cash_utilization_pct")
+            .and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    let end_cash_use = format_optional_percentage_points(
+        metrics
+            .get("end_cash_utilization_pct")
+            .and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    let drawdown = format_optional_percentage_points(
+        metrics.get("max_drawdown_pct").and_then(JsonValue::as_f64),
+        &prefs,
+    );
+    rsx! {
+        tr {
+            td { "{label}" }
+            td { "{observation_count}" }
+            td { "{start_value}" }
+            td { "{end_value}" }
+            td { "{start_cash_use} -> {end_cash_use}" }
+            td { "{drawdown}" }
         }
     }
 }
@@ -6293,6 +6436,13 @@ fn format_dkk(value: f64, prefs: &LocalizationPrefs) -> String {
 
 fn format_pct(value: f64, prefs: &LocalizationPrefs) -> String {
     format_percent(value, prefs)
+}
+
+fn format_optional_percentage_points(value: Option<f64>, prefs: &LocalizationPrefs) -> String {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| format_pct(value / 100.0, prefs))
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn distribution_label(value: Option<&JsonValue>, prefs: &LocalizationPrefs) -> String {

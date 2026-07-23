@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] improvement | Hermes baseline promotion evidence
+
+- Added a bounded read-only evidence pack for the active promoted baseline. It links only the exact source-experiment overlay manager runs to compact report/order outcome counts and uses persisted portfolio snapshots for experiment-window and post-promotion return, drawdown, cash utilization, and sufficient-sample zero-risk-free Sharpe observations.
+- The pack is explicitly observational rather than causal. It excludes raw experiment evidence, hypotheses, risk notes, provider payloads, broker payloads, and secrets; it cannot alter baseline/experiment lifecycle, configuration, or Saxo behavior.
+
 ## [2026-07-23] improvement | Hermes proposal quality review
 
 - Added a deterministic, bounded read-only review projection for active and pending Hermes experiments. It scores only safe persisted metadata: variable-path clarity, evidence presence/source names, measurable expected effect, changed values with risk notes, and exact or related active-proposal risk.

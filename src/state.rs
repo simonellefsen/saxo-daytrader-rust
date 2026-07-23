@@ -414,6 +414,244 @@ fn hermes_proposal_quality_from_experiments(experiments: &[JsonValue]) -> Vec<Js
         .collect()
 }
 
+/// Derive a compact evidence pack for a promoted baseline without introducing a
+/// second promotion workflow. All figures are local, persisted observations;
+/// they are useful review context, not proof that an experiment caused a
+/// return or a signal that it is active in live trading.
+fn hermes_baseline_evidence_pack_from_snapshot(
+    baseline: &JsonValue,
+    experiment: &JsonValue,
+    manager_runs: &[JsonValue],
+    orders: &[JsonValue],
+    portfolio_history: &[JsonValue],
+) -> JsonValue {
+    if baseline.is_null() {
+        return json!({
+            "status": "no_active_baseline",
+            "safety": "read_only_observational_not_causal",
+        });
+    }
+
+    let config = baseline.get("config_json").unwrap_or(&JsonValue::Null);
+    let source_experiment_id = json_text(config, "source_experiment_id");
+    let activated_at = json_text(baseline, "activated_at");
+    let variable = json_text(config, "changed_variable_path");
+    if source_experiment_id.is_empty() || experiment.is_null() {
+        return json!({
+            "status": "source_experiment_unavailable",
+            "safety": "read_only_observational_not_causal",
+            "baseline": {
+                "id": json_text(baseline, "id"),
+                "activated_at": activated_at,
+                "variable": variable,
+                "source_experiment_id": source_experiment_id,
+            },
+        });
+    }
+
+    let experiment_created_at = json_text(experiment, "created_at");
+    let matching_runs = manager_runs
+        .iter()
+        .filter(|run| {
+            run.get("manager_json")
+                .and_then(|value| value.get("strategy_experiment_overlay"))
+                .is_some_and(|overlay| json_text(overlay, "id") == source_experiment_id)
+        })
+        .collect::<Vec<_>>();
+    let report_ids = matching_runs
+        .iter()
+        .map(|run| value_i64(run, "report_id"))
+        .filter(|report_id| *report_id > 0)
+        .collect::<HashSet<_>>();
+    let approved_orders = matching_runs
+        .iter()
+        .map(|run| {
+            run.get("manager_json")
+                .map(|value| value_i64(value, "approved_order_count"))
+                .unwrap_or(0)
+        })
+        .sum::<i64>();
+    let skipped_orders = matching_runs
+        .iter()
+        .map(|run| {
+            run.get("manager_json")
+                .map(|value| value_i64(value, "skipped_order_count"))
+                .unwrap_or(0)
+        })
+        .sum::<i64>();
+    let related_orders = orders
+        .iter()
+        .filter(|order| report_ids.contains(&value_i64(order, "report_id")))
+        .collect::<Vec<_>>();
+    let mut executed_orders = 0_i64;
+    let mut working_orders = 0_i64;
+    let mut failed_orders = 0_i64;
+    let mut other_orders = 0_i64;
+    for order in &related_orders {
+        let status = json_text(order, "status").to_ascii_lowercase();
+        if status.contains("executed") || status.contains("filled") {
+            executed_orders += 1;
+        } else if status.contains("working") || status.contains("submitted") || status == "queued" {
+            working_orders += 1;
+        } else if status.contains("failed")
+            || status.contains("error")
+            || status.contains("reject")
+            || status.contains("expired")
+        {
+            failed_orders += 1;
+        } else {
+            other_orders += 1;
+        }
+    }
+
+    let experiment_history = portfolio_history
+        .iter()
+        .filter(|row| {
+            let recorded_at = json_text(row, "recorded_at");
+            !recorded_at.is_empty()
+                && (experiment_created_at.is_empty()
+                    || recorded_at.as_str() >= experiment_created_at.as_str())
+                && (activated_at.is_empty() || recorded_at.as_str() <= activated_at.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let post_promotion_history = portfolio_history
+        .iter()
+        .filter(|row| {
+            let recorded_at = json_text(row, "recorded_at");
+            !activated_at.is_empty() && recorded_at.as_str() > activated_at.as_str()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let experiment_metrics = hermes_portfolio_evidence_metrics(&experiment_history);
+    let post_promotion_metrics = hermes_portfolio_evidence_metrics(&post_promotion_history);
+    let status = if post_promotion_metrics["observation_count"]
+        .as_i64()
+        .unwrap_or(0)
+        > 0
+    {
+        "observing"
+    } else {
+        "awaiting_post_promotion_observation"
+    };
+
+    json!({
+        "status": status,
+        "safety": "read_only_observational_not_causal",
+        "baseline": {
+            "id": json_text(baseline, "id"),
+            "activated_at": activated_at,
+            "variable": variable,
+            "source_experiment_id": source_experiment_id,
+        },
+        "experiment": {
+            "created_at": experiment_created_at,
+            "status": json_text(experiment, "status"),
+            "evaluation_window": experiment_metrics,
+        },
+        "affected_activity": {
+            "manager_run_count": matching_runs.len(),
+            "report_count": report_ids.len(),
+            "approved_order_count": approved_orders,
+            "skipped_order_count": skipped_orders,
+            "execution_order_count": related_orders.len(),
+            "executed_order_count": executed_orders,
+            "working_order_count": working_orders,
+            "failed_order_count": failed_orders,
+            "other_order_count": other_orders,
+        },
+        "post_promotion": post_promotion_metrics,
+    })
+}
+
+fn hermes_portfolio_evidence_metrics(rows: &[JsonValue]) -> JsonValue {
+    let mut snapshots = rows
+        .iter()
+        .filter_map(|row| {
+            let recorded_at = json_text(row, "recorded_at");
+            let total = value_f64(row, "total_market_value_dkk");
+            (total.is_finite() && total > 0.0 && !recorded_at.is_empty()).then(|| {
+                (
+                    recorded_at,
+                    total,
+                    value_f64(row, "invested_market_value_dkk"),
+                    value_f64(row, "cash_balance_dkk"),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| left.0.cmp(&right.0));
+    let Some((start_at, start_value, start_invested, start_cash)) = snapshots.first() else {
+        return json!({
+            "observation_count": 0,
+            "return_pct": JsonValue::Null,
+            "max_drawdown_pct": JsonValue::Null,
+            "sharpe_zero_rf_annualized": JsonValue::Null,
+        });
+    };
+    let (end_at, end_value, end_invested, end_cash) = snapshots.last().expect("non-empty");
+    let return_pct = if snapshots.len() >= 2 {
+        Some((end_value / start_value - 1.0) * 100.0)
+    } else {
+        None
+    };
+    let mut peak = *start_value;
+    let mut max_drawdown_pct = 0.0_f64;
+    for (_, value, _, _) in &snapshots {
+        peak = peak.max(*value);
+        max_drawdown_pct = max_drawdown_pct.min((value / peak - 1.0) * 100.0);
+    }
+
+    let mut daily_closes: Vec<(String, f64)> = Vec::new();
+    for (recorded_at, value, _, _) in &snapshots {
+        let day = recorded_at.chars().take(10).collect::<String>();
+        if let Some((previous_day, previous_value)) = daily_closes.last_mut()
+            && *previous_day == day
+        {
+            *previous_value = *value;
+            continue;
+        }
+        daily_closes.push((day, *value));
+    }
+    let daily_returns = daily_closes
+        .windows(2)
+        .filter_map(|window| {
+            let previous = window[0].1;
+            let current = window[1].1;
+            (previous > 0.0).then_some(current / previous - 1.0)
+        })
+        .collect::<Vec<_>>();
+    let sharpe = if daily_returns.len() >= 3 {
+        let mean = daily_returns.iter().sum::<f64>() / daily_returns.len() as f64;
+        let variance = daily_returns
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / (daily_returns.len() - 1) as f64;
+        let volatility = variance.sqrt();
+        (volatility > f64::EPSILON).then_some(mean / volatility * 252.0_f64.sqrt())
+    } else {
+        None
+    };
+    let utilization =
+        |invested: f64, total: f64| (total > 0.0).then_some(invested.max(0.0) / total * 100.0);
+    json!({
+        "observation_count": snapshots.len(),
+        "start_at": start_at,
+        "end_at": end_at,
+        "start_total_market_value_dkk": start_value,
+        "end_total_market_value_dkk": end_value,
+        "start_cash_balance_dkk": start_cash,
+        "end_cash_balance_dkk": end_cash,
+        "start_cash_utilization_pct": utilization(*start_invested, *start_value),
+        "end_cash_utilization_pct": utilization(*end_invested, *end_value),
+        "return_pct": return_pct,
+        "max_drawdown_pct": if snapshots.len() >= 2 { json!(max_drawdown_pct) } else { JsonValue::Null },
+        "sharpe_zero_rf_annualized": sharpe,
+        "daily_return_observation_count": daily_returns.len(),
+    })
+}
+
 fn hermes_proposed_action_entries(value: &JsonValue) -> Vec<&JsonValue> {
     match value {
         JsonValue::Array(entries) => entries.iter().collect(),
@@ -1451,6 +1689,20 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let hermes_baseline_evidence_pack =
+            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+                self.hermes_baseline_evidence_pack(&active_strategy_baseline)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard Hermes baseline evidence pack degraded: {err:#}");
+                        json!({
+                            "status": "unavailable",
+                            "safety": "read_only_observational_not_causal",
+                        })
+                    })
+            } else {
+                JsonValue::Null
+            };
         let hermes_one_variable_audit =
             if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
                 self.hermes_one_variable_audit()
@@ -1647,6 +1899,7 @@ impl AppState {
             hermes_decision_advice_audit,
             hermes_counterfactuals,
             active_strategy_baseline,
+            hermes_baseline_evidence_pack,
             markov_signals,
             latest_markov_run,
             quiver_signals,
@@ -4312,6 +4565,87 @@ impl AppState {
             )
             .await?
             .unwrap_or(JsonValue::Null))
+    }
+
+    /// Return the active baseline's compact, locally-derived evidence pack.
+    /// This never reads broker payloads or alters an experiment/baseline; it
+    /// only joins already persisted local observations for operator review.
+    pub async fn hermes_baseline_evidence_pack(&self, baseline: &JsonValue) -> Result<JsonValue> {
+        if baseline.is_null() {
+            return Ok(hermes_baseline_evidence_pack_from_snapshot(
+                baseline,
+                &JsonValue::Null,
+                &[],
+                &[],
+                &[],
+            ));
+        }
+        let config = baseline.get("config_json").unwrap_or(&JsonValue::Null);
+        let experiment_id = json_text(config, "source_experiment_id");
+        if experiment_id.is_empty() {
+            return Ok(hermes_baseline_evidence_pack_from_snapshot(
+                baseline,
+                &JsonValue::Null,
+                &[],
+                &[],
+                &[],
+            ));
+        }
+        let experiment = self
+            .first_json(&format!(
+                "SELECT id, created_at, status, changed_variable_path
+                 FROM strategy_experiments WHERE id = '{}' LIMIT 1",
+                sql_escape(&experiment_id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        if experiment.is_null() {
+            return Ok(hermes_baseline_evidence_pack_from_snapshot(
+                baseline,
+                &experiment,
+                &[],
+                &[],
+                &[],
+            ));
+        }
+        let experiment_created_at = json_text(&experiment, "created_at");
+        let manager_runs = self
+            .select_json(&format!(
+                "SELECT id, created_at, report_id, status, manager_json
+                 FROM trading_manager_runs
+                 WHERE created_at >= '{}'
+                 ORDER BY created_at ASC, id ASC
+                 LIMIT 500",
+                sql_escape(&experiment_created_at)
+            ))
+            .await?;
+        let orders = self
+            .select_json(&format!(
+                "SELECT id, created_at, report_id, status, action
+                 FROM execution_orders
+                 WHERE created_at >= '{}'
+                 ORDER BY created_at ASC, id ASC
+                 LIMIT 1000",
+                sql_escape(&experiment_created_at)
+            ))
+            .await?;
+        let portfolio_history = self
+            .select_json(&format!(
+                "SELECT recorded_at, total_market_value_dkk, invested_market_value_dkk, cash_balance_dkk
+                 FROM portfolio_value_history
+                 WHERE recorded_at >= '{}'
+                 ORDER BY recorded_at ASC, id ASC
+                 LIMIT 1000",
+                sql_escape(&experiment_created_at)
+            ))
+            .await?;
+        Ok(hermes_baseline_evidence_pack_from_snapshot(
+            baseline,
+            &experiment,
+            &manager_runs,
+            &orders,
+            &portfolio_history,
+        ))
     }
 
     /// A read-only view of the promoted baseline artifact and the exact
@@ -8364,6 +8698,108 @@ mod tests {
             .expect("capital-buffer proposal quality");
         assert_eq!(capital_buffer["quality_score"], json!(95));
         assert_eq!(capital_buffer["quality_status"], json!("related_review"));
+    }
+
+    #[test]
+    fn baseline_evidence_pack_links_only_matching_overlay_activity() {
+        let pack = hermes_baseline_evidence_pack_from_snapshot(
+            &json!({
+                "id": "baseline-1",
+                "activated_at": "2026-07-10T12:00:00Z",
+                "config_json": {
+                    "source_experiment_id": "experiment-1",
+                    "changed_variable_path": "strategy.swing.markov_gate.min_signed_signal",
+                    "raw_payload": "must not appear"
+                }
+            }),
+            &json!({
+                "id": "experiment-1",
+                "created_at": "2026-07-01T12:00:00Z",
+                "status": "promoted",
+                "evidence_json": {"secret": "must not appear"}
+            }),
+            &[
+                json!({
+                    "id": 1,
+                    "created_at": "2026-07-04T12:00:00Z",
+                    "report_id": 41,
+                    "manager_json": {
+                        "strategy_experiment_overlay": {"id": "experiment-1"},
+                        "approved_order_count": 2,
+                        "skipped_order_count": 1
+                    }
+                }),
+                json!({
+                    "id": 2,
+                    "created_at": "2026-07-05T12:00:00Z",
+                    "report_id": 42,
+                    "manager_json": {
+                        "strategy_experiment_overlay": {"id": "different-experiment"},
+                        "approved_order_count": 9,
+                        "skipped_order_count": 9
+                    }
+                }),
+            ],
+            &[
+                json!({"report_id": 41, "status": "executed"}),
+                json!({"report_id": 41, "status": "execution_failed"}),
+                json!({"report_id": 42, "status": "executed"}),
+            ],
+            &[
+                json!({"recorded_at": "2026-07-01T12:00:00Z", "total_market_value_dkk": 100.0, "invested_market_value_dkk": 80.0, "cash_balance_dkk": 20.0}),
+                json!({"recorded_at": "2026-07-04T12:00:00Z", "total_market_value_dkk": 110.0, "invested_market_value_dkk": 88.0, "cash_balance_dkk": 22.0}),
+                json!({"recorded_at": "2026-07-08T12:00:00Z", "total_market_value_dkk": 105.0, "invested_market_value_dkk": 84.0, "cash_balance_dkk": 21.0}),
+                json!({"recorded_at": "2026-07-10T12:00:00Z", "total_market_value_dkk": 120.0, "invested_market_value_dkk": 96.0, "cash_balance_dkk": 24.0}),
+                json!({"recorded_at": "2026-07-11T12:00:00Z", "total_market_value_dkk": 126.0, "invested_market_value_dkk": 100.0, "cash_balance_dkk": 26.0}),
+                json!({"recorded_at": "2026-07-12T12:00:00Z", "total_market_value_dkk": 132.0, "invested_market_value_dkk": 106.0, "cash_balance_dkk": 26.0}),
+            ],
+        );
+
+        assert_eq!(pack["status"], json!("observing"));
+        assert_eq!(pack["affected_activity"]["manager_run_count"], json!(1));
+        assert_eq!(pack["affected_activity"]["report_count"], json!(1));
+        assert_eq!(pack["affected_activity"]["approved_order_count"], json!(2));
+        assert_eq!(pack["affected_activity"]["failed_order_count"], json!(1));
+        assert!(
+            (pack["experiment"]["evaluation_window"]["return_pct"]
+                .as_f64()
+                .expect("experiment return")
+                - 20.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (pack["post_promotion"]["return_pct"]
+                .as_f64()
+                .expect("post-promotion return")
+                - 100.0 / 21.0)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            pack.to_string()
+                .contains("read_only_observational_not_causal")
+        );
+        assert!(!pack.to_string().contains("must not appear"));
+        assert!(pack.get("evidence_json").is_none());
+    }
+
+    #[test]
+    fn baseline_evidence_pack_waits_for_a_source_experiment() {
+        let pack = hermes_baseline_evidence_pack_from_snapshot(
+            &json!({
+                "id": "baseline-missing-source",
+                "activated_at": "2026-07-10T12:00:00Z",
+                "config_json": {"source_experiment_id": "missing"}
+            }),
+            &JsonValue::Null,
+            &[],
+            &[],
+            &[],
+        );
+
+        assert_eq!(pack["status"], json!("source_experiment_unavailable"));
+        assert_eq!(pack["safety"], json!("read_only_observational_not_causal"));
     }
 
     #[test]

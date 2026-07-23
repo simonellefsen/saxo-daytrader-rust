@@ -330,6 +330,25 @@ work still required. The rubric is advisory only: it neither blocks nor
 advances lifecycle transitions, changes configuration, calls Saxo, or exposes
 the raw evidence, risk notes, hypothesis, or provider payload.
 
+### Baseline Promotion Evidence
+
+For an active promoted baseline, the Hermes dashboard derives a read-only
+**Baseline Promotion Evidence** pack from locally persisted records. It shows:
+
+- only Trading Manager runs that recorded the exact source experiment overlay;
+- linked report/order counts and compact execution outcome counts;
+- experiment-window portfolio return, drawdown, cash utilization, and a
+  zero-risk-free annualized Sharpe estimate when there are enough daily
+  observations; and
+- the same portfolio observations after promotion.
+
+The promoted baseline remains an audit artifact, not a configuration rewrite
+or live activation. Consequently, the pack labels all values as observational:
+they do not prove the experiment caused a return. It excludes raw experiment
+evidence, hypothesis, risk notes, provider payloads, broker payloads, and
+secrets; it cannot alter promotion, experiment lifecycle, configuration, or
+Saxo behavior.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.
