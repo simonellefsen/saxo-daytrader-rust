@@ -65,6 +65,10 @@ const HERMES_LEARNING_MEMORY_LIMIT: usize = 30;
 const HERMES_LEARNING_MEMORY_EMERGING_TTL_DAYS: i64 = 7;
 const HERMES_LEARNING_MEMORY_STABLE_TTL_DAYS: i64 = 21;
 const HERMES_LEARNING_MEMORY_STABLE_MIN_REFLECTIONS: usize = 2;
+const GATE_REPLAY_DEFAULT_RUN_LIMIT: i64 = 40;
+const GATE_REPLAY_MAX_CHANGE_ROWS: usize = 30;
+const GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL: f64 = 0.25;
+const GATE_REPLAY_MIN_CONFLUENCES: i64 = 4;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -1050,6 +1054,256 @@ fn compact_candidate_markov(value: &JsonValue) -> JsonValue {
     })
 }
 
+fn candidate_recorded_technical(candidate: &JsonValue) -> &JsonValue {
+    let final_technical = candidate.get("final_technical").unwrap_or(&JsonValue::Null);
+    if json_text(final_technical, "status") == "ok" {
+        final_technical
+    } else {
+        candidate.get("technical").unwrap_or(&JsonValue::Null)
+    }
+}
+
+fn replay_buy_technical_passes(candidate: &JsonValue, min_confluences: i64) -> Option<bool> {
+    if json_text(candidate, "action").to_ascii_uppercase() != "BUY" {
+        return None;
+    }
+    let technical = candidate_recorded_technical(candidate);
+    if json_text(technical, "status") != "ok" {
+        return None;
+    }
+    let sentiment = json_text(technical, "sentiment").to_ascii_uppercase();
+    let trend_bias = json_text(technical, "trend_bias").to_ascii_lowercase();
+    Some(
+        matches!(sentiment.as_str(), "BUY" | "OVERWEIGHT")
+            && trend_bias == "bullish"
+            && value_i64(technical, "confluence_count") >= min_confluences.max(1),
+    )
+}
+
+fn replay_recorded_min_confluences(candidate: &JsonValue) -> Option<i64> {
+    let minimum = value_i64(candidate_recorded_technical(candidate), "min_confluences");
+    (minimum > 0).then_some(minimum)
+}
+
+fn replay_recorded_markov_minimum(run: &JsonValue) -> Option<f64> {
+    run.get("manager_json")
+        .and_then(|value| value.get("hermes_preflight"))
+        .and_then(|value| value.get("markov"))
+        .and_then(|value| value.get("min_signed_signal"))
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn gate_replay_change_row(
+    run: &JsonValue,
+    candidate: &JsonValue,
+    effect: &str,
+    recorded_value: JsonValue,
+    proposed_value: JsonValue,
+) -> JsonValue {
+    json!({
+        "manager_run_id": value_i64(run, "id"),
+        "report_id": value_i64(run, "report_id"),
+        "created_at": json_text(run, "created_at"),
+        "symbol": json_text(candidate, "symbol"),
+        "action": json_text(candidate, "action"),
+        "recorded_outcome": json_text(candidate, "outcome"),
+        "recorded_gate": json_text(candidate, "gate_code"),
+        "effect": effect,
+        "recorded_value": recorded_value,
+        "proposed_value": proposed_value,
+    })
+}
+
+fn gate_replay_markov_scenario(runs: &[JsonValue]) -> JsonValue {
+    let mut candidate_count = 0usize;
+    let mut evaluated_count = 0usize;
+    let mut would_block_count = 0usize;
+    let mut would_clear_target_gate_only_count = 0usize;
+    let mut unchanged_count = 0usize;
+    let mut not_reached_count = 0usize;
+    let mut insufficient_evidence_count = 0usize;
+    let mut changes = Vec::new();
+
+    for run in runs {
+        let waterfall = candidate_scoring_waterfall_from_manager_run(run);
+        for candidate in waterfall
+            .get("candidates")
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+        {
+            candidate_count += 1;
+            if json_text(candidate, "action").to_ascii_uppercase() != "BUY" {
+                not_reached_count += 1;
+                continue;
+            }
+            let Some(recorded_minimum) = replay_recorded_markov_minimum(run) else {
+                insufficient_evidence_count += 1;
+                continue;
+            };
+            let Some(technical_passes) = replay_buy_technical_passes(
+                candidate,
+                replay_recorded_min_confluences(candidate).unwrap_or(1),
+            ) else {
+                insufficient_evidence_count += 1;
+                continue;
+            };
+            if technical_passes {
+                not_reached_count += 1;
+                continue;
+            }
+            let markov = candidate.get("markov").unwrap_or(&JsonValue::Null);
+            if json_text(markov, "status") != "ok"
+                || !markov
+                    .get("fresh")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                || json_text(markov, "direction") != "long"
+            {
+                insufficient_evidence_count += 1;
+                continue;
+            }
+            evaluated_count += 1;
+            let signal = value_f64(markov, "signed_signal");
+            let recorded_passes = signal >= recorded_minimum;
+            let proposed_passes = signal >= GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL;
+            let effect = match (recorded_passes, proposed_passes) {
+                (true, false) => "would_block_target_gate",
+                (false, true) => "would_clear_target_gate_only",
+                _ => "unchanged_target_gate",
+            };
+            match effect {
+                "would_block_target_gate" => would_block_count += 1,
+                "would_clear_target_gate_only" => would_clear_target_gate_only_count += 1,
+                _ => unchanged_count += 1,
+            }
+            if effect != "unchanged_target_gate" && changes.len() < GATE_REPLAY_MAX_CHANGE_ROWS {
+                changes.push(gate_replay_change_row(
+                    run,
+                    candidate,
+                    effect,
+                    json!({"min_signed_signal": recorded_minimum, "signed_signal": signal}),
+                    json!({"min_signed_signal": GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL, "signed_signal": signal}),
+                ));
+            }
+        }
+    }
+
+    json!({
+        "variable_path": "strategy.swing.markov_gate.min_signed_signal",
+        "proposed_value": GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL,
+        "comparison": "fresh long starter fallback only; historical technical-gate evidence must first reject the BUY",
+        "summary": {
+            "candidate_count": candidate_count,
+            "evaluated_count": evaluated_count,
+            "would_block_target_gate_count": would_block_count,
+            "would_clear_target_gate_only_count": would_clear_target_gate_only_count,
+            "unchanged_target_gate_count": unchanged_count,
+            "not_reached_count": not_reached_count,
+            "insufficient_evidence_count": insufficient_evidence_count,
+        },
+        "changes": changes,
+    })
+}
+
+fn gate_replay_technical_scenario(runs: &[JsonValue]) -> JsonValue {
+    let mut candidate_count = 0usize;
+    let mut evaluated_count = 0usize;
+    let mut would_block_count = 0usize;
+    let mut would_clear_target_gate_only_count = 0usize;
+    let mut unchanged_count = 0usize;
+    let mut not_reached_count = 0usize;
+    let mut insufficient_evidence_count = 0usize;
+    let mut changes = Vec::new();
+
+    for run in runs {
+        let waterfall = candidate_scoring_waterfall_from_manager_run(run);
+        for candidate in waterfall
+            .get("candidates")
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+        {
+            candidate_count += 1;
+            let Some(recorded_minimum) = replay_recorded_min_confluences(candidate) else {
+                insufficient_evidence_count += 1;
+                continue;
+            };
+            let Some(recorded_passes) = replay_buy_technical_passes(candidate, recorded_minimum)
+            else {
+                if json_text(candidate, "action").to_ascii_uppercase() == "BUY" {
+                    insufficient_evidence_count += 1;
+                } else {
+                    not_reached_count += 1;
+                }
+                continue;
+            };
+            evaluated_count += 1;
+            let proposed_passes =
+                replay_buy_technical_passes(candidate, GATE_REPLAY_MIN_CONFLUENCES)
+                    .unwrap_or(false);
+            let effect = match (recorded_passes, proposed_passes) {
+                (true, false) => "would_block_target_gate",
+                (false, true) => "would_clear_target_gate_only",
+                _ => "unchanged_target_gate",
+            };
+            match effect {
+                "would_block_target_gate" => would_block_count += 1,
+                "would_clear_target_gate_only" => would_clear_target_gate_only_count += 1,
+                _ => unchanged_count += 1,
+            }
+            if effect != "unchanged_target_gate" && changes.len() < GATE_REPLAY_MAX_CHANGE_ROWS {
+                changes.push(gate_replay_change_row(
+                    run,
+                    candidate,
+                    effect,
+                    json!({
+                        "min_confluences": recorded_minimum,
+                        "confluence_count": value_i64(candidate_recorded_technical(candidate), "confluence_count"),
+                    }),
+                    json!({
+                        "min_confluences": GATE_REPLAY_MIN_CONFLUENCES,
+                        "confluence_count": value_i64(candidate_recorded_technical(candidate), "confluence_count"),
+                    }),
+                ));
+            }
+        }
+    }
+
+    json!({
+        "variable_path": "strategy.swing.daily_indicators.min_confluences",
+        "proposed_value": GATE_REPLAY_MIN_CONFLUENCES,
+        "comparison": "BUY technical gate only; SELL rules do not use the confluence threshold",
+        "summary": {
+            "candidate_count": candidate_count,
+            "evaluated_count": evaluated_count,
+            "would_block_target_gate_count": would_block_count,
+            "would_clear_target_gate_only_count": would_clear_target_gate_only_count,
+            "unchanged_target_gate_count": unchanged_count,
+            "not_reached_count": not_reached_count,
+            "insufficient_evidence_count": insufficient_evidence_count,
+        },
+        "changes": changes,
+    })
+}
+
+/// Read-only counterfactual projection over persisted manager snapshots. It
+/// isolates each threshold and never re-runs a decision report, calls Saxo, or
+/// changes runtime configuration.
+fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
+    json!({
+        "status": if runs.is_empty() { "no_history" } else { "available" },
+        "run_count": runs.len(),
+        "scenarios": [
+            gate_replay_markov_scenario(runs),
+            gate_replay_technical_scenario(runs),
+        ],
+        "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
+        "interpretation": "A target-gate clear is not an approval: other recorded gates, capital, holdings, and market conditions remain outside this isolated comparison.",
+    })
+}
+
 fn compact_candidate_market(value: &JsonValue) -> JsonValue {
     let quarantine_active = value
         .get("instrument_quarantine")
@@ -1715,6 +1969,22 @@ impl AppState {
         } else {
             selected_decision
         };
+        let decision_gate_replay = if dashboard_loads_tab_exclusive_data(&active_view, "decisions")
+        {
+            self.decision_gate_replay(GATE_REPLAY_DEFAULT_RUN_LIMIT)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard gate replay degraded: {err:#}");
+                    json!({
+                        "status": "unavailable",
+                        "run_count": 0,
+                        "scenarios": [],
+                        "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
+                    })
+                })
+        } else {
+            JsonValue::Null
+        };
         // The Operations banner is visible on every dashboard tab, so it needs
         // a compact per-pulse report status rather than only the latest global
         // report. The payload deliberately excludes report prompt/response
@@ -2059,6 +2329,7 @@ impl AppState {
             watchlists,
             latest_decision,
             selected_decision,
+            decision_gate_replay,
         }
     }
 
@@ -3808,6 +4079,19 @@ impl AppState {
         Ok(candidate_scoring_waterfall_from_manager_run(&run))
     }
 
+    pub async fn decision_gate_replay(&self, limit: i64) -> Result<JsonValue> {
+        let sql = format!(
+            "SELECT id, report_id, created_at, status, manager_json
+             FROM trading_manager_runs
+             WHERE manager_json IS NOT NULL
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        let runs = self.select_json(&sql).await?;
+        Ok(gate_replay_from_manager_runs(&runs))
+    }
+
     pub async fn decision_pulse_statuses(&self) -> Result<Vec<JsonValue>> {
         let pulses = [
             (
@@ -4260,7 +4544,8 @@ impl AppState {
                     "execution.min_trade_value_dkk",
                     "strategy.capital.min_cash_buffer_pct",
                     "strategy.swing.cash_buffer_pct",
-                    "strategy.swing.daily_indicators.min_confluences"
+                    "strategy.swing.daily_indicators.min_confluences",
+                    "strategy.swing.markov_gate.min_signed_signal"
                 ]
             },
             "forbidden": [
@@ -4276,6 +4561,7 @@ impl AppState {
                 "Promoted baselines are audit records; they do not activate live broker behavior.",
                 "Strategy experiments must change exactly one variable while one_variable_only is true.",
                 "Markov method signals are advisory analytics and do not place or approve orders.",
+                "Gate replay is a read-only historical target-gate comparison; a target-gate clear is not a full approval.",
                 "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
                 "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
                 "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
@@ -4322,6 +4608,13 @@ impl AppState {
             .active_strategy_baseline()
             .await
             .unwrap_or(JsonValue::Null);
+        let gate_replay = self
+            .decision_gate_replay(limit)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("Hermes gate replay context degraded: {err:#}");
+                json!({"status": "unavailable"})
+            });
         let markov = crate::markov_method::compact_markov_context(self, limit)
             .await
             .unwrap_or_else(|err| {
@@ -4372,6 +4665,7 @@ impl AppState {
             "hermes": {
                 "experiments": active_experiments,
                 "active_strategy_baseline": active_strategy_baseline,
+                "gate_replay": gate_replay,
                 "learning_memory": {
                     "active": active_learning_memory,
                     "stale_count": stale_learning_memory_count,
@@ -10301,6 +10595,84 @@ analysis_windows:
         );
         assert!(!waterfall.to_string().contains("do not render this"));
         assert!(!waterfall.to_string().contains("technical_gate"));
+    }
+
+    #[test]
+    fn gate_replay_isolates_threshold_flips_without_claiming_full_approval() {
+        let run = json!({
+            "id": 77,
+            "report_id": 91,
+            "created_at": "2026-07-22T12:00:00Z",
+            "status": "completed",
+            "manager_json": {
+                "hermes_preflight": {
+                    "markov": {"min_signed_signal": 0.15},
+                    "candidate_waterfall": [
+                        {
+                            "strategy_key": "markov-starter",
+                            "symbol": "MARKOV:xnas",
+                            "action": "BUY",
+                            "technical": {"status": "ok", "sentiment": "HOLD", "trend_bias": "neutral", "confluence_count": 1, "min_confluences": 3},
+                            "markov": {"status": "ok", "fresh": true, "direction": "long", "signed_signal": 0.20, "age_days": 0}
+                        },
+                        {
+                            "strategy_key": "technical-buy",
+                            "symbol": "TECH:xnas",
+                            "action": "BUY",
+                            "technical": {"status": "ok", "sentiment": "BUY", "trend_bias": "bullish", "confluence_count": 3, "min_confluences": 3},
+                            "markov": {"status": "ok", "fresh": true, "direction": "long", "signed_signal": 0.40, "age_days": 0}
+                        },
+                        {
+                            "strategy_key": "sell",
+                            "symbol": "SELL:xnas",
+                            "action": "SELL",
+                            "technical": {"status": "ok", "sentiment": "SELL", "trend_bias": "bearish", "confluence_count": 0, "min_confluences": 3},
+                            "markov": {"status": "ok", "fresh": true, "direction": "short", "signed_signal": -0.40, "age_days": 0}
+                        }
+                    ]
+                },
+                "approved_orders": [
+                    {"strategy_key": "markov-starter", "symbol": "MARKOV:xnas", "action": "BUY", "gate_code": "approved"},
+                    {"strategy_key": "technical-buy", "symbol": "TECH:xnas", "action": "BUY", "gate_code": "approved"},
+                    {"strategy_key": "sell", "symbol": "SELL:xnas", "action": "SELL", "gate_code": "approved"}
+                ]
+            }
+        });
+
+        let replay = gate_replay_from_manager_runs(&[run]);
+        assert_eq!(replay["status"], "available");
+        assert_eq!(replay["run_count"], 1);
+        assert_eq!(
+            replay["scenarios"][0]["variable_path"],
+            "strategy.swing.markov_gate.min_signed_signal"
+        );
+        assert_eq!(
+            replay["scenarios"][0]["summary"]["would_block_target_gate_count"],
+            1
+        );
+        assert_eq!(
+            replay["scenarios"][0]["changes"][0]["symbol"],
+            "MARKOV:xnas"
+        );
+        assert_eq!(
+            replay["scenarios"][0]["changes"][0]["effect"],
+            "would_block_target_gate"
+        );
+        assert_eq!(
+            replay["scenarios"][1]["variable_path"],
+            "strategy.swing.daily_indicators.min_confluences"
+        );
+        assert_eq!(
+            replay["scenarios"][1]["summary"]["would_block_target_gate_count"],
+            1
+        );
+        assert_eq!(replay["scenarios"][1]["changes"][0]["symbol"], "TECH:xnas");
+        assert!(
+            replay["interpretation"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not an approval")
+        );
     }
 
     #[test]

@@ -380,6 +380,7 @@ Current allowlist:
 - `strategy.capital.min_cash_buffer_pct`
 - `strategy.swing.cash_buffer_pct`
 - `strategy.swing.daily_indicators.min_confluences`
+- `strategy.swing.markov_gate.min_signed_signal`
 
 After a scheduler cycle, verify the applied overlay in `trading_manager_runs.manager_json` and queued order `request_json` before any SIM broker submission.
 

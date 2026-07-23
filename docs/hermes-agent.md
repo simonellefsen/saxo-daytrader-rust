@@ -511,7 +511,7 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflect
 - Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
 - Write exactly one concise reflection.
 - Create at most one pending-review experiment proposal when the day produced a concrete learning that can be tested safely with exactly one changed variable.
-- Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.cash_buffer_pct`, and `strategy.swing.daily_indicators.min_confluences`.
+- Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.cash_buffer_pct`, `strategy.swing.daily_indicators.min_confluences`, and `strategy.swing.markov_gate.min_signed_signal`.
 - Avoid duplicate proposals for the same `changed_variable_path`; exact active/pending matches are rejected by both the protected HTTP adapter and MCP tool. A small explicit set of related variable families returns advisory review context only (currently the two cash-buffer paths); do not treat that signal as permission to merge, reject, or activate a different variable. If evidence is insufficient or an exact duplicate exists, record the candidate in `proposed_actions` instead of creating an experiment.
 
 After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.
@@ -664,6 +664,29 @@ The app should apply Hermes proposals through a controlled promotion pipeline.
 6. Operator promotes a winning experiment to a new baseline audit record.
 7. Hermes context and future AI decision prompts receive the active baseline id and payload as advisory context.
 8. Live execution still requires a separate reviewed implementation and human approval.
+
+### Offline Gate Replay Evidence
+
+The Decision Reports tab and `GET /api/decision/gate-replay` provide a bounded
+historical comparison before Hermes proposes a gate-threshold experiment. The
+projection reads only persisted `trading_manager_runs.manager_json` snapshots;
+it makes no provider or Saxo request, creates no order, and never changes the
+active configuration.
+
+The first scenarios test one variable at a time:
+
+- `strategy.swing.markov_gate.min_signed_signal` at `0.25`, only for a stored
+  fresh-long Markov starter fallback where the recorded BUY technical gate had
+  already rejected the candidate.
+- `strategy.swing.daily_indicators.min_confluences` at `4`, only for BUY
+  technical gates. SELL technical rules do not use that threshold.
+
+Results label a historical row as `would_block_target_gate`,
+`would_clear_target_gate_only`, or unchanged. A target-gate clear is explicitly
+not an approval: market scope, holdings, capital, quarantine, Hermes advice,
+and every other recorded gate remain outside the isolated comparison. Use this
+as evidence for a pending-review Hermes proposal, then evaluate an approved
+SIM experiment against the goal contract.
 
 ```mermaid
 stateDiagram-v2

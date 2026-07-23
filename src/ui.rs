@@ -1677,6 +1677,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .get("candidate_scoring_waterfall")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let gate_replay = data.decision_gate_replay.clone();
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -1746,6 +1747,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     MetricCard { label: "Model", value: text(&report, "model"), tone: "" }
                 }
                 CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }
+                GateReplayPanel { replay: gate_replay, prefs: prefs.clone() }
                 div { class: "decision-report-grid",
                     div { class: "stack loose",
                         div { class: "event",
@@ -1815,6 +1817,93 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn GateReplayPanel(replay: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&replay, "status");
+    let run_count = value_i64(&replay, "run_count");
+    let scenarios = json_array(&replay, "scenarios");
+    rsx! {
+        div { class: "event candidate-scoring-panel",
+            strong { "Gate Replay" }
+            p { class: "muted", "Offline one-variable comparison across persisted manager snapshots. It does not call a model or Saxo, create orders, or change configuration." }
+            if status == "no_history" {
+                span { class: "muted", "No persisted Trading Manager runs are available yet." }
+            } else if status != "available" {
+                span { class: "muted", "Gate replay evidence is unavailable right now." }
+            } else {
+                span { class: "muted", "{run_count} recent manager runs considered. A target-gate clear remains conditional on all other recorded gates." }
+                for scenario in scenarios.iter() {
+                    GateReplayScenario { scenario: scenario.clone(), prefs: prefs.clone() }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn GateReplayScenario(scenario: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let summary = scenario.get("summary").cloned().unwrap_or(JsonValue::Null);
+    let changes = json_array(&scenario, "changes");
+    let variable_path = text(&scenario, "variable_path");
+    let proposed_value = scenario
+        .get("proposed_value")
+        .map(|value| compact_json(Some(value)))
+        .unwrap_or_else(|| "n/a".to_string());
+    let block_count = value_i64(&summary, "would_block_target_gate_count");
+    let clear_count = value_i64(&summary, "would_clear_target_gate_only_count");
+    let evaluated_count = value_i64(&summary, "evaluated_count");
+    let comparison = text(&scenario, "comparison");
+    rsx! {
+        div { class: "event",
+            strong { "{variable_path} -> {proposed_value}" }
+            span { class: "muted block", "{comparison}" }
+            div { class: "quality-score-row",
+                span { class: "status warn", "{block_count} would block" }
+                span { class: "status good", "{clear_count} target-gate clears" }
+                span { class: "status", "{evaluated_count} evaluated" }
+            }
+            if changes.is_empty() {
+                span { class: "muted", "No historical target-gate flip in the retained evidence." }
+            } else {
+                div { class: "table-wrap candidate-scoring-table",
+                    table {
+                        thead { tr { th { "Candidate" } th { "Recorded" } th { "Counterfactual" } th { "Effect" } } }
+                        tbody {
+                            for row in changes.iter() {
+                                GateReplayChangeRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn GateReplayChangeRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let effect = text(&row, "effect").replace('_', " ");
+    let symbol = fallback_text(&row, "symbol", "candidate");
+    let action = text(&row, "action");
+    let recorded_gate = text(&row, "recorded_gate").replace('_', " ");
+    let recorded_value = compact_json(row.get("recorded_value"));
+    let proposed_value = compact_json(row.get("proposed_value"));
+    let effect_class = if text(&row, "effect") == "would_block_target_gate" {
+        "status warn"
+    } else {
+        "status good"
+    };
+    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
+    rsx! {
+        tr {
+            td { strong { "{symbol}" } span { class: "muted block", "{action}" } }
+            td { "{recorded_gate}" span { class: "muted block", "{created_at}" } }
+            td { "{recorded_value}" span { class: "muted block", "proposed: {proposed_value}" } }
+            td { span { class: effect_class, "{effect}" } }
         }
     }
 }

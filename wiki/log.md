@@ -1014,3 +1014,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Unified exact duplicate inspection across the protected Hermes HTTP adapter and the MCP `create_experiment_proposal` tool; active or pending proposals with the same normalized variable path are rejected consistently before insert.
 - Added a deliberately narrow `cash_buffer_policy` related-family signal for the two supported cash-buffer paths. It returns safe metadata for active/pending sibling proposals but is advisory only: it cannot merge, reject, approve, activate, or otherwise change a different experiment.
 - The returned review context excludes raw evidence, provider payloads, strategy configuration, and broker data. Hermes must put an exact duplicate candidate in reflection proposed actions instead of retrying proposal creation.
+
+## [2026-07-23] Hermes evidence | Offline gate replay
+
+- Added a bounded Decision Reports gate-replay projection over sanitized persisted Trading Manager snapshots.
+- The initial one-variable comparisons test a Markov starter signed-signal threshold of `0.25` and a BUY technical-confluence threshold of `4`; results distinguish a target-gate flip from a full approval.
+- Replay is read-only: it cannot call a provider or Saxo, create orders, alter experiments, or mutate runtime configuration.
+- Added the safe replay summary to Hermes `get_context` and listed the Markov threshold as an allowed one-variable overlay proposal, so Hermes can use replay evidence without treating it as approval.

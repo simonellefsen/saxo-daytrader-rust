@@ -113,6 +113,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/prompts", get(prompts))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
+        .route("/api/decision/gate-replay", get(decision_gate_replay))
         .route("/api/decision/schema", get(decision_schema))
         .route("/api/strategy-journal", get(strategy_journal))
         .route("/api/execution", get(execution))
@@ -792,6 +793,14 @@ async fn decision_reports(
             .await
             .map(|items| json!({"items": items})),
     )
+}
+
+async fn decision_gate_replay(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Response {
+    let limit = params.limit.unwrap_or(40);
+    json_result(state.decision_gate_replay(limit).await)
 }
 
 async fn decision_schema() -> Response {

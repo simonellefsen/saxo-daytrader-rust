@@ -76,6 +76,7 @@ pub struct DashboardView {
     pub watchlists: JsonValue,
     pub latest_decision: JsonValue,
     pub selected_decision: JsonValue,
+    pub decision_gate_replay: JsonValue,
 }
 
 #[derive(Debug, Deserialize)]
