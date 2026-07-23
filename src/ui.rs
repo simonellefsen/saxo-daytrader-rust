@@ -1453,7 +1453,15 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "table-wrap compact-table",
                 div { class: "section-title-row compact",
                     h3 { "Signals" }
-                    span { class: "muted", "{data.markov_signal_total} total · page {data.markov_page} of {total_pages}" }
+                    div { class: "table-pagination table-pagination-top", aria_label: "Markov signal pages",
+                        span { class: "muted", "{data.markov_signal_total} total · page {data.markov_page} of {total_pages}" }
+                        if data.markov_page > 1 {
+                            a { class: "small-button", href: "{previous_page_href}", "Previous" }
+                        }
+                        if data.markov_page < total_pages {
+                            a { class: "small-button", href: "{next_page_href}", "Next" }
+                        }
+                    }
                 }
                 table { class: "data-table",
                     thead {

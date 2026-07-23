@@ -271,6 +271,18 @@ form.is-submitting .button {
   margin-top: 8px;
 }
 
+.table-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-pagination-top {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
 .small-button {
   display: inline-flex;
   align-items: center;

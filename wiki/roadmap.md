@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-23: Added Previous/Next Markov signal navigation beside the table heading as well as at the bottom, so operators can move between bounded server-side pages without scrolling through the current page.
 - 2026-07-23: Reworked the Rust Docker build into a dependency-only Cargo layer plus persistent BuildKit Cargo registry/target caches. A tracked build script injects the per-deploy Git SHA only for the final application build, so revision metadata recompiles correctly without invalidating dependencies. Screenshot directories are excluded from the Docker context; a cached rebuild transfers roughly 16 KB of source context and reuses every dependency layer.
 
 - 2026-07-23: Added bounded, read-only Hermes Learning Memory. It promotes repeated safe reflection actions across distinct reflections to `stable`, keeps one-offs as `emerging`, expires emerging lessons after 7 days and stable lessons after 21 days, and keeps stale rows operator-visible but out of Hermes advisory context. It has no mutable memory store, configuration effect, lifecycle action, or Saxo behavior.
