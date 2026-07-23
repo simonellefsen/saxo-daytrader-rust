@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] configuration | TSLA and NOVO watchlist eligibility
+
+- Added `TSLA:xnas` and `NOVOb:xcse` to the versioned analysis universe used by Markov, daily indicators, Quiver, and decision reports.
+- Removed both symbols from the active Rust `never_trade_symbols` and `risk.excluded_symbols` lists. They remain subject to all normal market, technical, risk, Hermes, and broker gates; this is not an order or position change.
+
 ## [2026-07-23] improvement | Hermes learning memory compression
 
 - Added a bounded read-only projection that groups safe proposed reflection actions across distinct reflections into `emerging`, `stable`, and `stale` lessons.

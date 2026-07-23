@@ -161,6 +161,7 @@ market_data:
       - nke:xnys
       - nkt:xcse
       - nnit:xcse
+      - novob:xcse
       - nokia:xhel
       - now:xnys
       - nvda:xnas
@@ -337,9 +338,7 @@ strategy:
     max_holding_weight_pct: 0.25
     cash_buffer_pct: 0.02
     risk_per_trade_pct: 0.01
-    never_trade_symbols:
-      - NOVOb:xcse
-      - TSLA:xnas
+    never_trade_symbols: []
     daily_indicators:
       enabled: true
       # 0 = full portfolio+watchlist universe (matches the Markov run, ~199
@@ -438,9 +437,7 @@ execution:
     NKT:xcse: 0.5
 
 risk:
-  excluded_symbols:
-    - NOVOb:xcse
-    - TSLA:xnas
+  excluded_symbols: []
   excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS
   instrument_quarantine:
     enabled: true

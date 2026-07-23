@@ -29,7 +29,7 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - SIM/LIVE trading-environment metadata, account metadata, app-user metadata, and account-access tables prepared for future multi-account access control
 - Configurable `config.yaml` with placeholders for API keys, Saxo credentials, exclusions, tax brackets, and commission settings
 - CSV importer for the attached Saxo position export
-- Strict exclusion of `NOVOb:xcse` and `TSLA:xnas`
+- Versioned `NOVOb:xcse` and `TSLA:xnas` watchlist coverage, subject to the standard decision, technical, risk, and broker gates
 - Tax-lot tracking based on imported holdings
 - Danish share-income tax engine with 27% / 42% brackets
 - Configurable commission and FX-conversion cost handling
@@ -331,7 +331,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `quiver`: daily QuiverQuant alternative-data advisory signals for US portfolio/watchlist assets. The first source is Congress trading data and requires `QUIVERQUANT_API_KEY`.
 - `swing.min_holdings` / `swing.max_holdings`: hard portfolio count guardrails, default `10` to `25`.
 - `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: hard target weight guardrails, default `5%` to `25%`.
-- `swing.never_trade_symbols`: hard blacklist. Defaults include `NOVOb:xcse` and `TSLA:xnas`.
+- `swing.never_trade_symbols`: optional hard blacklist. Defaults to an empty list; use only for explicit temporary execution blocks.
 - `swing.daily_indicators`: daily-chart MA/MACD/RSI/Bollinger/Stochastic/Volume confluence settings used to filter swing entries.
 - `swing.journal`: daily/weekly/monthly learning journal cadence used to feed recent lessons back into decision prompts.
 - `swing.analysis_pulses`: timezone-aware daily decision triggers for the Nordic/EU open +1h15 report and the US open +1h15 report.
