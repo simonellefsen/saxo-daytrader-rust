@@ -188,6 +188,70 @@ fn hermes_lessons_pending_review_from_reflections(
     lessons
 }
 
+/// Produce a small, display-safe view of the one-variable state. Baselines
+/// remain audit records and overlays remain runtime candidates; neither row
+/// asserts that a persistent config rewrite or live activation occurred.
+fn hermes_one_variable_audit_from_snapshot(
+    baseline: &JsonValue,
+    overlay_audit: &JsonValue,
+    latest_manager_run: &JsonValue,
+) -> Vec<JsonValue> {
+    let mut rows = Vec::new();
+    if !baseline.is_null() {
+        let config = baseline.get("config_json").unwrap_or(&JsonValue::Null);
+        rows.push(json!({
+            "kind": "promoted_baseline",
+            "id": json_text(baseline, "id"),
+            "created_at": baseline.get("activated_at").cloned().unwrap_or(JsonValue::Null),
+            "status": "record_only",
+            "variable": json_text(config, "changed_variable_path"),
+            "baseline_value": config.get("old_value").cloned().unwrap_or(JsonValue::Null),
+            "candidate_value": config.get("new_value").cloned().unwrap_or(JsonValue::Null),
+            "reason": hermes_safe_display_text(&json_text(config, "hypothesis"), 220),
+            "scope": "baseline audit record only; no live activation",
+            "last_manager_state": "not an overlay",
+        }));
+    }
+
+    let candidate = overlay_audit.get("candidate").unwrap_or(&JsonValue::Null);
+    if !candidate.is_null() {
+        let candidate_id = json_text(candidate, "id");
+        let last_overlay = latest_manager_run
+            .get("manager_json")
+            .and_then(|value| value.get("strategy_experiment_overlay"))
+            .unwrap_or(&JsonValue::Null);
+        let observed_last_run =
+            !candidate_id.is_empty() && candidate_id == json_text(last_overlay, "id");
+        rows.push(json!({
+            "kind": "selected_overlay",
+            "id": candidate_id,
+            "created_at": latest_manager_run.get("created_at").cloned().unwrap_or(JsonValue::Null),
+            "status": json_text(overlay_audit, "state"),
+            "experiment_status": json_text(candidate, "status"),
+            "variable": json_text(candidate, "changed_variable_path"),
+            "baseline_value": candidate.get("old_value").cloned().unwrap_or(JsonValue::Null),
+            "candidate_value": candidate.get("new_value").cloned().unwrap_or(JsonValue::Null),
+            "reason": hermes_safe_display_text(&json_text(candidate, "hypothesis"), 220),
+            "scope": json_text(candidate, "scope"),
+            "last_manager_state": if observed_last_run {
+                "observed in latest manager run"
+            } else {
+                "selected for the next eligible manager cycle"
+            },
+            "execution_mode": json_text(overlay_audit, "execution_mode"),
+            "saxo_environment": json_text(overlay_audit, "saxo_environment"),
+        }));
+    } else if rows.is_empty() {
+        rows.push(json!({
+            "kind": "none",
+            "status": json_text(overlay_audit, "state"),
+            "scope": "no promoted baseline record or supported SIM/paper overlay selected",
+            "last_manager_state": "no one-variable difference is currently selected",
+        }));
+    }
+    rows
+}
+
 fn hermes_proposed_action_entries(value: &JsonValue) -> Vec<&JsonValue> {
     match value {
         JsonValue::Array(entries) => entries.iter().collect(),
@@ -224,15 +288,26 @@ fn hermes_proposed_action_text(value: &JsonValue) -> Option<String> {
     if hermes_lesson_text_looks_sensitive(&normalized) {
         return Some("[redacted potentially sensitive reflection action]".to_string());
     }
-    if normalized.chars().count() <= HERMES_LESSON_TEXT_MAX_CHARS {
-        return Some(normalized);
+    Some(hermes_safe_display_text(
+        &normalized,
+        HERMES_LESSON_TEXT_MAX_CHARS,
+    ))
+}
+
+fn hermes_safe_display_text(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return String::new();
     }
-    let mut truncated: String = normalized
-        .chars()
-        .take(HERMES_LESSON_TEXT_MAX_CHARS)
-        .collect();
+    if hermes_lesson_text_looks_sensitive(&normalized) {
+        return "[redacted potentially sensitive Hermes text]".to_string();
+    }
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut truncated: String = normalized.chars().take(max_chars).collect();
     truncated.push_str("...");
-    Some(truncated)
+    truncated
 }
 
 fn hermes_lesson_text_looks_sensitive(value: &str) -> bool {
@@ -1208,6 +1283,17 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let hermes_one_variable_audit =
+            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+                self.hermes_one_variable_audit()
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard Hermes one-variable audit degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
         let markov_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
             self.markov_signals_count().await.unwrap_or_else(|err| {
                 warn!("dashboard Markov signal count degraded: {err:#}");
@@ -1387,6 +1473,7 @@ impl AppState {
             scheduler_cycles,
             hermes_reflections,
             hermes_lessons_pending_review,
+            hermes_one_variable_audit,
             hermes_experiments,
             hermes_decision_advice_audit,
             hermes_counterfactuals,
@@ -4056,6 +4143,33 @@ impl AppState {
             )
             .await?
             .unwrap_or(JsonValue::Null))
+    }
+
+    /// A read-only view of the promoted baseline artifact and the exact
+    /// experiment overlay the Trading Manager will consider. It deliberately
+    /// uses the manager's selection helper instead of a dashboard-local
+    /// allowlist, so operator visibility follows runtime behavior.
+    pub async fn hermes_one_variable_audit(&self) -> Result<Vec<JsonValue>> {
+        let baseline = self.active_strategy_baseline().await?;
+        let overlay_audit = crate::trading_manager::strategy_experiment_overlay_audit(self)
+            .await
+            .context("loading Hermes one-variable overlay audit")?;
+        // Avoid `latest_trading_manager_run` here because it may repair legacy
+        // advice metadata. This audit must remain a query-only dashboard read.
+        let latest_manager_run = self
+            .first_json(
+                "SELECT created_at, manager_json
+                 FROM trading_manager_runs
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+            )
+            .await?
+            .unwrap_or(JsonValue::Null);
+        Ok(hermes_one_variable_audit_from_snapshot(
+            &baseline,
+            &overlay_audit,
+            &latest_manager_run,
+        ))
     }
 
     pub async fn hermes_execution_failures(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -7905,6 +8019,81 @@ mod tests {
             !serde_json::to_string(&lessons)
                 .expect("serialize lessons")
                 .contains("do-not-display")
+        );
+    }
+
+    #[test]
+    fn one_variable_audit_distinguishes_baseline_from_selected_overlay() {
+        let baseline = json!({
+            "id": "baseline-1",
+            "activated_at": "2026-07-23T08:00:00Z",
+            "config_json": {
+                "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                "old_value": 0.05,
+                "new_value": 0.02,
+                "hypothesis": "Use less idle cash when qualified signals are available."
+            }
+        });
+        let overlay_audit = json!({
+            "state": "selected_for_next_cycle",
+            "execution_mode": "live",
+            "saxo_environment": "SIM",
+            "candidate": {
+                "id": "experiment-2",
+                "status": "active_sim",
+                "changed_variable_path": "strategy.swing.daily_indicators.min_confluences",
+                "old_value": 4,
+                "new_value": 3,
+                "hypothesis": "Allow a controlled SIM comparison."
+            }
+        });
+        let latest_manager_run = json!({
+            "created_at": "2026-07-23T09:15:00Z",
+            "manager_json": {
+                "strategy_experiment_overlay": {"id": "experiment-2"}
+            }
+        });
+
+        let rows =
+            hermes_one_variable_audit_from_snapshot(&baseline, &overlay_audit, &latest_manager_run);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["kind"], json!("promoted_baseline"));
+        assert_eq!(rows[0]["status"], json!("record_only"));
+        assert_eq!(rows[1]["kind"], json!("selected_overlay"));
+        assert_eq!(rows[1]["status"], json!("selected_for_next_cycle"));
+        assert_eq!(
+            rows[1]["last_manager_state"],
+            json!("observed in latest manager run")
+        );
+        assert!(
+            serde_json::to_string(&rows)
+                .expect("serialize audit rows")
+                .contains("controlled SIM comparison")
+        );
+    }
+
+    #[test]
+    fn one_variable_audit_never_claims_a_live_config_change() {
+        let rows = hermes_one_variable_audit_from_snapshot(
+            &JsonValue::Null,
+            &json!({
+                "state": "disabled_live_environment",
+                "execution_mode": "live",
+                "saxo_environment": "LIVE",
+                "candidate": null,
+            }),
+            &JsonValue::Null,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["kind"], json!("none"));
+        assert_eq!(rows[0]["status"], json!("disabled_live_environment"));
+        assert!(
+            rows[0]["scope"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no promoted baseline")
         );
     }
 

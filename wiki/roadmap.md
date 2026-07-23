@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-23: Added a read-only Hermes One-Variable Audit view. It separates promoted baseline audit artifacts from the exact supported experiment overlay selected by the Trading Manager for its next paper/SIM-eligible cycle, records whether that overlay appeared in the latest manager run, and uses the manager's own selection helper to prevent dashboard/runtime drift. It cannot transition experiments, rewrite configuration, or affect broker behavior.
 - 2026-07-23: Added a bounded, read-only Hermes Lessons Pending Review queue. It turns recent reflection `proposed_actions` into deduplicated operator context, redacts sensitive-looking action text, and cannot create/transition experiments, change strategy configuration, or affect broker behavior.
 - 2026-07-22: Completed the next Hermes proposal-review slice. In addition to the 14-day stale alert and 30-day safe `expired_stale` closure, the scheduler now sends one sanitized Monday-morning local-time Slack digest per ISO week while proposals remain pending. It reports only safe review metadata and cannot alter proposal lifecycle, strategy, baseline, or broker state.
 - 2026-07-22: Routed sanitized Saxo execution taxonomy into Slack failure alerts. Per-order failures and failure-burst alerts now include only the stable category, label, remediation, and retry policy; raw broker diagnostics and local error text remain in the protected execution record and are not sent to Slack.

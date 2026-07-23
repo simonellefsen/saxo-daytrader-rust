@@ -294,6 +294,24 @@ approved experiment, strategy change, queue instruction, or trading approval.
 An operator must separately create and review a one-variable experiment through
 the existing protected lifecycle before any SIM/paper overlay can apply.
 
+### One-Variable Audit
+
+The Hermes dashboard also provides a bounded, read-only **One-Variable Audit**
+table. It distinguishes two intentionally different records:
+
+- A promoted baseline is an audit artifact of a completed experiment. It does
+  not rewrite runtime configuration or activate live trading.
+- A selected overlay is the exact most-recent supported experiment that the
+  Trading Manager would consider on its next eligible paper/SIM cycle. The
+  table reports whether that same overlay was observed in the latest manager
+  run.
+
+The projection reuses the Trading Manager's overlay selection helper, so the
+dashboard cannot maintain a different allowlist or environment rule. It shows
+only variable path, old/new values, a sanitized hypothesis, lifecycle state,
+and safe scope metadata. It excludes raw provider payloads, evidence blobs,
+broker data, secrets, and configuration mutation controls.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.
@@ -309,9 +327,12 @@ Overlay loading rules:
 Supported one-variable overlay paths:
 
 - `execution.min_trade_value_dkk`
+- `execution.max_commission_pct_per_side`
 - `strategy.capital.min_cash_buffer_pct`
 - `strategy.swing.cash_buffer_pct`
 - `strategy.swing.daily_indicators.min_confluences`
+- `strategy.swing.markov_gate.min_signed_signal`
+- `strategy.swing.markov_gate.max_position_pct`
 
 Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or activate live broker behavior.
 

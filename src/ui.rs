@@ -2673,6 +2673,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "pill-row right",
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
                     span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
+                    span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
                     span { class: "pill", "Advised reports: {advised_reports}" }
                     span { class: "pill", "Changed: {changed_reports}" }
@@ -2696,6 +2697,28 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "event",
                     strong { "No promoted baseline audit record yet." }
                     span { class: "muted", "Promote a successful paper/SIM experiment to create one. Decision prompts will include it once present." }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "One-Variable Audit" }
+                p { class: "muted", "Read-only view of the promoted baseline artifact and the exact experiment overlay the Trading Manager will consider. An overlay is limited to paper/SIM-eligible queue creation and never rewrites configuration or activates live trading." }
+                table {
+                    thead {
+                        tr {
+                            th { "Record" }
+                            th { "Status" }
+                            th { "Variable" }
+                            th { "Baseline Value" }
+                            th { "Candidate Value" }
+                            th { "Why" }
+                            th { "Manager State" }
+                        }
+                    }
+                    tbody {
+                        for row in data.hermes_one_variable_audit.iter() {
+                            HermesOneVariableAuditRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
                 }
             }
             div { class: "mini-grid",
@@ -3828,6 +3851,46 @@ fn HermesLessonPendingReviewRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
             td { span { class: "event-message", title: "{lesson}", "{truncate_chars(&lesson, 220)}" } }
             td { class: "muted", span { class: "event-message", title: "{reflection_summary}", "{truncate_chars(&reflection_summary, 180)}" } }
             td { class: "muted", "{text(&row, \"source_session_id\")}" }
+        }
+    }
+}
+
+#[component]
+fn HermesOneVariableAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let kind = match text(&row, "kind").as_str() {
+        "promoted_baseline" => "Promoted baseline",
+        "selected_overlay" => "Selected overlay",
+        _ => "No active difference",
+    };
+    let status = text_or(&row, "status", "n/a");
+    let status_class = match status.as_str() {
+        "selected_for_next_cycle" | "record_only" => "status good-status",
+        "disabled_live_environment" => "status warn-status",
+        _ => "status",
+    };
+    let reason = text_or(&row, "reason", "No hypothesis recorded.");
+    let manager_state = text_or(&row, "last_manager_state", "n/a");
+    let recorded_at = text(&row, "created_at");
+    let variable = text_or(&row, "variable", "n/a");
+    let baseline_value = short_json(row.get("baseline_value"));
+    let candidate_value = short_json(row.get("candidate_value"));
+    let scope = text_or(&row, "scope", "");
+    rsx! {
+        tr {
+            td {
+                strong { "{kind}" }
+                if !recorded_at.is_empty() {
+                    span { class: "muted block", "{format_timestamp(&recorded_at, &prefs)}" }
+                }
+            }
+            td { span { class: "{status_class}", "{status}" } }
+            td { class: "mono", "{variable}" }
+            td { class: "mono", "{baseline_value}" }
+            td { class: "mono", "{candidate_value}" }
+            td { span { class: "event-message", title: "{reason}", "{truncate_chars(&reason, 220)}" } }
+            td {
+                span { class: "event-message", title: "{scope}", "{manager_state}" }
+            }
         }
     }
 }

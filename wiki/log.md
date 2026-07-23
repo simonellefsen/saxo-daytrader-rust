@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] improvement | Hermes one-variable audit
+
+- Added a bounded read-only dashboard projection that distinguishes a promoted baseline audit artifact from the exact allowed strategy experiment overlay selected for a future paper/SIM Trading Manager cycle.
+- The projection reuses the manager's runtime selection helper and records only safe variable, old/new value, lifecycle, sanitized hypothesis, scope, and latest-manager-observation metadata. It cannot transition experiments, modify configuration, or affect Saxo behavior.
+
 ## [2026-07-23] improvement | Hermes lessons pending review
 
 - Added a bounded read-only Hermes dashboard queue derived from the most recent reflection `proposed_actions`.

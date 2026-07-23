@@ -3052,6 +3052,37 @@ async fn approved_strategy_experiment_overlay(
     Ok(None)
 }
 
+/// Return the same bounded experiment selection the Trading Manager uses,
+/// without creating a manager run or mutating configuration/broker state.
+/// This gives the dashboard an audit projection that cannot drift from the
+/// runtime overlay eligibility rules.
+pub(crate) async fn strategy_experiment_overlay_audit(state: &AppState) -> Result<JsonValue> {
+    let execution_mode =
+        yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
+    let saxo_environment =
+        yaml_string(&state.config, &["saxo", "environment"]).unwrap_or_else(|| "SIM".into());
+    let overlays_allowed = experiment_overlays_allowed(&execution_mode, &saxo_environment);
+    let selected = if overlays_allowed {
+        approved_strategy_experiment_overlay(state).await?
+    } else {
+        None
+    };
+
+    Ok(json!({
+        "state": if !overlays_allowed {
+            "disabled_live_environment"
+        } else if selected.is_some() {
+            "selected_for_next_cycle"
+        } else {
+            "no_supported_candidate"
+        },
+        "execution_mode": execution_mode,
+        "saxo_environment": saxo_environment,
+        "overlays_allowed": overlays_allowed,
+        "candidate": selected.map(|overlay| overlay.to_json()).unwrap_or(JsonValue::Null),
+    }))
+}
+
 fn experiment_overlays_allowed(execution_mode: &str, saxo_environment: &str) -> bool {
     !execution_mode.eq_ignore_ascii_case("live") || saxo_environment.eq_ignore_ascii_case("SIM")
 }
