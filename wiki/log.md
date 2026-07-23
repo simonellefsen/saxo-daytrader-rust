@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] fix | TradingView symbol aliases and modal close position
+
+- Added TradingView-specific aliases for `NOVOB:xcse` to `OMXCOP:NOVO_B`, `SHELL:xlon` to `LSE:SHEL`, and `ARKK:xmil` to `AMEX:ARKK`, plus OMX Copenhagen/Stockholm share-class punctuation conversion (`-` to `_`) for symbols such as `MAERSK-B` and `HEXA-B`.
+- Modal close controls now clear the URL fragment with `history.replaceState` and restore the prior scroll position, avoiding the page jump caused by a bare `#` close link.
+
 ## [2026-07-23] fix | Watchlist quote provenance labels
 
 - Replaced opaque Watchlist quote-status codes with compact labels and hover descriptions. A successful Saxo price-monitor quote is now distinct from a configured analysis-universe member that is awaiting enrichment.

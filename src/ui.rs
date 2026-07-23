@@ -108,11 +108,22 @@ const APP_SCRIPT: &str = r#"
     window.addEventListener("hashchange", loadTargetTradingViewModal);
     loadTargetTradingViewModal();
   };
+  const bindModalCloseLinks = () => {
+    document.addEventListener("click", (event) => {
+      const close = event.target.closest("[data-modal-close]");
+      if (!close) return;
+      event.preventDefault();
+      const scrollY = window.scrollY;
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      window.requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
+    });
+  };
   const bindApp = () => {
     bindPerformanceCharts();
     bindDecisionReportForms();
     bindDecisionReportPendingRefresh();
     bindTradingViewModals();
+    bindModalCloseLinks();
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bindApp, { once: true });
@@ -3471,7 +3482,7 @@ fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let daily_value = value_f64(&row, "daily_pnl_dkk");
     rsx! {
         div { id: "{modal_id}", class: "modal-target",
-            a { class: "modal-dismiss", href: "#", "Close" }
+            a { class: "modal-dismiss", href: "#", "data-modal-close": "true", "Close" }
             section { class: "chart-modal position-detail-modal", role: "dialog", aria_label: "Position details for {symbol}",
                 div { class: "section-title-row",
                     div {
@@ -3481,7 +3492,7 @@ fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                     div { class: "button-row",
                         a { class: "small-button", href: "{yahoo_url}", target: "_blank", rel: "noopener noreferrer", "Yahoo" }
                         a { class: "small-button", href: "{tradingview_page_url(&tradingview_symbol)}", target: "_blank", rel: "noopener noreferrer", "TradingView" }
-                        a { class: "small-button", href: "#", "Close" }
+                        a { class: "small-button", href: "#", "data-modal-close": "true", "Close" }
                     }
                 }
                 div { class: "position-detail-grid",
@@ -3632,13 +3643,13 @@ fn TrendSparkline(row: JsonValue) -> Element {
                 }
             }
             div { id: "{modal_id}", class: "modal-target",
-                a { class: "modal-dismiss", href: "#", "Close" }
+                a { class: "modal-dismiss", href: "#", "data-modal-close": "true", "Close" }
                 section { class: "chart-modal", role: "dialog", aria_label: "TradingView chart for {symbol}",
                     div { class: "section-title-row",
                         h2 { "{symbol}" }
                         div { class: "button-row",
                             a { class: "small-button", href: "{tradingview_page_url(&tradingview_symbol)}", target: "_blank", "Open on TradingView" }
-                            a { class: "small-button", href: "#", "Close" }
+                            a { class: "small-button", href: "#", "data-modal-close": "true", "Close" }
                         }
                     }
                     div { class: "tradingview-frame-shell", "data-tradingview-shell": "true",
@@ -6438,7 +6449,19 @@ fn modal_id_for_symbol(symbol: &str) -> String {
 
 fn tradingview_symbol(symbol: &str) -> String {
     let (base, exchange) = symbol.split_once(':').unwrap_or((symbol, ""));
-    let tv_exchange = match exchange.to_lowercase().as_str() {
+    let exchange = exchange.to_lowercase();
+    let normalized = format!("{}:{}", base.to_ascii_uppercase(), exchange);
+    if let Some(alias) = match normalized.as_str() {
+        // Saxo's compact Novo Nordisk symbol does not preserve TradingView's
+        // underscore share-class separator.
+        "NOVOB:xcse" | "NOVO-B:xcse" => Some("OMXCOP:NOVO_B"),
+        "SHELL:xlon" => Some("LSE:SHEL"),
+        "ARKK:xmil" => Some("AMEX:ARKK"),
+        _ => None,
+    } {
+        return alias.to_string();
+    }
+    let tv_exchange = match exchange.as_str() {
         "xnas" => "NASDAQ",
         "xnys" => "NYSE",
         "xcse" => "OMXCOP",
@@ -6450,6 +6473,11 @@ fn tradingview_symbol(symbol: &str) -> String {
         "xhel" => "OMXHEX",
         "xmil" => "MIL",
         _ => "NASDAQ",
+    };
+    let base = if matches!(exchange.as_str(), "xcse" | "xsto") {
+        base.replace('-', "_")
+    } else {
+        base.to_string()
     };
     format!("{tv_exchange}:{base}")
 }
@@ -6804,6 +6832,23 @@ mod tests {
         assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
         assert!(APP_SCRIPT.contains("frame.dataset.tradingviewLoaded"));
         assert!(APP_SCRIPT.contains("loadTargetTradingViewModal"));
+    }
+
+    #[test]
+    fn tradingview_symbols_handle_share_classes_and_known_exchange_aliases() {
+        assert_eq!(tradingview_symbol("NOVOB:xcse"), "OMXCOP:NOVO_B");
+        assert_eq!(tradingview_symbol("NOVO-B:xcse"), "OMXCOP:NOVO_B");
+        assert_eq!(tradingview_symbol("MAERSK-B:xcse"), "OMXCOP:MAERSK_B");
+        assert_eq!(tradingview_symbol("HEXA-B:xsto"), "OMXSTO:HEXA_B");
+        assert_eq!(tradingview_symbol("SHELL:xlon"), "LSE:SHEL");
+        assert_eq!(tradingview_symbol("ARKK:xmil"), "AMEX:ARKK");
+    }
+
+    #[test]
+    fn modal_close_handler_preserves_scroll_position() {
+        assert!(APP_SCRIPT.contains("[data-modal-close]"));
+        assert!(APP_SCRIPT.contains("window.history.replaceState"));
+        assert!(APP_SCRIPT.contains("window.scrollTo({ top: scrollY })"));
     }
 
     #[test]
