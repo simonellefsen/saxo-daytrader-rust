@@ -13,6 +13,8 @@ node_modules/
 logs
 tmp
 .diagnostics
+screenshots/
+docs/screenshots/
 __pycache__/
 *.py[cod]
 *.pyo

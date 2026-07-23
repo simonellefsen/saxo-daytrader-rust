@@ -1,20 +1,33 @@
+# syntax=docker/dockerfile:1.7
 FROM rust:1.95-bookworm AS builder
 
 WORKDIR /app
 ARG TARGETARCH
-ARG GIT_SHA=unknown
-ENV DAYTRADER_GIT_SHA=${GIT_SHA}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates musl-tools \
     && rm -rf /var/lib/apt/lists/*
-COPY . .
 RUN case "${TARGETARCH:-$(uname -m)}" in \
       amd64|x86_64) echo x86_64-unknown-linux-musl > /tmp/rust-target ;; \
       arm64|aarch64) echo aarch64-unknown-linux-musl > /tmp/rust-target ;; \
       *) echo "Unsupported TARGETARCH=${TARGETARCH:-unset}" >&2; exit 1 ;; \
     esac \
-    && rustup target add "$(cat /tmp/rust-target)" \
-    && cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust \
+    && rustup target add "$(cat /tmp/rust-target)"
+
+# Compile the dependency graph before application sources enter the build context.
+# BuildKit cache mounts retain Cargo downloads and target artifacts across deploys.
+COPY Cargo.toml Cargo.lock build.rs ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    mkdir src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust
+
+ARG GIT_SHA=unknown
+ENV DAYTRADER_GIT_SHA=${GIT_SHA}
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust \
     && cp "target/$(cat /tmp/rust-target)/release/saxo-rust" /tmp/saxo-rust \
     && mkdir -p /tmp/runtime/daytrader
 

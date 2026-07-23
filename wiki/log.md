@@ -16,6 +16,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Modal close controls now clear the URL fragment with `history.replaceState` and restore the prior scroll position, avoiding the page jump caused by a bare `#` close link.
 - The Kubernetes deploy target now resolves a separate Git SHA at invocation time instead of accepting an inherited stale value, so the image build metadata and post-deploy guard identify the actual deployed commit.
 
+## [2026-07-23] deploy | Rust Docker dependency cache
+
+- Split the Rust image build into a manifest-only dependency layer and a final source build, using BuildKit Cargo registry and target caches. A tracked `build.rs` injects the Git SHA and reruns when it changes, so provenance stays correct while dependencies remain cached across deployments.
+- Excluded screenshot directories from the Docker build context. A repeated validation build transferred approximately 16 KB of source context and reused all layers.
+
 ## [2026-07-23] fix | Watchlist quote provenance labels
 
 - Replaced opaque Watchlist quote-status codes with compact labels and hover descriptions. A successful Saxo price-monitor quote is now distinct from a configured analysis-universe member that is awaiting enrichment.
