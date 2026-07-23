@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] fix | Lazy TradingView chart embeds
+
+- Watchlist sparklines previously rendered a live external TradingView iframe inside every hidden chart modal, which made a selected chart compete with the entire watchlist for third-party widget loading.
+- The iframe now remains `about:blank` until the modal's URL fragment opens it. The selected chart receives an immediate local loading state and remains loaded for the rest of the page session; no Saxo or application data path changed.
+
 ## [2026-07-23] configuration | TSLA and NOVO watchlist eligibility
 
 - Added `TSLA:xnas` and `NOVOb:xcse` to the versioned analysis universe used by Markov, daily indicators, Quiver, and decision reports.

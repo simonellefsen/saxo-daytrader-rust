@@ -290,6 +290,7 @@ The dashboard should make action, risk, and system state obvious without needing
 - Per-tab lazy read models (see P0 UI performance row): each view fetches only its own data, heavy JSON/prompt payloads load on demand, and long tables (positions, Markov signals, execution orders, scheduler cycles) paginate server-side. Target: any tab under 300 ms server time and under 200 KB HTML.
 - ~~Age-label or hide stale per-position decisions~~ Landed 2026-07-14: portfolio and watchlist decision chips show relative age, become `Stale` after the configurable seven-day default horizon, and treat missing timestamps as stale rather than current advice.
 - ~~Make ops-banner staleness market-aware~~ Landed 2026-07-14: weekday-only Markov, Quiver, and Indicator jobs render neutral `idle (weekend)` or `waiting` when no run is due. A warning now means a run missed its latest scheduled due date, failed, or completed only partially.
+- ~~Defer embedded TradingView charts until selected~~ Landed 2026-07-23: watchlist sparklines now render an `about:blank` iframe and attach the external advanced-chart URL only when its modal opens. This removes background chart requests from every hidden row and leaves the selected chart's remaining load time to TradingView.
 - Render the AI Prompts view as collapsed sections with copy buttons instead of a 1 MB inline dump of system prompt and payload.
 
 ## Refactoring And Architecture

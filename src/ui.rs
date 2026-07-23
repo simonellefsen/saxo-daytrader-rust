@@ -78,10 +78,41 @@ const APP_SCRIPT: &str = r#"
     window.setTimeout(poll, 4000);
     window.setInterval(poll, 10000);
   };
+  const loadTradingViewModal = (modal) => {
+    if (!modal) return;
+    const frame = modal.querySelector("iframe[data-tradingview-src]");
+    if (!frame || frame.dataset.tradingviewLoaded === "true") return;
+    const source = frame.dataset.tradingviewSrc;
+    if (!source) return;
+    const shell = frame.closest("[data-tradingview-shell]");
+    frame.dataset.tradingviewLoaded = "true";
+    frame.addEventListener("load", () => {
+      if (shell) shell.classList.add("is-loaded");
+    }, { once: true });
+    frame.src = source;
+  };
+  const loadTargetTradingViewModal = () => {
+    const targetId = window.location.hash.slice(1);
+    if (!targetId) return;
+    const modal = document.getElementById(targetId);
+    if (modal && modal.classList.contains("modal-target")) {
+      loadTradingViewModal(modal);
+    }
+  };
+  const bindTradingViewModals = () => {
+    document.addEventListener("click", (event) => {
+      const trigger = event.target.closest(".sparkline-link");
+      if (!trigger) return;
+      window.setTimeout(loadTargetTradingViewModal, 0);
+    });
+    window.addEventListener("hashchange", loadTargetTradingViewModal);
+    loadTargetTradingViewModal();
+  };
   const bindApp = () => {
     bindPerformanceCharts();
     bindDecisionReportForms();
     bindDecisionReportPendingRefresh();
+    bindTradingViewModals();
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bindApp, { once: true });
@@ -3602,10 +3633,14 @@ fn TrendSparkline(row: JsonValue) -> Element {
                             a { class: "small-button", href: "#", "Close" }
                         }
                     }
-                    iframe {
-                        class: "tradingview-frame",
-                        src: "{tradingview_url(&tradingview_symbol)}",
-                        title: "TradingView chart for {symbol}"
+                    div { class: "tradingview-frame-shell", "data-tradingview-shell": "true",
+                        span { class: "tradingview-loading", "Loading TradingView chart..." }
+                        iframe {
+                            class: "tradingview-frame",
+                            src: "about:blank",
+                            "data-tradingview-src": "{tradingview_url(&tradingview_symbol)}",
+                            title: "TradingView chart for {symbol}"
+                        }
                     }
                 }
             }
@@ -6694,6 +6729,13 @@ fn decision_health(latest_decision: &JsonValue) -> (&'static str, String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tradingview_modals_defer_external_chart_loading_until_opened() {
+        assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
+        assert!(APP_SCRIPT.contains("frame.dataset.tradingviewLoaded"));
+        assert!(APP_SCRIPT.contains("loadTargetTradingViewModal"));
+    }
 
     #[test]
     fn formats_dashboard_numbers_for_display() {
