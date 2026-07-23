@@ -96,6 +96,7 @@ const APP_SCRIPT: &str = r#"
     if (!targetId) return;
     const modal = document.getElementById(targetId);
     if (modal && modal.classList.contains("modal-target")) {
+      modal.classList.remove("is-dismissed");
       loadTradingViewModal(modal);
     }
   };
@@ -110,12 +111,25 @@ const APP_SCRIPT: &str = r#"
   };
   const bindModalCloseLinks = () => {
     document.addEventListener("click", (event) => {
-      const close = event.target.closest("[data-modal-close]");
+      const close = event.composedPath().find((node) =>
+        node instanceof Element && node.matches("[data-modal-close]")
+      );
       if (!close) return;
       event.preventDefault();
+      event.stopPropagation();
       const scrollY = window.scrollY;
+      const modal = close.closest(".modal-target");
+      if (modal) modal.classList.add("is-dismissed");
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
       window.requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      const modal = document.querySelector(".modal-target:target");
+      if (!modal) return;
+      event.preventDefault();
+      modal.classList.add("is-dismissed");
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     });
   };
   const bindApp = () => {
@@ -3651,13 +3665,13 @@ fn TrendSparkline(row: JsonValue) -> Element {
                 }
             }
             div { id: "{modal_id}", class: "modal-target",
-                a { class: "modal-dismiss", href: "#", "data-modal-close": "true", "Close" }
+                a { class: "modal-dismiss", href: "#chart-dismissed", "data-modal-close": "true", "Close" }
                 section { class: "chart-modal", role: "dialog", aria_label: "TradingView chart for {symbol}",
                     div { class: "section-title-row",
                         h2 { "{symbol}" }
                         div { class: "button-row",
                             a { class: "small-button", href: "{tradingview_page_url(&tradingview_symbol)}", target: "_blank", "Open on TradingView" }
-                            a { class: "small-button", href: "#", "data-modal-close": "true", "Close" }
+                            a { class: "small-button", href: "#chart-dismissed", "data-modal-close": "true", "Close" }
                         }
                     }
                     div { class: "tradingview-frame-shell", "data-tradingview-shell": "true",
@@ -6463,6 +6477,10 @@ fn tradingview_symbol(symbol: &str) -> String {
         // Saxo's compact Novo Nordisk symbol does not preserve TradingView's
         // underscore share-class separator.
         "NOVOB:xcse" | "NOVO-B:xcse" => Some("OMXCOP:NOVO_B"),
+        // Novozymes renamed to Novonesis and changed its Copenhagen ticker
+        // from NZYM B to NSIS B in 2024. Keep old Saxo/history symbols stable
+        // while sending TradingView the active listing symbol.
+        "NZYM-B:xcse" | "NZYMB:xcse" => Some("OMXCOP:NSIS_B"),
         "SHELL:xlon" => Some("LSE:SHEL"),
         "ARKK:xmil" => Some("AMEX:ARKK"),
         _ => None,
@@ -6846,6 +6864,7 @@ mod tests {
     fn tradingview_symbols_handle_share_classes_and_known_exchange_aliases() {
         assert_eq!(tradingview_symbol("NOVOB:xcse"), "OMXCOP:NOVO_B");
         assert_eq!(tradingview_symbol("NOVO-B:xcse"), "OMXCOP:NOVO_B");
+        assert_eq!(tradingview_symbol("NZYM-B:xcse"), "OMXCOP:NSIS_B");
         assert_eq!(tradingview_symbol("MAERSK-B:xcse"), "OMXCOP:MAERSK_B");
         assert_eq!(tradingview_symbol("HEXA-B:xsto"), "OMXSTO:HEXA_B");
         assert_eq!(tradingview_symbol("SHELL:xlon"), "LSE:SHEL");
@@ -6855,6 +6874,8 @@ mod tests {
     #[test]
     fn modal_close_handler_preserves_scroll_position() {
         assert!(APP_SCRIPT.contains("[data-modal-close]"));
+        assert!(APP_SCRIPT.contains("event.composedPath"));
+        assert!(APP_SCRIPT.contains("is-dismissed"));
         assert!(APP_SCRIPT.contains("window.history.replaceState"));
         assert!(APP_SCRIPT.contains("window.scrollTo({ top: scrollY })"));
     }

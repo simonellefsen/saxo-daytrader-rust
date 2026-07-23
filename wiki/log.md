@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] fix | TradingView Novonesis alias and resilient modal close
+
+- Mapped historical `NZYM-B:xcse`/`NZYMB:xcse` chart requests to current TradingView listing `OMXCOP:NSIS_B`; persisted Saxo symbols, historical keys, and trading behavior remain unchanged.
+- Modal close now uses a capture-phase delegated handler plus an immediate dismissed state, with Escape support and a non-modal fallback fragment. This prevents a third-party frame or focus behavior from leaving the overlay stuck.
+
 ## [2026-07-23] fix | TradingView symbol aliases and modal close position
 
 - Added TradingView-specific aliases for `NOVOB:xcse` to `OMXCOP:NOVO_B`, `SHELL:xlon` to `LSE:SHEL`, and `ARKK:xmil` to `AMEX:ARKK`, plus OMX Copenhagen/Stockholm share-class punctuation conversion (`-` to `_`) for symbols such as `MAERSK-B` and `HEXA-B`.

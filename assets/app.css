@@ -1090,6 +1090,10 @@ tr:last-child td {
   padding: 18px;
 }
 
+.modal-target.is-dismissed {
+  display: none;
+}
+
 .modal-dismiss {
   position: fixed;
   inset: 0;

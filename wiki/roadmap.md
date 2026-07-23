@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-23: Hardened the lazy TradingView modal close path. Close clicks are handled during the capture phase, immediately hide the active target before removing its URL fragment, and Escape dismisses the current chart; close links also point at a non-modal fallback fragment. Added the historical Novozymes `NZYM-B:xcse` chart alias to current Novonesis `OMXCOP:NSIS_B`, without changing Saxo symbols or trading behavior.
 - 2026-07-23: Added Previous/Next Markov signal navigation beside the table heading as well as at the bottom, so operators can move between bounded server-side pages without scrolling through the current page.
 - 2026-07-23: Reworked the Rust Docker build into a dependency-only Cargo layer plus persistent BuildKit Cargo registry/target caches. A tracked build script injects the per-deploy Git SHA only for the final application build, so revision metadata recompiles correctly without invalidating dependencies. Screenshot directories are excluded from the Docker context; a cached rebuild transfers roughly 16 KB of source context and reuses every dependency layer.
 
