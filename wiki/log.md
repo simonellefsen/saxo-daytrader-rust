@@ -14,6 +14,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added TradingView-specific aliases for `NOVOB:xcse` to `OMXCOP:NOVO_B`, `SHELL:xlon` to `LSE:SHEL`, and `ARKK:xmil` to `AMEX:ARKK`, plus OMX Copenhagen/Stockholm share-class punctuation conversion (`-` to `_`) for symbols such as `MAERSK-B` and `HEXA-B`.
 - Modal close controls now clear the URL fragment with `history.replaceState` and restore the prior scroll position, avoiding the page jump caused by a bare `#` close link.
+- The Kubernetes deploy target now resolves the Git SHA at invocation time instead of accepting an inherited stale value, so the image build metadata and post-deploy guard identify the actual deployed commit.
 
 ## [2026-07-23] fix | Watchlist quote provenance labels
 

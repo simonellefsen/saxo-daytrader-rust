@@ -75,7 +75,7 @@ security-scan:
 	CARGO_HOME=$(CARGO_HOME) bash scripts/security_scan.sh
 
 k8s-deploy:
-	KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
+	GIT_SHA=$$(git rev-parse HEAD) KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
 
 k8s-status:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) get pods,svc,agentendpoint
