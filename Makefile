@@ -7,6 +7,7 @@ APP_NAMESPACE ?= saxo
 DB_NAMESPACE ?= saxo
 IMAGE ?= daytrader-api:local
 GIT_SHA ?= $(shell git rev-parse HEAD)
+DEPLOY_GIT_SHA := $(shell git rev-parse HEAD)
 SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
 
 .PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke post-deploy-guard diagnostics diagnostics-artifact shared-ngrok-status shared-ngrok-apply
@@ -75,7 +76,7 @@ security-scan:
 	CARGO_HOME=$(CARGO_HOME) bash scripts/security_scan.sh
 
 k8s-deploy:
-	GIT_SHA=$$(git rev-parse HEAD) KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
+	GIT_SHA=$(DEPLOY_GIT_SHA) KUBE_CONTEXT=$(KUBE_CONTEXT) NAMESPACE=$(APP_NAMESPACE) DB_NAMESPACE=$(DB_NAMESPACE) bash scripts/deploy_k8s_docker_desktop.sh
 
 k8s-status:
 	kubectl --context $(KUBE_CONTEXT) -n $(APP_NAMESPACE) get pods,svc,agentendpoint
