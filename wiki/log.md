@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] fix | Watchlist quote provenance labels
+
+- Replaced opaque Watchlist quote-status codes with compact labels and hover descriptions. A successful Saxo price-monitor quote is now distinct from a configured analysis-universe member that is awaiting enrichment.
+- Decision-derived values no longer inherit the ambiguous `ok` quote state; they persist as `decision_snapshot`. Broker-only and current-source rows remain separately identified. This is a display/provenance change only and does not affect instrument membership, decision prompts, or trading.
+
 ## [2026-07-23] fix | Lazy TradingView chart embeds
 
 - Watchlist sparklines previously rendered a live external TradingView iframe inside every hidden chart modal, which made a selected chart compete with the entire watchlist for third-party widget loading.

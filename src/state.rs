@@ -2786,7 +2786,8 @@ impl AppState {
                 "market_value_dkk": 0.0,
                 "daily_pnl_dkk": 0.0,
                 "allocation_pct": 0.0,
-                "quote_status": technical.get("status").cloned().unwrap_or_else(|| JsonValue::from("decision_report")),
+                "quote_status": "decision_snapshot",
+                "technical_status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
                 "source": source.get("source").cloned().unwrap_or_else(|| JsonValue::from("decision_report")),
                 "decision": decision,
                 "exchange": exchange_code(symbol).to_uppercase(),
@@ -2854,7 +2855,8 @@ impl AppState {
                 "market_value_dkk": 0.0,
                 "daily_pnl_dkk": 0.0,
                 "allocation_pct": 0.0,
-                "quote_status": technical.get("status").cloned().unwrap_or_else(|| JsonValue::from("decision_history")),
+                "quote_status": "decision_snapshot",
+                "technical_status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
                 "source": "swing_sentiment_snapshots",
                 "decision": decision,
                 "exchange": exchange_code(&symbol).to_uppercase(),
@@ -2890,7 +2892,7 @@ impl AppState {
                 obj.entry("instrument_name".to_string())
                     .or_insert_with(|| JsonValue::from(instrument_name_for_symbol(&symbol)));
                 obj.entry("quote_status".to_string())
-                    .or_insert_with(|| JsonValue::from("ok"));
+                    .or_insert_with(|| JsonValue::from("current_source"));
             }
         }
         let mut nordic = Vec::new();

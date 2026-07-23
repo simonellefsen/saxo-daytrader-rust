@@ -1377,13 +1377,21 @@ fn WatchlistCategory(
                                 td { "{text(row, \"currency\")}" }
                                 td { "{format_local_money(value_f64(row, \"current_price_local\"), &text(row, \"currency\"), &prefs)}" }
                                 td { class: if value_f64(row, "change_pct") >= 0.0 { "good-text" } else { "bad-text" }, "{format_pct(value_f64(row, \"change_pct\"), &prefs)}" }
-                                td { "{fallback_text(row, \"quote_status\", &fallback_text(row, \"status\", \"ok\"))}" }
+                                td { WatchlistQuoteStatus { row: row.clone() } }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+#[component]
+fn WatchlistQuoteStatus(row: JsonValue) -> Element {
+    let (label, tone, detail) = watchlist_quote_status(&row);
+    rsx! {
+        span { class: "status {tone}", title: "{detail}", "{label}" }
     }
 }
 
@@ -4968,6 +4976,67 @@ fn coverage_label(category: &JsonValue) -> String {
     format!("{:.0}%", (items / target * 100.0).min(100.0))
 }
 
+fn watchlist_quote_status(row: &JsonValue) -> (&'static str, &'static str, &'static str) {
+    match fallback_text(
+        row,
+        "quote_status",
+        &fallback_text(row, "status", "current_source"),
+    )
+    .as_str()
+    {
+        "ok" => (
+            "Quote current",
+            "good-status",
+            "A successful Saxo price-monitor quote is available for this instrument.",
+        ),
+        "configured_universe" => (
+            "Awaiting quote",
+            "",
+            "Configured analysis-universe member. It has not yet received current quote, position, or decision enrichment.",
+        ),
+        "current_source" => (
+            "Current source",
+            "",
+            "The instrument came from a current portfolio or report source without a Saxo price-monitor quote status.",
+        ),
+        "decision_snapshot" => (
+            "Decision snapshot",
+            "",
+            "Price and technical context came from a recent decision report, not the current Saxo price monitor.",
+        ),
+        "broker_snapshot" => (
+            "Broker snapshot",
+            "",
+            "The instrument came from the latest Saxo portfolio exposure snapshot; no current price-monitor quote was attached.",
+        ),
+        "partial" => (
+            "Quote partial",
+            "warn-status",
+            "The latest Saxo price-monitor run completed with one or more quote failures.",
+        ),
+        "market_closed" => (
+            "Market closed",
+            "",
+            "The instrument's exchange was closed when the price monitor last ran.",
+        ),
+        "stale_quote_dropped" => (
+            "Stale quote withheld",
+            "warn-status",
+            "An old quote was intentionally excluded from current analysis evidence.",
+        ),
+        "stale_history" => (
+            "Historical only",
+            "warn-status",
+            "The instrument remains for legacy universe membership only; historical price and sentiment are excluded.",
+        ),
+        _ => (
+            "Quote unavailable",
+            "warn-status",
+            "No recognized current quote provenance is available for this instrument.",
+        ),
+    }
+}
+
 fn bool_label(value: &JsonValue, key: &str) -> &'static str {
     if value.get(key).and_then(JsonValue::as_bool).unwrap_or(false) {
         "Yes"
@@ -6735,6 +6804,34 @@ mod tests {
         assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
         assert!(APP_SCRIPT.contains("frame.dataset.tradingviewLoaded"));
         assert!(APP_SCRIPT.contains("loadTargetTradingViewModal"));
+    }
+
+    #[test]
+    fn watchlist_quote_statuses_distinguish_fresh_quotes_from_membership() {
+        assert_eq!(
+            watchlist_quote_status(&json!({"quote_status": "ok"})),
+            (
+                "Quote current",
+                "good-status",
+                "A successful Saxo price-monitor quote is available for this instrument."
+            )
+        );
+        assert_eq!(
+            watchlist_quote_status(&json!({"quote_status": "configured_universe"})),
+            (
+                "Awaiting quote",
+                "",
+                "Configured analysis-universe member. It has not yet received current quote, position, or decision enrichment."
+            )
+        );
+        assert_eq!(
+            watchlist_quote_status(&json!({"quote_status": "decision_snapshot"})),
+            (
+                "Decision snapshot",
+                "",
+                "Price and technical context came from a recent decision report, not the current Saxo price monitor."
+            )
+        );
     }
 
     #[test]
