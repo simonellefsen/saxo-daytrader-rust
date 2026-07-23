@@ -57,6 +57,9 @@ const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
 const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &["strategy.capital.cash_buffer"];
+const HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT: i64 = 50;
+const HERMES_LESSONS_PENDING_REVIEW_LIMIT: usize = 30;
+const HERMES_LESSON_TEXT_MAX_CHARS: usize = 500;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -131,6 +134,122 @@ fn sql_f64(value: f64) -> String {
     } else {
         "0".to_string()
     }
+}
+
+/// Convert reflection `proposed_actions` into a bounded, display-safe operator
+/// queue. The rows are deliberately derived rather than persisted as a second
+/// workflow: an item is advisory context, not an approved experiment or task.
+fn hermes_lessons_pending_review_from_reflections(
+    reflections: &[JsonValue],
+    limit: usize,
+) -> Vec<JsonValue> {
+    let mut lessons = Vec::new();
+    let mut seen = HashSet::new();
+
+    for reflection in reflections {
+        let reflection_id = reflection
+            .get("id")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("")
+            .trim();
+        if reflection_id.is_empty() {
+            continue;
+        }
+        let Some(actions) = reflection.get("proposed_actions_json") else {
+            continue;
+        };
+        for (action_index, action) in hermes_proposed_action_entries(actions)
+            .into_iter()
+            .enumerate()
+        {
+            let Some(lesson) = hermes_proposed_action_text(action) else {
+                continue;
+            };
+            let normalized = lesson.to_lowercase();
+            if !seen.insert(normalized) {
+                continue;
+            }
+            lessons.push(json!({
+                "id": format!("{reflection_id}:{action_index}"),
+                "reflection_id": reflection_id,
+                "created_at": reflection.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "period_start": reflection.get("period_start").cloned().unwrap_or(JsonValue::Null),
+                "period_end": reflection.get("period_end").cloned().unwrap_or(JsonValue::Null),
+                "goal_version": reflection.get("goal_version").cloned().unwrap_or(JsonValue::Null),
+                "lesson": lesson,
+                "reflection_summary": reflection.get("summary").cloned().unwrap_or(JsonValue::Null),
+                "source_session_id": reflection.get("source_session_id").cloned().unwrap_or(JsonValue::Null),
+            }));
+            if lessons.len() >= limit.max(1) {
+                return lessons;
+            }
+        }
+    }
+    lessons
+}
+
+fn hermes_proposed_action_entries(value: &JsonValue) -> Vec<&JsonValue> {
+    match value {
+        JsonValue::Array(entries) => entries.iter().collect(),
+        JsonValue::Object(object) => object
+            .get("actions")
+            .and_then(JsonValue::as_array)
+            .map(|entries| entries.iter().collect())
+            .unwrap_or_else(|| vec![value]),
+        JsonValue::String(_) => vec![value],
+        _ => Vec::new(),
+    }
+}
+
+fn hermes_proposed_action_text(value: &JsonValue) -> Option<String> {
+    let text = match value {
+        JsonValue::String(text) => Some(text.as_str()),
+        JsonValue::Object(object) => [
+            "action",
+            "recommendation",
+            "proposal",
+            "summary",
+            "title",
+            "detail",
+        ]
+        .iter()
+        .find_map(|field| object.get(*field).and_then(JsonValue::as_str)),
+        _ => None,
+    };
+    let text = text?;
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    if hermes_lesson_text_looks_sensitive(&normalized) {
+        return Some("[redacted potentially sensitive reflection action]".to_string());
+    }
+    if normalized.chars().count() <= HERMES_LESSON_TEXT_MAX_CHARS {
+        return Some(normalized);
+    }
+    let mut truncated: String = normalized
+        .chars()
+        .take(HERMES_LESSON_TEXT_MAX_CHARS)
+        .collect();
+    truncated.push_str("...");
+    Some(truncated)
+}
+
+fn hermes_lesson_text_looks_sensitive(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
+        "refresh_token",
+        "access_token",
+        "client_secret",
+        "authorization:",
+        "bearer ",
+        "api_key=",
+        "openrouter_api_key",
+        "accountkey=",
+        "clientkey=",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
 }
 
 fn hermes_counterfactual_shadow_quantity(
@@ -1042,6 +1161,17 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let hermes_lessons_pending_review =
+            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+                self.hermes_lessons_pending_review(HERMES_LESSONS_PENDING_REVIEW_LIMIT as i64)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard Hermes lessons pending review degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
         let hermes_experiments = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
             self.hermes_experiments(20).await.unwrap_or_else(|err| {
                 warn!("dashboard Hermes experiments degraded: {err:#}");
@@ -1256,6 +1386,7 @@ impl AppState {
             journal_entries,
             scheduler_cycles,
             hermes_reflections,
+            hermes_lessons_pending_review,
             hermes_experiments,
             hermes_decision_advice_audit,
             hermes_counterfactuals,
@@ -3948,6 +4079,21 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn hermes_lessons_pending_review(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, period_start, period_end, goal_version, summary, proposed_actions_json, source_session_id
+             FROM hermes_reflections
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT
+        );
+        let reflections = self.select_json(&sql).await.unwrap_or_default();
+        Ok(hermes_lessons_pending_review_from_reflections(
+            &reflections,
+            clamp_limit(limit, 1, HERMES_LESSONS_PENDING_REVIEW_LIMIT as i64) as usize,
+        ))
     }
 
     pub async fn record_hermes_reflection(
@@ -7678,6 +7824,89 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hermes_lessons_pending_review_projects_safe_recent_actions() {
+        let reflections = vec![
+            json!({
+                "id": "newer-reflection",
+                "created_at": "2026-07-23T14:00:00Z",
+                "period_start": "2026-07-23",
+                "period_end": "2026-07-23",
+                "goal_version": 1,
+                "summary": "Fresh evidence supports an operator review.",
+                "source_session_id": "daily-eod-reflection-2026-07-23",
+                "raw_payload_json": {"secret": "must-not-leak"},
+                "proposed_actions_json": {
+                    "actions": [
+                        {"action": "  Compare the Markov horizon against the next five reports.  "},
+                        {"recommendation": "Review the cash-buffer evidence before proposing a change."}
+                    ]
+                }
+            }),
+            json!({
+                "id": "older-reflection",
+                "created_at": "2026-07-22T14:00:00Z",
+                "summary": "Older evidence.",
+                "proposed_actions_json": [
+                    "Compare the Markov horizon against the next five reports.",
+                    {"unsupported": "not surfaced"}
+                ]
+            }),
+        ];
+
+        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 30);
+
+        assert_eq!(lessons.len(), 2);
+        assert_eq!(
+            lessons[0]["lesson"],
+            json!("Compare the Markov horizon against the next five reports.")
+        );
+        assert_eq!(
+            lessons[1]["lesson"],
+            json!("Review the cash-buffer evidence before proposing a change.")
+        );
+        assert_eq!(lessons[0]["reflection_id"], json!("newer-reflection"));
+        assert_eq!(
+            lessons[0]["source_session_id"],
+            json!("daily-eod-reflection-2026-07-23")
+        );
+        assert!(lessons[0].get("raw_payload_json").is_none());
+    }
+
+    #[test]
+    fn hermes_lessons_pending_review_caps_and_ignores_empty_actions() {
+        let reflections = vec![json!({
+            "id": "reflection",
+            "proposed_actions_json": ["", "First review", "Second review"]
+        })];
+
+        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 1);
+
+        assert_eq!(lessons.len(), 1);
+        assert_eq!(lessons[0]["lesson"], json!("First review"));
+    }
+
+    #[test]
+    fn hermes_lessons_pending_review_redacts_sensitive_action_text() {
+        let reflections = vec![json!({
+            "id": "reflection",
+            "proposed_actions_json": ["Investigate refresh_token=do-not-display"]
+        })];
+
+        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 30);
+
+        assert_eq!(lessons.len(), 1);
+        assert_eq!(
+            lessons[0]["lesson"],
+            json!("[redacted potentially sensitive reflection action]")
+        );
+        assert!(
+            !serde_json::to_string(&lessons)
+                .expect("serialize lessons")
+                .contains("do-not-display")
+        );
+    }
 
     #[test]
     fn configured_watchlist_universe_is_versioned_and_case_normalized() {

@@ -2672,6 +2672,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 div { class: "pill-row right",
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
+                    span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
                     span { class: "pill", "Advised reports: {advised_reports}" }
                     span { class: "pill", "Changed: {changed_reports}" }
@@ -2722,6 +2723,32 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     tbody {
                         for row in data.hermes_decision_advice_audit.iter() {
                             HermesAdviceAuditRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Lessons Pending Review" }
+                p { class: "muted", "Recent advisory actions derived from Hermes reflections. Duplicate text is collapsed to the newest item. These are not approved experiments, strategy changes, or trading instructions." }
+                if data.hermes_lessons_pending_review.is_empty() {
+                    div { class: "event",
+                        span { class: "muted", "No reviewable lessons were recorded in recent reflections." }
+                    }
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th { "Created" }
+                                th { "Period" }
+                                th { "Proposed Action" }
+                                th { "Reflection" }
+                                th { "Session" }
+                            }
+                        }
+                        tbody {
+                            for row in data.hermes_lessons_pending_review.iter() {
+                                HermesLessonPendingReviewRow { row: row.clone(), prefs: prefs.clone() }
+                            }
                         }
                     }
                 }
@@ -3772,6 +3799,34 @@ fn HermesReflectionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{text_or(&row, \"summary\", \"No summary recorded.\")}" }
             td { "{json_item_count(&row, \"findings_json\")}" }
             td { "{json_item_count(&row, \"proposed_actions_json\")}" }
+            td { class: "muted", "{text(&row, \"source_session_id\")}" }
+        }
+    }
+}
+
+#[component]
+fn HermesLessonPendingReviewRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let lesson = text_or(&row, "lesson", "No proposed action text recorded.");
+    let reflection_summary = text_or(
+        &row,
+        "reflection_summary",
+        "No reflection summary recorded.",
+    );
+    let period_start = text(&row, "period_start");
+    let period_end = text(&row, "period_end");
+    let period = match (period_start.is_empty(), period_end.is_empty()) {
+        (false, false) if period_start == period_end => period_start,
+        (false, false) => format!("{period_start} to {period_end}"),
+        (false, true) => period_start,
+        (true, false) => period_end,
+        (true, true) => "n/a".to_string(),
+    };
+    rsx! {
+        tr {
+            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { class: "muted", "{period}" }
+            td { span { class: "event-message", title: "{lesson}", "{truncate_chars(&lesson, 220)}" } }
+            td { class: "muted", span { class: "event-message", title: "{reflection_summary}", "{truncate_chars(&reflection_summary, 180)}" } }
             td { class: "muted", "{text(&row, \"source_session_id\")}" }
         }
     }

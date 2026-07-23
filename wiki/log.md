@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-21
+updated: 2026-07-23
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-23] improvement | Hermes lessons pending review
+
+- Added a bounded read-only Hermes dashboard queue derived from the most recent reflection `proposed_actions`.
+- The queue collapses duplicate normalized action text to its newest reflection and displays only action text plus safe reflection context. It excludes raw Hermes/provider payloads, evidence blobs, Saxo data, and broker payloads; sensitive-looking action text is redacted.
+- A queued lesson remains advisory context only. It cannot create or transition an experiment, change strategy configuration, or affect broker behavior; those remain behind the protected one-variable experiment lifecycle.
 
 ## [2026-07-21] fix | Versioned analysis-universe source
 

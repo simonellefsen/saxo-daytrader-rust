@@ -279,6 +279,21 @@ active or pending experiment already uses the same `changed_variable_path`
 (case-insensitive after trimming). Hermes should then record the duplicate
 candidate in reflection `proposed_actions` instead of retrying the insert.
 
+### Lessons Pending Review
+
+The Hermes dashboard derives a bounded **Lessons Pending Review** queue from
+the most recent reflection `proposed_actions`. It keeps the newest instance of
+duplicate normalized action text and displays only the action, reflection
+timestamp/period, reflection summary, goal version, and source session id.
+Raw Hermes payloads, evidence blobs, provider responses, Saxo data, and broker
+payloads are not included in this projection. Sensitive-looking action text is
+replaced with a redacted placeholder.
+
+This queue is deliberately read-only advisory context. A lesson is not an
+approved experiment, strategy change, queue instruction, or trading approval.
+An operator must separately create and review a one-variable experiment through
+the existing protected lifecycle before any SIM/paper overlay can apply.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.

@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-22
+updated: 2026-07-23
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-23: Added a bounded, read-only Hermes Lessons Pending Review queue. It turns recent reflection `proposed_actions` into deduplicated operator context, redacts sensitive-looking action text, and cannot create/transition experiments, change strategy configuration, or affect broker behavior.
 - 2026-07-22: Completed the next Hermes proposal-review slice. In addition to the 14-day stale alert and 30-day safe `expired_stale` closure, the scheduler now sends one sanitized Monday-morning local-time Slack digest per ISO week while proposals remain pending. It reports only safe review metadata and cannot alter proposal lifecycle, strategy, baseline, or broker state.
 - 2026-07-22: Routed sanitized Saxo execution taxonomy into Slack failure alerts. Per-order failures and failure-burst alerts now include only the stable category, label, remediation, and retry policy; raw broker diagnostics and local error text remain in the protected execution record and are not sent to Slack.
 - 2026-07-21: Hardened the Decision Report dry-run lifecycle. Dry runs now use explicit `dry_run_xai_deferred`, `dry_run_completed`, and `dry_run_error` statuses from provider submission through polling, persist a compact safety boundary in the sanitized report, and are rejected by the Trading Manager status gate. This closes the prior timing gap where a background scheduler could have seen a dry run as an ordinary completed report after the immediate manual path correctly skipped it.
@@ -224,7 +225,7 @@ Hermes should become a useful advisory layer that learns from evidence without b
 - Add a Hermes advisory dashboard section with rows for each report: input report id, advice status, recommendation, orders allowed/reduced/blocked, timeout status, and final Trading Manager outcome.
 - Add "proposal impact" tracking: when Hermes blocks or reduces an order, follow the hypothetical outcome versus the executed path.
 - Give Hermes access to normalized report outcomes: report completed, manager queued, broker submitted, filled/expired/failed, and next-day/weekly P/L attribution.
-- Add a daily "lessons pending review" queue for Hermes proposed actions that are not formal experiments.
+- Landed 2026-07-23: Added a bounded, read-only "Lessons Pending Review" queue derived from recent Hermes reflection `proposed_actions`. It collapses duplicate normalized action text to the newest reflection and exposes only safe operator context. It does not persist a second workflow, approve experiments, change strategy config, or affect broker behavior.
 - Exact duplicate detection landed 2026-07-10 and is shared by the protected HTTP adapter and Hermes MCP tool as of 2026-07-22. A deliberately small, explicit related-family map now flags the two cash-buffer paths as advisory review context before insert; it does not auto-merge, reject, approve, or activate a different variable. Remaining work: add another family only with evidence that its paths are truly interchangeable, then keep the final lifecycle decision with the operator.
 - Add baseline promotion evidence packs: before/after metrics, affected reports/orders, drawdown, Sharpe, cash utilization, and failure count.
 - Add a "one-variable audit" view that shows which live or SIM setting currently differs from baseline and why.
