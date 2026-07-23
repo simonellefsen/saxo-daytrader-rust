@@ -23,11 +23,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust
 
 ARG GIT_SHA=unknown
-ENV DAYTRADER_GIT_SHA=${GIT_SHA}
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust \
+    DAYTRADER_GIT_SHA="$GIT_SHA" cargo build --release --target "$(cat /tmp/rust-target)" --bin saxo-rust \
     && cp "target/$(cat /tmp/rust-target)/release/saxo-rust" /tmp/saxo-rust \
     && mkdir -p /tmp/runtime/daytrader
 
