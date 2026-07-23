@@ -252,6 +252,168 @@ fn hermes_one_variable_audit_from_snapshot(
     rows
 }
 
+/// Score active Hermes proposals using only their persisted, non-sensitive
+/// fields. The score is advisory review context, not a lifecycle gate: an
+/// operator still owns every approval, activation, rejection, and promotion.
+fn hermes_proposal_quality_from_experiments(experiments: &[JsonValue]) -> Vec<JsonValue> {
+    experiments
+        .iter()
+        .filter(|experiment| {
+            hermes_experiment_status_blocks_duplicate(&json_text(experiment, "status"))
+        })
+        .map(|experiment| {
+            let id = json_text(experiment, "id");
+            let variable = normalize_hermes_experiment_variable_path(&json_text(
+                experiment,
+                "changed_variable_path",
+            ));
+            let one_variable = !variable.is_empty()
+                && variable.contains('.')
+                && !variable.contains([' ', ',', ';', '\n', '\r']);
+            let values_changed =
+                experiment.get("old_value_json") != experiment.get("new_value_json");
+            let risk_notes_present = !json_text(experiment, "risk_notes").trim().is_empty();
+            let evidence = experiment.get("evidence_json").unwrap_or(&JsonValue::Null);
+            let evidence_present = match evidence {
+                JsonValue::Array(values) => !values.is_empty(),
+                JsonValue::Object(values) => !values.is_empty(),
+                JsonValue::String(value) => !value.trim().is_empty(),
+                _ => false,
+            };
+            let evidence_has_named_sources = evidence
+                .as_object()
+                .map(|values| {
+                    [
+                        "report_id",
+                        "report_ids",
+                        "decision_reports",
+                        "end_of_day",
+                        "markov",
+                        "quiver",
+                        "metrics",
+                        "observations",
+                    ]
+                    .iter()
+                    .any(|key| values.contains_key(*key))
+                })
+                .unwrap_or(false);
+            let expected_effect = json_text(experiment, "expected_effect");
+            let effect_lower = expected_effect.to_ascii_lowercase();
+            let measurable_effect = !effect_lower.trim().is_empty()
+                && [
+                    "%", "pct", "return", "drawdown", "sharpe", "p/l", "pnl", "dkk", "cash",
+                    "budget", "failure", "order", "rate",
+                ]
+                .iter()
+                .any(|marker| effect_lower.contains(marker));
+            let exact_duplicates = experiments
+                .iter()
+                .filter(|other| {
+                    json_text(other, "id") != id
+                        && hermes_experiment_status_blocks_duplicate(&json_text(other, "status"))
+                        && normalize_hermes_experiment_variable_path(&json_text(
+                            other,
+                            "changed_variable_path",
+                        )) == variable
+                })
+                .count();
+            let review_family = hermes_experiment_review_family(&variable);
+            let related_family = review_family
+                .map(|family| {
+                    experiments
+                        .iter()
+                        .filter(|other| {
+                            json_text(other, "id") != id
+                                && hermes_experiment_status_blocks_duplicate(&json_text(
+                                    other, "status",
+                                ))
+                                && hermes_experiment_review_family(&json_text(
+                                    other,
+                                    "changed_variable_path",
+                                )) == Some(family)
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let mut score = 0_i64;
+            let mut strengths = Vec::new();
+            let mut gaps = Vec::new();
+            if one_variable {
+                score += 20;
+                strengths.push("one variable".to_string());
+            } else {
+                gaps.push("requires one unambiguous variable path".to_string());
+            }
+            if evidence_present {
+                score += 20;
+                strengths.push("evidence attached".to_string());
+            } else {
+                gaps.push("attach evidence".to_string());
+            }
+            if evidence_has_named_sources {
+                score += 10;
+                strengths.push("named evidence source".to_string());
+            } else if evidence_present {
+                gaps.push("name report, EOD, Markov, Quiver, or metrics source".to_string());
+            }
+            if measurable_effect {
+                score += 20;
+                strengths.push("measurable expected effect".to_string());
+            } else {
+                gaps.push("define a measurable expected effect".to_string());
+            }
+            if values_changed && risk_notes_present {
+                score += 20;
+                strengths.push("changed value and risk notes".to_string());
+            } else {
+                if !values_changed {
+                    gaps.push("old and new values must differ".to_string());
+                }
+                if !risk_notes_present {
+                    gaps.push("add risk notes".to_string());
+                }
+            }
+            if exact_duplicates == 0 && related_family == 0 {
+                score += 10;
+                strengths.push("no active duplicate risk".to_string());
+            } else if exact_duplicates > 0 {
+                gaps.push("exact active/pending duplicate".to_string());
+            } else {
+                gaps.push("related active/pending variable family".to_string());
+                score += 5;
+            }
+            let quality_status = if exact_duplicates > 0 {
+                "duplicate_risk"
+            } else if score < 80 {
+                "needs_evidence"
+            } else if related_family > 0 {
+                "related_review"
+            } else {
+                "review_ready"
+            };
+            json!({
+                "id": id,
+                "created_at": experiment.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "experiment_status": json_text(experiment, "status"),
+                "variable": variable,
+                "quality_score": score,
+                "quality_status": quality_status,
+                "evidence_present": evidence_present,
+                "evidence_has_named_sources": evidence_has_named_sources,
+                "measurable_effect": measurable_effect,
+                "one_variable": one_variable,
+                "values_changed": values_changed,
+                "risk_notes_present": risk_notes_present,
+                "exact_duplicate_count": exact_duplicates,
+                "related_family_count": related_family,
+                "strengths": strengths,
+                "gaps": gaps,
+            })
+        })
+        .collect()
+}
+
 fn hermes_proposed_action_entries(value: &JsonValue) -> Vec<&JsonValue> {
     match value {
         JsonValue::Array(entries) => entries.iter().collect(),
@@ -1255,6 +1417,12 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let hermes_proposal_quality = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
+        {
+            hermes_proposal_quality_from_experiments(&hermes_experiments)
+        } else {
+            Vec::new()
+        };
         let hermes_decision_advice_audit =
             if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
                 self.hermes_decision_advice_audit(20)
@@ -1474,6 +1642,7 @@ impl AppState {
             hermes_reflections,
             hermes_lessons_pending_review,
             hermes_one_variable_audit,
+            hermes_proposal_quality,
             hermes_experiments,
             hermes_decision_advice_audit,
             hermes_counterfactuals,
@@ -8095,6 +8264,106 @@ mod tests {
                 .unwrap_or_default()
                 .contains("no promoted baseline")
         );
+    }
+
+    #[test]
+    fn proposal_quality_rubric_marks_complete_safe_proposal_review_ready() {
+        let quality = hermes_proposal_quality_from_experiments(&[json!({
+            "id": "proposal-ready",
+            "created_at": "2026-07-23T10:00:00Z",
+            "status": "pending_review",
+            "changed_variable_path": "strategy.swing.markov_gate.min_signed_signal",
+            "old_value_json": 0.15,
+            "new_value_json": 0.20,
+            "expected_effect": "Raise the minimum signal threshold to reduce failure rate and drawdown.",
+            "risk_notes": "Could reduce eligible BUY opportunities.",
+            "evidence_json": {
+                "report_ids": [201, 202],
+                "markov": {"fresh": true},
+                "metrics": {"failure_rate": 0.20}
+            }
+        })]);
+
+        assert_eq!(quality.len(), 1);
+        assert_eq!(quality[0]["quality_score"], json!(100));
+        assert_eq!(quality[0]["quality_status"], json!("review_ready"));
+        assert_eq!(quality[0]["exact_duplicate_count"], json!(0));
+        assert_eq!(quality[0]["related_family_count"], json!(0));
+        assert!(quality[0].get("evidence_json").is_none());
+        assert!(quality[0].get("risk_notes").is_none());
+    }
+
+    #[test]
+    fn proposal_quality_rubric_surfaces_missing_evidence_and_related_family() {
+        let quality = hermes_proposal_quality_from_experiments(&[
+            json!({
+                "id": "proposal-cash-buffer",
+                "status": "pending_review",
+                "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                "old_value_json": 0.02,
+                "new_value_json": 0.03,
+                "expected_effect": "Improve outcomes.",
+                "risk_notes": "May retain more cash.",
+                "evidence_json": []
+            }),
+            json!({
+                "id": "proposal-swing-buffer",
+                "status": "active_paper",
+                "changed_variable_path": "strategy.swing.cash_buffer_pct",
+                "old_value_json": 0.02,
+                "new_value_json": 0.03,
+                "expected_effect": "Improve cash budget.",
+                "risk_notes": "May retain more cash.",
+                "evidence_json": {"observations": ["operator reviewed"]}
+            }),
+        ]);
+
+        let cash_buffer = quality
+            .iter()
+            .find(|row| row["id"] == json!("proposal-cash-buffer"))
+            .expect("cash-buffer proposal quality");
+        assert_eq!(cash_buffer["quality_status"], json!("needs_evidence"));
+        assert_eq!(cash_buffer["related_family_count"], json!(1));
+        assert!(
+            cash_buffer["gaps"]
+                .as_array()
+                .expect("gaps array")
+                .iter()
+                .any(|gap| gap == "attach evidence")
+        );
+    }
+
+    #[test]
+    fn proposal_quality_rubric_requires_review_for_an_otherwise_ready_related_family() {
+        let quality = hermes_proposal_quality_from_experiments(&[
+            json!({
+                "id": "proposal-capital-buffer",
+                "status": "pending_review",
+                "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                "old_value_json": 0.02,
+                "new_value_json": 0.03,
+                "expected_effect": "Improve cash budget by 1 pct while preserving drawdown.",
+                "risk_notes": "May retain more cash.",
+                "evidence_json": {"report_ids": [301], "metrics": {"cash": 0.02}}
+            }),
+            json!({
+                "id": "proposal-swing-buffer",
+                "status": "active_paper",
+                "changed_variable_path": "strategy.swing.cash_buffer_pct",
+                "old_value_json": 0.02,
+                "new_value_json": 0.03,
+                "expected_effect": "Improve cash budget by 1 pct while preserving drawdown.",
+                "risk_notes": "May retain more cash.",
+                "evidence_json": {"report_ids": [302], "metrics": {"cash": 0.02}}
+            }),
+        ]);
+
+        let capital_buffer = quality
+            .iter()
+            .find(|row| row["id"] == json!("proposal-capital-buffer"))
+            .expect("capital-buffer proposal quality");
+        assert_eq!(capital_buffer["quality_score"], json!(95));
+        assert_eq!(capital_buffer["quality_status"], json!("related_review"));
     }
 
     #[test]

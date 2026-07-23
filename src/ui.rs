@@ -2674,6 +2674,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
                     span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
                     span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
+                    span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
                     span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
                     span { class: "pill", "Advised reports: {advised_reports}" }
                     span { class: "pill", "Changed: {changed_reports}" }
@@ -2717,6 +2718,35 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     tbody {
                         for row in data.hermes_one_variable_audit.iter() {
                             HermesOneVariableAuditRow { row: row.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Proposal Quality Review" }
+                p { class: "muted", "Deterministic, read-only rubric for active Hermes proposals. It scores one-variable purity, attached/named evidence, measurable expected effect, changed values with risk notes, and active duplicate risk. It never blocks or advances a lifecycle transition." }
+                if data.hermes_proposal_quality.is_empty() {
+                    div { class: "event",
+                        span { class: "muted", "No pending or active Hermes proposals require a quality review." }
+                    }
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th { "Proposal" }
+                                th { "Lifecycle" }
+                                th { "Quality" }
+                                th { "Evidence" }
+                                th { "Measurement" }
+                                th { "Safety" }
+                                th { "Duplicate Risk" }
+                                th { "Review Gaps" }
+                            }
+                        }
+                        tbody {
+                            for row in data.hermes_proposal_quality.iter() {
+                                HermesProposalQualityRow { row: row.clone(), prefs: prefs.clone() }
+                            }
                         }
                     }
                 }
@@ -3891,6 +3921,92 @@ fn HermesOneVariableAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
             td {
                 span { class: "event-message", title: "{scope}", "{manager_state}" }
             }
+        }
+    }
+}
+
+#[component]
+fn HermesProposalQualityRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let quality_status = text_or(&row, "quality_status", "needs_evidence");
+    let quality_class = match quality_status.as_str() {
+        "review_ready" => "status good-status",
+        "duplicate_risk" => "status bad-status",
+        _ => "status warn-status",
+    };
+    let evidence = match (
+        row.get("evidence_present").and_then(JsonValue::as_bool),
+        row.get("evidence_has_named_sources")
+            .and_then(JsonValue::as_bool),
+    ) {
+        (Some(true), Some(true)) => "attached + named",
+        (Some(true), _) => "attached",
+        _ => "missing",
+    };
+    let measurement = if row
+        .get("measurable_effect")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        "defined"
+    } else {
+        "missing"
+    };
+    let safety = match (
+        row.get("values_changed").and_then(JsonValue::as_bool),
+        row.get("risk_notes_present").and_then(JsonValue::as_bool),
+    ) {
+        (Some(true), Some(true)) => "values + risk notes",
+        (Some(true), _) => "risk notes missing",
+        (_, Some(true)) => "values unchanged",
+        _ => "incomplete",
+    };
+    let exact_duplicates = row
+        .get("exact_duplicate_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let related_duplicates = row
+        .get("related_family_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let duplicate_risk = if exact_duplicates > 0 {
+        format!("exact: {exact_duplicates}")
+    } else if related_duplicates > 0 {
+        format!("related: {related_duplicates}")
+    } else {
+        "none".to_string()
+    };
+    let gaps = row
+        .get("gaps")
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "None".to_string());
+    let variable = text_or(&row, "variable", "n/a");
+    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
+    let experiment_status = text_or(&row, "experiment_status", "n/a");
+    let quality_score = text_or(&row, "quality_score", "0");
+    rsx! {
+        tr {
+            td {
+                strong { class: "mono", "{variable}" }
+                span { class: "muted block", "{created_at}" }
+            }
+            td { span { class: "status", "{experiment_status}" } }
+            td {
+                span { class: "{quality_class}", "{quality_score}/100" }
+                span { class: "muted block", "{quality_status}" }
+            }
+            td { "{evidence}" }
+            td { "{measurement}" }
+            td { "{safety}" }
+            td { "{duplicate_risk}" }
+            td { span { class: "event-message", title: "{gaps}", "{truncate_chars(&gaps, 220)}" } }
         }
     }
 }

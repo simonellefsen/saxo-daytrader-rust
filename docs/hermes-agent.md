@@ -312,6 +312,24 @@ only variable path, old/new values, a sanitized hypothesis, lifecycle state,
 and safe scope metadata. It excludes raw provider payloads, evidence blobs,
 broker data, secrets, and configuration mutation controls.
 
+### Proposal Quality Review
+
+Active and pending Hermes proposals also have a deterministic, read-only
+**Proposal Quality Review**. It scores persisted safe metadata only:
+
+- one unambiguous variable path;
+- evidence attached, with named report, EOD, Markov, Quiver, or metrics input
+  where available;
+- a measurable expected effect;
+- distinct old/new values plus risk notes; and
+- active exact or related-variable-family proposal risk.
+
+`review_ready` means the proposal meets the lightweight metadata threshold.
+`needs_evidence`, `related_review`, and `duplicate_risk` identify the review
+work still required. The rubric is advisory only: it neither blocks nor
+advances lifecycle transitions, changes configuration, calls Saxo, or exposes
+the raw evidence, risk notes, hypothesis, or provider payload.
+
 ## SIM/Paper Experiment Overlays
 
 The Rust Trading Manager can load one approved Hermes experiment as a runtime overlay without rewriting config files or changing the active baseline.

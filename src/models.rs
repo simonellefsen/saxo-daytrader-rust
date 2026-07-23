@@ -55,6 +55,7 @@ pub struct DashboardView {
     pub hermes_reflections: Vec<JsonValue>,
     pub hermes_lessons_pending_review: Vec<JsonValue>,
     pub hermes_one_variable_audit: Vec<JsonValue>,
+    pub hermes_proposal_quality: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
     pub hermes_counterfactuals: Vec<JsonValue>,

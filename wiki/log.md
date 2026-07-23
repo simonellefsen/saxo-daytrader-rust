@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] improvement | Hermes proposal quality review
+
+- Added a deterministic, bounded read-only review projection for active and pending Hermes experiments. It scores only safe persisted metadata: variable-path clarity, evidence presence/source names, measurable expected effect, changed values with risk notes, and exact or related active-proposal risk.
+- The projection emits a compact score, review status, counts, and review gaps. It excludes raw evidence, risk notes, hypotheses, provider payloads, broker data, and secrets; it cannot change a proposal lifecycle, strategy configuration, or Saxo behavior.
+
 ## [2026-07-23] improvement | Hermes one-variable audit
 
 - Added a bounded read-only dashboard projection that distinguishes a promoted baseline audit artifact from the exact allowed strategy experiment overlay selected for a future paper/SIM Trading Manager cycle.

@@ -16,7 +16,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [log](log.md) - Append-only timeline of wiki operations.
 - [roadmap](roadmap.md) - Potential improvements across reliability, Hermes, strategy, execution, UX, and architecture.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
-- [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, read-only one-variable audits, and strategy experiments connect to the wiki.
+- [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, read-only one-variable and proposal-quality audits, and strategy experiments connect to the wiki.
 - [QuiverQuant advisory signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md) - Rust alternative-data signal implementation for decision reports and Hermes.
 
 ## Source Notes
