@@ -221,6 +221,7 @@ market_data:
       - tom:xosl
       - tryg:xcse
       - tsm:xnys
+      - tsla:xnas
       - tte:xpar
       - txn:xnas
       - uber:xnys
