@@ -54,6 +54,7 @@ pub struct DashboardView {
     pub scheduler_cycles: Vec<JsonValue>,
     pub hermes_reflections: Vec<JsonValue>,
     pub hermes_lessons_pending_review: Vec<JsonValue>,
+    pub hermes_learning_memory: Vec<JsonValue>,
     pub hermes_one_variable_audit: Vec<JsonValue>,
     pub hermes_proposal_quality: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,

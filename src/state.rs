@@ -60,6 +60,11 @@ const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &["strategy.capital.cash_buffer"];
 const HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT: i64 = 50;
 const HERMES_LESSONS_PENDING_REVIEW_LIMIT: usize = 30;
 const HERMES_LESSON_TEXT_MAX_CHARS: usize = 500;
+const HERMES_LEARNING_MEMORY_REFLECTION_LIMIT: i64 = 80;
+const HERMES_LEARNING_MEMORY_LIMIT: usize = 30;
+const HERMES_LEARNING_MEMORY_EMERGING_TTL_DAYS: i64 = 7;
+const HERMES_LEARNING_MEMORY_STABLE_TTL_DAYS: i64 = 21;
+const HERMES_LEARNING_MEMORY_STABLE_MIN_REFLECTIONS: usize = 2;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -67,6 +72,15 @@ struct SaxoExchangeCalendarCache {
     checked_at: DateTime<Utc>,
     exchanges: HashMap<String, SaxoExchangeCalendar>,
     source: String,
+}
+
+#[derive(Clone, Debug)]
+struct HermesLearningMemoryEntry {
+    lesson: String,
+    first_seen: DateTime<Utc>,
+    last_seen: DateTime<Utc>,
+    reflection_ids: HashSet<String>,
+    cadences: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -186,6 +200,116 @@ fn hermes_lessons_pending_review_from_reflections(
         }
     }
     lessons
+}
+
+/// Compress repeated safe reflection actions into an expiring, read-only
+/// learning-memory view. Repetition across separate reflections makes a
+/// lesson stable; one-off actions remain emerging and all observations expire
+/// deterministically. This is advisory context only, not an experiment or
+/// strategy/configuration mutation path.
+fn hermes_learning_memory_from_reflections(
+    reflections: &[JsonValue],
+    now: DateTime<Utc>,
+    limit: usize,
+) -> Vec<JsonValue> {
+    let mut entries = HashMap::<String, HermesLearningMemoryEntry>::new();
+    for reflection in reflections {
+        let reflection_id = json_text(reflection, "id");
+        if reflection_id.is_empty() {
+            continue;
+        }
+        let created_at = json_text(reflection, "created_at");
+        let Some(created_at) = DateTime::parse_from_rfc3339(&created_at)
+            .ok()
+            .map(|value| value.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        let cadence = hermes_reflection_cadence(reflection);
+        let Some(actions) = reflection.get("proposed_actions_json") else {
+            continue;
+        };
+        let mut actions_seen_in_reflection = HashSet::new();
+        for action in hermes_proposed_action_entries(actions) {
+            let Some(lesson) = hermes_proposed_action_text(action) else {
+                continue;
+            };
+            let normalized = lesson.to_ascii_lowercase();
+            if !actions_seen_in_reflection.insert(normalized.clone()) {
+                continue;
+            }
+            let entry = entries
+                .entry(normalized)
+                .or_insert_with(|| HermesLearningMemoryEntry {
+                    lesson: lesson.clone(),
+                    first_seen: created_at,
+                    last_seen: created_at,
+                    reflection_ids: HashSet::new(),
+                    cadences: HashSet::new(),
+                });
+            entry.first_seen = entry.first_seen.min(created_at);
+            entry.last_seen = entry.last_seen.max(created_at);
+            entry.reflection_ids.insert(reflection_id.clone());
+            entry.cadences.insert(cadence.clone());
+        }
+    }
+
+    let mut memory = entries
+        .into_iter()
+        .map(|(normalized_lesson, entry)| {
+            let observation_count = entry.reflection_ids.len();
+            let stable = observation_count >= HERMES_LEARNING_MEMORY_STABLE_MIN_REFLECTIONS;
+            let ttl_days = if stable {
+                HERMES_LEARNING_MEMORY_STABLE_TTL_DAYS
+            } else {
+                HERMES_LEARNING_MEMORY_EMERGING_TTL_DAYS
+            };
+            let expires_at = entry.last_seen + Duration::days(ttl_days);
+            let status = if now >= expires_at {
+                "stale"
+            } else if stable {
+                "stable"
+            } else {
+                "emerging"
+            };
+            let mut cadences = entry.cadences.into_iter().collect::<Vec<_>>();
+            cadences.sort();
+            json!({
+                "id": format!("lesson-memory:{}:{normalized_lesson}", entry.first_seen.timestamp_micros()),
+                "lesson": entry.lesson,
+                "status": status,
+                "observation_count": observation_count,
+                "first_seen": entry.first_seen.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "last_seen": entry.last_seen.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "cadences": cadences,
+                "safety": "derived_reflection_context_not_a_trading_instruction",
+            })
+        })
+        .collect::<Vec<_>>();
+    memory.sort_by(|left, right| {
+        let rank = |row: &JsonValue| match json_text(row, "status").as_str() {
+            "stable" => 0,
+            "emerging" => 1,
+            _ => 2,
+        };
+        rank(left)
+            .cmp(&rank(right))
+            .then_with(|| json_text(right, "last_seen").cmp(&json_text(left, "last_seen")))
+    });
+    memory.truncate(limit.max(1));
+    memory
+}
+
+fn hermes_reflection_cadence(reflection: &JsonValue) -> String {
+    let session = json_text(reflection, "source_session_id").to_ascii_lowercase();
+    if session.contains("weekly") {
+        "weekly".to_string()
+    } else if session.contains("daily") {
+        "daily".to_string()
+    } else {
+        "other".to_string()
+    }
 }
 
 /// Produce a small, display-safe view of the one-variable state. Baselines
@@ -1647,6 +1771,16 @@ impl AppState {
             } else {
                 Vec::new()
             };
+        let hermes_learning_memory = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            self.hermes_learning_memory(HERMES_LEARNING_MEMORY_LIMIT as i64)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard Hermes learning memory degraded: {err:#}");
+                    Vec::new()
+                })
+        } else {
+            Vec::new()
+        };
         let hermes_experiments = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
             self.hermes_experiments(20).await.unwrap_or_else(|err| {
                 warn!("dashboard Hermes experiments degraded: {err:#}");
@@ -1893,6 +2027,7 @@ impl AppState {
             scheduler_cycles,
             hermes_reflections,
             hermes_lessons_pending_review,
+            hermes_learning_memory,
             hermes_one_variable_audit,
             hermes_proposal_quality,
             hermes_experiments,
@@ -4173,6 +4308,16 @@ impl AppState {
             .await
             .unwrap_or_default();
         let active_experiments = self.hermes_experiments(10).await.unwrap_or_default();
+        let learning_memory = self.hermes_learning_memory(limit).await.unwrap_or_default();
+        let active_learning_memory = learning_memory
+            .iter()
+            .filter(|lesson| json_text(lesson, "status") != "stale")
+            .cloned()
+            .collect::<Vec<_>>();
+        let stale_learning_memory_count = learning_memory
+            .iter()
+            .filter(|lesson| json_text(lesson, "status") == "stale")
+            .count();
         let active_strategy_baseline = self
             .active_strategy_baseline()
             .await
@@ -4226,7 +4371,12 @@ impl AppState {
             "quiver_signals": quiver,
             "hermes": {
                 "experiments": active_experiments,
-                "active_strategy_baseline": active_strategy_baseline
+                "active_strategy_baseline": active_strategy_baseline,
+                "learning_memory": {
+                    "active": active_learning_memory,
+                    "stale_count": stale_learning_memory_count,
+                    "policy": "repeated reflection actions become stable after two distinct reflections; emerging lessons expire after 7d and stable lessons after 21d"
+                }
             },
             "safety": {
                 "saxo_sessions_excluded": true,
@@ -4710,6 +4860,22 @@ impl AppState {
         Ok(hermes_lessons_pending_review_from_reflections(
             &reflections,
             clamp_limit(limit, 1, HERMES_LESSONS_PENDING_REVIEW_LIMIT as i64) as usize,
+        ))
+    }
+
+    pub async fn hermes_learning_memory(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, proposed_actions_json, source_session_id
+             FROM hermes_reflections
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            HERMES_LEARNING_MEMORY_REFLECTION_LIMIT
+        );
+        let reflections = self.select_json(&sql).await.unwrap_or_default();
+        Ok(hermes_learning_memory_from_reflections(
+            &reflections,
+            Utc::now(),
+            clamp_limit(limit, 1, HERMES_LEARNING_MEMORY_LIMIT as i64) as usize,
         ))
     }
 
@@ -8800,6 +8966,98 @@ mod tests {
 
         assert_eq!(pack["status"], json!("source_experiment_unavailable"));
         assert_eq!(pack["safety"], json!("read_only_observational_not_causal"));
+    }
+
+    #[test]
+    fn learning_memory_promotes_repeated_lessons_and_expires_old_ones() {
+        let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
+            .expect("valid current time")
+            .with_timezone(&Utc);
+        let memory = hermes_learning_memory_from_reflections(
+            &[
+                json!({
+                    "id": "reflection-1",
+                    "created_at": "2026-07-20T12:00:00Z",
+                    "source_session_id": "daily-reflection-2026-07-20",
+                    "proposed_actions_json": ["Keep Markov signals fresh before approving BUYs."]
+                }),
+                json!({
+                    "id": "reflection-2",
+                    "created_at": "2026-07-21T12:00:00Z",
+                    "source_session_id": "weekly-reflection-2026-07-21",
+                    "proposed_actions_json": ["Keep Markov signals fresh before approving BUYs."]
+                }),
+                json!({
+                    "id": "reflection-old",
+                    "created_at": "2026-06-01T12:00:00Z",
+                    "source_session_id": "daily-reflection-2026-06-01",
+                    "proposed_actions_json": ["Retire this old one-off lesson."]
+                }),
+            ],
+            now,
+            10,
+        );
+
+        let stable = memory
+            .iter()
+            .find(|row| row["lesson"] == json!("Keep Markov signals fresh before approving BUYs."))
+            .expect("stable lesson");
+        assert_eq!(stable["status"], json!("stable"));
+        assert_eq!(stable["observation_count"], json!(2));
+        assert_eq!(stable["cadences"], json!(["daily", "weekly"]));
+        let stale = memory
+            .iter()
+            .find(|row| row["lesson"] == json!("Retire this old one-off lesson."))
+            .expect("stale lesson");
+        assert_eq!(stale["status"], json!("stale"));
+    }
+
+    #[test]
+    fn learning_memory_redacts_sensitive_actions_before_grouping() {
+        let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
+            .expect("valid current time")
+            .with_timezone(&Utc);
+        let memory = hermes_learning_memory_from_reflections(
+            &[json!({
+                "id": "reflection-sensitive",
+                "created_at": "2026-07-22T12:00:00Z",
+                "source_session_id": "daily-reflection-2026-07-22",
+                "proposed_actions_json": ["Use bearer token super-secret-value in the next report."]
+            })],
+            now,
+            10,
+        );
+
+        assert_eq!(memory.len(), 1);
+        assert_eq!(
+            memory[0]["lesson"],
+            json!("[redacted potentially sensitive reflection action]")
+        );
+        assert!(!memory[0].to_string().contains("super-secret-value"));
+    }
+
+    #[test]
+    fn learning_memory_counts_duplicate_actions_once_per_reflection() {
+        let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
+            .expect("valid current time")
+            .with_timezone(&Utc);
+        let memory = hermes_learning_memory_from_reflections(
+            &[json!({
+                "id": "reflection-duplicate-actions",
+                "created_at": "2026-07-22T12:00:00Z",
+                "source_session_id": "daily-reflection-2026-07-22",
+                "proposed_actions_json": [
+                    "Wait for fresh Markov signals.",
+                    "Wait for fresh Markov signals."
+                ]
+            })],
+            now,
+            10,
+        );
+
+        assert_eq!(memory.len(), 1);
+        assert_eq!(memory[0]["status"], json!("emerging"));
+        assert_eq!(memory[0]["observation_count"], json!(1));
     }
 
     #[test]

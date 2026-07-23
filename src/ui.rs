@@ -2658,6 +2658,16 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .iter()
         .filter(|row| hermes_advice_impact(row).0 != "no-op")
         .count();
+    let stable_learning_memory = data
+        .hermes_learning_memory
+        .iter()
+        .filter(|row| text(row, "status") == "stable")
+        .count();
+    let stale_learning_memory = data
+        .hermes_learning_memory
+        .iter()
+        .filter(|row| text(row, "status") == "stale")
+        .count();
     let latest_created = if latest_reflection.is_null() {
         "None".to_string()
     } else {
@@ -2674,6 +2684,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 div { class: "pill-row right",
                     span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
                     span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
+                    span { class: "pill", "Memory: {stable_learning_memory} stable / {stale_learning_memory} stale" }
                     span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
                     span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
                     if !data.hermes_baseline_evidence_pack.is_null() {
@@ -2806,6 +2817,34 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         tbody {
                             for row in data.hermes_lessons_pending_review.iter() {
                                 HermesLessonPendingReviewRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "table-wrap",
+                h3 { "Learning Memory" }
+                p { class: "muted", "Compressed, read-only lessons derived from repeated reflection actions. A lesson becomes stable after two distinct reflections; emerging lessons expire after 7 days and stable lessons after 21 days. Stale lessons are visible here but excluded from Hermes context." }
+                if data.hermes_learning_memory.is_empty() {
+                    div { class: "event",
+                        span { class: "muted", "No usable reflection actions are available to form learning memory yet." }
+                    }
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th { "Status" }
+                                th { "Lesson" }
+                                th { "Observations" }
+                                th { "Cadence" }
+                                th { "First Seen" }
+                                th { "Last Seen" }
+                                th { "Expires" }
+                            }
+                        }
+                        tbody {
+                            for row in data.hermes_learning_memory.iter() {
+                                HermesLearningMemoryRow { row: row.clone(), prefs: prefs.clone() }
                             }
                         }
                     }
@@ -3886,6 +3925,44 @@ fn HermesLessonPendingReviewRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
             td { span { class: "event-message", title: "{lesson}", "{truncate_chars(&lesson, 220)}" } }
             td { class: "muted", span { class: "event-message", title: "{reflection_summary}", "{truncate_chars(&reflection_summary, 180)}" } }
             td { class: "muted", "{text(&row, \"source_session_id\")}" }
+        }
+    }
+}
+
+#[component]
+fn HermesLearningMemoryRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text_or(&row, "status", "emerging");
+    let status_class = match status.as_str() {
+        "stable" => "status good-status",
+        "stale" => "status warn-status",
+        _ => "status",
+    };
+    let lesson = text_or(&row, "lesson", "No lesson text recorded.");
+    let observation_count = text_or(&row, "observation_count", "0");
+    let first_seen = format_timestamp(&text(&row, "first_seen"), &prefs);
+    let last_seen = format_timestamp(&text(&row, "last_seen"), &prefs);
+    let expires_at = format_timestamp(&text(&row, "expires_at"), &prefs);
+    let cadences = row
+        .get("cadences")
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "n/a".to_string());
+    rsx! {
+        tr {
+            td { span { class: "{status_class}", "{status}" } }
+            td { span { class: "event-message", title: "{lesson}", "{truncate_chars(&lesson, 220)}" } }
+            td { "{observation_count}" }
+            td { class: "muted", "{cadences}" }
+            td { class: "muted", "{first_seen}" }
+            td { class: "muted", "{last_seen}" }
+            td { class: "muted", "{expires_at}" }
         }
     }
 }

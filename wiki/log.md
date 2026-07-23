@@ -10,6 +10,11 @@ updated: 2026-07-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-23] improvement | Hermes learning memory compression
+
+- Added a bounded read-only projection that groups safe proposed reflection actions across distinct reflections into `emerging`, `stable`, and `stale` lessons.
+- Emerging lessons expire after 7 days and stable lessons after 21 days. Stale lessons remain operator-visible for audit but are excluded from Hermes advisory context; the projection stores no second workflow and cannot change configuration, lifecycle, or broker behavior.
+
 ## [2026-07-23] improvement | Hermes baseline promotion evidence
 
 - Added a bounded read-only evidence pack for the active promoted baseline. It links only the exact source-experiment overlay manager runs to compact report/order outcome counts and uses persisted portfolio snapshots for experiment-window and post-promotion return, drawdown, cash utilization, and sufficient-sample zero-risk-free Sharpe observations.

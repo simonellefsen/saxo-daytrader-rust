@@ -294,6 +294,22 @@ approved experiment, strategy change, queue instruction, or trading approval.
 An operator must separately create and review a one-variable experiment through
 the existing protected lifecycle before any SIM/paper overlay can apply.
 
+### Learning Memory
+
+The dashboard also derives a bounded **Learning Memory** projection from safe
+reflection actions. An action repeated in at least two distinct reflections is
+`stable`; a single recent observation is `emerging`. Emerging lessons expire
+after seven days and stable lessons after 21 days. Expired lessons remain
+visible as `stale` operator history, but are excluded from the Hermes context
+used for future advice.
+
+The projection records only safe lesson text, observation count, cadence,
+first/last observation time, and expiry time. It redacts sensitive-looking
+action text before grouping and does not persist a second memory workflow,
+expose provider or broker payloads, change configuration, approve an
+experiment, or affect Saxo behavior. A repeated lesson is evidence for review,
+not a trading instruction.
+
 ### One-Variable Audit
 
 The Hermes dashboard also provides a bounded, read-only **One-Variable Audit**
