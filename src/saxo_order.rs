@@ -16,7 +16,7 @@ use crate::{
     db::{row_to_json, sql_escape, value_f64, value_i64},
     saxo_error::classify_execution_error,
     saxo_portfolio::refresh_broker_snapshots,
-    state::AppState,
+    state::{AppState, PROTECTIVE_STOP_STRATEGY_TYPE},
 };
 
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
@@ -647,10 +647,16 @@ pub(crate) async fn outstanding_order_count(state: &AppState) -> Result<i64> {
         .map(|status| format!("'{}'", sql_escape(status)))
         .collect::<Vec<_>>()
         .join(", ");
+    // A protective stop rests at the broker as GoodTillCancel, by design, for
+    // as long as the position is held. Counting it here would leave
+    // `outstanding` permanently above zero and silently convert the scheduler's
+    // 10-minute cadence into a 1-minute one for the life of the portfolio.
     let row = sqlx::query(&format!(
         "SELECT COUNT(*) AS outstanding
          FROM execution_orders
-         WHERE mode = 'live' AND adapter = 'saxo' AND status IN ({statuses})"
+         WHERE mode = 'live' AND adapter = 'saxo' AND status IN ({statuses})
+           AND COALESCE(strategy_type, '') <> '{}'",
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
     ))
     .fetch_one(&state.pool)
     .await?;
@@ -1230,6 +1236,29 @@ async fn execute_order(
     }
 
     if action == "SELL" {
+        // Saxo permits one resting sell per owned holding, so a protective stop
+        // on this symbol will make the exit fail with
+        // `SellOrdersAlreadyExistForOwnedContracts`. Standing protection must
+        // yield to a decided exit: cancel the stop first and confirm at the
+        // broker that it is gone before the sell is built. Nothing else in the
+        // runtime cancels a protective stop automatically.
+        if let Err(err) = cancel_protective_stops_before_sell(state, session, &symbol).await {
+            return fail_order(
+                state,
+                order_id,
+                "execution_failed",
+                &format!(
+                    "Sell blocked for {symbol}: the resting protective stop could not be cleared first: {err:#}"
+                ),
+                &json!({
+                    "failure_stage": "protective_stop_release",
+                    "error": err.to_string(),
+                    "safety": "sell_not_submitted_protective_stop_state_left_for_the_next_sync"
+                }),
+            )
+            .await;
+        }
+
         // Local snapshots are useful for the dashboard, but Saxo is the source of truth
         // for whether a sell can be placed. This matters after rollouts or stale imports:
         // Python/Node systems often trust their latest cached row, while broker APIs can
@@ -2865,6 +2894,126 @@ async fn resolve_order_currency(
         .to_string())
 }
 
+/// Clears any resting protective stop on `symbol` so a decided exit can be
+/// submitted.
+///
+/// This is the only automatic broker mutation the protective-stop machinery
+/// performs, and it is deliberately narrow: it cancels rows this runtime marked
+/// `protective_stop` on exactly the symbol being sold, and it will not report
+/// success until Saxo confirms the stop is no longer working. A cancel that
+/// Saxo accepted but has not yet applied is treated as a failure, because
+/// proceeding would submit a sell the broker rejects and burn the exit.
+async fn cancel_protective_stops_before_sell(
+    state: &AppState,
+    session: &JsonValue,
+    symbol: &str,
+) -> Result<Vec<JsonValue>> {
+    let statuses = BROKER_SYNC_STATUSES
+        .iter()
+        .chain(["broker_state_unknown"].iter())
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = sqlx::query(&format!(
+        "SELECT * FROM execution_orders
+         WHERE symbol = '{}'
+           AND action = 'SELL'
+           AND COALESCE(strategy_type, '') = '{}'
+           AND status IN ({statuses})
+           AND broker_order_id IS NOT NULL
+           AND broker_order_id <> ''
+         ORDER BY id ASC
+         LIMIT 10",
+        sql_escape(symbol),
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading resting protective stops before a sell")?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let client_key = client_key(state, session)?;
+    let account_key = account_key(state, session)?;
+    let mut cancelled = Vec::new();
+    for row in rows.iter().map(row_to_json) {
+        let order_id = value_i64(&row, "id");
+        let broker_order_id = order_text(&row, "broker_order_id");
+        saxo_delete_json(
+            state,
+            session,
+            &format!(
+                "/trade/v2/orders/{}",
+                percent_encode_path_segment(&broker_order_id)
+            ),
+            &[("AccountKey", account_key.clone())],
+            "protective-stop cancellation before sell",
+        )
+        .await
+        .with_context(|| {
+            format!("cancelling protective stop {broker_order_id} on {symbol} before a sell")
+        })?;
+
+        // A DELETE that Saxo accepted is a request, not a completed state
+        // change. Read the order back before letting the sell through.
+        sleep(Duration::from_millis(1500)).await;
+        let broker_state =
+            fetch_broker_order_state(state, session, &client_key, &broker_order_id).await?;
+        let still_working = broker_state.as_ref().is_some_and(|state| {
+            let payload = broker_payload(state);
+            let status = broker_status_text(payload).unwrap_or_default();
+            !status.eq_ignore_ascii_case("Cancelled")
+                && !is_final_fill_status(
+                    &Some(status.clone()),
+                    json_text(payload, "SubStatus").as_deref(),
+                )
+                && !is_terminal_failure_status(&Some(status))
+        });
+        if still_working {
+            bail!(
+                "Saxo accepted the cancellation of protective stop {broker_order_id} on {symbol} but the order is still working"
+            );
+        }
+        let observed = broker_state.unwrap_or_else(|| {
+            json!({
+                "source": "protective_stop_cancel_verification",
+                "broker_visibility": "not_found",
+                "broker_payload": {"Status": "Cancelled"},
+                "broker_visibility_note": "Saxo returned no open order and no audit activity after the cancellation, so the stop is no longer resting.",
+                "last_sync_at": now_iso()
+            })
+        });
+        update_order_broker_status(state, &row, "broker_cancelled", &observed, None).await?;
+        insert_order_event(
+            state,
+            order_id,
+            Some(&broker_order_id),
+            "protective_stop_cancelled_for_sell",
+            &json!({
+                "reason": "a_decided_sell_needs_the_single_permitted_resting_sell_slot",
+                "symbol": symbol,
+                "broker_order_id": broker_order_id,
+                "verified": "broker_confirmed_not_working_before_the_sell_was_built"
+            }),
+        )
+        .await?;
+        state
+            .release_protective_stop_lifecycle_test(&broker_order_id)
+            .await?;
+        info!(
+            symbol,
+            broker_order_id, "cancelled resting protective stop so a decided sell can be placed"
+        );
+        cancelled.push(json!({
+            "execution_order_id": order_id,
+            "broker_order_id": broker_order_id,
+            "symbol": symbol
+        }));
+    }
+    Ok(cancelled)
+}
+
 async fn active_sell_reservations(
     state: &AppState,
     symbol: &str,
@@ -2875,16 +3024,24 @@ async fn active_sell_reservations(
         .map(|status| format!("'{}'", sql_escape(status)))
         .collect::<Vec<_>>()
         .join(", ");
+    // A protective stop covers the whole holding, so counting it as a
+    // reservation would make every discretionary exit look impossible and block
+    // the strategy from ever selling. It is excluded here and cancelled
+    // explicitly by `cancel_protective_stops_before_sell` instead, which is the
+    // only correct order of operations: Saxo permits one resting sell per owned
+    // holding, so the stop has to be gone before the exit is submitted.
     let row = sqlx::query(&format!(
         "SELECT COALESCE(SUM(quantity), 0) AS quantity
          FROM execution_orders
          WHERE symbol = '{}'
            AND action = 'SELL'
            AND id <> {}
-           AND status IN ({})",
+           AND status IN ({})
+           AND COALESCE(strategy_type, '') <> '{}'",
         sql_escape(symbol),
         exclude_order_id,
-        statuses
+        statuses,
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
     ))
     .fetch_optional(&state.pool)
     .await?;
@@ -3780,7 +3937,8 @@ mod tests {
                 created_at TEXT,
                 quantity REAL,
                 price_local REAL,
-                ledger_id INTEGER
+                ledger_id INTEGER,
+                strategy_type TEXT
             )",
         )
         .execute(&pool)
@@ -4195,6 +4353,34 @@ mod tests {
                 .await
                 .expect("read active SELL reservation"),
             3.0
+        );
+
+        // A protective stop covers the whole holding. If it reserved that
+        // quantity the strategy could never sell the position it protects, so
+        // the reservation must ignore it; `cancel_protective_stops_before_sell`
+        // is what actually clears the broker's single resting-sell slot.
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, status, action, symbol, quantity, strategy_type, broker_order_id
+             ) VALUES (7, 'broker_working', 'SELL', 'AMD:xnas', 7, 'protective_stop', '5101')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed resting protective stop");
+        assert_eq!(
+            active_sell_reservations(&state, "AMD:xnas", 2)
+                .await
+                .expect("read active SELL reservation with a stop resting"),
+            3.0,
+            "a resting protective stop must not reserve the quantity its own position needs to exit"
+        );
+        assert_eq!(
+            outstanding_order_count(&state)
+                .await
+                .expect("count outstanding orders"),
+            0,
+            "a GoodTillCancel protective stop rests for the life of the position, so counting it \
+             would pin the scheduler at its fast poll interval permanently"
         );
 
         let stored = sqlx::query(

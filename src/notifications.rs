@@ -1475,6 +1475,9 @@ async fn upsert_alert_state(state: &AppState, alert: &SlackAlert, delivery_id: i
 fn execution_source_label(row: &JsonValue) -> String {
     match text(row, "strategy_type").as_str() {
         "portfolio_sync" => "SIM portfolio sync".to_string(),
+        // A stop fill is an exit nobody decided in the moment, so the alert has
+        // to name it as such. "Execution" would read like a routine order.
+        "protective_stop" => "Protective stop".to_string(),
         "swing" | "ladder" => "Trading Manager".to_string(),
         _ => "Execution".to_string(),
     }

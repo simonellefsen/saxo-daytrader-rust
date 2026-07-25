@@ -139,6 +139,34 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         step_started,
     );
     let step_started = Instant::now();
+    // Adoption runs after confirmation so a stop that was just promoted to
+    // `broker_working` is picked up in the same cycle. It writes only local
+    // rows -- the broker order already exists -- and from here on
+    // `sync_saxo_broker_orders` above owns the stop, so a fill produces a
+    // ledger row, a position update, and an execution notification like any
+    // other order.
+    let protective_stop_adoption = match state.adopt_protective_stops_into_execution_orders().await
+    {
+        Ok(adopted) => {
+            if !adopted.is_empty() {
+                info!(
+                    adopted = adopted.len(),
+                    "adopted broker-confirmed protective stops into the execution order table"
+                );
+            }
+            json!({"status": "ok", "adopted": adopted.len(), "orders": adopted})
+        }
+        Err(err) => {
+            warn!("Protective stop adoption failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(
+        &mut step_durations,
+        "protective_stop_adoption",
+        step_started,
+    );
+    let step_started = Instant::now();
     let decision_reports = match run_xai_decision_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -310,6 +338,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "saxo_session": saxo,
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,
+        "protective_stop_adoption": protective_stop_adoption,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
         "markov_method": markov_method,

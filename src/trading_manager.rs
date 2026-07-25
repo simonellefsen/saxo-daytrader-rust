@@ -2666,9 +2666,18 @@ async fn active_instrument_quarantines(state: &AppState) -> Result<Vec<Instrumen
     let cutoff = (Utc::now() - Duration::days(cfg.lookback_days))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let rows = sqlx::query(&format!(
+        // Protective stops are excluded on purpose. Cancelling one is a healthy,
+        // deliberate act -- it is how a decided exit claims Saxo's single
+        // permitted resting sell -- but `update_order_broker_status` writes
+        // `error_text` for every `broker_cancelled` row, so without this the
+        // runtime would accumulate quarantine strikes against exactly the
+        // symbols it is successfully trading and eventually refuse to trade
+        // them. Quarantine is meant to catch instruments the broker keeps
+        // rejecting, not our own housekeeping.
         "SELECT id, created_at, symbol, action, status, error_text, execution_result_json \
              FROM execution_orders \
              WHERE created_at >= '{}' \
+               AND COALESCE(strategy_type, '') <> 'protective_stop' \
                AND (error_text IS NOT NULL \
                     OR lower(status) LIKE '%failed%' \
                     OR lower(status) LIKE '%rejected%' \

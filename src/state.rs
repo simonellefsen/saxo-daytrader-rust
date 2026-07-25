@@ -1500,6 +1500,13 @@ pub(crate) const SUPPORTED_EXPERIMENT_VARIABLES: &[&str] = &[
 
 const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
 
+/// Marks an `execution_orders` row as a broker-hosted protective stop rather
+/// than a discretionary order. Three code paths depend on telling them apart: a
+/// resting GTC stop must not pin the scheduler at its fast poll interval, must
+/// not reserve the quantity its own position needs to exit, and must be
+/// cancelled before a discretionary SELL on the same symbol reaches Saxo.
+pub(crate) const PROTECTIVE_STOP_STRATEGY_TYPE: &str = "protective_stop";
+
 /// A protective stop level derived from stored daily indicators.
 ///
 /// This is arithmetic on data the nightly indicator run already persisted: it
@@ -1577,6 +1584,17 @@ fn protective_stop_coverage_from_rows(
         }
     }
 
+    // Once a stop is adopted into `execution_orders` it is the same broker
+    // order as its lifecycle-test row. Counting both would report two stops
+    // covering one position and inflate the active stop count.
+    let adopted_broker_order_ids = execution_order_rows
+        .iter()
+        .filter_map(|order| {
+            let broker_order_id = json_text(order, "broker_order_id").trim().to_string();
+            (!broker_order_id.is_empty()).then_some(broker_order_id)
+        })
+        .collect::<HashSet<String>>();
+
     // A lifecycle test is distinct from the normal execution queue. Count it
     // only after reconciliation has confirmed a broker-working SIM Stop with
     // an order identifier. Submitted, cancelled, failed, and ambiguous tests
@@ -1586,6 +1604,7 @@ fn protective_stop_coverage_from_rows(
         if !json_text(test, "environment").eq_ignore_ascii_case("sim")
             || json_text(test, "status") != "broker_working"
             || json_text(test, "broker_order_id").trim().is_empty()
+            || adopted_broker_order_ids.contains(json_text(test, "broker_order_id").trim())
         {
             continue;
         }
@@ -4341,7 +4360,7 @@ impl AppState {
             .await?;
         let orders = self
             .select_json(
-                "SELECT symbol, action, order_type, status, quantity, stop_price_local
+                "SELECT symbol, action, order_type, status, quantity, stop_price_local, broker_order_id
                  FROM execution_orders
                  WHERE action = 'SELL'
                  ORDER BY created_at DESC, id DESC",
@@ -4529,6 +4548,145 @@ impl AppState {
             .map(|row| text_value(row, "symbol").trim().to_ascii_uppercase())
             .filter(|symbol| !symbol.is_empty())
             .collect())
+    }
+
+    /// Marks the lifecycle-test row behind a protective stop as released once
+    /// the stop has been cancelled at Saxo to make room for a decided sell.
+    /// Keeping the two tables agreed matters: `symbols_with_active_protective_stops`
+    /// reads this table, and a stale `broker_working` row there would stop the
+    /// position from ever being re-protected after the sell.
+    pub async fn release_protective_stop_lifecycle_test(
+        &self,
+        broker_order_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE protective_stop_lifecycle_tests
+             SET updated_at = $1, status = 'broker_cancelled', cancellation_result_json = $2
+             WHERE broker_order_id = $3 AND status <> 'broker_cancelled'",
+        )
+        .bind(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .bind(
+            json!({
+                "cancelled_by": "automatic_release_before_a_decided_sell",
+                "verified": "broker_confirmed_not_working_before_the_sell_was_built",
+                "safety": "cancellation_is_scoped_to_the_symbol_being_sold"
+            })
+            .to_string(),
+        )
+        .bind(broker_order_id)
+        .execute(&self.pool)
+        .await
+        .context("releasing protective-stop lifecycle test after cancellation")?;
+        Ok(())
+    }
+
+    /// Adopts every broker-confirmed protective stop into `execution_orders`.
+    ///
+    /// This is the load-bearing half of U1 slice 3. `sync_saxo_broker_orders`
+    /// reads `execution_orders` and nothing else, so a stop living only in
+    /// `protective_stop_lifecycle_tests` can fill at Saxo without producing a
+    /// ledger row, a position update, or any Trading Manager awareness. Giving
+    /// each stop an execution-order row inherits broker sync, fill
+    /// reconciliation, the trade ledger, and execution notifications with no
+    /// new plumbing.
+    ///
+    /// Adoption is idempotent on `broker_order_id` and creates no broker
+    /// traffic: it records an order Saxo already holds. The lifecycle-test row
+    /// stays as the placement audit trail.
+    pub async fn adopt_protective_stops_into_execution_orders(&self) -> Result<Vec<JsonValue>> {
+        let candidates = self
+            .select_json(
+                "SELECT t.id, t.created_at, t.symbol, t.quantity, t.stop_price_local,
+                        t.broker_order_id, t.external_reference, t.request_id
+                 FROM protective_stop_lifecycle_tests t
+                 WHERE t.status = 'broker_working'
+                   AND t.broker_order_id IS NOT NULL
+                   AND t.broker_order_id <> ''
+                   AND NOT EXISTS (
+                         SELECT 1 FROM execution_orders o
+                         WHERE o.broker_order_id = t.broker_order_id
+                       )
+                 ORDER BY t.id ASC
+                 LIMIT 50",
+            )
+            .await?;
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mode = yaml_string(&self.config, &["execution", "mode"])
+            .unwrap_or_else(|| "simulation".to_string());
+        let adapter = yaml_string(&self.config, &["execution", "adapter"])
+            .unwrap_or_else(|| "saxo".to_string());
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut adopted = Vec::new();
+        for candidate in &candidates {
+            let test_id = value_i64(candidate, "id");
+            let symbol = text_value(candidate, "symbol").trim().to_string();
+            let broker_order_id = text_value(candidate, "broker_order_id").trim().to_string();
+            let quantity = value_f64(candidate, "quantity");
+            let stop_price_local = value_f64(candidate, "stop_price_local");
+            if symbol.is_empty() || broker_order_id.is_empty() || quantity <= 0.0 {
+                continue;
+            }
+            let request_json = json!({
+                "source": "protective_stop_adoption",
+                "adopted_at": now,
+                "lifecycle_test_id": test_id,
+                "external_reference": text_value(candidate, "external_reference"),
+                "request_id": text_value(candidate, "request_id"),
+                "placed_at": text_value(candidate, "created_at"),
+                "note": "Broker-confirmed protective stop adopted so broker sync, fill reconciliation, and the trade ledger cover it. No broker call was made by the adoption itself."
+            });
+            // `NOT EXISTS` above is checked outside a transaction, so a
+            // concurrent scheduler pod could reach here with the same row. The
+            // unique strategy key is the second guard: the insert is skipped
+            // rather than duplicated.
+            let strategy_key = format!("protective_stop:{test_id}");
+            if self
+                .select_json(&format!(
+                    "SELECT id FROM execution_orders WHERE strategy_key = '{}' LIMIT 1",
+                    sql_escape(&strategy_key)
+                ))
+                .await?
+                .first()
+                .is_some()
+            {
+                continue;
+            }
+            let inserted = sqlx::query(
+                "INSERT INTO execution_orders (
+                    created_at, symbol, action, order_type, mode, status, adapter,
+                    quantity, stop_price_local, approval_required, approved_at,
+                    strategy_type, strategy_key, strategy_role, broker_order_id, request_json
+                 ) VALUES ($1, $2, 'SELL', 'stop', $3, 'broker_working', $4,
+                           $5, $6, 0, $7, $8, $9, 'protective_stop', $10, $11)",
+            )
+            .bind(&now)
+            .bind(&symbol)
+            .bind(&mode)
+            .bind(&adapter)
+            .bind(quantity)
+            .bind(stop_price_local)
+            .bind(&now)
+            .bind(PROTECTIVE_STOP_STRATEGY_TYPE)
+            .bind(&strategy_key)
+            .bind(&broker_order_id)
+            .bind(serde_json::to_string(&request_json)?)
+            .execute(&self.pool)
+            .await
+            .context("adopting protective stop into execution orders")?;
+            if inserted.rows_affected() == 1 {
+                adopted.push(json!({
+                    "lifecycle_test_id": test_id,
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "stop_price_local": stop_price_local,
+                    "broker_order_id": broker_order_id,
+                    "strategy_key": strategy_key
+                }));
+            }
+        }
+        Ok(adopted)
     }
 
     /// Marks a prepared lifecycle test abandoned after a reconcile confirmed the
@@ -8805,6 +8963,7 @@ fn unreconciled_orders_sql(stale_cutoff: &str, fill_cutoff: &str) -> String {
                            'waiting_for_cash_settlement', \
                            'waiting_for_virtual_cash_budget', \
                            'waiting_for_technical_gate') \
+                AND {} \
                 AND created_at < '{}') \
             OR (status = 'executed' \
                 AND ledger_id IS NULL \
@@ -8812,11 +8971,22 @@ fn unreconciled_orders_sql(stale_cutoff: &str, fill_cutoff: &str) -> String {
                 AND created_at < '{}') \
          ORDER BY created_at ASC, id ASC \
          LIMIT 20",
+        RESTING_PROTECTIVE_STOP_EXCLUSION,
         sql_escape(stale_cutoff),
         ADOPTED_ORDER_EXCLUSION,
         sql_escape(fill_cutoff)
     )
 }
+
+/// A protective stop is GoodTillCancel and is *supposed* to rest at
+/// `broker_working` for as long as the position is held, so age alone says
+/// nothing about it. Without this exclusion every adopted stop becomes a
+/// permanent integrity warning 24 hours after placement, which is the same
+/// false positive that adopted positions produced before 2026-07-25 -- and a
+/// panel that is always warning is a panel nobody reads. The
+/// `broker_state_unknown` and executed-without-a-ledger-row branches
+/// deliberately still apply: those are real faults for a stop too.
+const RESTING_PROTECTIVE_STOP_EXCLUSION: &str = "COALESCE(strategy_type, '') <> 'protective_stop'";
 
 const ADOPTED_ORDERS_WITHOUT_LEDGER_SQL: &str = "SELECT COUNT(*) AS count FROM execution_orders \
      WHERE status = 'executed' \
@@ -10889,6 +11059,169 @@ market_data:
                 (3, "placement_preparing".to_string()),
                 (4, "broker_working".to_string()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_confirmed_protective_stops_are_adopted_once_into_execution_orders() {
+        let state = runtime_settings_test_state(
+            "saxo:\n  environment: sim\nexecution:\n  mode: live\n  adapter: saxo\n",
+        )
+        .await;
+        sqlx::query(
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER,
+                environment TEXT,
+                symbol TEXT,
+                quantity REAL,
+                stop_price_local REAL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT,
+                request_id TEXT,
+                placement_result_json TEXT,
+                cancellation_result_json TEXT,
+                reconciliation_json TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create lifecycle test table");
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                order_type TEXT NOT NULL DEFAULT 'Market',
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                adapter TEXT NOT NULL,
+                quantity REAL,
+                stop_price_local REAL,
+                approval_required INTEGER NOT NULL DEFAULT 0,
+                approved_at TEXT,
+                strategy_type TEXT,
+                strategy_key TEXT,
+                strategy_role TEXT,
+                broker_order_id TEXT,
+                request_json TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution order table");
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        sqlx::query(&format!(
+            "INSERT INTO protective_stop_lifecycle_tests
+                (id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                 stop_price_local, status, broker_order_id, external_reference, request_id) VALUES
+                (1, '{now}', '{now}', 1, 'sim', 'V:xnys', 13, 340.84, 'broker_working', '5100', 'stop-test:1:1', 'r1'),
+                (2, '{now}', '{now}', 2, 'sim', 'AMD:xnas', 7, 448.78, 'placement_submitted', '5101', 'stop-test:2:1', 'r2'),
+                (3, '{now}', '{now}', 3, 'sim', 'BAC:xnys', 58, 59.67, 'broker_working', '', 'stop-test:3:1', 'r3'),
+                (4, '{now}', '{now}', 4, 'sim', 'AAPL:xnas', 4, 316.49, 'placement_failed', NULL, 'stop-test:4:1', 'r4')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("insert lifecycle rows");
+
+        let adopted = state
+            .adopt_protective_stops_into_execution_orders()
+            .await
+            .expect("adopt protective stops");
+        assert_eq!(
+            adopted.len(),
+            1,
+            "only a broker-confirmed stop carrying a broker order id may be adopted; \
+             a submitted-but-unconfirmed, an empty-id, and a failed row must all be skipped"
+        );
+
+        // Adoption runs every scheduler cycle. A second pass must not create a
+        // duplicate SELL, which at Saxo would be a second resting sell order.
+        let repeat = state
+            .adopt_protective_stops_into_execution_orders()
+            .await
+            .expect("re-run adoption");
+        assert!(repeat.is_empty(), "adoption must be idempotent");
+
+        let orders = state
+            .select_json(
+                "SELECT symbol, action, order_type, status, mode, adapter, quantity,
+                        stop_price_local, strategy_type, strategy_role, broker_order_id
+                 FROM execution_orders ORDER BY id",
+            )
+            .await
+            .expect("read execution orders");
+        assert_eq!(orders.len(), 1);
+        let order = &orders[0];
+        assert_eq!(text_value(order, "symbol"), "V:xnys");
+        assert_eq!(text_value(order, "action"), "SELL");
+        assert_eq!(text_value(order, "order_type"), "stop");
+        // The status has to be one broker sync polls for, or the adoption
+        // achieves nothing: an unwatched row is exactly the state this change
+        // exists to end.
+        assert_eq!(text_value(order, "status"), "broker_working");
+        assert_eq!(text_value(order, "mode"), "live");
+        assert_eq!(text_value(order, "adapter"), "saxo");
+        assert_eq!(text_value(order, "strategy_type"), "protective_stop");
+        assert_eq!(text_value(order, "strategy_role"), "protective_stop");
+        assert_eq!(text_value(order, "broker_order_id"), "5100");
+        assert_eq!(value_f64(order, "quantity"), 13.0);
+        assert_eq!(value_f64(order, "stop_price_local"), 340.84);
+    }
+
+    #[tokio::test]
+    async fn resting_protective_stops_are_not_reported_as_stale_orders() {
+        let state = runtime_settings_test_state("app: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                symbol TEXT,
+                action TEXT,
+                status TEXT NOT NULL,
+                quantity REAL,
+                currency TEXT,
+                limit_price_local REAL,
+                ledger_id INTEGER,
+                broker_order_id TEXT,
+                error_text TEXT,
+                strategy_type TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution order table");
+        let old = "2020-01-01T00:00:00Z";
+        sqlx::query(&format!(
+            "INSERT INTO execution_orders
+                (id, created_at, symbol, action, status, quantity, broker_order_id, strategy_type) VALUES
+                (1, '{old}', 'V:xnys', 'SELL', 'broker_working', 13, '5100', 'protective_stop'),
+                (2, '{old}', 'AMD:xnas', 'BUY', 'broker_working', 7, '5101', 'swing'),
+                (3, '{old}', 'BAC:xnys', 'SELL', 'broker_state_unknown', 58, NULL, 'protective_stop')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("insert orders");
+
+        let cutoff = "2021-01-01T00:00:00Z";
+        let rows = state
+            .select_json(&unreconciled_orders_sql(cutoff, cutoff))
+            .await
+            .expect("run the shared integrity query");
+        let ids = rows
+            .iter()
+            .map(|row| value_f64(row, "id") as i64)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![2, 3],
+            "a GoodTillCancel protective stop resting at the broker is doing its job, \
+             so age alone must not flag it; an ordinary stale order and a protective stop \
+             with an unresolved placement are both still real faults"
         );
     }
 
