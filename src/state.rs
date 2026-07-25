@@ -1485,6 +1485,19 @@ fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
 /// protection guarantee that the broker has not acknowledged.
 /// Default when `strategy.ladder.stop_loss_atr_multiple` is absent. Matches the
 /// value both shipped configs carry.
+/// One-variable overlay paths Hermes may propose. Cross-checked against the
+/// config contract by test, so a variable nothing reads cannot be offered.
+///
+/// `strategy.swing.cash_buffer_pct` was removed on 2026-07-25: the audit proved
+/// nothing reads it, so an experiment on it could be proposed, run in SIM,
+/// observed, and promoted while changing nothing at all.
+pub(crate) const SUPPORTED_EXPERIMENT_VARIABLES: &[&str] = &[
+    "execution.min_trade_value_dkk",
+    "strategy.capital.min_cash_buffer_pct",
+    "strategy.swing.daily_indicators.min_confluences",
+    "strategy.swing.markov_gate.min_signed_signal",
+];
+
 const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
 
 /// A protective stop level derived from stored daily indicators.
@@ -5579,13 +5592,12 @@ impl AppState {
             "supported_experiment_overlays": {
                 "scope": "paper_or_saxo_sim_only",
                 "statuses": ["approved_sim", "active_sim", "approved_paper", "active_paper"],
-                "variables": [
-                    "execution.min_trade_value_dkk",
-                    "strategy.capital.min_cash_buffer_pct",
-                    "strategy.swing.cash_buffer_pct",
-                    "strategy.swing.daily_indicators.min_confluences",
-                    "strategy.swing.markov_gate.min_signed_signal"
-                ]
+                // Every entry must be a key the runtime actually reads.
+                // `strategy.swing.cash_buffer_pct` was removed on 2026-07-25:
+                // the config-contract audit proved nothing reads it, so an
+                // experiment on it could be proposed, run in SIM, observed, and
+                // promoted while changing nothing at all.
+                "variables": SUPPORTED_EXPERIMENT_VARIABLES
             },
             "forbidden": [
                 "saxo_sessions",
@@ -10710,6 +10722,46 @@ market_data:
     /// Stale rows must be findable, and abandoning one must be safe only for the
     /// exact shape that was never sent — never for a row that carries a broker
     /// order id, since that interruption could have happened after placement.
+
+    /// A variable offered to Hermes as tunable must be one the runtime actually
+    /// reads. `strategy.swing.cash_buffer_pct` was on this list until
+    /// 2026-07-25 while nothing read it, so an experiment could have been
+    /// proposed, run in SIM, observed, and promoted while changing nothing --
+    /// and whatever the portfolio did would have been attributed to it.
+    #[test]
+    fn supported_experiment_variables_are_all_read_by_the_runtime() {
+        use crate::config_contract::{ContractStatus, status_for_path};
+        let mut dead = Vec::new();
+        for path in SUPPORTED_EXPERIMENT_VARIABLES {
+            // Paths outside the audited roots are not described by the contract
+            // and cannot be checked here.
+            if let Some(status) = status_for_path(path) {
+                if status == ContractStatus::Unused {
+                    dead.push((*path).to_string());
+                }
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "Hermes may propose experiments on variables nothing reads: {dead:?}"
+        );
+    }
+
+    #[test]
+    fn hermes_capabilities_publish_the_checked_variable_list() {
+        // The published payload must be the same list the test above checks,
+        // so the two cannot drift apart.
+        let expected = SUPPORTED_EXPERIMENT_VARIABLES
+            .iter()
+            .map(|path| json!(path))
+            .collect::<Vec<_>>();
+        assert_eq!(json!(SUPPORTED_EXPERIMENT_VARIABLES), json!(expected));
+        assert!(
+            !SUPPORTED_EXPERIMENT_VARIABLES.contains(&"strategy.swing.cash_buffer_pct"),
+            "the dead cash-buffer path must not return"
+        );
+    }
+
     #[tokio::test]
     async fn stale_protective_stop_preparations_are_findable_and_safely_abandoned() {
         let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;

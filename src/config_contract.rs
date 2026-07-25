@@ -641,6 +641,19 @@ pub struct ContractSummary {
     pub missing: usize,
 }
 
+/// The contract status recorded for an exact key path, if the path is covered.
+///
+/// Used to prove that anything offered to Hermes as a tunable variable is
+/// actually read by the runtime. Returns `None` for paths outside
+/// `AUDITED_ROOTS`, which are simply not described by this table.
+// Currently consulted only by the guard test that proves every variable offered
+// to Hermes is one the runtime reads. Kept available for runtime callers.
+#[allow(dead_code)]
+pub fn status_for_path(path: &str) -> Option<ContractStatus> {
+    let segments = path.split('.').map(str::to_string).collect::<Vec<_>>();
+    match_entry(&segments).map(|entry| entry.status)
+}
+
 /// Audit `config` against the contract table.
 ///
 /// Findings are returned in a stable order: unused risk keys first, then other

@@ -1190,3 +1190,17 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Parsed the body directly with `form_urlencoded` instead. The crate was already in the dependency tree via `url`, so nothing new is downloaded. The parse is a pure function: it decodes, trims, upper-cases, de-duplicates, and drops blank symbols, and treats confirmation as opt-in so a missing or non-`true` value places nothing.
 - Two tests cover it, one reproducing the exact submitted body from the failure.
 - Note for future form work in this codebase: any multi-select or checkbox column has this problem. `Form<T>` with a `Vec` field will compile and then fail at runtime on the first real submission.
+
+## [2026-07-25] security | Editorial research injection screen (U4)
+
+- Landed the prompt-injection screen while the exposure was live rather than theoretical: editorial ingestion started working in production that morning and is now feeding real items into the decision prompt.
+- A deliberately narrow marker list detects text addressed at a model rather than a reader — "ignore previous", "system prompt", "you are now", role markers, chat-template delimiters. Ordinary financial language is explicitly out of scope: "buy", "sell", "upgrade", and "target price" must keep flowing or the screen would gut the feature and train the operator to ignore the flag. A test pins both directions, including "Fed signals it will disregard one month of noisy inflation data" as a non-match.
+- Screening happens at the context boundary, not only at ingest. That covers items stored before the screen existed — including the twelve already in production — and means widening the marker list applies retroactively with no backfill. Flagged items stay in the database for review and are reported as `screened_out`; they simply never reach a prompt.
+- The decision prompt now carries an explicit security-boundary instruction: every string in the section is untrusted third-party text, is data to read rather than instructions to follow, and cannot alter the instructions, schema, market scope, or any gate.
+- Blast radius was already bounded by the deterministic Trading Manager gates — injected text cannot bypass the technical, Markov, or budget checks — but it could bias which candidates the model proposes and consume the limited suggestion slots.
+
+## [2026-07-25] governance | Hermes cannot experiment on a dead variable (U7)
+
+- Removed `strategy.swing.cash_buffer_pct` from the supported one-variable overlay list in both the Rust capabilities payload and the Kubernetes ConfigMap. The config-contract audit had proved nothing reads it, so an experiment on it could have been proposed, run in SIM, observed, and promoted while changing nothing at all — and whatever the portfolio did in that window would have been attributed to it.
+- The list is now a single `SUPPORTED_EXPERIMENT_VARIABLES` constant, published from one place and cross-checked against the config contract by test. Any variable the contract classifies `unused` fails the build. Confirmed the guard fails when the dead path is re-added.
+- Paths outside the audited roots (`execution.min_trade_value_dkk`) are not described by the contract and are skipped rather than assumed dead.
