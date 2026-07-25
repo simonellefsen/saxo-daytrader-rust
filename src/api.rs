@@ -732,7 +732,6 @@ fn parse_protective_stop_batch_form(body: &str) -> ProtectiveStopBatchForm {
 ///   followed by another placement, because the safe assumption is that an
 ///   order may already exist.
 async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: String) -> Response {
-    const PLACEMENT_SPACING_MS: u64 = 1_100;
     let request = parse_protective_stop_batch_form(&body);
     let return_to = safe_return_to(request.return_to.as_deref());
     if !request.confirmed {
@@ -803,6 +802,20 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
         eligible = total,
         "starting SIM protective-stop batch placement"
     );
+    // Placement runs detached. A dozen orders take longer than a proxy will
+    // hold a request open, and when the client disconnects axum drops the
+    // handler future -- mid-batch that can place an order at Saxo and lose the
+    // record of it. Observed 2026-07-25: a 12-symbol batch timed out and left an
+    // orphaned preparation. The operator watches the lifecycle table instead.
+    tokio::spawn(run_protective_stop_batch(state.clone(), targets));
+    redirect_to_app(&state, return_to).into_response()
+}
+
+/// Places one protective stop per target, sequentially, halting on the first
+/// problem. Runs outside the request so a client timeout cannot interrupt it.
+async fn run_protective_stop_batch(state: Arc<AppState>, targets: Vec<(String, f64, f64)>) {
+    const PLACEMENT_SPACING_MS: u64 = 1_100;
+    let total = targets.len();
     let mut placed = 0usize;
     for (index, (symbol, quantity, stop_price)) in targets.into_iter().enumerate() {
         if index > 0 {
@@ -901,6 +914,47 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
                 }
                 placed += 1;
                 info!(symbol, test_id, ?broker_order_id, "batch stop placed");
+                // `placement_submitted` is not coverage. The audit counts a
+                // stop only once Saxo reports it working, so confirm now rather
+                // than leaving the operator a table of unverified placements.
+                let prepared_for_reconcile = json!({
+                    "id": test_id,
+                    "broker_order_id": broker_order_id,
+                    "external_reference": prepared.get("external_reference").cloned().unwrap_or(JsonValue::Null),
+                    "created_at": prepared.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                });
+                match reconcile_sim_protective_stop_lifecycle_test(&state, &prepared_for_reconcile)
+                    .await
+                {
+                    Ok(reconciled) => {
+                        let status = reconciled
+                            .get("status")
+                            .and_then(JsonValue::as_str)
+                            .unwrap_or("reconciliation_pending");
+                        if let Err(err) = state
+                            .record_protective_stop_lifecycle_reconciliation(
+                                test_id,
+                                status,
+                                reconciled
+                                    .get("broker_order_id")
+                                    .and_then(JsonValue::as_str),
+                                &reconciled,
+                            )
+                            .await
+                        {
+                            warn!(test_id, "could not persist batch reconciliation: {err:#}");
+                        }
+                        info!(symbol, test_id, status, "batch stop reconciled");
+                    }
+                    Err(err) => {
+                        // The order is placed; only confirmation failed. Leave
+                        // it submitted for the operator rather than guessing.
+                        warn!(
+                            symbol,
+                            test_id, "batch stop placed but not reconciled: {err:#}"
+                        );
+                    }
+                }
             }
             Err(err) => {
                 let uncertain = protective_stop_lifecycle_error_is_state_unknown(&err);
@@ -938,7 +992,6 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
         eligible = total,
         "SIM protective-stop batch placement finished"
     );
-    redirect_to_app(&state, return_to).into_response()
 }
 
 async fn cancel_protective_stop_lifecycle_test(
