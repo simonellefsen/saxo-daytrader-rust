@@ -1483,11 +1483,69 @@ fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
 /// and only classifies broker-confirmed order states as active protection.
 /// Queued or uncertain orders remain planned so the dashboard cannot imply a
 /// protection guarantee that the broker has not acknowledged.
+/// Default when `strategy.ladder.stop_loss_atr_multiple` is absent. Matches the
+/// value both shipped configs carry.
+const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
+
+/// A protective stop level derived from stored daily indicators.
+///
+/// This is arithmetic on data the nightly indicator run already persisted: it
+/// makes no Saxo call and places nothing. The price is deliberately *not*
+/// tick-normalized here, because normalization needs Saxo instrument details;
+/// the precheck and placement paths normalize before any order is built.
+fn proposed_protective_stop(
+    indicator: Option<&JsonValue>,
+    quantity: f64,
+    atr_multiple: f64,
+) -> Option<JsonValue> {
+    let indicator = indicator?;
+    let close = value_f64(indicator, "close");
+    let atr14 = value_f64(indicator, "atr14");
+    if !close.is_finite() || close <= 0.0 || !atr14.is_finite() || atr14 <= 0.0 {
+        return None;
+    }
+    if !atr_multiple.is_finite() || atr_multiple <= 0.0 {
+        return None;
+    }
+    let distance = atr14 * atr_multiple;
+    let stop_price = close - distance;
+    // A stop at or below zero is not a protective level; report no proposal
+    // rather than a nonsensical one.
+    if !stop_price.is_finite() || stop_price <= 0.0 {
+        return None;
+    }
+    Some(json!({
+        "stop_price_local": stop_price,
+        "quantity": quantity,
+        "reference_close": close,
+        "atr14": atr14,
+        "atr_multiple": atr_multiple,
+        "distance_local": distance,
+        "distance_pct": (distance / close) * 100.0,
+        "indicator_run_date": json_text(indicator, "run_date"),
+        "tick_normalized": false,
+        "basis": "close_minus_atr14_times_multiple",
+        "safety": "computed_from_stored_indicators_no_saxo_call_and_places_nothing",
+    }))
+}
+
 fn protective_stop_coverage_from_rows(
     position_rows: &[JsonValue],
     execution_order_rows: &[JsonValue],
     lifecycle_test_rows: &[JsonValue],
+    indicator_rows: &[JsonValue],
+    atr_multiple: f64,
 ) -> JsonValue {
+    let mut indicators_by_symbol: HashMap<String, &JsonValue> = HashMap::new();
+    for row in indicator_rows {
+        let symbol = json_text(row, "symbol");
+        if !symbol.trim().is_empty() {
+            // Rows arrive newest-first, so the first entry per symbol wins.
+            indicators_by_symbol
+                .entry(symbol.trim().to_ascii_uppercase())
+                .or_insert(row);
+        }
+    }
     let mut stops_by_symbol: HashMap<String, Vec<&JsonValue>> = HashMap::new();
     for order in execution_order_rows {
         if !json_text(order, "action").eq_ignore_ascii_case("SELL") {
@@ -1629,6 +1687,18 @@ fn protective_stop_coverage_from_rows(
         };
         confirmed_covered_quantity += confirmed_quantity;
         let unprotected_quantity = (quantity - confirmed_quantity).max(0.0);
+        // Only the uncovered share needs a stop, so the proposal is sized to it.
+        let proposed_stop = (unprotected_quantity > 0.0)
+            .then(|| {
+                proposed_protective_stop(
+                    indicators_by_symbol
+                        .get(&symbol.trim().to_ascii_uppercase())
+                        .copied(),
+                    unprotected_quantity,
+                    atr_multiple,
+                )
+            })
+            .flatten();
         if protection_status != "protected" {
             let (kind, reason) = match protection_status {
                 "partial_protection" => (
@@ -1652,6 +1722,7 @@ fn protective_stop_coverage_from_rows(
                 "confirmed_covered_quantity": confirmed_quantity,
                 "unprotected_quantity": unprotected_quantity,
                 "reason": reason,
+                "proposed_stop": proposed_stop.clone(),
                 "operator_action": "Review the persisted broker position and stop evidence. The SIM lifecycle test is manual and does not place, change, or cancel any order without its separate confirmation.",
             }));
         }
@@ -1673,6 +1744,7 @@ fn protective_stop_coverage_from_rows(
             "planned_stop_count": planned_orders.len(),
             "active_stop_price_local": active_stop_price,
             "planned_stop_price_local": planned_stop_price,
+            "proposed_stop": proposed_stop,
         }));
     }
 
@@ -4292,8 +4364,33 @@ impl AppState {
                  LIMIT 100",
             )
             .await?;
-        let mut coverage =
-            protective_stop_coverage_from_rows(&positions, &orders, &active_lifecycle_tests);
+        // Latest stored close and ATR14 per symbol, so an unprotected position
+        // can be shown with the concrete stop level it should carry. Bounded and
+        // newest-first; `proposed_protective_stop` takes the first row per
+        // symbol. No Saxo call is made and nothing is placed.
+        let indicators = self
+            .select_json(
+                "SELECT symbol, run_date, close, atr14
+                 FROM daily_indicator_signals
+                 WHERE close IS NOT NULL AND atr14 IS NOT NULL
+                 ORDER BY run_date DESC, id DESC
+                 LIMIT 600",
+            )
+            .await
+            .unwrap_or_default();
+        let atr_multiple = yaml_f64(
+            &self.config,
+            &["strategy", "ladder", "stop_loss_atr_multiple"],
+        )
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(DEFAULT_STOP_LOSS_ATR_MULTIPLE);
+        let mut coverage = protective_stop_coverage_from_rows(
+            &positions,
+            &orders,
+            &active_lifecycle_tests,
+            &indicators,
+            atr_multiple,
+        );
         if let Some(object) = coverage.as_object_mut() {
             object.insert("recent_prechecks".to_string(), JsonValue::Array(prechecks));
             object.insert(
@@ -12028,6 +12125,74 @@ analysis_windows:
         );
     }
 
+    /// Makes `strategy.ladder.stop_loss_atr_multiple` real. The proposal covers
+    /// only the uncovered share of a position, is absent when the position is
+    /// fully protected or the indicator data is unusable, and never claims to be
+    /// tick-normalized -- normalization needs Saxo instrument details and
+    /// happens in the precheck/placement path.
+    #[test]
+    fn proposed_protective_stop_sizes_to_uncovered_quantity_and_fails_closed() {
+        let positions = vec![
+            json!({"symbol": "OPEN:xnas", "quantity": 10.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "HALF:xnas", "quantity": 10.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "SAFE:xnas", "quantity": 4.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "NOATR:xnas", "quantity": 4.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "DEEP:xnas", "quantity": 4.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+        ];
+        let orders = vec![
+            json!({"symbol": "HALF:xnas", "action": "SELL", "order_type": "Stop", "status": "broker_working", "quantity": 6.0, "stop_price_local": 90.0}),
+            json!({"symbol": "SAFE:xnas", "action": "SELL", "order_type": "Stop", "status": "broker_working", "quantity": 4.0, "stop_price_local": 90.0}),
+        ];
+        let indicators = vec![
+            json!({"symbol": "OPEN:xnas", "run_date": "2026-07-24", "close": 100.0, "atr14": 4.0}),
+            json!({"symbol": "HALF:xnas", "run_date": "2026-07-24", "close": 100.0, "atr14": 4.0}),
+            json!({"symbol": "SAFE:xnas", "run_date": "2026-07-24", "close": 100.0, "atr14": 4.0}),
+            // Unusable ATR must produce no proposal rather than a bad level.
+            json!({"symbol": "NOATR:xnas", "run_date": "2026-07-24", "close": 100.0, "atr14": 0.0}),
+            // A stop below zero is not a protective level.
+            json!({"symbol": "DEEP:xnas", "run_date": "2026-07-24", "close": 5.0, "atr14": 4.0}),
+        ];
+
+        let coverage =
+            protective_stop_coverage_from_rows(&positions, &orders, &[], &indicators, 2.0);
+        let rows = coverage["positions"].as_array().expect("coverage rows");
+        let find = |symbol: &str| {
+            rows.iter()
+                .find(|row| row["symbol"] == json!(symbol))
+                .expect("symbol row")
+        };
+
+        // 100 - (4 * 2) = 92, on the full unprotected quantity.
+        let open = &find("OPEN:xnas")["proposed_stop"];
+        assert_eq!(open["stop_price_local"], json!(92.0));
+        assert_eq!(open["quantity"], json!(10.0));
+        assert_eq!(open["distance_pct"], json!(8.0));
+        assert_eq!(open["tick_normalized"], json!(false));
+
+        // Only the 4 uncovered of 10 need a stop.
+        assert_eq!(find("HALF:xnas")["proposed_stop"]["quantity"], json!(4.0));
+
+        for symbol in ["SAFE:xnas", "NOATR:xnas", "DEEP:xnas"] {
+            assert_eq!(
+                find(symbol)["proposed_stop"],
+                JsonValue::Null,
+                "{symbol} must not carry a proposed stop"
+            );
+        }
+
+        // The exception rows carry the same proposal so the operator sees the
+        // level next to the reason.
+        let exceptions = coverage["exceptions"].as_array().expect("exceptions");
+        let open_exception = exceptions
+            .iter()
+            .find(|row| row["symbol"] == json!("OPEN:xnas"))
+            .expect("unprotected exception");
+        assert_eq!(
+            open_exception["proposed_stop"]["stop_price_local"],
+            json!(92.0)
+        );
+    }
+
     #[test]
     fn protective_stop_coverage_requires_broker_confirmed_stop_state() {
         let positions = vec![
@@ -12043,7 +12208,7 @@ analysis_windows:
             json!({"symbol": "FAIL:xnas", "action": "SELL", "order_type": "Stop", "status": "execution_failed", "quantity": 2.0, "stop_price_local": 80.0}),
         ];
 
-        let coverage = protective_stop_coverage_from_rows(&positions, &orders, &[]);
+        let coverage = protective_stop_coverage_from_rows(&positions, &orders, &[], &[], 2.0);
         let rows = coverage["positions"].as_array().expect("coverage rows");
         let find = |symbol: &str| {
             rows.iter()
@@ -12100,7 +12265,8 @@ analysis_windows:
             }),
         ];
 
-        let coverage = protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests);
+        let coverage =
+            protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests, &[], 2.0);
         let row = &coverage["positions"][0];
         assert_eq!(coverage["status"], "covered");
         assert_eq!(coverage["summary"]["protected_count"], 1);
@@ -12127,7 +12293,8 @@ analysis_windows:
             "broker_order_id": "12345",
         })];
 
-        let coverage = protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests);
+        let coverage =
+            protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests, &[], 2.0);
         assert_eq!(coverage["status"], "attention_required");
         assert_eq!(coverage["summary"]["unprotected_count"], 1);
         assert_eq!(coverage["summary"]["exception_count"], 1);

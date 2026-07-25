@@ -3615,7 +3615,7 @@ fn ProtectiveStopCoveragePanel(
                     p { class: "muted", "Read-only operator alerts for persisted broker positions without full broker-confirmed coverage. Reviewing an exception does not schedule or place a stop order." }
                     div { class: "table-wrap candidate-scoring-table",
                         table {
-                            thead { tr { th { "Symbol" } th { "Unprotected Qty" } th { "Reason" } th { "Operator action" } } }
+                            thead { tr { th { "Symbol" } th { "Unprotected Qty" } th { "Proposed Stop" } th { "Reason" } th { "Operator action" } } }
                             tbody {
                                 for row in exceptions.iter() {
                                     ProtectiveStopExceptionRow { row: row.clone(), prefs: prefs.clone() }
@@ -3866,10 +3866,35 @@ fn ProtectiveStopExceptionRow(row: JsonValue, prefs: LocalizationPrefs) -> Eleme
         "operator_action",
         "Review the persisted broker position and stop evidence.",
     );
+    // Computed from stored indicator close and ATR14. It is a suggestion for
+    // the manual SIM workflow, not a queued or scheduled order.
+    let proposed = row.get("proposed_stop").cloned().unwrap_or(JsonValue::Null);
+    let proposed_stop = if proposed.is_null() {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} ({}% below {})",
+            format_number(value_f64(&proposed, "stop_price_local"), 2, &prefs),
+            format_number(value_f64(&proposed, "distance_pct"), 1, &prefs),
+            format_number(value_f64(&proposed, "reference_close"), 2, &prefs)
+        )
+    };
+    let proposed_title = if proposed.is_null() {
+        "No proposal: the latest daily indicator run has no usable close and ATR14 for this symbol."
+            .to_string()
+    } else {
+        format!(
+            "close {} minus ATR14 {} x {}. Not tick-normalized; the precheck and placement paths round to Saxo's tick scheme. Computed from stored indicators — no Saxo call, and nothing is placed.",
+            format_number(value_f64(&proposed, "reference_close"), 2, &prefs),
+            format_number(value_f64(&proposed, "atr14"), 2, &prefs),
+            format_number(value_f64(&proposed, "atr_multiple"), 2, &prefs)
+        )
+    };
     rsx! {
         tr {
             td { strong { class: "mono", "{symbol}" } }
             td { "{quantity}" }
+            td { class: "mono", title: "{proposed_title}", "{proposed_stop}" }
             td { span { class: "status warn", "{reason}" } }
             td { class: "muted", "{operator_action}" }
         }

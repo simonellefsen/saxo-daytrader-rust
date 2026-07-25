@@ -523,9 +523,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "atr_spacing_max"],
         "Ladder entries are not implemented.",
     ),
-    unused_risk(
+    advisory(
         &["strategy", "ladder", "stop_loss_atr_multiple"],
-        "No stop distance is computed; nothing reads this multiple.",
+        "Sets the protective-stop distance in the read-only coverage audit's proposed stop level. Becomes enforced when automatic stop placement lands.",
     ),
     unused(
         &["strategy", "ladder", "take_profit_rung_multiple"],
