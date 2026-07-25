@@ -195,6 +195,16 @@ pub struct ProtectiveStopLifecyclePlacementRequest {
     pub return_to: Option<String>,
 }
 
+/// Bulk protective-stop placement. `symbols` arrives as repeated form fields,
+/// one per checked row.
+#[derive(Debug, Deserialize)]
+pub struct ProtectiveStopBatchPlacementRequest {
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    pub confirm_sim_batch_placement: Option<String>,
+    pub return_to: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ProtectiveStopLifecycleCancellationRequest {
     pub lifecycle_test_id: i64,

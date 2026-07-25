@@ -3612,15 +3612,46 @@ fn ProtectiveStopCoveragePanel(
             if !exceptions.is_empty() {
                 div { class: "event protective-stop-exceptions",
                     strong { "Protection Exceptions" }
-                    p { class: "muted", "Read-only operator alerts for persisted broker positions without full broker-confirmed coverage. Reviewing an exception does not schedule or place a stop order." }
-                    div { class: "table-wrap candidate-scoring-table",
-                        table {
-                            thead { tr { th { "Symbol" } th { "Unprotected Qty" } th { "Proposed Stop" } th { "Reason" } th { "Operator action" } } }
-                            tbody {
-                                for row in exceptions.iter() {
-                                    ProtectiveStopExceptionRow { row: row.clone(), prefs: prefs.clone() }
+                    p { class: "muted", "Persisted broker positions without full broker-confirmed coverage. Checking rows and confirming places real SIM GTC SELL Stop orders at the computed levels." }
+                    form {
+                        action: "/api/protective-stops/lifecycle/place-batch",
+                        method: "post",
+                        id: "protective-stop-batch-form",
+                        input { r#type: "hidden", name: "return_to", value: "/?view=execution" }
+                        div { class: "table-wrap candidate-scoring-table",
+                            table {
+                                thead { tr { th { "Place" } th { "Symbol" } th { "Unprotected Qty" } th { "Proposed Stop" } th { "Reason" } th { "Operator action" } } }
+                                tbody {
+                                    for row in exceptions.iter() {
+                                        ProtectiveStopExceptionRow { row: row.clone(), prefs: prefs.clone(), sim_enabled: sim_enabled }
+                                    }
                                 }
                             }
+                        }
+                        if sim_enabled {
+                            div { class: "form-row",
+                                label {
+                                    input { r#type: "checkbox", name: "confirm_sim_batch_placement", value: "true", required: true }
+                                    " I confirm these place real SIM broker orders at the computed stop levels."
+                                }
+                            }
+                            p { class: "muted",
+                                "Orders are placed one at a time, spaced for Saxo's 1 order/second limit. "
+                                "The batch stops at the first rejection, error, or ambiguous broker response, so a "
+                                "problem costs one order rather than every checked row."
+                            }
+                            button {
+                                r#type: "submit",
+                                id: "protective-stop-batch-submit",
+                                "Place stops for checked positions"
+                            }
+                            // A dropped duplicate request used to leave an orphaned
+                            // preparing record that blocked every later attempt.
+                            script {
+                                dangerous_inner_html: "(function(){{var f=document.getElementById('protective-stop-batch-form');if(!f)return;f.addEventListener('submit',function(){{var b=document.getElementById('protective-stop-batch-submit');if(b){{b.disabled=true;b.textContent='Placing...';}}}});}})();"
+                            }
+                        } else {
+                            p { class: "muted", "Batch placement is available only when the Saxo environment is SIM." }
                         }
                     }
                 }
@@ -3857,7 +3888,11 @@ fn ProtectiveStopCoverageRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
 }
 
 #[component]
-fn ProtectiveStopExceptionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn ProtectiveStopExceptionRow(
+    row: JsonValue,
+    prefs: LocalizationPrefs,
+    sim_enabled: bool,
+) -> Element {
     let symbol = text_or(&row, "symbol", "n/a");
     let quantity = format_quantity(value_f64(&row, "unprotected_quantity"), &prefs);
     let reason = text_or(&row, "reason", "Coverage needs review.");
@@ -3890,8 +3925,18 @@ fn ProtectiveStopExceptionRow(row: JsonValue, prefs: LocalizationPrefs) -> Eleme
             format_number(value_f64(&proposed, "atr_multiple"), 2, &prefs)
         )
     };
+    // Only a row with a computed level can be placed; without one there is
+    // nothing to send, so the checkbox is omitted rather than shown inert.
+    let placeable = sim_enabled && !proposed.is_null();
     rsx! {
         tr {
+            td {
+                if placeable {
+                    input { r#type: "checkbox", name: "symbols", value: "{symbol}" }
+                } else {
+                    span { class: "muted", "—" }
+                }
+            }
             td { strong { class: "mono", "{symbol}" } }
             td { "{quantity}" }
             td { class: "mono", title: "{proposed_title}", "{proposed_stop}" }

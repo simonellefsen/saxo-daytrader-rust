@@ -4317,7 +4317,7 @@ impl AppState {
         self.execution_orders_page(limit, 0).await
     }
 
-    async fn protective_stop_coverage(&self) -> Result<JsonValue> {
+    pub(crate) async fn protective_stop_coverage(&self) -> Result<JsonValue> {
         let positions = self
             .select_json(
                 "SELECT symbol, updated_at, quantity, currency
@@ -4408,7 +4408,7 @@ impl AppState {
         stop_price_local: f64,
         status: &str,
         result: &JsonValue,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let environment = yaml_string(&self.config, &["saxo", "environment"])
             .unwrap_or_else(|| "sim".to_string())
             .to_ascii_lowercase();
@@ -4427,6 +4427,76 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("recording sanitized protective-stop precheck")?;
+        // AnyPool does not expose last-insert-id portably, so read the row back
+        // by its exact identity instead of trusting a driver-specific handle.
+        let id = self
+            .first_json(&format!(
+                "SELECT id FROM protective_stop_prechecks
+                 WHERE symbol = '{}' AND status = '{}'
+                 ORDER BY id DESC LIMIT 1",
+                sql_escape(symbol.trim()),
+                sql_escape(status)
+            ))
+            .await?
+            .map(|row| value_i64(&row, "id"))
+            .unwrap_or_default();
+        Ok(id)
+    }
+
+    /// Lifecycle tests left in `placement_preparing` with no broker order id.
+    ///
+    /// Axum drops a handler future when the client disconnects, so a
+    /// double-clicked placement can commit the prepared row and never reach the
+    /// broker call. The orphan then counts as active forever and blocks every
+    /// retry for that precheck. Observed 2026-07-25 on lifecycle test 1.
+    ///
+    /// These are *not* safe to expire on a timer: the future could equally have
+    /// been dropped after a successful placement. The caller must reconcile each
+    /// one against Saxo and only abandon those the broker does not know about.
+    pub async fn stale_protective_stop_preparations(
+        &self,
+        older_than_seconds: i64,
+    ) -> Result<Vec<JsonValue>> {
+        let cutoff = (Utc::now() - Duration::seconds(older_than_seconds.max(0)))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        self.select_json(&format!(
+            "SELECT id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                    stop_price_local, status, broker_order_id, external_reference, request_id
+             FROM protective_stop_lifecycle_tests
+             WHERE status = 'placement_preparing'
+               AND (broker_order_id IS NULL OR broker_order_id = '')
+               AND updated_at < '{}'
+             ORDER BY id ASC
+             LIMIT 20",
+            sql_escape(&cutoff)
+        ))
+        .await
+    }
+
+    /// Marks a prepared lifecycle test abandoned after a reconcile confirmed the
+    /// broker never saw it. `placement_abandoned` is deliberately absent from
+    /// the active-status list, so the precheck becomes reusable.
+    pub async fn abandon_protective_stop_preparation(&self, test_id: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE protective_stop_lifecycle_tests
+             SET updated_at = $1, status = 'placement_abandoned', placement_result_json = $2
+             WHERE id = $3 AND status = 'placement_preparing'
+               AND (broker_order_id IS NULL OR broker_order_id = '')",
+        )
+        .bind(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .bind(
+            json!({
+                "placement": "not_sent",
+                "abandoned_reason": "prepared_request_did_not_reach_the_broker",
+                "verified_by": "saxo_open_order_and_audit_activity_lookup_found_nothing",
+                "safety": "verified_absent_at_broker_before_abandoning_never_expired_on_a_timer"
+            })
+            .to_string(),
+        )
+        .bind(test_id)
+        .execute(&self.pool)
+        .await
+        .context("abandoning unreached protective-stop preparation")?;
         Ok(())
     }
 
@@ -10632,6 +10702,99 @@ market_data:
     /// The backfill must reach Trading Manager orders and nothing else.
     /// `report_id IS NOT NULL` is the discriminator: adoption, reconciliation,
     /// and manual rows do not originate in a decision report.
+    /// A double-clicked placement left lifecycle test 1 in `placement_preparing`
+    /// with no broker order id on 2026-07-25: axum dropped the first handler
+    /// future when the browser cancelled it, after the prepared row had already
+    /// committed. The orphan then blocked its precheck permanently.
+    ///
+    /// Stale rows must be findable, and abandoning one must be safe only for the
+    /// exact shape that was never sent — never for a row that carries a broker
+    /// order id, since that interruption could have happened after placement.
+    #[tokio::test]
+    async fn stale_protective_stop_preparations_are_findable_and_safely_abandoned() {
+        let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;
+        sqlx::query(
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER,
+                environment TEXT,
+                symbol TEXT,
+                quantity REAL,
+                stop_price_local REAL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT,
+                request_id TEXT,
+                placement_result_json TEXT,
+                cancellation_result_json TEXT,
+                reconciliation_json TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create lifecycle test table");
+        let old = "2020-01-01T00:00:00Z";
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        sqlx::query(&format!(
+            "INSERT INTO protective_stop_lifecycle_tests
+                (id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                 stop_price_local, status, broker_order_id, external_reference, request_id) VALUES
+                (1, '{old}', '{old}', 1, 'sim', 'V:xnys', 13, 340.84, 'placement_preparing', NULL, 'stop-test:1:1', 'r1'),
+                (2, '{old}', '{old}', 2, 'sim', 'AMD:xnas', 7, 448.78, 'placement_preparing', '5099', 'stop-test:2:1', 'r2'),
+                (3, '{now}', '{now}', 3, 'sim', 'BAC:xnys', 58, 59.67, 'placement_preparing', NULL, 'stop-test:3:1', 'r3'),
+                (4, '{old}', '{old}', 4, 'sim', 'V:xnys', 13, 340.84, 'broker_working', '5100', 'stop-test:4:1', 'r4')"
+        ))
+        .execute(&state.pool)
+        .await
+        .expect("insert lifecycle rows");
+
+        let stale = state
+            .stale_protective_stop_preparations(90)
+            .await
+            .expect("read stale preparations");
+        let ids = stale
+            .iter()
+            .map(|row| value_f64(row, "id") as i64)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![1],
+            "only an old preparing row with no broker order id is stale; \
+             row 2 has a broker order id, row 3 is recent, row 4 is already working"
+        );
+
+        state
+            .abandon_protective_stop_preparation(1)
+            .await
+            .expect("abandon row 1");
+        // Abandoning a row that carries a broker order id must be a no-op even
+        // if it is somehow attempted.
+        state
+            .abandon_protective_stop_preparation(2)
+            .await
+            .expect("attempt row 2");
+
+        let rows = state
+            .select_json("SELECT id, status FROM protective_stop_lifecycle_tests ORDER BY id")
+            .await
+            .expect("read back");
+        let statuses = rows
+            .iter()
+            .map(|row| (value_f64(row, "id") as i64, text_value(row, "status")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                (1, "placement_abandoned".to_string()),
+                (2, "placement_preparing".to_string()),
+                (3, "placement_preparing".to_string()),
+                (4, "broker_working".to_string()),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn strategy_type_backfill_targets_only_report_derived_orders() {
         let state = runtime_settings_test_state("app: {}\n").await;

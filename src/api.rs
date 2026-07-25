@@ -22,9 +22,10 @@ use crate::{
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
+        PerformanceParams, ProtectiveStopBatchPlacementRequest,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, SaxoCallbackParams,
+        ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -155,6 +156,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/protective-stops/lifecycle/place",
             post(place_protective_stop_lifecycle_test),
+        )
+        .route(
+            "/api/protective-stops/lifecycle/place-batch",
+            post(place_protective_stop_batch),
         )
         .route(
             "/api/protective-stops/lifecycle/cancel",
@@ -432,6 +437,80 @@ async fn update_overview_integrity_acknowledgement(
     }
 }
 
+/// A prepared lifecycle test only counts as blocking once the broker has been
+/// asked about it. Axum drops a handler future when the client disconnects, so a
+/// double-clicked placement can commit the prepared row and never reach Saxo;
+/// that orphan otherwise blocks its precheck permanently.
+///
+/// Each stale row is reconciled first. Only rows Saxo does not know about are
+/// abandoned — a row is never expired on a timer alone, because the same
+/// interruption could have happened *after* a successful placement.
+async fn resolve_stale_protective_stop_preparations(state: &AppState) {
+    const STALE_AFTER_SECONDS: i64 = 90;
+    let stale = match state
+        .stale_protective_stop_preparations(STALE_AFTER_SECONDS)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            warn!("could not read stale protective-stop preparations: {err:#}");
+            return;
+        }
+    };
+    for test in stale {
+        let test_id = test
+            .get("id")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default();
+        match reconcile_sim_protective_stop_lifecycle_test(state, &test).await {
+            Ok(result) => {
+                let status = result
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("reconciliation_pending");
+                let visibility = result
+                    .get("broker_visibility")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default();
+                if status == "reconciliation_pending" && visibility == "not_found" {
+                    if let Err(err) = state.abandon_protective_stop_preparation(test_id).await {
+                        warn!(test_id, "could not abandon unreached preparation: {err:#}");
+                    } else {
+                        info!(
+                            test_id,
+                            "abandoned protective-stop preparation the broker never received"
+                        );
+                    }
+                } else {
+                    // The broker does know about it. Persist what it said and
+                    // leave the row active for the operator.
+                    if let Err(err) = state
+                        .record_protective_stop_lifecycle_reconciliation(
+                            test_id,
+                            status,
+                            result.get("broker_order_id").and_then(JsonValue::as_str),
+                            &result,
+                        )
+                        .await
+                    {
+                        warn!(test_id, "could not persist stale reconciliation: {err:#}");
+                    }
+                    warn!(
+                        test_id,
+                        status, "stale protective-stop preparation exists at the broker"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    test_id,
+                    "could not reconcile stale protective-stop preparation: {err:#}"
+                );
+            }
+        }
+    }
+}
+
 async fn precheck_protective_stop(
     State(state): State<Arc<AppState>>,
     Form(request): Form<ProtectiveStopPrecheckRequest>,
@@ -514,6 +593,9 @@ async fn place_protective_stop_lifecycle_test(
         );
         return redirect_to_app(&state, return_to).into_response();
     }
+    // Clear orphans a cancelled duplicate submit may have left behind, so a
+    // retry is not blocked by a record the broker never received.
+    resolve_stale_protective_stop_preparations(&state).await;
     let prepared = match state
         .prepare_protective_stop_lifecycle_test(request.source_precheck_id)
         .await
@@ -590,6 +672,236 @@ async fn place_protective_stop_lifecycle_test(
             }
         }
     }
+    redirect_to_app(&state, return_to).into_response()
+}
+
+/// Places protective stops for several positions in one operator action.
+///
+/// Deliberately conservative, because a bulk path turns one mistake into many:
+///
+/// - SIM only, and every symbol must appear as an unprotected position in the
+///   read-only coverage audit with a computed stop level. Operator-supplied
+///   prices are never accepted here.
+/// - Strictly sequential, with Saxo's documented 1 order/second placement limit
+///   respected between orders.
+/// - Fail-fast. The first rejection, error, or ambiguous broker response stops
+///   the whole batch. An ambiguous response is never retried, and never
+///   followed by another placement, because the safe assumption is that an
+///   order may already exist.
+async fn place_protective_stop_batch(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<ProtectiveStopBatchPlacementRequest>,
+) -> Response {
+    const PLACEMENT_SPACING_MS: u64 = 1_100;
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.confirm_sim_batch_placement.as_deref() != Some("true") {
+        warn!("SIM protective-stop batch confirmation missing; nothing was sent");
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    let environment = yaml_string(&state.config, &["saxo", "environment"])
+        .unwrap_or_else(|| "sim".to_string())
+        .to_ascii_lowercase();
+    if environment != "sim" {
+        warn!(
+            environment,
+            "refusing protective-stop batch placement outside SIM"
+        );
+        return redirect_to_app(&state, return_to).into_response();
+    }
+
+    resolve_stale_protective_stop_preparations(&state).await;
+
+    // The audit is the only source of symbols, quantities, and stop levels.
+    let coverage = match state.protective_stop_coverage().await {
+        Ok(coverage) => coverage,
+        Err(err) => {
+            warn!("could not load protective-stop coverage for batch: {err:#}");
+            return redirect_to_app(&state, return_to).into_response();
+        }
+    };
+    let requested = request
+        .symbols
+        .iter()
+        .map(|symbol| symbol.trim().to_ascii_uppercase())
+        .filter(|symbol| !symbol.is_empty())
+        .collect::<Vec<_>>();
+    let mut targets = Vec::new();
+    for exception in coverage
+        .get("exceptions")
+        .and_then(JsonValue::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let symbol = exception
+            .get("symbol")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !requested.contains(&symbol.trim().to_ascii_uppercase()) {
+            continue;
+        }
+        let Some(proposed) = exception
+            .get("proposed_stop")
+            .filter(|value| !value.is_null())
+        else {
+            warn!(symbol, "skipping batch stop: no computed stop level");
+            continue;
+        };
+        let quantity = proposed
+            .get("quantity")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or_default();
+        let stop_price = proposed
+            .get("stop_price_local")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or_default();
+        if quantity > 0.0 && stop_price > 0.0 {
+            targets.push((symbol, quantity, stop_price));
+        }
+    }
+    targets.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let total = targets.len();
+    info!(
+        requested = requested.len(),
+        eligible = total,
+        "starting SIM protective-stop batch placement"
+    );
+    let mut placed = 0usize;
+    for (index, (symbol, quantity, stop_price)) in targets.into_iter().enumerate() {
+        if index > 0 {
+            // Saxo permits one order per second per session.
+            tokio::time::sleep(std::time::Duration::from_millis(PLACEMENT_SPACING_MS)).await;
+        }
+        let precheck =
+            match precheck_sim_protective_stop(&state, &symbol, quantity, stop_price).await {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!(symbol, "batch stop precheck failed; halting batch: {err:#}");
+                    let _ = state
+                    .record_protective_stop_precheck(
+                        &symbol,
+                        quantity,
+                        stop_price,
+                        "precheck_failed",
+                        &json!({
+                            "accepted": false,
+                            "error": classify_execution_error("execution_failed", &err.to_string()),
+                            "batch_halted": true
+                        }),
+                    )
+                    .await;
+                    break;
+                }
+            };
+        let accepted = precheck
+            .get("accepted")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let precheck_id = match state
+            .record_protective_stop_precheck(
+                &symbol,
+                quantity,
+                stop_price,
+                if accepted {
+                    "precheck_ok"
+                } else {
+                    "precheck_rejected"
+                },
+                &precheck,
+            )
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => {
+                warn!(symbol, "could not record batch precheck; halting: {err:#}");
+                break;
+            }
+        };
+        if !accepted {
+            warn!(symbol, "batch stop precheck rejected; halting batch");
+            break;
+        }
+
+        let prepared = match state
+            .prepare_protective_stop_lifecycle_test(precheck_id)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                warn!(symbol, "could not prepare batch stop; halting: {err:#}");
+                break;
+            }
+        };
+        let test_id = prepared
+            .get("id")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default();
+        match place_sim_protective_stop_lifecycle_test(&state, &prepared).await {
+            Ok(result) => {
+                let broker_order_id = result.get("broker_order_id").and_then(JsonValue::as_str);
+                let status = if broker_order_id.is_some() {
+                    "placement_submitted"
+                } else {
+                    "broker_state_unknown"
+                };
+                if let Err(err) = state
+                    .record_protective_stop_lifecycle_placement(
+                        test_id,
+                        status,
+                        broker_order_id,
+                        &result,
+                    )
+                    .await
+                {
+                    warn!(test_id, "could not persist batch placement: {err:#}");
+                }
+                if broker_order_id.is_none() {
+                    warn!(
+                        symbol,
+                        test_id, "batch stop returned no broker order id; halting batch"
+                    );
+                    break;
+                }
+                placed += 1;
+                info!(symbol, test_id, ?broker_order_id, "batch stop placed");
+            }
+            Err(err) => {
+                let uncertain = protective_stop_lifecycle_error_is_state_unknown(&err);
+                let status = if uncertain {
+                    "broker_state_unknown"
+                } else {
+                    "placement_failed"
+                };
+                let result = json!({
+                    "accepted": false,
+                    "error": classify_execution_error("execution_failed", &err.to_string()),
+                    "batch_halted": true,
+                    "safety": if uncertain {
+                        "broker_state_unknown_no_automatic_retry_and_no_further_placements"
+                    } else {
+                        "SIM batch placement rejected_before_broker_confirmation"
+                    }
+                });
+                if let Err(record_err) = state
+                    .record_protective_stop_lifecycle_placement(test_id, status, None, &result)
+                    .await
+                {
+                    warn!(test_id, "could not persist batch failure: {record_err:#}");
+                }
+                warn!(
+                    symbol,
+                    test_id, status, "batch stop placement failed; halting batch: {err:#}"
+                );
+                break;
+            }
+        }
+    }
+    info!(
+        placed,
+        eligible = total,
+        "SIM protective-stop batch placement finished"
+    );
     redirect_to_app(&state, return_to).into_response()
 }
 
