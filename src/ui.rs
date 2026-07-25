@@ -1874,6 +1874,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }
                 GateReplayPanel { replay: gate_replay, prefs: prefs.clone() }
+                SupportRiskEvidencePanel { evidence: data.decision_gate_replay.get("support_risk_evidence").cloned().unwrap_or(JsonValue::Null), prefs: prefs.clone() }
                 div { class: "decision-report-grid",
                     div { class: "stack loose",
                         div { class: "event",
@@ -1943,6 +1944,89 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn SupportRiskEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&evidence, "status").replace('_', " ");
+    let labels = json_array(&evidence, "labels");
+    let eligible = value_i64(&evidence, "eligible_signal_count");
+    let next_complete = value_i64(&evidence, "next_run_complete_count");
+    let five_complete = value_i64(&evidence, "five_run_complete_count");
+    let minimum = value_i64(&evidence, "minimum_complete_observations");
+    let interpretation = fallback_text(
+        &evidence,
+        "interpretation",
+        "Stored support-risk evidence is observational only.",
+    );
+    rsx! {
+        div { class: "event candidate-scoring-panel",
+            strong { "Support Risk Evidence" }
+            p { class: "muted", "Read-only outcome collection for stored daily support-risk labels. It does not create a support gate or change Hermes, configuration, or Saxo orders." }
+            if text(&evidence, "status") == "unavailable" {
+                span { class: "muted", "Support-risk evidence is unavailable right now." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status", "{eligible} labelled signals" }
+                    span { class: "status", "{next_complete} next-run outcomes" }
+                    span { class: "status", "{five_complete} five-run outcomes" }
+                    span { class: if text(&evidence, "status") == "preliminary" { "status good" } else { "status warn" }, "{status}" }
+                }
+                if text(&evidence, "status") != "preliminary" {
+                    span { class: "muted block", "Collecting until at least {minimum} complete five-run observations are available; no strategy effect is permitted before separate held-out review." }
+                }
+                if !labels.is_empty() {
+                    div { class: "table-wrap candidate-scoring-table",
+                        table {
+                            thead { tr { th { "Break Risk" } th { "Signals" } th { "Next Run" } th { "5 Runs" } th { "Confidence" } } }
+                            tbody {
+                                for label in labels.iter() {
+                                    SupportRiskEvidenceRow { row: label.clone(), prefs: prefs.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
+                span { class: "muted block", "{interpretation}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn SupportRiskEvidenceRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let next_run = row.get("next_run").unwrap_or(&JsonValue::Null);
+    let five_run = row.get("five_run").unwrap_or(&JsonValue::Null);
+    let outcome_label = |outcome: &JsonValue| {
+        let sample_count = value_i64(outcome, "sample_count");
+        let average = outcome
+            .get("average_return_pct")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_optional_percentage_points(Some(value), &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        let negative_rate = outcome
+            .get("negative_return_rate")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_pct(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        format!("{average} avg · {negative_rate} negative · {sample_count} samples")
+    };
+    let confidence = row
+        .get("average_confidence")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let risk_label = fallback_text(&row, "label", "n/a");
+    let signal_count = value_i64(&row, "signal_count");
+    rsx! {
+        tr {
+            td { strong { "{risk_label}" } }
+            td { "{signal_count}" }
+            td { "{outcome_label(next_run)}" }
+            td { "{outcome_label(five_run)}" }
+            td { "{confidence}" }
         }
     }
 }

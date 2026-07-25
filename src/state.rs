@@ -69,6 +69,9 @@ const GATE_REPLAY_DEFAULT_RUN_LIMIT: i64 = 40;
 const GATE_REPLAY_MAX_CHANGE_ROWS: usize = 30;
 const GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL: f64 = 0.25;
 const GATE_REPLAY_MIN_CONFLUENCES: i64 = 4;
+const SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS: i64 = 180;
+const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
+const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -1301,6 +1304,176 @@ fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
         ],
         "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
         "interpretation": "A target-gate clear is not an approval: other recorded gates, capital, holdings, and market conditions remain outside this isolated comparison.",
+    })
+}
+
+#[derive(Default)]
+struct SupportRiskEvidenceStats {
+    signal_count: usize,
+    one_run_count: usize,
+    one_run_return_sum_pct: f64,
+    one_run_negative_count: usize,
+    five_run_count: usize,
+    five_run_return_sum_pct: f64,
+    five_run_negative_count: usize,
+    break_risk_sum: f64,
+    confidence_sum: f64,
+    history_coverage_sum: f64,
+}
+
+fn average_or_null(total: f64, count: usize) -> JsonValue {
+    if count == 0 {
+        JsonValue::Null
+    } else {
+        json!(total / count as f64)
+    }
+}
+
+fn fraction_or_null(numerator: usize, denominator: usize) -> JsonValue {
+    if denominator == 0 {
+        JsonValue::Null
+    } else {
+        json!(numerator as f64 / denominator as f64)
+    }
+}
+
+/// Groups stored daily signals by their recorded support-break label and
+/// observes subsequent stored closes. This deliberately measures only the
+/// next available indicator runs; it neither assumes every market traded nor
+/// claims a causal backtest from sparse observations.
+fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
+    let mut grouped: HashMap<String, Vec<&JsonValue>> = HashMap::new();
+    for row in rows {
+        let symbol = json_text(row, "symbol");
+        let run_date = json_text(row, "run_date");
+        if !symbol.trim().is_empty() && !run_date.trim().is_empty() {
+            // The query is ordered by created_at within a symbol/date. A manual
+            // rerun supersedes the older daily row instead of manufacturing an
+            // extra next-run outcome for the same market date.
+            let symbol_rows = grouped.entry(symbol).or_default();
+            if symbol_rows
+                .last()
+                .is_some_and(|previous| json_text(previous, "run_date") == run_date)
+            {
+                let last_index = symbol_rows.len() - 1;
+                symbol_rows[last_index] = row;
+            } else {
+                symbol_rows.push(row);
+            }
+        }
+    }
+
+    let mut stats: HashMap<&'static str, SupportRiskEvidenceStats> = SUPPORT_RISK_LABELS
+        .iter()
+        .copied()
+        .map(|label| (label, SupportRiskEvidenceStats::default()))
+        .collect();
+
+    for symbol_rows in grouped.values() {
+        for (index, row) in symbol_rows.iter().enumerate() {
+            let label = json_text(row, "support_break_risk_label");
+            let Some(label) = SUPPORT_RISK_LABELS
+                .iter()
+                .copied()
+                .find(|candidate| *candidate == label)
+            else {
+                continue;
+            };
+            let close = value_f64(row, "close");
+            if !close.is_finite() || close <= 0.0 {
+                continue;
+            }
+            let entry = stats.get_mut(label).expect("known support-risk label");
+            entry.signal_count += 1;
+            entry.break_risk_sum += value_f64(row, "support_break_risk").clamp(0.0, 1.0);
+            entry.confidence_sum += value_f64(row, "support_confidence").clamp(0.0, 1.0);
+            entry.history_coverage_sum +=
+                value_f64(row, "support_history_coverage").clamp(0.0, 1.0);
+
+            for (horizon, count, return_sum, negative_count) in [
+                (
+                    1usize,
+                    &mut entry.one_run_count,
+                    &mut entry.one_run_return_sum_pct,
+                    &mut entry.one_run_negative_count,
+                ),
+                (
+                    5usize,
+                    &mut entry.five_run_count,
+                    &mut entry.five_run_return_sum_pct,
+                    &mut entry.five_run_negative_count,
+                ),
+            ] {
+                let Some(next_row) = symbol_rows.get(index + horizon) else {
+                    continue;
+                };
+                let next_close = value_f64(next_row, "close");
+                if !next_close.is_finite() || next_close <= 0.0 {
+                    continue;
+                }
+                let return_pct = (next_close - close) / close * 100.0;
+                *count += 1;
+                *return_sum += return_pct;
+                if return_pct < 0.0 {
+                    *negative_count += 1;
+                }
+            }
+        }
+    }
+
+    let labels = SUPPORT_RISK_LABELS
+        .iter()
+        .map(|label| {
+            let entry = stats.get(label).expect("known support-risk label");
+            json!({
+                "label": label,
+                "signal_count": entry.signal_count,
+                "next_run": {
+                    "sample_count": entry.one_run_count,
+                    "average_return_pct": average_or_null(entry.one_run_return_sum_pct, entry.one_run_count),
+                    "negative_return_rate": fraction_or_null(entry.one_run_negative_count, entry.one_run_count),
+                },
+                "five_run": {
+                    "sample_count": entry.five_run_count,
+                    "average_return_pct": average_or_null(entry.five_run_return_sum_pct, entry.five_run_count),
+                    "negative_return_rate": fraction_or_null(entry.five_run_negative_count, entry.five_run_count),
+                },
+                "average_break_risk": average_or_null(entry.break_risk_sum, entry.signal_count),
+                "average_confidence": average_or_null(entry.confidence_sum, entry.signal_count),
+                "average_history_coverage": average_or_null(entry.history_coverage_sum, entry.signal_count),
+            })
+        })
+        .collect::<Vec<_>>();
+    let eligible_signal_count = stats
+        .values()
+        .map(|entry| entry.signal_count)
+        .sum::<usize>();
+    let one_run_complete_count = stats
+        .values()
+        .map(|entry| entry.one_run_count)
+        .sum::<usize>();
+    let five_run_complete_count = stats
+        .values()
+        .map(|entry| entry.five_run_count)
+        .sum::<usize>();
+    let status = if eligible_signal_count == 0 {
+        "no_observations"
+    } else if five_run_complete_count < SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS {
+        "collecting"
+    } else {
+        "preliminary"
+    };
+
+    json!({
+        "status": status,
+        "lookback_days": SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS,
+        "minimum_complete_observations": SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS,
+        "eligible_signal_count": eligible_signal_count,
+        "next_run_complete_count": one_run_complete_count,
+        "five_run_complete_count": five_run_complete_count,
+        "labels": labels,
+        "safety": "read_only_observation_of_stored_daily_indicator_closes",
+        "interpretation": "Outcomes use the next available one or five stored daily indicator runs for the same symbol. They are descriptive, not causal, do not account for trading costs or market gaps, and cannot change a gate, Hermes proposal, configuration, or Saxo order.",
     })
 }
 
@@ -4131,7 +4304,36 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         let runs = self.select_json(&sql).await?;
-        Ok(gate_replay_from_manager_runs(&runs))
+        let mut replay = gate_replay_from_manager_runs(&runs);
+        let support_risk_evidence = self.support_risk_evidence().await.unwrap_or_else(|err| {
+            warn!("support-risk evidence projection degraded: {err:#}");
+            json!({
+                "status": "unavailable",
+                "safety": "read_only_observation_of_stored_daily_indicator_closes",
+                "interpretation": "Support-risk evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
+            })
+        });
+        replay["support_risk_evidence"] = support_risk_evidence;
+        Ok(replay)
+    }
+
+    async fn support_risk_evidence(&self) -> Result<JsonValue> {
+        let cutoff = (Utc::now().date_naive()
+            - Duration::days(SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS))
+        .to_string();
+        let rows = self
+            .select_json(&format!(
+                "SELECT symbol, run_date, close, support_break_risk, support_break_risk_label,
+                        support_confidence, support_history_coverage
+                 FROM daily_indicator_signals
+                 WHERE status = 'ok'
+                   AND close > 0
+                   AND run_date >= '{}'
+                 ORDER BY symbol ASC, run_date ASC, created_at ASC",
+                sql_escape(&cutoff)
+            ))
+            .await?;
+        Ok(support_risk_evidence_from_indicator_rows(&rows))
     }
 
     pub async fn decision_pulse_statuses(&self) -> Result<Vec<JsonValue>> {
@@ -10736,6 +10938,44 @@ analysis_windows:
                 .as_str()
                 .unwrap_or_default()
                 .contains("not an approval")
+        );
+    }
+
+    #[test]
+    fn support_risk_evidence_uses_next_available_closes_without_claiming_causality() {
+        let rows = vec![
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-01", "close": 100.0, "support_break_risk_label": "low", "support_break_risk": 0.2, "support_confidence": 0.8, "support_history_coverage": 1.0}),
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-02", "close": 105.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-03", "close": 106.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-04", "close": 107.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-05", "close": 108.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "LOW:xnas", "run_date": "2026-07-06", "close": 110.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "HIGH:xnas", "run_date": "2026-07-01", "close": 100.0, "support_break_risk_label": "high", "support_break_risk": 0.8, "support_confidence": 0.6, "support_history_coverage": 0.5}),
+            json!({"symbol": "HIGH:xnas", "run_date": "2026-07-02", "close": 92.0, "support_break_risk_label": "unavailable"}),
+            json!({"symbol": "HIGH:xnas", "run_date": "2026-07-02", "close": 90.0, "support_break_risk_label": "unavailable"}),
+        ];
+
+        let evidence = support_risk_evidence_from_indicator_rows(&rows);
+        assert_eq!(evidence["status"], "collecting");
+        assert_eq!(evidence["eligible_signal_count"], 2);
+        assert_eq!(evidence["next_run_complete_count"], 2);
+        assert_eq!(evidence["five_run_complete_count"], 1);
+        assert_eq!(evidence["labels"][0]["label"], "low");
+        assert_eq!(evidence["labels"][0]["next_run"]["average_return_pct"], 5.0);
+        assert_eq!(
+            evidence["labels"][0]["five_run"]["average_return_pct"],
+            10.0
+        );
+        assert_eq!(evidence["labels"][2]["label"], "high");
+        assert_eq!(
+            evidence["labels"][2]["next_run"]["average_return_pct"],
+            -10.0
+        );
+        assert!(
+            evidence["interpretation"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("descriptive, not causal")
         );
     }
 
