@@ -22,9 +22,10 @@ use crate::{
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, SaxoCallbackParams, ViewParams,
+        PerformanceParams, ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
     },
-    saxo_order::run_saxo_execution_queue,
+    saxo_error::classify_execution_error,
+    saxo_order::{precheck_sim_protective_stop, run_saxo_execution_queue},
     state::AppState,
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -141,6 +142,10 @@ fn app_routes() -> Router<Arc<AppState>> {
             post(action_generate_decision_report_dry_run),
         )
         .route("/api/actions/queue-process", post(action_process_queue))
+        .route(
+            "/api/protective-stops/precheck",
+            post(precheck_protective_stop),
+        )
         .route(
             "/api/actions/daily-indicators",
             post(action_run_daily_indicators),
@@ -407,6 +412,76 @@ async fn update_overview_integrity_acknowledgement(
             json_result(Err(err))
         }
     }
+}
+
+async fn precheck_protective_stop(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<ProtectiveStopPrecheckRequest>,
+) -> Response {
+    let symbol = request.symbol.trim().to_string();
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.confirm_sim_precheck.as_deref() != Some("true") {
+        let _ = state
+            .record_protective_stop_precheck(
+                &symbol,
+                request.quantity,
+                request.stop_price_local,
+                "confirmation_required",
+                &json!({
+                    "accepted": false,
+                    "message": "SIM confirmation was required. No Saxo request was sent."
+                }),
+            )
+            .await;
+        return redirect_to_app(&state, return_to).into_response();
+    }
+
+    match precheck_sim_protective_stop(&state, &symbol, request.quantity, request.stop_price_local)
+        .await
+    {
+        Ok(result) => {
+            if let Err(err) = state
+                .record_protective_stop_precheck(
+                    &symbol,
+                    request.quantity,
+                    request.stop_price_local,
+                    "precheck_ok",
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    symbol,
+                    "could not record successful protective-stop precheck: {err:#}"
+                );
+            }
+            info!(
+                symbol,
+                "SIM protective-stop precheck completed without placing an order"
+            );
+        }
+        Err(err) => {
+            let taxonomy = classify_execution_error("execution_failed", &err.to_string());
+            warn!(symbol, "SIM protective-stop precheck rejected: {err:#}");
+            if let Err(record_err) = state
+                .record_protective_stop_precheck(
+                    &symbol,
+                    request.quantity,
+                    request.stop_price_local,
+                    "precheck_rejected",
+                    &json!({
+                        "accepted": false,
+                        "error": taxonomy,
+                        "message": "Saxo rejected the SIM protective-stop precheck. No order was placed."
+                    }),
+                )
+                .await
+            {
+                warn!(symbol, "could not record rejected protective-stop precheck: {record_err:#}");
+            }
+        }
+    }
+    redirect_to_app(&state, return_to).into_response()
 }
 
 async fn update_localization_settings(

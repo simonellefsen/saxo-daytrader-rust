@@ -4124,7 +4124,48 @@ impl AppState {
                  ORDER BY created_at DESC, id DESC",
             )
             .await?;
-        Ok(protective_stop_coverage_from_rows(&positions, &orders))
+        let prechecks = self
+            .select_json(
+                "SELECT id, created_at, environment, symbol, quantity, stop_price_local, status, result_json
+                 FROM protective_stop_prechecks
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 10",
+            )
+            .await?;
+        let mut coverage = protective_stop_coverage_from_rows(&positions, &orders);
+        if let Some(object) = coverage.as_object_mut() {
+            object.insert("recent_prechecks".to_string(), JsonValue::Array(prechecks));
+        }
+        Ok(coverage)
+    }
+
+    pub async fn record_protective_stop_precheck(
+        &self,
+        symbol: &str,
+        quantity: f64,
+        stop_price_local: f64,
+        status: &str,
+        result: &JsonValue,
+    ) -> Result<()> {
+        let environment = yaml_string(&self.config, &["saxo", "environment"])
+            .unwrap_or_else(|| "sim".to_string())
+            .to_ascii_lowercase();
+        sqlx::query(
+            "INSERT INTO protective_stop_prechecks (
+                created_at, environment, symbol, quantity, stop_price_local, status, result_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(environment)
+        .bind(symbol.trim())
+        .bind(quantity)
+        .bind(stop_price_local)
+        .bind(status)
+        .bind(result.to_string())
+        .execute(&self.pool)
+        .await
+        .context("recording sanitized protective-stop precheck")?;
+        Ok(())
     }
 
     pub async fn execution_orders_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
@@ -7427,6 +7468,46 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating broker position snapshots table")?;
+        if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS protective_stop_prechecks (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    stop_price_local REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    result_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating protective-stop prechecks table")?;
+        } else {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS protective_stop_prechecks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    stop_price_local REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    result_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating protective-stop prechecks table")?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_protective_stop_prechecks_created
+             ON protective_stop_prechecks(created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating protective-stop prechecks index")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS broker_instrument_exposures (
                 symbol TEXT PRIMARY KEY,

@@ -3381,7 +3381,11 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { "Expires " strong { "{text(&data.saxo_auth, \"expires_in_minutes\")} min" } }
                 }
             }
-            ProtectiveStopCoveragePanel { coverage: data.execution_protection.clone(), prefs: prefs.clone() }
+            ProtectiveStopCoveragePanel {
+                coverage: data.execution_protection.clone(),
+                prefs: prefs.clone(),
+                sim_enabled: text(&data.saxo_auth, "environment").eq_ignore_ascii_case("SIM")
+            }
 
             // SIM-only: Reset portfolio from Live Positioner export
             {
@@ -3550,7 +3554,11 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn ProtectiveStopCoveragePanel(coverage: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn ProtectiveStopCoveragePanel(
+    coverage: JsonValue,
+    prefs: LocalizationPrefs,
+    sim_enabled: bool,
+) -> Element {
     let status = text(&coverage, "status");
     let summary = coverage.get("summary").cloned().unwrap_or(JsonValue::Null);
     let positions = json_array(&coverage, "positions");
@@ -3569,6 +3577,7 @@ fn ProtectiveStopCoveragePanel(coverage: JsonValue, prefs: LocalizationPrefs) ->
         "interpretation",
         "Protective-stop coverage is unavailable right now.",
     );
+    let recent_prechecks = json_array(&coverage, "recent_prechecks");
     rsx! {
         section { class: "event candidate-scoring-panel",
             strong { "Protective Stop Coverage" }
@@ -3597,6 +3606,88 @@ fn ProtectiveStopCoveragePanel(coverage: JsonValue, prefs: LocalizationPrefs) ->
                 }
             }
             span { class: "muted block", "{interpretation}" }
+            if sim_enabled {
+                div { class: "event sim-stop-precheck",
+                    strong { "SIM Protective Stop Precheck" }
+                    p { class: "muted", "Verifies a broker-held position and submits only Saxo's GTC SELL Stop precheck. It never places an order, creates an execution queue record, or reserves shares." }
+                    form { action: "/api/protective-stops/precheck", method: "post", class: "sim-stop-precheck-form",
+                        input { r#type: "hidden", name: "return_to", value: "/?view=execution" }
+                        div { class: "form-row",
+                            label { "Symbol" }
+                            input { r#type: "text", name: "symbol", required: true, placeholder: "e.g. TSLA:xnas" }
+                        }
+                        div { class: "form-row",
+                            label { "Quantity" }
+                            input { r#type: "number", name: "quantity", min: "1", step: "1", required: true }
+                        }
+                        div { class: "form-row",
+                            label { "Stop price (local currency)" }
+                            input { r#type: "number", name: "stop_price_local", min: "0.0001", step: "0.0001", required: true }
+                        }
+                        div { class: "form-row checkbox",
+                            label {
+                                input { r#type: "checkbox", name: "confirm_sim_precheck", value: "true", required: true }
+                                " I confirm this is a SIM-only broker precheck and will not place a stop order."
+                            }
+                        }
+                        button { class: "small-button", r#type: "submit", "Run SIM Stop Precheck" }
+                    }
+                }
+            }
+            if !recent_prechecks.is_empty() {
+                div { class: "table-wrap candidate-scoring-table",
+                    h3 { "Recent SIM Stop Prechecks" }
+                    table {
+                        thead { tr { th { "Created" } th { "Symbol" } th { "Qty" } th { "Stop" } th { "Result" } th { "Safety" } } }
+                        tbody {
+                            for row in recent_prechecks.iter() {
+                                ProtectiveStopPrecheckRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProtectiveStopPrecheckRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let result = row
+        .get("result_json")
+        .and_then(JsonValue::as_str)
+        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+        .unwrap_or(JsonValue::Null);
+    let status = text_or(&row, "status", "unknown").replace('_', " ");
+    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
+    let symbol = text_or(&row, "symbol", "n/a");
+    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
+    let stop_price = format_number(value_f64(&row, "stop_price_local"), 4, &prefs);
+    let status_class = if text(&row, "status") == "precheck_ok" {
+        "status good"
+    } else {
+        "status warn"
+    };
+    let result_label = result
+        .get("error")
+        .and_then(|error| error.get("label"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or_else(|| {
+            if text(&row, "status") == "precheck_ok" {
+                "Accepted"
+            } else {
+                "Review required"
+            }
+        });
+    let safety = fallback_text(&result, "safety", "no Saxo order placement").replace('_', " ");
+    rsx! {
+        tr {
+            td { "{created_at}" }
+            td { strong { class: "mono", "{symbol}" } }
+            td { "{quantity}" }
+            td { "{stop_price}" }
+            td { span { class: "{status_class}", "{status}: {result_label}" } }
+            td { class: "muted", "{safety}" }
         }
     }
 }

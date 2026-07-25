@@ -180,6 +180,15 @@ pub struct OverviewIntegrityAcknowledgementRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ProtectiveStopPrecheckRequest {
+    pub symbol: String,
+    pub quantity: f64,
+    pub stop_price_local: f64,
+    pub confirm_sim_precheck: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LocalizationSettingsRequest {
     pub locale: Option<String>,
     pub time_zone: Option<String>,

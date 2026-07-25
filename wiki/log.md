@@ -1074,3 +1074,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a bounded local reconciliation of persisted positive `broker_position_snapshots` against local SELL `Stop` and `StopLimit` execution records. Execution now shows protected, partial, planned, and unprotected coverage per snapshot position; Hermes receives the same sanitized, bounded context.
 - Only `submitted_to_broker`, `broker_working`, `broker_amended`, `broker_partially_filled`, and `broker_replace_requested` stop statuses count as broker-confirmed coverage. Queued, uncertain, cancelled, and failed rows remain non-protective by design.
 - The audit makes no Saxo HTTP call and cannot place, replace, cancel, or activate stops. It is a prerequisite visibility slice before any small-SIM broker-hosted `GoodTillCancel` Stop lifecycle experiment.
+
+## [2026-07-25] safety | SIM protective-stop precheck probe
+
+- Added an explicit operator-confirmed SIM-only probe for a broker-hosted `GoodTillCancel` SELL `Stop`. It reads the current Saxo position, validates sellable quantity, applies the existing Saxo tick normalizer, and calls only `/trade/v2/orders/precheck`.
+- The probe cannot call Saxo order placement, create an execution order, or reserve a holding. Its local audit keeps only the requested safe fields, sanitized payload metadata, and result classification; tokens, account keys, and raw broker responses are excluded.
+- The next lifecycle step remains a separately approved small-SIM placement/cancel/reconciliation test before any automation or filled-BUY child-order behavior is considered.

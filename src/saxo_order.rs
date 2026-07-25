@@ -211,6 +211,121 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
     }))
 }
 
+/// Runs only Saxo's order precheck for a manually selected SIM protective stop.
+/// This deliberately does not create an execution-order row and never calls the
+/// order-placement endpoint. A separately approved lifecycle change is required
+/// before the application can place broker-hosted stop orders.
+pub async fn precheck_sim_protective_stop(
+    state: &AppState,
+    symbol: &str,
+    quantity: f64,
+    stop_price_local: f64,
+) -> Result<JsonValue> {
+    let symbol = symbol.trim();
+    if symbol.is_empty() || symbol.len() > 80 {
+        bail!("A valid Saxo symbol is required for a protective-stop precheck");
+    }
+    if !quantity.is_finite() || quantity < 1.0 || (quantity - quantity.round()).abs() > 1e-6 {
+        bail!("Protective-stop precheck quantity must be a positive whole-share amount");
+    }
+    if !stop_price_local.is_finite() || stop_price_local <= 0.0 {
+        bail!("Protective-stop precheck stop price must be positive");
+    }
+    let configured_environment = yaml_string(&state.config, &["saxo", "environment"])
+        .unwrap_or_else(|| "sim".to_string())
+        .to_ascii_lowercase();
+    if configured_environment != "sim" {
+        bail!("Protective-stop precheck is restricted to the Saxo SIM environment");
+    }
+
+    let session = state
+        .ensure_saxo_session_json("protective_stop_sim_precheck")
+        .await
+        .context("loading Saxo SIM session before protective-stop precheck")?;
+    if let Some(session_environment) = session_text(&session, "environment") {
+        if !session_environment.eq_ignore_ascii_case("sim") {
+            bail!("Protective-stop precheck session is not a Saxo SIM session");
+        }
+    }
+
+    let broker_positions = broker_position_quantities(state, &session)
+        .await
+        .context("loading broker-held position before protective-stop precheck")?;
+    let position = broker_positions
+        .get(symbol)
+        .or_else(|| {
+            broker_positions
+                .iter()
+                .find(|(broker_symbol, _)| broker_symbol.eq_ignore_ascii_case(symbol))
+                .map(|(_, position)| position)
+        })
+        .ok_or_else(|| anyhow!("No broker-held position was found for {symbol}"))?;
+    if !position.can_be_closed || position.quantity + 1e-6 < quantity {
+        bail!(
+            "Broker-held position for {symbol} cannot cover the requested protective-stop quantity"
+        );
+    }
+    let instrument = position.instrument.as_ref().ok_or_else(|| {
+        anyhow!("Broker-held position for {symbol} had no Saxo instrument metadata")
+    })?;
+    let normalized_stop_price = normalize_broker_order_price(
+        state,
+        &session,
+        symbol,
+        instrument,
+        stop_price_local,
+        "SELL",
+        "stop",
+    )
+    .await?;
+    let payload = protective_stop_precheck_payload(
+        account_key(state, &session)?,
+        instrument,
+        quantity,
+        normalized_stop_price,
+    );
+    let precheck = precheck_order(state, &session, &payload).await?;
+    Ok(json!({
+        "accepted": true,
+        "symbol": symbol,
+        "quantity": quantity,
+        "stop_price_local": normalized_stop_price,
+        "order_type": "Stop",
+        "duration_type": "GoodTillCancel",
+        "payload": sanitized_order_payload(&payload),
+        "precheck": protective_stop_precheck_summary(&precheck),
+        "safety": "sim_only_precheck_no_order_placement_execution_order_or_sell_reservation"
+    }))
+}
+
+fn protective_stop_precheck_payload(
+    account_key: String,
+    instrument: &SaxoInstrument,
+    quantity: f64,
+    stop_price_local: f64,
+) -> JsonValue {
+    json!({
+        "AccountKey": account_key,
+        "Amount": quantity as i64,
+        "AssetType": instrument.asset_type,
+        "BuySell": "Sell",
+        "ManualOrder": true,
+        "OrderDuration": {"DurationType": "GoodTillCancel"},
+        "OrderPrice": stop_price_local,
+        "OrderType": "Stop",
+        "Uic": instrument.uic,
+    })
+}
+
+fn protective_stop_precheck_summary(precheck: &JsonValue) -> JsonValue {
+    json!({
+        "accepted": true,
+        "has_cost_estimate": precheck.get("Cost").is_some(),
+        "has_margin_impact": precheck.get("MarginImpactBuySell").is_some(),
+        "field_groups": ["Costs", "MarginImpactBuySell"],
+    })
+}
+
 pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
     let execution_mode =
         yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
@@ -3611,6 +3726,48 @@ mod tests {
             Some(ExecutionQueueGate::ApprovalRequired)
         );
         assert_eq!(execution_queue_gate("live", "saxo", false, false), None);
+    }
+
+    #[test]
+    fn protective_stop_precheck_payload_is_gtc_sell_stop_and_sanitizes_account_key() {
+        let instrument = SaxoInstrument {
+            uic: 12345,
+            asset_type: "Stock".to_string(),
+            exchange_id: "XNAS".to_string(),
+            description: "Example".to_string(),
+        };
+        let payload = protective_stop_precheck_payload(
+            "account-key-must-not-leak".to_string(),
+            &instrument,
+            2.0,
+            95.5,
+        );
+
+        assert_eq!(payload["BuySell"], "Sell");
+        assert_eq!(payload["OrderType"], "Stop");
+        assert_eq!(payload["OrderPrice"], 95.5);
+        assert_eq!(payload["OrderDuration"]["DurationType"], "GoodTillCancel");
+        assert!(payload.get("StopLimitPrice").is_none());
+        assert!(
+            sanitized_order_payload(&payload)
+                .get("AccountKey")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn protective_stop_precheck_summary_never_retains_raw_broker_response() {
+        let summary = protective_stop_precheck_summary(&json!({
+            "Cost": {"Commission": 1.0},
+            "MarginImpactBuySell": {"InitialMargin": 2.0},
+            "AccountKey": "must-not-appear",
+            "arbitrary_raw_payload": "must-not-appear"
+        }));
+
+        assert_eq!(summary["accepted"], true);
+        assert_eq!(summary["has_cost_estimate"], true);
+        assert_eq!(summary["has_margin_impact"], true);
+        assert!(!summary.to_string().contains("must-not-appear"));
     }
 
     #[tokio::test]
