@@ -1142,3 +1142,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Also blocks the roadmap's per-pulse attribution work, and the column is now load-bearing for the 2026-07-25 adoption exclusion in the integrity check — correct today only because adopted rows are among the populated ones.
 - Durable lesson for the wiki: record provenance in the component that knows it; do not ask the model to classify its own orders.
 - Documentation only. No code, schema, gate, or broker behavior was changed by this entry.
+
+## [2026-07-25] execution | Trading Manager orders record their own provenance
+
+- Implemented urgent-todo U8. `CandidateOrder::from_json` no longer reads `strategy_type` from the model's suggested-trade JSON; the Trading Manager sets `TRADING_MANAGER_STRATEGY_TYPE` (`swing`) itself and ignores any value a model supplies. The value matches what the legacy Python runtime wrote through 2026-05-07 and what `execution_source_label` already maps to "Trading Manager", so backfilled and new rows read identically.
+- Backfilled the 101 historical rows at startup, scoped to `strategy_type IS NULL AND report_id IS NOT NULL`. That predicate is exact rather than convenient: every unset row carried a report id, and every row with another strategy type (`portfolio_sync`, `clean_reconciliation`, `manual`) carried none, because those originate in adoption and manual paths rather than a decision report. The update is idempotent and cannot overwrite a value another path set.
+- Changed the Execution table fallback from `manual` to `unknown`. The old fallback was what made the defect silent: an absent value was displayed as a concrete, wrong provenance instead of as missing. A display fallback should never assert a fact.
+- Two tests: candidate orders carry runtime provenance even when the model claims a different `strategy_type`, and the backfill leaves adoption, reconciliation, manual, and report-less rows untouched across repeated runs.
+- The pulse (scheduled EU/US or manual) remains in `strategy_session` and `strategy_key`; `strategy_type` answers "which subsystem queued this", not "which pulse".
+- No gate, sizing, order, or broker behavior changed. This corrects a persisted classification and its display.

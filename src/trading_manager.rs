@@ -1874,6 +1874,15 @@ fn candidate_orders_from_report(report_json: &JsonValue) -> Vec<CandidateOrder> 
         .collect()
 }
 
+/// Every order this module queues comes from a decision report, so it carries
+/// one strategy type. The pulse (scheduled EU/US or manual) is separate and
+/// lives in `strategy_session` and `strategy_key`.
+///
+/// The value matches what the legacy Python runtime wrote through 2026-05-07
+/// and what `execution_source_label` already maps to "Trading Manager", so
+/// backfilled and new rows read identically.
+pub(crate) const TRADING_MANAGER_STRATEGY_TYPE: &str = "swing";
+
 impl CandidateOrder {
     fn from_json(raw: JsonValue) -> Result<Self> {
         let symbol = text(&raw, "symbol");
@@ -1901,7 +1910,11 @@ impl CandidateOrder {
             stop_price_local: optional_f64(&raw, "stop_price_local"),
             requested_weight_pct: optional_f64(&raw, "requested_weight_pct"),
             estimated_value_dkk: optional_f64(&raw, "estimated_value_dkk"),
-            strategy_type: optional_text(&raw, "strategy_type"),
+            // Provenance is recorded by the component that knows it. This was
+            // previously read from the model's suggested-trade JSON, but the
+            // decision-report schema has no such field, so every Rust-queued
+            // order carried NULL and rendered to the operator as "manual".
+            strategy_type: Some(TRADING_MANAGER_STRATEGY_TYPE.to_string()),
             strategy_session: optional_text(&raw, "session_tag"),
             strategy_key,
             strategy_role: optional_text(&raw, "strategy_role"),
@@ -3753,6 +3766,45 @@ mod tests {
         let orders = candidate_orders_from_report(&report);
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].strategy_key, "swing:test:NVDA:xnas:BUY");
+    }
+
+    /// The decision-report schema has no `strategy_type` field, so reading it
+    /// from the model's response left every Rust-queued order NULL from the
+    /// 2026-05-12 port until 2026-07-25. The runtime knows the provenance and
+    /// must set it, and a model that invents the field must not override it.
+    #[test]
+    fn candidate_orders_carry_runtime_strategy_type_regardless_of_model_output() {
+        let report = json!({
+            "strategy_plan": {
+                "swing_orders": [
+                    {
+                        "symbol": "NVDA:xnas",
+                        "action": "BUY",
+                        "quantity": 2,
+                        "strategy_key": "us_open_followup:NVDA",
+                        "estimated_value_dkk": 5400
+                    },
+                    {
+                        "symbol": "AMD:xnas",
+                        "action": "BUY",
+                        "quantity": 1,
+                        "strategy_key": "us_open_followup:AMD",
+                        "estimated_value_dkk": 1200,
+                        "strategy_type": "manual"
+                    }
+                ]
+            }
+        });
+        let orders = candidate_orders_from_report(&report);
+        assert_eq!(orders.len(), 2);
+        for order in &orders {
+            assert_eq!(
+                order.strategy_type.as_deref(),
+                Some(TRADING_MANAGER_STRATEGY_TYPE),
+                "{} must record runtime provenance, not the model's claim",
+                order.symbol
+            );
+        }
     }
 
     #[test]

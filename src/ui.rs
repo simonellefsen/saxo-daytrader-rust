@@ -4258,7 +4258,10 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
             td { "{text(&row, \"symbol\")}" }
             td { "{text(&row, \"action\")}" }
-            td { "{fallback_text(&row, \"strategy_type\", \"manual\")}" }
+            // Never fall back to a concrete provenance. An unset type used to
+            // render as "manual", which showed every automated order as
+            // operator-initiated instead of revealing that the value was absent.
+            td { "{fallback_text(&row, \"strategy_type\", \"unknown\")}" }
             td { "{fallback_text(&row, \"strategy_role\", \"primary\")}" }
             td { "{fallback_text(&row, \"order_type\", \"Market\")}" }
             td { class: "execution-status-cell",

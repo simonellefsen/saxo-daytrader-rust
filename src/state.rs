@@ -8196,6 +8196,35 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating Hermes counterfactual tracking index")?;
+        self.backfill_trading_manager_strategy_type().await?;
+        Ok(())
+    }
+
+    /// Backfill `strategy_type` on Trading Manager orders queued before the
+    /// runtime started setting it (2026-05-12 to 2026-07-25).
+    ///
+    /// `report_id IS NOT NULL` is the exact discriminator: on 2026-07-25 all
+    /// 101 unset rows carried a report id, and every row with another
+    /// `strategy_type` -- `portfolio_sync`, `clean_reconciliation`, `manual` --
+    /// carried none, because those come from adoption and manual paths that do
+    /// not originate in a decision report. The update is idempotent and cannot
+    /// overwrite a value another path already set.
+    async fn backfill_trading_manager_strategy_type(&self) -> Result<()> {
+        let result = sqlx::query(&format!(
+            "UPDATE execution_orders SET strategy_type = '{}' \
+             WHERE strategy_type IS NULL AND report_id IS NOT NULL",
+            sql_escape(crate::trading_manager::TRADING_MANAGER_STRATEGY_TYPE)
+        ))
+        .execute(&self.pool)
+        .await
+        .context("backfilling Trading Manager execution-order strategy type")?;
+        if result.rows_affected() > 0 {
+            info!(
+                rows = result.rows_affected(),
+                strategy_type = crate::trading_manager::TRADING_MANAGER_STRATEGY_TYPE,
+                "backfilled execution-order strategy type"
+            );
+        }
         Ok(())
     }
 
@@ -10503,6 +10532,70 @@ market_data:
     /// Before 2026-07-25 the integrity check counted them as unreconciled,
     /// which held `healthy` false continuously from the 2026-05-05 adoption and
     /// buried the signal this check exists to raise.
+    /// The backfill must reach Trading Manager orders and nothing else.
+    /// `report_id IS NOT NULL` is the discriminator: adoption, reconciliation,
+    /// and manual rows do not originate in a decision report.
+    #[tokio::test]
+    async fn strategy_type_backfill_targets_only_report_derived_orders() {
+        let state = runtime_settings_test_state("app: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                report_id INTEGER,
+                strategy_type TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution_orders test table");
+        sqlx::query(
+            "INSERT INTO execution_orders (id, report_id, strategy_type) VALUES \
+                (1, 42, NULL), \
+                (2, 43, NULL), \
+                (3, NULL, 'portfolio_sync'), \
+                (4, NULL, 'clean_reconciliation'), \
+                (5, NULL, 'manual'), \
+                (6, NULL, NULL), \
+                (7, 44, 'swing')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert execution_orders test rows");
+
+        state
+            .backfill_trading_manager_strategy_type()
+            .await
+            .expect("backfill strategy type");
+        // Idempotent: a second pass must be a no-op.
+        state
+            .backfill_trading_manager_strategy_type()
+            .await
+            .expect("backfill strategy type again");
+
+        let rows = state
+            .select_json("SELECT id, COALESCE(strategy_type, 'NULL') AS stype FROM execution_orders ORDER BY id")
+            .await
+            .expect("read back execution orders");
+        let observed = rows
+            .iter()
+            .map(|row| (value_f64(row, "id") as i64, text_value(row, "stype")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed,
+            vec![
+                (1, "swing".to_string()),
+                (2, "swing".to_string()),
+                (3, "portfolio_sync".to_string()),
+                (4, "clean_reconciliation".to_string()),
+                (5, "manual".to_string()),
+                // No report id and no type: not a Trading Manager order, so it
+                // stays unset rather than being guessed at.
+                (6, "NULL".to_string()),
+                (7, "swing".to_string()),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn unreconciled_orders_check_excludes_adopted_positions_but_not_real_fills() {
         let state = runtime_settings_test_state("app: {}\n").await;
