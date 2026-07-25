@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-23
+updated: 2026-07-25
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-25] safety | Protective-stop coverage exceptions and reconciled SIM evidence
+
+- Coverage now counts a SIM lifecycle test only when its read-only reconciliation recorded `broker_working` and a broker order identifier. Placement-submitted, cancelled, failed, ambiguous, and non-SIM records remain non-protective.
+- The Execution view now presents explicit read-only exception rows for persisted broker positions with no complete broker-confirmed coverage, including the uncovered quantity, reason, and a non-mutating operator next step.
+- This does not place, amend, cancel, or reconcile a Saxo order, enable parent/child order automation, alter Trading Manager or Hermes behavior, or make a stop guarantee its fill price through a gap.
 
 ## [2026-07-23] fix | TradingView Novonesis alias and resilient modal close
 

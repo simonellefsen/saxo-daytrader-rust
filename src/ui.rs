@@ -3572,6 +3572,7 @@ fn ProtectiveStopCoveragePanel(
     let partial_count = value_i64(&summary, "partial_count");
     let planned_count = value_i64(&summary, "planned_count");
     let unprotected_count = value_i64(&summary, "unprotected_count");
+    let exception_count = value_i64(&summary, "exception_count");
     let interpretation = fallback_text(
         &coverage,
         "interpretation",
@@ -3579,10 +3580,11 @@ fn ProtectiveStopCoveragePanel(
     );
     let recent_prechecks = json_array(&coverage, "recent_prechecks");
     let recent_lifecycle_tests = json_array(&coverage, "recent_lifecycle_tests");
+    let exceptions = json_array(&coverage, "exceptions");
     rsx! {
         section { class: "event candidate-scoring-panel",
             strong { "Protective Stop Coverage" }
-            p { class: "muted", "Local audit of broker-held long-position snapshots against locally recorded SELL Stop or StopLimit orders. The coverage audit is read-only; the separate SIM lifecycle panel below is the only manual test path that can request broker placement or cancellation." }
+            p { class: "muted", "Local audit of broker-held long-position snapshots against locally recorded SELL Stop or StopLimit orders and reconciled SIM lifecycle tests. The coverage audit is read-only; the separate SIM lifecycle panel below is the only manual test path that can request broker placement or cancellation." }
             if status == "unavailable" {
                 span { class: "status bad", "unavailable" }
             } else if status == "no_positive_broker_positions_recorded" {
@@ -3593,6 +3595,7 @@ fn ProtectiveStopCoveragePanel(
                     span { class: if partial_count > 0 { "status warn" } else { "status" }, "{partial_count} partial" }
                     span { class: if planned_count > 0 { "status warn" } else { "status" }, "{planned_count} planned" }
                     span { class: if unprotected_count > 0 { "status warn" } else { "status" }, "{unprotected_count} unprotected" }
+                    span { class: if exception_count > 0 { "status warn" } else { "status" }, "{exception_count} exceptions" }
                     span { class: "status {tone}", "{status}" }
                 }
                 div { class: "table-wrap candidate-scoring-table",
@@ -3601,6 +3604,22 @@ fn ProtectiveStopCoveragePanel(
                         tbody {
                             for row in positions.iter() {
                                 ProtectiveStopCoverageRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            if !exceptions.is_empty() {
+                div { class: "event protective-stop-exceptions",
+                    strong { "Protection Exceptions" }
+                    p { class: "muted", "Read-only operator alerts for persisted broker positions without full broker-confirmed coverage. Reviewing an exception does not schedule or place a stop order." }
+                    div { class: "table-wrap candidate-scoring-table",
+                        table {
+                            thead { tr { th { "Symbol" } th { "Unprotected Qty" } th { "Reason" } th { "Operator action" } } }
+                            tbody {
+                                for row in exceptions.iter() {
+                                    ProtectiveStopExceptionRow { row: row.clone(), prefs: prefs.clone() }
+                                }
                             }
                         }
                     }
@@ -3833,6 +3852,26 @@ fn ProtectiveStopCoverageRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
             td { "{stop}" }
             td { "{snapshot}" }
             td { span { class: "{state_class}", "{state}" } }
+        }
+    }
+}
+
+#[component]
+fn ProtectiveStopExceptionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let symbol = text_or(&row, "symbol", "n/a");
+    let quantity = format_quantity(value_f64(&row, "unprotected_quantity"), &prefs);
+    let reason = text_or(&row, "reason", "Coverage needs review.");
+    let operator_action = text_or(
+        &row,
+        "operator_action",
+        "Review the persisted broker position and stop evidence.",
+    );
+    rsx! {
+        tr {
+            td { strong { class: "mono", "{symbol}" } }
+            td { "{quantity}" }
+            td { span { class: "status warn", "{reason}" } }
+            td { class: "muted", "{operator_action}" }
         }
     }
 }

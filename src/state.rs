@@ -1486,6 +1486,7 @@ fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
 fn protective_stop_coverage_from_rows(
     position_rows: &[JsonValue],
     execution_order_rows: &[JsonValue],
+    lifecycle_test_rows: &[JsonValue],
 ) -> JsonValue {
     let mut stops_by_symbol: HashMap<String, Vec<&JsonValue>> = HashMap::new();
     for order in execution_order_rows {
@@ -1505,7 +1506,29 @@ fn protective_stop_coverage_from_rows(
         }
     }
 
+    // A lifecycle test is distinct from the normal execution queue. Count it
+    // only after reconciliation has confirmed a broker-working SIM Stop with
+    // an order identifier. Submitted, cancelled, failed, and ambiguous tests
+    // deliberately provide no coverage evidence.
+    let mut lifecycle_stops_by_symbol: HashMap<String, Vec<&JsonValue>> = HashMap::new();
+    for test in lifecycle_test_rows {
+        if !json_text(test, "environment").eq_ignore_ascii_case("sim")
+            || json_text(test, "status") != "broker_working"
+            || json_text(test, "broker_order_id").trim().is_empty()
+        {
+            continue;
+        }
+        let symbol = json_text(test, "symbol");
+        if !symbol.trim().is_empty() {
+            lifecycle_stops_by_symbol
+                .entry(symbol.trim().to_ascii_uppercase())
+                .or_default()
+                .push(test);
+        }
+    }
+
     let mut positions = Vec::new();
+    let mut exceptions = Vec::new();
     let mut protected_count = 0usize;
     let mut partial_count = 0usize;
     let mut planned_count = 0usize;
@@ -1524,6 +1547,10 @@ fn protective_stop_coverage_from_rows(
         }
         total_quantity += quantity;
         let orders = stops_by_symbol
+            .get(&symbol.trim().to_ascii_uppercase())
+            .cloned()
+            .unwrap_or_default();
+        let lifecycle_tests = lifecycle_stops_by_symbol
             .get(&symbol.trim().to_ascii_uppercase())
             .cloned()
             .unwrap_or_default();
@@ -1558,17 +1585,26 @@ fn protective_stop_coverage_from_rows(
                 )
             })
             .collect::<Vec<_>>();
-        let confirmed_quantity = active_orders
+        let execution_order_covered_quantity = active_orders
             .iter()
             .map(|order| value_f64(order, "quantity").max(0.0))
-            .sum::<f64>()
-            .min(quantity);
+            .sum::<f64>();
+        let lifecycle_test_covered_quantity = lifecycle_tests
+            .iter()
+            .map(|test| value_f64(test, "quantity").max(0.0))
+            .sum::<f64>();
+        let confirmed_quantity =
+            (execution_order_covered_quantity + lifecycle_test_covered_quantity).min(quantity);
         let active_stop_price = active_orders
             .iter()
             .filter_map(|order| {
                 let price = value_f64(order, "stop_price_local");
                 (price.is_finite() && price > 0.0).then_some(price)
             })
+            .chain(lifecycle_tests.iter().filter_map(|test| {
+                let price = value_f64(test, "stop_price_local");
+                (price.is_finite() && price > 0.0).then_some(price)
+            }))
             .max_by(f64::total_cmp);
         let planned_stop_price = planned_orders
             .iter()
@@ -1577,21 +1613,48 @@ fn protective_stop_coverage_from_rows(
                 (price.is_finite() && price > 0.0).then_some(price)
             })
             .max_by(f64::total_cmp);
-        let protection_status =
-            if !active_orders.is_empty() && confirmed_quantity + 1e-6 >= quantity {
-                protected_count += 1;
-                "protected"
-            } else if !active_orders.is_empty() {
-                partial_count += 1;
-                "partial_protection"
-            } else if !planned_orders.is_empty() {
-                planned_count += 1;
-                "planned"
-            } else {
-                unprotected_count += 1;
-                "unprotected"
-            };
+        let active_stop_count = active_orders.len() + lifecycle_tests.len();
+        let protection_status = if active_stop_count > 0 && confirmed_quantity + 1e-6 >= quantity {
+            protected_count += 1;
+            "protected"
+        } else if active_stop_count > 0 {
+            partial_count += 1;
+            "partial_protection"
+        } else if !planned_orders.is_empty() {
+            planned_count += 1;
+            "planned"
+        } else {
+            unprotected_count += 1;
+            "unprotected"
+        };
         confirmed_covered_quantity += confirmed_quantity;
+        let unprotected_quantity = (quantity - confirmed_quantity).max(0.0);
+        if protection_status != "protected" {
+            let (kind, reason) = match protection_status {
+                "partial_protection" => (
+                    "partial_protective_stop_coverage",
+                    "Only part of the persisted broker position has broker-confirmed protective-stop coverage.",
+                ),
+                "planned" => (
+                    "planned_stop_not_broker_confirmed",
+                    "A local stop plan exists, but Saxo has not confirmed a working protective stop.",
+                ),
+                _ => (
+                    "unprotected_broker_position",
+                    "No broker-confirmed protective stop is recorded for this persisted broker position.",
+                ),
+            };
+            exceptions.push(json!({
+                "kind": kind,
+                "severity": "warning",
+                "symbol": symbol,
+                "broker_quantity": quantity,
+                "confirmed_covered_quantity": confirmed_quantity,
+                "unprotected_quantity": unprotected_quantity,
+                "reason": reason,
+                "operator_action": "Review the persisted broker position and stop evidence. The SIM lifecycle test is manual and does not place, change, or cancel any order without its separate confirmation.",
+            }));
+        }
         positions.push(json!({
             "symbol": symbol,
             "quantity": quantity,
@@ -1600,7 +1663,13 @@ fn protective_stop_coverage_from_rows(
             "protection_status": protection_status,
             "confirmed_covered_quantity": confirmed_quantity,
             "coverage_ratio": (confirmed_quantity / quantity).clamp(0.0, 1.0),
-            "active_stop_count": active_orders.len(),
+            "active_stop_count": active_stop_count,
+            "execution_order_stop_count": active_orders.len(),
+            "lifecycle_test_stop_count": lifecycle_tests.len(),
+            "coverage_evidence": {
+                "execution_orders": active_orders.len(),
+                "manual_sim_lifecycle_tests": lifecycle_tests.len(),
+            },
             "planned_stop_count": planned_orders.len(),
             "active_stop_price_local": active_stop_price,
             "planned_stop_price_local": planned_stop_price,
@@ -1626,10 +1695,12 @@ fn protective_stop_coverage_from_rows(
             "unprotected_count": unprotected_count,
             "total_quantity": total_quantity,
             "confirmed_covered_quantity": confirmed_covered_quantity,
+            "exception_count": exceptions.len(),
         },
         "positions": positions,
+        "exceptions": exceptions,
         "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
-        "interpretation": "Coverage is inferred from the latest persisted broker-position snapshot and local SELL Stop or StopLimit records. Only broker-confirmed stop states count as protection; queued, unresolved, stale, cancelled, or failed orders do not. A broker-hosted stop can still fill away from its stop price during a market gap.",
+        "interpretation": "Coverage is inferred from the latest persisted broker-position snapshot, local SELL Stop or StopLimit records, and reconciled manual SIM lifecycle-test records. Only broker-confirmed stop states and lifecycle tests reconciled as broker-working count as protection; queued, unresolved, stale, cancelled, or failed records do not. A broker-hosted stop can still fill away from its stop price during a market gap.",
     })
 }
 
@@ -1641,6 +1712,12 @@ fn compact_protective_stop_coverage_for_hermes(coverage: &JsonValue, limit: usiz
         .and_then(JsonValue::as_array_mut)
     {
         positions.truncate(position_limit);
+    }
+    if let Some(exceptions) = compact
+        .get_mut("exceptions")
+        .and_then(JsonValue::as_array_mut)
+    {
+        exceptions.truncate(position_limit);
     }
     compact
 }
@@ -4142,7 +4219,20 @@ impl AppState {
                  LIMIT 10",
             )
             .await?;
-        let mut coverage = protective_stop_coverage_from_rows(&positions, &orders);
+        let active_lifecycle_tests = self
+            .select_json(
+                "SELECT id, updated_at, environment, symbol, quantity, stop_price_local, status, broker_order_id
+                 FROM protective_stop_lifecycle_tests
+                 WHERE environment = 'sim'
+                   AND status = 'broker_working'
+                   AND broker_order_id IS NOT NULL
+                   AND broker_order_id <> ''
+                 ORDER BY updated_at DESC, id DESC
+                 LIMIT 100",
+            )
+            .await?;
+        let mut coverage =
+            protective_stop_coverage_from_rows(&positions, &orders, &active_lifecycle_tests);
         if let Some(object) = coverage.as_object_mut() {
             object.insert("recent_prechecks".to_string(), JsonValue::Array(prechecks));
             object.insert(
@@ -11654,7 +11744,7 @@ analysis_windows:
             json!({"symbol": "FAIL:xnas", "action": "SELL", "order_type": "Stop", "status": "execution_failed", "quantity": 2.0, "stop_price_local": 80.0}),
         ];
 
-        let coverage = protective_stop_coverage_from_rows(&positions, &orders);
+        let coverage = protective_stop_coverage_from_rows(&positions, &orders, &[]);
         let rows = coverage["positions"].as_array().expect("coverage rows");
         let find = |symbol: &str| {
             rows.iter()
@@ -11674,14 +11764,92 @@ analysis_windows:
     }
 
     #[test]
+    fn protective_stop_coverage_accepts_only_reconciled_sim_lifecycle_tests() {
+        let positions = vec![json!({
+            "symbol": "TEST:xnas",
+            "quantity": 5.0,
+            "currency": "USD",
+            "updated_at": "2026-07-25T12:00:00Z",
+        })];
+        let lifecycle_tests = vec![
+            json!({
+                "id": "working",
+                "environment": "sim",
+                "symbol": "TEST:xnas",
+                "quantity": 5.0,
+                "stop_price_local": 95.0,
+                "status": "broker_working",
+                "broker_order_id": "12345",
+            }),
+            json!({
+                "id": "ambiguous",
+                "environment": "sim",
+                "symbol": "TEST:xnas",
+                "quantity": 5.0,
+                "stop_price_local": 94.0,
+                "status": "placement_submitted",
+                "broker_order_id": "67890",
+            }),
+            json!({
+                "id": "wrong-environment",
+                "environment": "live",
+                "symbol": "TEST:xnas",
+                "quantity": 5.0,
+                "stop_price_local": 93.0,
+                "status": "broker_working",
+                "broker_order_id": "98765",
+            }),
+        ];
+
+        let coverage = protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests);
+        let row = &coverage["positions"][0];
+        assert_eq!(coverage["status"], "covered");
+        assert_eq!(coverage["summary"]["protected_count"], 1);
+        assert_eq!(coverage["summary"]["exception_count"], 0);
+        assert_eq!(row["confirmed_covered_quantity"], 5.0);
+        assert_eq!(row["coverage_evidence"]["execution_orders"], 0);
+        assert_eq!(row["coverage_evidence"]["manual_sim_lifecycle_tests"], 1);
+    }
+
+    #[test]
+    fn protective_stop_coverage_marks_unconfirmed_lifecycle_test_as_exception() {
+        let positions = vec![json!({
+            "symbol": "PENDING:xnas",
+            "quantity": 2.0,
+            "currency": "USD",
+            "updated_at": "2026-07-25T12:00:00Z",
+        })];
+        let lifecycle_tests = vec![json!({
+            "environment": "sim",
+            "symbol": "PENDING:xnas",
+            "quantity": 2.0,
+            "stop_price_local": 90.0,
+            "status": "placement_submitted",
+            "broker_order_id": "12345",
+        })];
+
+        let coverage = protective_stop_coverage_from_rows(&positions, &[], &lifecycle_tests);
+        assert_eq!(coverage["status"], "attention_required");
+        assert_eq!(coverage["summary"]["unprotected_count"], 1);
+        assert_eq!(coverage["summary"]["exception_count"], 1);
+        assert_eq!(
+            coverage["exceptions"][0]["kind"],
+            "unprotected_broker_position"
+        );
+        assert_eq!(coverage["exceptions"][0]["unprotected_quantity"], 2.0);
+    }
+
+    #[test]
     fn protective_stop_coverage_for_hermes_is_bounded() {
         let coverage = json!({
             "status": "covered",
             "summary": {"position_count": 3},
             "positions": [json!({"symbol": "A:xnas"}), json!({"symbol": "B:xnas"}), json!({"symbol": "C:xnas"})],
+            "exceptions": [json!({"symbol": "A:xnas"}), json!({"symbol": "B:xnas"}), json!({"symbol": "C:xnas"})],
         });
         let compact = compact_protective_stop_coverage_for_hermes(&coverage, 2);
         assert_eq!(compact["positions"].as_array().map(Vec::len), Some(2));
+        assert_eq!(compact["exceptions"].as_array().map(Vec::len), Some(2));
         assert_eq!(coverage["positions"].as_array().map(Vec::len), Some(3));
     }
 
