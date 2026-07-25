@@ -4486,6 +4486,51 @@ impl AppState {
         .await
     }
 
+    /// Placed stops still awaiting broker confirmation.
+    ///
+    /// `placement_submitted` is not coverage: the audit counts a stop only once
+    /// Saxo reports it working. Left unconfirmed, the position keeps appearing
+    /// as an exception and a later batch retries it -- which Saxo rejects with
+    /// `SellOrdersAlreadyExistForOwnedContracts`, because the stop it does not
+    /// know about is already resting. Observed 2026-07-25 across nine symbols.
+    pub async fn unconfirmed_protective_stop_placements(
+        &self,
+        older_than_seconds: i64,
+    ) -> Result<Vec<JsonValue>> {
+        let cutoff = (Utc::now() - Duration::seconds(older_than_seconds.max(0)))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        self.select_json(&format!(
+            "SELECT id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                    stop_price_local, status, broker_order_id, external_reference, request_id
+             FROM protective_stop_lifecycle_tests
+             WHERE status = 'placement_submitted'
+               AND broker_order_id IS NOT NULL
+               AND broker_order_id <> ''
+               AND updated_at < '{}'
+             ORDER BY id ASC
+             LIMIT 25",
+            sql_escape(&cutoff)
+        ))
+        .await
+    }
+
+    /// Symbols with a protective-stop lifecycle test that is not in a terminal
+    /// state. Saxo permits one resting sell per owned holding, so a batch must
+    /// not attempt a second one even while local coverage still lags.
+    pub async fn symbols_with_active_protective_stops(&self) -> Result<Vec<String>> {
+        Ok(self
+            .select_json(
+                "SELECT DISTINCT symbol FROM protective_stop_lifecycle_tests
+                 WHERE status IN ('placement_preparing', 'placement_submitted', 'broker_working',
+                                  'broker_state_unknown', 'broker_amended', 'reconciliation_pending')",
+            )
+            .await?
+            .iter()
+            .map(|row| text_value(row, "symbol").trim().to_ascii_uppercase())
+            .filter(|symbol| !symbol.is_empty())
+            .collect())
+    }
+
     /// Marks a prepared lifecycle test abandoned after a reconcile confirmed the
     /// broker never saw it. `placement_abandoned` is deliberately absent from
     /// the active-status list, so the precheck becomes reusable.

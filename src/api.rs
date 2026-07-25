@@ -444,6 +444,56 @@ async fn update_overview_integrity_acknowledgement(
 /// Each stale row is reconciled first. Only rows Saxo does not know about are
 /// abandoned — a row is never expired on a timer alone, because the same
 /// interruption could have happened *after* a successful placement.
+/// Confirms placed stops the broker has not yet been asked about.
+///
+/// A stop sitting at `placement_submitted` is invisible to the coverage audit,
+/// so its position keeps appearing as an exception and a later batch retries it
+/// -- which Saxo rejects, because the stop it does not know about is already
+/// resting. Reconciling promotes it to the state the audit actually counts.
+async fn confirm_unconfirmed_protective_stops(state: &AppState) {
+    const CONFIRM_AFTER_SECONDS: i64 = 15;
+    let pending = match state
+        .unconfirmed_protective_stop_placements(CONFIRM_AFTER_SECONDS)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            warn!("could not read unconfirmed protective stops: {err:#}");
+            return;
+        }
+    };
+    for test in pending {
+        let test_id = test
+            .get("id")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default();
+        match reconcile_sim_protective_stop_lifecycle_test(state, &test).await {
+            Ok(result) => {
+                let status = result
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("reconciliation_pending");
+                if let Err(err) = state
+                    .record_protective_stop_lifecycle_reconciliation(
+                        test_id,
+                        status,
+                        result.get("broker_order_id").and_then(JsonValue::as_str),
+                        &result,
+                    )
+                    .await
+                {
+                    warn!(test_id, "could not persist stop confirmation: {err:#}");
+                } else {
+                    info!(test_id, status, "confirmed protective stop with broker");
+                }
+            }
+            Err(err) => {
+                warn!(test_id, "could not confirm protective stop: {err:#}");
+            }
+        }
+    }
+}
+
 async fn resolve_stale_protective_stop_preparations(state: &AppState) {
     const STALE_AFTER_SECONDS: i64 = 90;
     let stale = match state
@@ -750,6 +800,17 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
     }
 
     resolve_stale_protective_stop_preparations(&state).await;
+    confirm_unconfirmed_protective_stops(&state).await;
+
+    // Saxo permits one resting sell per owned holding, so never attempt a second
+    // one -- not even when local coverage still lags behind the broker.
+    let already_protected = state
+        .symbols_with_active_protective_stops()
+        .await
+        .unwrap_or_else(|err| {
+            warn!("could not read active protective stops: {err:#}");
+            Vec::new()
+        });
 
     // The audit is the only source of symbols, quantities, and stop levels.
     let coverage = match state.protective_stop_coverage().await {
@@ -772,7 +833,15 @@ async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: S
             .and_then(JsonValue::as_str)
             .unwrap_or_default()
             .to_string();
-        if !requested.contains(&symbol.trim().to_ascii_uppercase()) {
+        let key = symbol.trim().to_ascii_uppercase();
+        if !requested.contains(&key) {
+            continue;
+        }
+        if already_protected.contains(&key) {
+            info!(
+                symbol,
+                "skipping batch stop: a protective stop already exists"
+            );
             continue;
         }
         let Some(proposed) = exception

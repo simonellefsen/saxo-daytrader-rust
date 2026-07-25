@@ -128,6 +128,20 @@ pub(crate) fn classify_execution_error(status: &str, error_text: &str) -> JsonVa
             "Reconcile Saxo holdings and active SELL reservations before another SELL.",
             "reconcile_before_retry",
         )
+    } else if error.contains("sellordersalreadyexistforownedcontracts") {
+        (
+            "sell_order_already_exists",
+            "A sell order already exists for this holding",
+            "Saxo allows one resting sell per owned holding. Reconcile or cancel the existing order before placing another.",
+            "reconcile_before_retry",
+        )
+    } else if error.contains("ordertypenotsupported") {
+        (
+            "order_type_not_supported",
+            "Order type not supported for this instrument",
+            "Read SupportedOrderTypes from instrument reference data and use a type the instrument allows. Precheck acceptance does not confirm order-type support.",
+            "manual_review",
+        )
     } else if error.contains("no tradable saxo instrument")
         || error.contains("instrument is not tradable")
         || error.contains("looking up saxo instrument")
@@ -199,5 +213,27 @@ mod tests {
         );
         assert_eq!(taxonomy["code"], json!("broker_state_unknown"));
         assert_eq!(taxonomy["retry_policy"], json!("reconcile_before_retry"));
+    }
+
+    #[test]
+    fn classifies_the_protective_stop_broker_errors_seen_on_2026_07_25() {
+        // Saxo permits one resting sell per owned holding. A batch that retries
+        // a position whose stop is already working hits this, and it must not
+        // read as an unclassified failure.
+        let existing = classify_execution_error(
+            "execution_failed",
+            "Order precheck failed: SellOrdersAlreadyExistForOwnedContracts: A sell order already exists for this instrument.",
+        );
+        assert_eq!(existing["code"], "sell_order_already_exists");
+        assert_eq!(existing["retry_policy"], "reconcile_before_retry");
+
+        // `Stop` is the FX form; equities need `StopIfTraded`. Precheck accepts
+        // both, so this only ever surfaces at placement.
+        let unsupported = classify_execution_error(
+            "execution_failed",
+            "Order placement failed: OrderTypeNotSupported: The chosen order type is not supported for this instrument type.",
+        );
+        assert_eq!(unsupported["code"], "order_type_not_supported");
+        assert_eq!(unsupported["retry_policy"], "manual_review");
     }
 }
