@@ -2053,6 +2053,7 @@ dependencies = [
  "csv",
  "dioxus",
  "dioxus-ssr",
+ "form_urlencoded",
  "md5",
  "quick-xml",
  "rand 0.8.6",

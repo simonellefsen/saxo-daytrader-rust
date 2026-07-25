@@ -22,10 +22,9 @@ use crate::{
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, ProtectiveStopBatchPlacementRequest,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, SaxoCallbackParams,
-        ViewParams,
+        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -675,6 +674,50 @@ async fn place_protective_stop_lifecycle_test(
     redirect_to_app(&state, return_to).into_response()
 }
 
+/// Parsed bulk-placement form.
+struct ProtectiveStopBatchForm {
+    /// Upper-cased, de-duplicated symbols from the checked rows.
+    symbols: Vec<String>,
+    confirmed: bool,
+    return_to: Option<String>,
+}
+
+/// Parses the bulk-placement body.
+///
+/// A checkbox column submits one repeated `symbols` field per checked row, and
+/// `serde_urlencoded` -- which axum's `Form` extractor uses -- cannot
+/// deserialize repeated keys into a `Vec`. It fails the whole request with
+/// `invalid type: string ..., expected a sequence`, so the body is parsed
+/// directly instead.
+fn parse_protective_stop_batch_form(body: &str) -> ProtectiveStopBatchForm {
+    let mut symbols: Vec<String> = Vec::new();
+    let mut confirmed = false;
+    let mut return_to = None;
+    for (key, value) in form_urlencoded::parse(body.as_bytes()) {
+        match key.as_ref() {
+            "symbols" => {
+                let symbol = value.trim().to_ascii_uppercase();
+                if !symbol.is_empty() && !symbols.contains(&symbol) {
+                    symbols.push(symbol);
+                }
+            }
+            "confirm_sim_batch_placement" => confirmed = value == "true",
+            "return_to" => {
+                let value = value.trim().to_string();
+                if !value.is_empty() {
+                    return_to = Some(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    ProtectiveStopBatchForm {
+        symbols,
+        confirmed,
+        return_to,
+    }
+}
+
 /// Places protective stops for several positions in one operator action.
 ///
 /// Deliberately conservative, because a bulk path turns one mistake into many:
@@ -688,13 +731,11 @@ async fn place_protective_stop_lifecycle_test(
 ///   the whole batch. An ambiguous response is never retried, and never
 ///   followed by another placement, because the safe assumption is that an
 ///   order may already exist.
-async fn place_protective_stop_batch(
-    State(state): State<Arc<AppState>>,
-    Form(request): Form<ProtectiveStopBatchPlacementRequest>,
-) -> Response {
+async fn place_protective_stop_batch(State(state): State<Arc<AppState>>, body: String) -> Response {
     const PLACEMENT_SPACING_MS: u64 = 1_100;
+    let request = parse_protective_stop_batch_form(&body);
     let return_to = safe_return_to(request.return_to.as_deref());
-    if request.confirm_sim_batch_placement.as_deref() != Some("true") {
+    if !request.confirmed {
         warn!("SIM protective-stop batch confirmation missing; nothing was sent");
         return redirect_to_app(&state, return_to).into_response();
     }
@@ -719,12 +760,7 @@ async fn place_protective_stop_batch(
             return redirect_to_app(&state, return_to).into_response();
         }
     };
-    let requested = request
-        .symbols
-        .iter()
-        .map(|symbol| symbol.trim().to_ascii_uppercase())
-        .filter(|symbol| !symbol.is_empty())
-        .collect::<Vec<_>>();
+    let requested = request.symbols.clone();
     let mut targets = Vec::new();
     for exception in coverage
         .get("exceptions")
@@ -2160,5 +2196,36 @@ mod tests {
         assert_eq!(normalize_scheduler_page(Some(-3)), 1);
         assert_eq!(normalize_scheduler_page(Some(7)), 7);
         assert_eq!(normalize_scheduler_page(Some(9_999)), 1_000);
+    }
+
+    /// A checkbox column submits one repeated `symbols` field per checked row.
+    /// axum's `Form` extractor uses `serde_urlencoded`, which cannot map
+    /// repeated keys onto a `Vec` and fails the request outright with
+    /// `invalid type: string "LMND:xnys", expected a sequence` -- observed by
+    /// the operator on 2026-07-25.
+    #[test]
+    fn batch_form_parses_repeated_symbol_fields() {
+        let body = "return_to=%2F%3Fview%3Dexecution&symbols=LMND%3Axnys&symbols=ASML%3Axnas\
+                    &symbols=lmnd%3Axnys&symbols=+&confirm_sim_batch_placement=true";
+        let parsed = parse_protective_stop_batch_form(body);
+        assert_eq!(
+            parsed.symbols,
+            vec!["LMND:XNYS".to_string(), "ASML:XNAS".to_string()],
+            "symbols are decoded, upper-cased, de-duplicated, and blanks dropped"
+        );
+        assert!(parsed.confirmed);
+        assert_eq!(parsed.return_to.as_deref(), Some("/?view=execution"));
+    }
+
+    /// Confirmation is opt-in. Anything other than an explicit `true` must place
+    /// nothing, including a missing field or an unchecked box.
+    #[test]
+    fn batch_form_requires_explicit_confirmation() {
+        assert!(!parse_protective_stop_batch_form("symbols=V%3Axnys").confirmed);
+        assert!(
+            !parse_protective_stop_batch_form("symbols=V%3Axnys&confirm_sim_batch_placement=false")
+                .confirmed
+        );
+        assert!(parse_protective_stop_batch_form("").symbols.is_empty());
     }
 }

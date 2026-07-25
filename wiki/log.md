@@ -1183,3 +1183,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Recorded the fill-detection gap the operator raised. `sync_saxo_broker_orders` already runs twice per scheduler cycle — every 10 minutes, dropping to 1 minute while `outstanding_order_count > 0` — but reads `execution_orders` only, and `protective_stop_lifecycle_tests` is referenced zero times in that path. A stop filling at Saxo today would produce no ledger row, no position update, and no Trading Manager awareness.
 - Design consequence: automated protective stops must be created as `execution_orders` rows rather than lifecycle-test rows. Broker sync, fast polling, fill reconciliation, and the coverage audit then cover them without new plumbing. The manual lifecycle-test table stays what it was built for — a one-off validation harness outside the queue.
 - Open risk to handle with that change: a resting GTC stop keeps `outstanding_order_count` above zero indefinitely, which would pin the scheduler at 1-minute polling. The fast-poll trigger must exclude resting protective stops.
+
+## [2026-07-25] fix | Repeated form fields in bulk stop placement
+
+- The bulk placement button returned `Failed to deserialize form body: symbols: invalid type: string "LMND:xnys", expected a sequence`. A checkbox column submits one repeated `symbols` field per checked row, and `serde_urlencoded` — which axum's `Form` extractor uses — cannot map repeated keys onto a `Vec`. It rejects the whole request rather than collecting them.
+- Parsed the body directly with `form_urlencoded` instead. The crate was already in the dependency tree via `url`, so nothing new is downloaded. The parse is a pure function: it decodes, trims, upper-cases, de-duplicates, and drops blank symbols, and treats confirmation as opt-in so a missing or non-`true` value places nothing.
+- Two tests cover it, one reproducing the exact submitted body from the failure.
+- Note for future form work in this codebase: any multi-select or checkbox column has this problem. `Form<T>` with a `Vec` field will compile and then fail at runtime on the first real submission.
