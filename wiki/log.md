@@ -1231,3 +1231,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Root cause of the wasted attempts was local, not broker-side: the nine stops sat at `placement_submitted`, and the coverage audit counts only `broker_working`. Their positions therefore still rendered as unprotected exceptions, so each new batch dutifully retried them against stops that were already resting.
 - Three fixes. A sweep now reconciles `placement_submitted` rows older than 15 seconds so they reach the state the audit counts. The batch independently excludes any symbol with a non-terminal lifecycle test, so it cannot attempt a second sell even while coverage lags. Both new broker errors gained taxonomy entries — `sell_order_already_exists` (reconcile before retry) and `order_type_not_supported` (manual review) — replacing "Unclassified Saxo failure".
 - Worth recording as a general lesson: local state lagging the broker does not merely mislead a dashboard. Here it caused the system to repeatedly attempt orders the broker had already accepted, and only Saxo's own guard prevented double protection.
+
+## [2026-07-25] safety | Scheduler confirms placed protective stops
+
+- Added a read-only protective-stop confirmation step to the scheduler cycle. It asks Saxo what state each already-placed stop is in and records the answer. It cannot place, amend, or cancel anything, so the manual-only boundary around stop *mutation* is unchanged.
+- Needed because confirmation previously ran only inside a placement request. A stop therefore stayed at `placement_submitted` until an operator happened to trigger another placement, the coverage audit kept reporting its position as unprotected, and the next batch retried an order Saxo already held.
+- This is the first scheduler involvement in the protective-stop lifecycle. The distinction that keeps it safe: the scheduler may *observe* stop state, and only an explicitly confirmed operator action may change it.

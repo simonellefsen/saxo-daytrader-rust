@@ -127,6 +127,18 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     };
     record_step_duration(&mut step_durations, "broker_order_sync", step_started);
     let step_started = Instant::now();
+    // Read-only confirmation of already-placed protective stops. It asks Saxo
+    // what state each stop is in and records the answer; it cannot place,
+    // amend, or cancel anything. Without it a stop stays at
+    // `placement_submitted`, the coverage audit keeps reporting its position as
+    // unprotected, and a later batch retries an order the broker already holds.
+    crate::api::confirm_unconfirmed_protective_stops(state).await;
+    record_step_duration(
+        &mut step_durations,
+        "protective_stop_confirmation",
+        step_started,
+    );
+    let step_started = Instant::now();
     let decision_reports = match run_xai_decision_cycle(state).await {
         Ok(value) => value,
         Err(err) => {

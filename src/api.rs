@@ -450,7 +450,7 @@ async fn update_overview_integrity_acknowledgement(
 /// so its position keeps appearing as an exception and a later batch retries it
 /// -- which Saxo rejects, because the stop it does not know about is already
 /// resting. Reconciling promotes it to the state the audit actually counts.
-async fn confirm_unconfirmed_protective_stops(state: &AppState) {
+pub(crate) async fn confirm_unconfirmed_protective_stops(state: &AppState) {
     const CONFIRM_AFTER_SECONDS: i64 = 15;
     let pending = match state
         .unconfirmed_protective_stop_placements(CONFIRM_AFTER_SECONDS)
