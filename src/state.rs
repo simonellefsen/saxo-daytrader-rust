@@ -4132,9 +4132,23 @@ impl AppState {
                  LIMIT 10",
             )
             .await?;
+        let lifecycle_tests = self
+            .select_json(
+                "SELECT id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                        stop_price_local, status, broker_order_id, external_reference, request_id,
+                        placement_result_json, cancellation_result_json, reconciliation_json
+                 FROM protective_stop_lifecycle_tests
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 10",
+            )
+            .await?;
         let mut coverage = protective_stop_coverage_from_rows(&positions, &orders);
         if let Some(object) = coverage.as_object_mut() {
             object.insert("recent_prechecks".to_string(), JsonValue::Array(prechecks));
+            object.insert(
+                "recent_lifecycle_tests".to_string(),
+                JsonValue::Array(lifecycle_tests),
+            );
         }
         Ok(coverage)
     }
@@ -4165,6 +4179,219 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("recording sanitized protective-stop precheck")?;
+        Ok(())
+    }
+
+    pub async fn prepare_protective_stop_lifecycle_test(
+        &self,
+        source_precheck_id: i64,
+    ) -> Result<JsonValue> {
+        if source_precheck_id <= 0 {
+            bail!("A successful SIM protective-stop precheck is required");
+        }
+        let source = self
+            .first_json(&format!(
+                "SELECT id, environment, symbol, quantity, stop_price_local, status
+                 FROM protective_stop_prechecks WHERE id = {} LIMIT 1",
+                source_precheck_id
+            ))
+            .await?
+            .ok_or_else(|| {
+                anyhow!("Protective-stop precheck {source_precheck_id} was not found")
+            })?;
+        if json_text(&source, "status") != "precheck_ok"
+            || !json_text(&source, "environment").eq_ignore_ascii_case("sim")
+        {
+            bail!("Protective-stop lifecycle tests require a successful SIM precheck");
+        }
+        let active = self
+            .first_json(&format!(
+                "SELECT id FROM protective_stop_lifecycle_tests
+                 WHERE source_precheck_id = {}
+                   AND status IN ('placement_preparing', 'placement_submitted', 'broker_working',
+                                  'broker_state_unknown', 'cancellation_submitted', 'reconciliation_pending')
+                 ORDER BY id DESC LIMIT 1",
+                source_precheck_id
+            ))
+            .await?;
+        if let Some(active) = active {
+            bail!(
+                "Protective-stop precheck {source_precheck_id} already has active lifecycle test {}",
+                value_i64(&active, "id")
+            );
+        }
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let nonce = Utc::now().timestamp_micros();
+        let request_id = format!("saxo-stop-test-{source_precheck_id}-{nonce}");
+        let external_reference = format!("stop-test:{source_precheck_id}:{nonce}");
+        let result = json!({
+            "safety": "manual_sim_only_single_position_precheck_before_place_no_scheduler_or_hermes",
+            "source_precheck_id": source_precheck_id,
+            "placement": "not_sent"
+        });
+        sqlx::query(
+            "INSERT INTO protective_stop_lifecycle_tests (
+                created_at, updated_at, source_precheck_id, environment, symbol, quantity, stop_price_local,
+                status, broker_order_id, external_reference, request_id, placement_result_json,
+                cancellation_result_json, reconciliation_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(source_precheck_id)
+        .bind("sim")
+        .bind(json_text(&source, "symbol"))
+        .bind(value_f64(&source, "quantity"))
+        .bind(value_f64(&source, "stop_price_local"))
+        .bind("placement_preparing")
+        .bind(&external_reference)
+        .bind(&request_id)
+        .bind(result.to_string())
+        .bind(json!({"status": "not_requested"}).to_string())
+        .bind(json!({"status": "not_requested"}).to_string())
+        .execute(&self.pool)
+        .await
+        .context("creating SIM protective-stop lifecycle test")?;
+        self.protective_stop_lifecycle_test_by_request_id(&request_id)
+            .await?
+            .ok_or_else(|| anyhow!("Could not reload prepared protective-stop lifecycle test"))
+    }
+
+    pub async fn protective_stop_lifecycle_test(&self, test_id: i64) -> Result<Option<JsonValue>> {
+        if test_id <= 0 {
+            return Ok(None);
+        }
+        self.first_json(&format!(
+            "SELECT id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                    stop_price_local, status, broker_order_id, external_reference, request_id,
+                    placement_result_json, cancellation_result_json, reconciliation_json
+             FROM protective_stop_lifecycle_tests WHERE id = {} LIMIT 1",
+            test_id
+        ))
+        .await
+    }
+
+    async fn protective_stop_lifecycle_test_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<JsonValue>> {
+        self.first_json(&format!(
+            "SELECT id, created_at, updated_at, source_precheck_id, environment, symbol, quantity,
+                    stop_price_local, status, broker_order_id, external_reference, request_id,
+                    placement_result_json, cancellation_result_json, reconciliation_json
+             FROM protective_stop_lifecycle_tests
+             WHERE request_id = '{}' LIMIT 1",
+            sql_escape(request_id)
+        ))
+        .await
+    }
+
+    pub async fn record_protective_stop_lifecycle_placement(
+        &self,
+        test_id: i64,
+        status: &str,
+        broker_order_id: Option<&str>,
+        result: &JsonValue,
+    ) -> Result<()> {
+        self.update_protective_stop_lifecycle_test(
+            test_id,
+            status,
+            broker_order_id,
+            Some(result),
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn record_protective_stop_lifecycle_cancellation(
+        &self,
+        test_id: i64,
+        status: &str,
+        result: &JsonValue,
+    ) -> Result<()> {
+        self.update_protective_stop_lifecycle_test(test_id, status, None, None, Some(result), None)
+            .await
+    }
+
+    pub async fn record_protective_stop_lifecycle_reconciliation(
+        &self,
+        test_id: i64,
+        status: &str,
+        broker_order_id: Option<&str>,
+        result: &JsonValue,
+    ) -> Result<()> {
+        self.update_protective_stop_lifecycle_test(
+            test_id,
+            status,
+            broker_order_id,
+            None,
+            None,
+            Some(result),
+        )
+        .await
+    }
+
+    async fn update_protective_stop_lifecycle_test(
+        &self,
+        test_id: i64,
+        status: &str,
+        broker_order_id: Option<&str>,
+        placement: Option<&JsonValue>,
+        cancellation: Option<&JsonValue>,
+        reconciliation: Option<&JsonValue>,
+    ) -> Result<()> {
+        let current = self
+            .protective_stop_lifecycle_test(test_id)
+            .await?
+            .ok_or_else(|| anyhow!("Protective-stop lifecycle test {test_id} was not found"))?;
+        let broker_order_id = broker_order_id.map(ToString::to_string).or_else(|| {
+            let value = json_text(&current, "broker_order_id");
+            (!value.is_empty()).then_some(value)
+        });
+        let placement_text = placement.map(ToString::to_string).unwrap_or_else(|| {
+            let value = json_text(&current, "placement_result_json");
+            if value.is_empty() {
+                "{}".to_string()
+            } else {
+                value
+            }
+        });
+        let cancellation_text = cancellation.map(ToString::to_string).unwrap_or_else(|| {
+            let value = json_text(&current, "cancellation_result_json");
+            if value.is_empty() {
+                "{}".to_string()
+            } else {
+                value
+            }
+        });
+        let reconciliation_text = reconciliation.map(ToString::to_string).unwrap_or_else(|| {
+            let value = json_text(&current, "reconciliation_json");
+            if value.is_empty() {
+                "{}".to_string()
+            } else {
+                value
+            }
+        });
+        let updated = sqlx::query(
+            "UPDATE protective_stop_lifecycle_tests
+             SET updated_at = ?, status = ?, broker_order_id = ?, placement_result_json = ?,
+                 cancellation_result_json = ?, reconciliation_json = ?
+             WHERE id = ?",
+        )
+        .bind(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .bind(status)
+        .bind(broker_order_id)
+        .bind(placement_text)
+        .bind(cancellation_text)
+        .bind(reconciliation_text)
+        .bind(test_id)
+        .execute(&self.pool)
+        .await
+        .context("recording SIM protective-stop lifecycle test state")?;
+        if updated.rows_affected() != 1 {
+            bail!("Protective-stop lifecycle test {test_id} changed while updating");
+        }
         Ok(())
     }
 
@@ -7508,6 +7735,69 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating protective-stop prechecks index")?;
+        if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS protective_stop_lifecycle_tests (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    source_precheck_id BIGINT NOT NULL,
+                    environment TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    stop_price_local REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    broker_order_id TEXT,
+                    external_reference TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    placement_result_json TEXT NOT NULL,
+                    cancellation_result_json TEXT NOT NULL,
+                    reconciliation_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating protective-stop lifecycle tests table")?;
+        } else {
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS protective_stop_lifecycle_tests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    source_precheck_id INTEGER NOT NULL,
+                    environment TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    stop_price_local REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    broker_order_id TEXT,
+                    external_reference TEXT NOT NULL,
+                    request_id TEXT NOT NULL UNIQUE,
+                    placement_result_json TEXT NOT NULL,
+                    cancellation_result_json TEXT NOT NULL,
+                    reconciliation_json TEXT NOT NULL
+                )",
+            )
+            .execute(&self.pool)
+            .await
+            .context("creating protective-stop lifecycle tests table")?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_protective_stop_lifecycle_tests_created
+             ON protective_stop_lifecycle_tests(created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating protective-stop lifecycle tests index")?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_protective_stop_lifecycle_tests_active_source
+             ON protective_stop_lifecycle_tests(source_precheck_id)
+             WHERE status IN ('placement_preparing', 'placement_submitted', 'broker_working',
+                              'broker_state_unknown', 'cancellation_submitted', 'reconciliation_pending')",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating active protective-stop lifecycle test uniqueness guard")?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS broker_instrument_exposures (
                 symbol TEXT PRIMARY KEY,
@@ -9975,6 +10265,75 @@ market_data:
             db_url: "sqlite::memory:".to_string(),
             pool,
         }
+    }
+
+    #[tokio::test]
+    async fn protective_stop_lifecycle_requires_accepted_sim_precheck_and_blocks_duplicate_active_test()
+     {
+        let state = runtime_settings_test_state("saxo:\n  environment: sim\n").await;
+        sqlx::query(
+            "CREATE TABLE protective_stop_prechecks (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                stop_price_local REAL NOT NULL,
+                status TEXT NOT NULL,
+                result_json TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create protective-stop prechecks test table");
+        sqlx::query(
+            "CREATE TABLE protective_stop_lifecycle_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source_precheck_id INTEGER NOT NULL,
+                environment TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                stop_price_local REAL NOT NULL,
+                status TEXT NOT NULL,
+                broker_order_id TEXT,
+                external_reference TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,
+                placement_result_json TEXT NOT NULL,
+                cancellation_result_json TEXT NOT NULL,
+                reconciliation_json TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create protective-stop lifecycle test table");
+        sqlx::query(
+            "INSERT INTO protective_stop_prechecks (
+                id, created_at, environment, symbol, quantity, stop_price_local, status, result_json
+             ) VALUES (1, '2026-07-25T08:00:00Z', 'sim', 'TSLA:xnas', 1, 300, 'precheck_ok', '{}')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed accepted SIM precheck");
+
+        let first = state
+            .prepare_protective_stop_lifecycle_test(1)
+            .await
+            .expect("prepare lifecycle test");
+        assert_eq!(first["status"], json!("placement_preparing"));
+        assert!(
+            state
+                .prepare_protective_stop_lifecycle_test(1)
+                .await
+                .is_err()
+        );
+        assert!(
+            state
+                .prepare_protective_stop_lifecycle_test(999)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -231,26 +231,182 @@ pub async fn precheck_sim_protective_stop(
     if !stop_price_local.is_finite() || stop_price_local <= 0.0 {
         bail!("Protective-stop precheck stop price must be positive");
     }
-    let configured_environment = yaml_string(&state.config, &["saxo", "environment"])
-        .unwrap_or_else(|| "sim".to_string())
-        .to_ascii_lowercase();
-    if configured_environment != "sim" {
-        bail!("Protective-stop precheck is restricted to the Saxo SIM environment");
-    }
+    let (session, payload, normalized_stop_price) = protective_stop_sim_payload(
+        state,
+        symbol,
+        quantity,
+        stop_price_local,
+        "protective_stop_sim_precheck",
+        None,
+    )
+    .await?;
+    let precheck = precheck_order(state, &session, &payload).await?;
+    Ok(json!({
+        "accepted": true,
+        "symbol": symbol,
+        "quantity": quantity,
+        "stop_price_local": normalized_stop_price,
+        "order_type": "Stop",
+        "duration_type": "GoodTillCancel",
+        "payload": sanitized_order_payload(&payload),
+        "precheck": protective_stop_precheck_summary(&precheck),
+        "safety": "sim_only_precheck_no_order_placement_execution_order_or_sell_reservation"
+    }))
+}
 
-    let session = state
-        .ensure_saxo_session_json("protective_stop_sim_precheck")
-        .await
-        .context("loading Saxo SIM session before protective-stop precheck")?;
-    if let Some(session_environment) = session_text(&session, "environment") {
-        if !session_environment.eq_ignore_ascii_case("sim") {
-            bail!("Protective-stop precheck session is not a Saxo SIM session");
-        }
+/// Places exactly one prechecked, operator-confirmed SIM GTC SELL Stop lifecycle
+/// test. This is deliberately excluded from the execution queue, scheduler, and
+/// Hermes: it exists solely to validate Saxo's broker-hosted stop lifecycle.
+pub async fn place_sim_protective_stop_lifecycle_test(
+    state: &AppState,
+    lifecycle_test: &JsonValue,
+) -> Result<JsonValue> {
+    let symbol = json_text(lifecycle_test, "symbol")
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no symbol"))?;
+    let quantity = lifecycle_test
+        .get("quantity")
+        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no quantity"))?;
+    let stop_price_local = lifecycle_test
+        .get("stop_price_local")
+        .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no stop price"))?;
+    let request_id = json_text(lifecycle_test, "request_id")
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no request id"))?;
+    let external_reference = json_text(lifecycle_test, "external_reference")
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test had no external reference"))?;
+    let (session, mut payload, normalized_stop_price) = protective_stop_sim_payload(
+        state,
+        &symbol,
+        quantity,
+        stop_price_local,
+        "protective_stop_sim_lifecycle_placement",
+        Some(&external_reference),
+    )
+    .await?;
+    let precheck = precheck_order(state, &session, &payload).await?;
+    let placement = place_order(state, &session, &request_id, &payload).await?;
+    let broker_order_id = broker_order_id(&placement);
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("AccountKey");
     }
+    Ok(json!({
+        "accepted": true,
+        "symbol": symbol,
+        "quantity": quantity,
+        "stop_price_local": normalized_stop_price,
+        "order_type": "Stop",
+        "duration_type": "GoodTillCancel",
+        "external_reference": external_reference,
+        "request_id": request_id,
+        "broker_order_id": broker_order_id,
+        "payload": payload,
+        "precheck": protective_stop_precheck_summary(&precheck),
+        "safety": "manual_sim_only_single_position_no_scheduler_hermes_or_execution_queue"
+    }))
+}
 
+/// Cancels only a previously placed manual SIM protective-stop lifecycle test.
+/// A successful DELETE is not treated as final until a separate reconciliation
+/// reads Saxo's open-order/audit state.
+pub async fn cancel_sim_protective_stop_lifecycle_test(
+    state: &AppState,
+    lifecycle_test: &JsonValue,
+) -> Result<JsonValue> {
+    let broker_order_id = json_text(lifecycle_test, "broker_order_id")
+        .ok_or_else(|| anyhow!("Protective-stop lifecycle test has no broker order id"))?;
+    let session =
+        protective_stop_sim_session(state, "protective_stop_sim_lifecycle_cancel").await?;
+    let response = saxo_delete_json(
+        state,
+        &session,
+        &format!(
+            "/trade/v2/orders/{}",
+            percent_encode_path_segment(&broker_order_id)
+        ),
+        &[("AccountKey", account_key(state, &session)?)],
+        "SIM protective-stop lifecycle cancellation",
+    )
+    .await?;
+    Ok(json!({
+        "accepted": true,
+        "broker_order_id": broker_order_id,
+        "result": if response.is_null() { json!({}) } else { sanitized_broker_activity(&response) },
+        "safety": "manual_sim_only_cancellation_requires_separate_reconciliation"
+    }))
+}
+
+/// Reconciles one manual lifecycle test without issuing a broker mutation.
+pub async fn reconcile_sim_protective_stop_lifecycle_test(
+    state: &AppState,
+    lifecycle_test: &JsonValue,
+) -> Result<JsonValue> {
+    let session =
+        protective_stop_sim_session(state, "protective_stop_sim_lifecycle_reconcile").await?;
+    let client_key = client_key(state, &session)?;
+    let known_broker_order_id = json_text(lifecycle_test, "broker_order_id");
+    let broker_state =
+        if let Some(broker_order_id) = known_broker_order_id.as_deref() {
+            fetch_broker_order_state(state, &session, &client_key, broker_order_id).await?
+        } else {
+            let external_reference = json_text(lifecycle_test, "external_reference").ok_or_else(|| {
+            anyhow!("Protective-stop lifecycle test has no broker order id or external reference")
+        })?;
+            let from_datetime = unknown_placement_from_datetime(lifecycle_test);
+            fetch_broker_order_activity_by_external_reference(
+                state,
+                &session,
+                &client_key,
+                &external_reference,
+                &from_datetime,
+            )
+            .await?
+        };
+    let Some(broker_state) = broker_state else {
+        return Ok(json!({
+            "status": "reconciliation_pending",
+            "broker_order_id": known_broker_order_id,
+            "broker_visibility": "not_found",
+            "safety": "no_mutation_no_retry_operator_review_required"
+        }));
+    };
+    let payload = broker_payload(&broker_state);
+    let broker_order_id = broker_order_id(payload).or(known_broker_order_id);
+    let broker_status = broker_status_text(payload).unwrap_or_else(|| "Unknown".to_string());
+    let status = if is_final_fill_status(
+        &Some(broker_status.clone()),
+        json_text(payload, "SubStatus").as_deref(),
+    ) {
+        "filled"
+    } else if broker_status.eq_ignore_ascii_case("Cancelled") {
+        "cancelled"
+    } else if is_terminal_failure_status(&Some(broker_status.clone())) {
+        "failed"
+    } else {
+        "broker_working"
+    };
+    Ok(json!({
+        "status": status,
+        "broker_order_id": broker_order_id,
+        "broker_status": broker_status,
+        "broker_visibility": json_text(&broker_state, "broker_visibility").unwrap_or_else(|| "unknown".to_string()),
+        "broker_state": sanitized_broker_activity(&broker_state),
+        "safety": "read_only_reconciliation_no_retry_or_broker_mutation"
+    }))
+}
+
+async fn protective_stop_sim_payload(
+    state: &AppState,
+    symbol: &str,
+    quantity: f64,
+    stop_price_local: f64,
+    session_source: &str,
+    external_reference: Option<&str>,
+) -> Result<(JsonValue, JsonValue, f64)> {
+    let session = protective_stop_sim_session(state, session_source).await?;
     let broker_positions = broker_position_quantities(state, &session)
         .await
-        .context("loading broker-held position before protective-stop precheck")?;
+        .context("loading broker-held position before protective-stop request")?;
     let position = broker_positions
         .get(symbol)
         .or_else(|| {
@@ -278,24 +434,36 @@ pub async fn precheck_sim_protective_stop(
         "stop",
     )
     .await?;
-    let payload = protective_stop_precheck_payload(
+    let mut payload = protective_stop_precheck_payload(
         account_key(state, &session)?,
         instrument,
         quantity,
         normalized_stop_price,
     );
-    let precheck = precheck_order(state, &session, &payload).await?;
-    Ok(json!({
-        "accepted": true,
-        "symbol": symbol,
-        "quantity": quantity,
-        "stop_price_local": normalized_stop_price,
-        "order_type": "Stop",
-        "duration_type": "GoodTillCancel",
-        "payload": sanitized_order_payload(&payload),
-        "precheck": protective_stop_precheck_summary(&precheck),
-        "safety": "sim_only_precheck_no_order_placement_execution_order_or_sell_reservation"
-    }))
+    if let Some(external_reference) = external_reference {
+        payload["ExternalReference"] =
+            json!(external_reference.chars().take(50).collect::<String>());
+    }
+    Ok((session, payload, normalized_stop_price))
+}
+
+async fn protective_stop_sim_session(state: &AppState, source: &str) -> Result<JsonValue> {
+    let configured_environment = yaml_string(&state.config, &["saxo", "environment"])
+        .unwrap_or_else(|| "sim".to_string())
+        .to_ascii_lowercase();
+    if configured_environment != "sim" {
+        bail!("Protective-stop lifecycle is restricted to the Saxo SIM environment");
+    }
+    let session = state
+        .ensure_saxo_session_json(source)
+        .await
+        .context("loading Saxo SIM session before protective-stop lifecycle action")?;
+    if !session_text(&session, "environment")
+        .is_some_and(|session_environment| session_environment.eq_ignore_ascii_case("sim"))
+    {
+        bail!("Protective-stop lifecycle session is not a verified Saxo SIM session");
+    }
+    Ok(session)
 }
 
 fn protective_stop_precheck_payload(
@@ -1569,6 +1737,10 @@ fn placement_error_is_state_unknown(error: &anyhow::Error) -> bool {
     placement_error_text_is_state_unknown(&error.to_string())
 }
 
+pub fn protective_stop_lifecycle_error_is_state_unknown(error: &anyhow::Error) -> bool {
+    placement_error_is_state_unknown(error)
+}
+
 fn placement_error_text_is_state_unknown(error_text: &str) -> bool {
     let lower = error_text.to_ascii_lowercase();
     lower.contains("tradenotcompleted")
@@ -1676,6 +1848,28 @@ async fn saxo_post_json(
         }
     }
     bail!(last_error.unwrap_or_else(|| format!("{action} rate limited by Saxo")));
+}
+
+async fn saxo_delete_json(
+    state: &AppState,
+    session: &JsonValue,
+    path: &str,
+    query: &[(&str, String)],
+    action: &str,
+) -> Result<JsonValue> {
+    let access_token = session_text(session, "access_token")
+        .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let response = client
+        .delete(format!("{}{}", openapi_base_url(state, session)?, path))
+        .bearer_auth(access_token)
+        .header(header::ACCEPT, "application/json")
+        .query(query)
+        .send()
+        .await?;
+    saxo_response_json(response, action).await
 }
 
 async fn saxo_response_json(response: reqwest::Response, action: &str) -> Result<JsonValue> {
@@ -3753,6 +3947,32 @@ mod tests {
                 .get("AccountKey")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn protective_stop_lifecycle_reference_is_bounded_and_sanitized() {
+        let instrument = SaxoInstrument {
+            uic: 12345,
+            asset_type: "Stock".to_string(),
+            exchange_id: "XNAS".to_string(),
+            description: "Example".to_string(),
+        };
+        let mut payload = protective_stop_precheck_payload(
+            "account-key-must-not-leak".to_string(),
+            &instrument,
+            2.0,
+            95.5,
+        );
+        payload["ExternalReference"] = json!("x".repeat(80).chars().take(50).collect::<String>());
+        let sanitized = sanitized_order_payload(&payload);
+
+        assert_eq!(sanitized["OrderType"], "Stop");
+        assert_eq!(sanitized["OrderDuration"]["DurationType"], "GoodTillCancel");
+        assert_eq!(
+            sanitized["ExternalReference"].as_str().map(str::len),
+            Some(50)
+        );
+        assert!(sanitized.get("AccountKey").is_none());
     }
 
     #[test]

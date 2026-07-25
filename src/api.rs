@@ -22,10 +22,16 @@ use crate::{
         HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
+        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
-    saxo_order::{precheck_sim_protective_stop, run_saxo_execution_queue},
+    saxo_order::{
+        cancel_sim_protective_stop_lifecycle_test, place_sim_protective_stop_lifecycle_test,
+        precheck_sim_protective_stop, protective_stop_lifecycle_error_is_state_unknown,
+        reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
+    },
     state::AppState,
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -145,6 +151,18 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/protective-stops/precheck",
             post(precheck_protective_stop),
+        )
+        .route(
+            "/api/protective-stops/lifecycle/place",
+            post(place_protective_stop_lifecycle_test),
+        )
+        .route(
+            "/api/protective-stops/lifecycle/cancel",
+            post(cancel_protective_stop_lifecycle_test),
+        )
+        .route(
+            "/api/protective-stops/lifecycle/reconcile",
+            post(reconcile_protective_stop_lifecycle_test),
         )
         .route(
             "/api/actions/daily-indicators",
@@ -478,6 +496,235 @@ async fn precheck_protective_stop(
                 .await
             {
                 warn!(symbol, "could not record rejected protective-stop precheck: {record_err:#}");
+            }
+        }
+    }
+    redirect_to_app(&state, return_to).into_response()
+}
+
+async fn place_protective_stop_lifecycle_test(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<ProtectiveStopLifecyclePlacementRequest>,
+) -> Response {
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.confirm_sim_placement.as_deref() != Some("true") {
+        warn!(
+            source_precheck_id = request.source_precheck_id,
+            "SIM protective-stop placement confirmation missing"
+        );
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    let prepared = match state
+        .prepare_protective_stop_lifecycle_test(request.source_precheck_id)
+        .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            warn!(
+                source_precheck_id = request.source_precheck_id,
+                "could not prepare SIM protective-stop lifecycle test: {err:#}"
+            );
+            return redirect_to_app(&state, return_to).into_response();
+        }
+    };
+    let test_id = prepared
+        .get("id")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or_default();
+    match place_sim_protective_stop_lifecycle_test(&state, &prepared).await {
+        Ok(result) => {
+            let broker_order_id = result.get("broker_order_id").and_then(JsonValue::as_str);
+            let status = if broker_order_id.is_some() {
+                "placement_submitted"
+            } else {
+                "broker_state_unknown"
+            };
+            if let Err(err) = state
+                .record_protective_stop_lifecycle_placement(
+                    test_id,
+                    status,
+                    broker_order_id,
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    test_id,
+                    "could not persist SIM protective-stop placement result: {err:#}"
+                );
+            }
+            info!(
+                test_id,
+                ?broker_order_id,
+                "manual SIM protective-stop lifecycle placement submitted"
+            );
+        }
+        Err(err) => {
+            let uncertain = protective_stop_lifecycle_error_is_state_unknown(&err);
+            let status = if uncertain {
+                "broker_state_unknown"
+            } else {
+                "placement_failed"
+            };
+            let result = json!({
+                "accepted": false,
+                "error": classify_execution_error("execution_failed", &err.to_string()),
+                "safety": if uncertain {
+                    "broker_state_unknown_no_automatic_retry_or_duplicate_placement"
+                } else {
+                    "SIM placement rejected_before_broker_confirmation"
+                }
+            });
+            warn!(
+                test_id,
+                status, "SIM protective-stop lifecycle placement failed: {err:#}"
+            );
+            if let Err(record_err) = state
+                .record_protective_stop_lifecycle_placement(test_id, status, None, &result)
+                .await
+            {
+                warn!(
+                    test_id,
+                    "could not persist SIM protective-stop placement failure: {record_err:#}"
+                );
+            }
+        }
+    }
+    redirect_to_app(&state, return_to).into_response()
+}
+
+async fn cancel_protective_stop_lifecycle_test(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<ProtectiveStopLifecycleCancellationRequest>,
+) -> Response {
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.confirm_sim_cancellation.as_deref() != Some("true") {
+        warn!(
+            lifecycle_test_id = request.lifecycle_test_id,
+            "SIM protective-stop cancellation confirmation missing"
+        );
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    let test = match state
+        .protective_stop_lifecycle_test(request.lifecycle_test_id)
+        .await
+    {
+        Ok(Some(test)) => test,
+        Ok(None) | Err(_) => return redirect_to_app(&state, return_to).into_response(),
+    };
+    let current_status = test
+        .get("status")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        current_status,
+        "placement_submitted" | "broker_working" | "reconciliation_pending"
+    ) {
+        warn!(
+            lifecycle_test_id = request.lifecycle_test_id,
+            current_status, "SIM protective-stop cancellation rejected by lifecycle state"
+        );
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    match cancel_sim_protective_stop_lifecycle_test(&state, &test).await {
+        Ok(result) => {
+            if let Err(err) = state
+                .record_protective_stop_lifecycle_cancellation(
+                    request.lifecycle_test_id,
+                    "cancellation_submitted",
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    lifecycle_test_id = request.lifecycle_test_id,
+                    "could not record SIM stop cancellation: {err:#}"
+                );
+            }
+        }
+        Err(err) => {
+            let uncertain = protective_stop_lifecycle_error_is_state_unknown(&err);
+            let status = if uncertain {
+                "reconciliation_pending"
+            } else {
+                "cancellation_failed"
+            };
+            let result = json!({
+                "accepted": false,
+                "error": classify_execution_error("execution_failed", &err.to_string()),
+                "safety": "no_automatic_cancellation_retry_operator_must_reconcile"
+            });
+            if let Err(record_err) = state
+                .record_protective_stop_lifecycle_cancellation(
+                    request.lifecycle_test_id,
+                    status,
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    lifecycle_test_id = request.lifecycle_test_id,
+                    "could not record SIM stop cancellation failure: {record_err:#}"
+                );
+            }
+        }
+    }
+    redirect_to_app(&state, return_to).into_response()
+}
+
+async fn reconcile_protective_stop_lifecycle_test(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<ProtectiveStopLifecycleReconcileRequest>,
+) -> Response {
+    let return_to = safe_return_to(request.return_to.as_deref());
+    let test = match state
+        .protective_stop_lifecycle_test(request.lifecycle_test_id)
+        .await
+    {
+        Ok(Some(test)) => test,
+        Ok(None) | Err(_) => return redirect_to_app(&state, return_to).into_response(),
+    };
+    match reconcile_sim_protective_stop_lifecycle_test(&state, &test).await {
+        Ok(result) => {
+            let status = result
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("reconciliation_pending");
+            let broker_order_id = result.get("broker_order_id").and_then(JsonValue::as_str);
+            if let Err(err) = state
+                .record_protective_stop_lifecycle_reconciliation(
+                    request.lifecycle_test_id,
+                    status,
+                    broker_order_id,
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    lifecycle_test_id = request.lifecycle_test_id,
+                    "could not record SIM stop reconciliation: {err:#}"
+                );
+            }
+        }
+        Err(err) => {
+            let result = json!({
+                "status": "reconciliation_pending",
+                "error": classify_execution_error("execution_failed", &err.to_string()),
+                "safety": "read_only_reconciliation_no_automatic_retry"
+            });
+            if let Err(record_err) = state
+                .record_protective_stop_lifecycle_reconciliation(
+                    request.lifecycle_test_id,
+                    "reconciliation_pending",
+                    None,
+                    &result,
+                )
+                .await
+            {
+                warn!(
+                    lifecycle_test_id = request.lifecycle_test_id,
+                    "could not record SIM stop reconciliation failure: {record_err:#}"
+                );
             }
         }
     }

@@ -1080,3 +1080,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added an explicit operator-confirmed SIM-only probe for a broker-hosted `GoodTillCancel` SELL `Stop`. It reads the current Saxo position, validates sellable quantity, applies the existing Saxo tick normalizer, and calls only `/trade/v2/orders/precheck`.
 - The probe cannot call Saxo order placement, create an execution order, or reserve a holding. Its local audit keeps only the requested safe fields, sanitized payload metadata, and result classification; tokens, account keys, and raw broker responses are excluded.
 - The next lifecycle step remains a separately approved small-SIM placement/cancel/reconciliation test before any automation or filled-BUY child-order behavior is considered.
+
+## [2026-07-25] safety | Manual SIM protective-stop lifecycle test workflow
+
+- Added a separate lifecycle-test record for one operator-confirmed SIM `GoodTillCancel` SELL `Stop` placement after a successful local precheck. It is intentionally outside `execution_orders`, the scheduler, Trading Manager, and Hermes, so it cannot reserve inventory or affect routine decisions.
+- Placement, cancellation, and reconciliation are distinct UI actions. Both mutations require their own SIM confirmation; reconciliation reads Saxo's open-order endpoint with audit-activity fallback and writes only sanitized broker state.
+- Transport ambiguity or timeout becomes an operator-visible unknown/pending state with no automatic retry. The system does not create a broker order until an operator explicitly uses the placement form; no placement was made by this implementation.

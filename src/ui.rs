@@ -3578,10 +3578,11 @@ fn ProtectiveStopCoveragePanel(
         "Protective-stop coverage is unavailable right now.",
     );
     let recent_prechecks = json_array(&coverage, "recent_prechecks");
+    let recent_lifecycle_tests = json_array(&coverage, "recent_lifecycle_tests");
     rsx! {
         section { class: "event candidate-scoring-panel",
             strong { "Protective Stop Coverage" }
-            p { class: "muted", "Read-only local audit of broker-held long-position snapshots against locally recorded SELL Stop or StopLimit orders. It never places, replaces, or cancels Saxo orders." }
+            p { class: "muted", "Local audit of broker-held long-position snapshots against locally recorded SELL Stop or StopLimit orders. The coverage audit is read-only; the separate SIM lifecycle panel below is the only manual test path that can request broker placement or cancellation." }
             if status == "unavailable" {
                 span { class: "status bad", "unavailable" }
             } else if status == "no_positive_broker_positions_recorded" {
@@ -3638,10 +3639,24 @@ fn ProtectiveStopCoveragePanel(
                 div { class: "table-wrap candidate-scoring-table",
                     h3 { "Recent SIM Stop Prechecks" }
                     table {
-                        thead { tr { th { "Created" } th { "Symbol" } th { "Qty" } th { "Stop" } th { "Result" } th { "Safety" } } }
+                        thead { tr { th { "Created" } th { "Symbol" } th { "Qty" } th { "Stop" } th { "Result" } th { "Safety" } th { "SIM test" } } }
                         tbody {
                             for row in recent_prechecks.iter() {
-                                ProtectiveStopPrecheckRow { row: row.clone(), prefs: prefs.clone() }
+                                ProtectiveStopPrecheckRow { row: row.clone(), prefs: prefs.clone(), sim_enabled: sim_enabled }
+                            }
+                        }
+                    }
+                }
+            }
+            if !recent_lifecycle_tests.is_empty() {
+                div { class: "table-wrap candidate-scoring-table",
+                    h3 { "SIM Stop Lifecycle Tests" }
+                    p { class: "muted", "Manual test records are separate from the execution queue. Placement and cancellation each require an explicit SIM acknowledgement. Reconcile before treating any broker response as final." }
+                    table {
+                        thead { tr { th { "Created" } th { "Symbol" } th { "Qty" } th { "Stop" } th { "State" } th { "Broker order" } th { "Actions" } } }
+                        tbody {
+                            for row in recent_lifecycle_tests.iter() {
+                                ProtectiveStopLifecycleTestRow { row: row.clone(), prefs: prefs.clone(), sim_enabled: sim_enabled }
                             }
                         }
                     }
@@ -3652,7 +3667,11 @@ fn ProtectiveStopCoveragePanel(
 }
 
 #[component]
-fn ProtectiveStopPrecheckRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn ProtectiveStopPrecheckRow(
+    row: JsonValue,
+    prefs: LocalizationPrefs,
+    sim_enabled: bool,
+) -> Element {
     let result = row
         .get("result_json")
         .and_then(JsonValue::as_str)
@@ -3680,6 +3699,8 @@ fn ProtectiveStopPrecheckRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
             }
         });
     let safety = fallback_text(&result, "safety", "no Saxo order placement").replace('_', " ");
+    let id = value_i64(&row, "id");
+    let eligible_for_test = sim_enabled && text(&row, "status") == "precheck_ok" && id > 0;
     rsx! {
         tr {
             td { "{created_at}" }
@@ -3688,6 +3709,89 @@ fn ProtectiveStopPrecheckRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
             td { "{stop_price}" }
             td { span { class: "{status_class}", "{status}: {result_label}" } }
             td { class: "muted", "{safety}" }
+            td {
+                if eligible_for_test {
+                    form { action: "/api/protective-stops/lifecycle/place", method: "post", class: "sim-stop-precheck-form",
+                        input { r#type: "hidden", name: "return_to", value: "/?view=execution" }
+                        input { r#type: "hidden", name: "source_precheck_id", value: "{id}" }
+                        label { class: "checkbox small-checkbox",
+                            input { r#type: "checkbox", name: "confirm_sim_placement", value: "true", required: true }
+                            " SIM placement"
+                        }
+                        button { class: "small-button", r#type: "submit", "Place test" }
+                    }
+                } else {
+                    span { class: "muted", "Requires accepted SIM precheck" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProtectiveStopLifecycleTestRow(
+    row: JsonValue,
+    prefs: LocalizationPrefs,
+    sim_enabled: bool,
+) -> Element {
+    let id = value_i64(&row, "id");
+    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
+    let symbol = text_or(&row, "symbol", "n/a");
+    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
+    let stop_price = format_number(value_f64(&row, "stop_price_local"), 4, &prefs);
+    let status = text_or(&row, "status", "unknown");
+    let broker_order_id = text_or(&row, "broker_order_id", "pending");
+    let status_class = match status.as_str() {
+        "cancelled" | "broker_working" | "placement_submitted" => "status good",
+        "placement_failed" | "cancellation_failed" | "failed" | "broker_state_unknown" => {
+            "status warn"
+        }
+        _ => "status",
+    };
+    let can_cancel = sim_enabled
+        && broker_order_id != "pending"
+        && matches!(
+            status.as_str(),
+            "placement_submitted" | "broker_working" | "reconciliation_pending"
+        );
+    let can_reconcile = sim_enabled
+        && !matches!(
+            status.as_str(),
+            "cancelled" | "filled" | "failed" | "placement_failed"
+        );
+    rsx! {
+        tr {
+            td { "{created_at}" }
+            td { strong { class: "mono", "{symbol}" } }
+            td { "{quantity}" }
+            td { "{stop_price}" }
+            td { span { class: "{status_class}", "{status}" } }
+            td { class: "mono", "{broker_order_id}" }
+            td {
+                div { class: "inline-actions",
+                    if can_reconcile {
+                        form { action: "/api/protective-stops/lifecycle/reconcile", method: "post",
+                            input { r#type: "hidden", name: "return_to", value: "/?view=execution" }
+                            input { r#type: "hidden", name: "lifecycle_test_id", value: "{id}" }
+                            button { class: "small-button", r#type: "submit", "Reconcile" }
+                        }
+                    }
+                    if can_cancel {
+                        form { action: "/api/protective-stops/lifecycle/cancel", method: "post", class: "sim-stop-precheck-form",
+                            input { r#type: "hidden", name: "return_to", value: "/?view=execution" }
+                            input { r#type: "hidden", name: "lifecycle_test_id", value: "{id}" }
+                            label { class: "checkbox small-checkbox",
+                                input { r#type: "checkbox", name: "confirm_sim_cancellation", value: "true", required: true }
+                                " SIM cancel"
+                            }
+                            button { class: "small-button", r#type: "submit", "Cancel test" }
+                        }
+                    }
+                    if !can_cancel && !can_reconcile {
+                        span { class: "muted", "No action available" }
+                    }
+                }
+            }
         }
     }
 }

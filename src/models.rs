@@ -189,6 +189,26 @@ pub struct ProtectiveStopPrecheckRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ProtectiveStopLifecyclePlacementRequest {
+    pub source_precheck_id: i64,
+    pub confirm_sim_placement: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProtectiveStopLifecycleCancellationRequest {
+    pub lifecycle_test_id: i64,
+    pub confirm_sim_cancellation: Option<String>,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProtectiveStopLifecycleReconcileRequest {
+    pub lifecycle_test_id: i64,
+    pub return_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LocalizationSettingsRequest {
     pub locale: Option<String>,
     pub time_zone: Option<String>,
