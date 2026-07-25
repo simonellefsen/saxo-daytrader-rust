@@ -1,0 +1,50 @@
+name: CI
+
+# Mirrors `make validate`. The suite is trading-critical and until now ran only
+# when an operator typed it by hand; deploy provenance proves the intended
+# commit shipped, this proves that commit was green.
+#
+# Deliberately hermetic: no secrets, no Saxo or OpenRouter access, no deploy
+# step. Database-backed fixtures use isolated in-memory SQLite.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail on warnings so the tree cannot drift back to noisy builds.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  validate:
+    name: fmt, test, check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cargo.toml sets edition = "2024", so stable is the floor. Do not pin
+      # an older toolchain here.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Type-check
+        run: cargo check --all-targets
+
+      - name: Test
+        run: cargo test

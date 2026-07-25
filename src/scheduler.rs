@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::{
     daily_indicators::run_daily_indicators_cycle,
+    editorial_research::run_editorial_research_cycle,
     markov_method::run_markov_method_cycle,
     notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
     quiver::run_quiver_signal_cycle,
@@ -162,6 +163,15 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     };
     record_step_duration(&mut step_durations, "quiver_signals", step_started);
     let step_started = Instant::now();
+    let editorial_research = match run_editorial_research_cycle(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("editorial research cycle failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(&mut step_durations, "editorial_research", step_started);
+    let step_started = Instant::now();
     let daily_indicators = match run_daily_indicators_cycle(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -292,6 +302,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "trading_manager": trading_manager,
         "markov_method": markov_method,
         "quiver_signals": quiver_signals,
+        "editorial_research": editorial_research,
         "daily_indicators": daily_indicators,
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,

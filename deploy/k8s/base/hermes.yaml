@@ -80,13 +80,13 @@ data:
     hermes_self_improvement:
       enabled: true
       mode: recommend_only
-      goal_version: 1
+      goal_version: 2
       objective:
-        target_return_30d: 0.47
-        target_return_note: "Approximately 10x in 6 months if compounded monthly: 1.47^6 ~= 10.1"
+        target_return_30d: 0.0117
+        target_return_note: "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15"
         max_drawdown: 0.20
         min_sharpe: 1.0
-        failure_below_30d_return: -0.04
+        failure_below_30d_return: -0.02
         reflection_every: 7d
         one_variable_only: true
       constraints:
@@ -519,7 +519,7 @@ spec:
                   {
                     "period_start": "${RUN_DATE}",
                     "period_end": "${RUN_DATE}",
-                    "goal_version": 1,
+                    "goal_version": 2,
                     "summary": "Daily reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the daily reflection loop.",
                     "findings": [{"severity": "warning", "topic": "hermes_daily_reflection", "detail": "Scheduled Hermes run did not persist a daily reflection within the watchdog window."}],
                     "proposed_actions": [],
@@ -647,7 +647,7 @@ spec:
                   {
                     "period_start": "",
                     "period_end": "${RUN_DATE}",
-                    "goal_version": 1,
+                    "goal_version": 2,
                     "summary": "Weekly reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the weekly self-improvement loop.",
                     "findings": [{"severity": "warning", "topic": "hermes_weekly_reflection", "detail": "Scheduled Hermes run did not persist a weekly reflection within the watchdog window."}],
                     "proposed_actions": [],

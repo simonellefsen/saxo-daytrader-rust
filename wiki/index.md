@@ -15,6 +15,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [schema](schema.md) - Maintenance rules, page conventions, and workflows.
 - [log](log.md) - Append-only timeline of wiki operations.
 - [roadmap](roadmap.md) - Potential improvements across reliability, Hermes, strategy, execution, UX, and architecture.
+- [urgent-todo](urgent-todo.md) - Short ranked list of verified exposures that should not wait for roadmap sequencing.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, expiring read-only memory, audits, baseline evidence, and strategy experiments connect to the wiki.
 - [QuiverQuant advisory signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md) - Rust alternative-data signal implementation for decision reports and Hermes.
@@ -23,6 +24,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 - [sources/llm-wiki](sources/llm-wiki.md) - Source-note summary for the LLM Wiki pattern.
 - [sources/markov-hedge-fund-method](sources/markov-hedge-fund-method.md) - Source-note summary for the Markov regime method.
+- [sources/app-economy-insights](sources/app-economy-insights.md) - Public editorial-research source boundary and proposed advisory ingestion shape.
 
 ## Concepts
 

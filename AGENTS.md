@@ -178,6 +178,14 @@ rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo check
 rtk env CARGO_HOME=/Users/lindau/codex/rust_daytrader/.cargo-home cargo fmt --check
 ```
 
+### Continuous Integration
+
+`.github/workflows/ci.yml` mirrors `make validate` (`cargo fmt --check`, `cargo check --all-targets`, `cargo test`) on every push to `main`, every pull request, and on manual dispatch. It builds with `RUSTFLAGS: -D warnings`, so a new warning fails CI.
+
+Keep the suite hermetic: no test may require network access, a live database, or a Saxo/OpenRouter credential. Database-backed fixtures use isolated in-memory SQLite. If a test genuinely needs an external dependency, mark it `#[ignore]` rather than weakening CI.
+
+Do not set `CARGO_HOME` in the workflow. The repo-local `.cargo-home` is a local-development workaround and conflicts with the CI cache action.
+
 Kubernetes manifest validation:
 
 ```bash

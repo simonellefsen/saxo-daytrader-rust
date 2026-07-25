@@ -10,6 +10,12 @@ updated: 2026-07-25
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-25] implementation | Public editorial research ingestion
+
+- Added the initial bounded public-feed ingestion path for App Economy Insights. The Rust scheduler persists sanitized metadata and compact summaries, deduplicates by feed identity, and matches only explicit configured aliases before exposing the context to Decision Reports and Hermes.
+- Paid content remains out of scope. This secondary editorial evidence cannot become a Trading Manager gate or Saxo action without separately measured evidence and an approved one-variable proposal.
+- Recorded the next source-catalog milestone: port and validate the legacy Yahoo Finance, CNBC, Reuters, and macro RSS configuration through the same bounded Rust framework. Yahoo quote pages remain human-facing links, not an ingestion target.
+
 ## [2026-07-25] safety | Protective-stop coverage exceptions and reconciled SIM evidence
 
 - Coverage now counts a SIM lifecycle test only when its read-only reconciliation recorded `broker_working` and a broker order identifier. Placement-submitted, cancelled, failed, ambiguous, and non-SIM records remain non-protective.
@@ -1096,3 +1102,23 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a separate lifecycle-test record for one operator-confirmed SIM `GoodTillCancel` SELL `Stop` placement after a successful local precheck. It is intentionally outside `execution_orders`, the scheduler, Trading Manager, and Hermes, so it cannot reserve inventory or affect routine decisions.
 - Placement, cancellation, and reconciliation are distinct UI actions. Both mutations require their own SIM confirmation; reconciliation reads Saxo's open-order endpoint with audit-activity fallback and writes only sanitized broker state.
 - Transport ambiguity or timeout becomes an operator-visible unknown/pending state with no automatic retry. The system does not create a broker order until an operator explicitly uses the placement form; no placement was made by this implementation.
+
+## [2026-07-25] roadmap | Urgent todo, config contract, CI
+
+- Added [urgent-todo](urgent-todo.md): a short ranked page for verified gaps between what the runtime claims or is configured to do and what it actually enforces. Six items: finish broker-hosted protective stops, config-contract audit, reconcile the Hermes goal contract with enforced reality, prompt-injection screen for editorial research, CI on every push, and Saxo rate-limit pacing for the now-unlimited nightly runs.
+- Implemented the config-contract audit in `src/config_contract.rs` and wired it into startup logging and the Overview integrity payload. Against `config.yaml` it reports 20 enforced, 30 advisory, and 44 unused keys, 27 of them risk-surface: `strategy.enabled`, `trading_manager.enabled`, and both pulse `enabled` switches do nothing; position sizing is not risk-based; no concentration gate exists; five separate position-weight caps are unenforced; no protective stop, trailing stop, bracket, or session flatten is ever placed; `RISK_EXCLUDED_SYMBOLS` has no effect; and after-tax P/L equals pre-tax P/L. Also surfaced two config divergences: `trading_manager.max_report_age_hours` is read but supplied by neither shipped config, and `strategy.quiver.*` exists only in the Kubernetes config.
+- Method note for future passes: leaf-name grep over-counts badly (`cash_buffer_pct` appears to have 54 hits because it is a substring of `min_cash_buffer_pct`). Statuses were established by extracting full config access paths — both `&["a", "b", "c"]` slices and chained `.get("a")` — from `src/*.rs`.
+- Added continuous integration in `.github/workflows/ci.yml`: fmt, check, and test with warnings-as-errors on push, pull request, and manual dispatch. Hermetic — no secrets, no broker or provider access, no deploy step.
+- Recorded that the Hermes goal contract declares `max_drawdown: 0.20` and `min_sharpe: 1.0` as constraints while only the monthly-loss DKK floors are enforced; drawdown is computed for display only.
+- Recorded that editorial-research feed text is the first attacker-influenceable free text to reach the decision prompt and Hermes context, and must be screened and delimited before the feed catalog expands.
+- Added roadmap rows for risk-configuration integrity, a drawdown guardrail reusing the existing tiered-budget mechanism, editorial-text screening, continuous integration, concentration-gate data prerequisites, maximum holding period, weekend/off-pulse gap exposure, and a concrete first `state.rs` extraction.
+- The config-contract audit reads configuration and reports; it cannot change a gate, a size, or an order. CI adds no runtime code.
+
+## [2026-07-25] strategy | Return goal realigned to +15% per year
+
+- The operator's actual target is +10-20% per year. The configured goals stated three different and much larger things: `xai.performance_goals.monthly_target_dkk` 20,000 (~+115%/yr on a ~304,000 DKK book), `weekly_target_dkk` 5,000 (~+137%/yr), and a Hermes objective of `target_return_30d: 0.47` noted as "10x in 6 months" (~70x the real target).
+- The Hermes figure was not cosmetic. `experiment_policy.promote_only_if.return_30d_gte` used the same 0.47, so no one-variable experiment could clear the promotion bar on merit, and every reflection was measured against a return only reachable by taking far more risk than the loss floors permit.
+- Set to +15% per year (range midpoint) in all five copies: `config.yaml`, `deploy/k8s/base/config.k8s.yaml`, `deploy/k8s/base/hermes.yaml`, `docs/hermes-agent.md`, and `AppState::hermes_goal_contract_value`. Now `target_return_30d: 0.0117`, 880 DKK/week, 3,800 DKK/month, 1,200 DKK stretch week, `goal_version: 2`, `failure_below_30d_return: -0.02`, and matching `promote_only_if`/`rollback_if` thresholds. The Kubernetes watchdog reflection payloads were moved to `goal_version: 2` so reflections attribute to the active goal.
+- Rescaled the monthly loss floors with the goal: -25,000/-50,000 was -8.2%/-16.4% of the portfolio in a single month, letting one bad month erase roughly a year of target gains before the hard halt fired. Now -9,000 soft (-3%) and -18,000 hard (-6%), preserving the 2:1 ratio and leaving SELLs unblocked.
+- Recorded two follow-ups in [urgent-todo](urgent-todo.md): the targets are stored as DKK against a ~300,000 DKK book and drift silently as the portfolio changes, and `max_drawdown: 0.20` is now loose relative to a 15%/year target while still being unenforced.
+- New finding U7: `deploy/k8s/base/hermes.yaml` lists `strategy.swing.cash_buffer_pct` as a supported experiment variable, and the config contract proves nothing reads it. Hermes can propose, run, observe, and promote an experiment whose variable has no effect.

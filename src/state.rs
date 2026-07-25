@@ -2260,6 +2260,10 @@ impl AppState {
             .with_context(|| format!("reading config {}", config_path.display()))?;
         let config: YamlValue = serde_yaml::from_str(&config_text)
             .with_context(|| format!("parsing config {}", config_path.display()))?;
+        // Report config keys that are configured but unwired before anything
+        // starts trusting them. Covers every process mode because api,
+        // scheduler, and MCP all load state through here.
+        crate::config_contract::log_config_contract_audit(&config);
         let db_url = database_url(&config, &config_path)?;
         let safe_db_url = redacted_database_url(&db_url);
         info!(database_url = %safe_db_url, "connecting to database");
@@ -4025,6 +4029,75 @@ impl AppState {
             }));
         }
 
+        // Config contract. Known unwired keys are reported as visible context
+        // rather than as a warning: they are already documented in
+        // wiki/urgent-todo.md and would otherwise hold the whole overview
+        // permanently unhealthy, which trains the operator to ignore this panel.
+        // A warning is reserved for genuine new drift -- a key added to config
+        // without a contract entry, or an enforced key config stopped supplying
+        // -- both of which are actionable and self-clearing.
+        let (contract_summary, contract_findings) =
+            crate::config_contract::audit_config(&self.config);
+        let unused_risk_keys = contract_findings
+            .iter()
+            .filter(|finding| {
+                finding.kind == crate::config_contract::FindingKind::UnusedKeyPresent
+                    && finding.risk_surface
+            })
+            .map(|finding| json!({"key": finding.path, "note": finding.note}))
+            .collect::<Vec<_>>();
+        let drift_keys = contract_findings
+            .iter()
+            .filter(|finding| {
+                matches!(
+                    finding.kind,
+                    crate::config_contract::FindingKind::UncontractedKey
+                ) || (finding.kind == crate::config_contract::FindingKind::ContractedKeyMissing
+                    && finding.risk_surface)
+            })
+            .map(|finding| {
+                json!({
+                    "key": finding.path,
+                    "kind": finding.kind.as_str(),
+                    "note": finding.note
+                })
+            })
+            .collect::<Vec<_>>();
+        let config_contract = json!({
+            "enforced": contract_summary.enforced,
+            "advisory": contract_summary.advisory,
+            "unused": contract_summary.unused,
+            "unused_risk_surface": contract_summary.unused_risk_surface,
+            "uncontracted": contract_summary.uncontracted,
+            "missing": contract_summary.missing,
+            "unused_risk_keys": unused_risk_keys,
+            "drift_keys": drift_keys
+        });
+        if drift_keys.is_empty() {
+            checks.insert(
+                "config_contract".to_string(),
+                if contract_summary.unused_risk_surface > 0 {
+                    json!("unused_risk_keys")
+                } else {
+                    json!("ok")
+                },
+            );
+        } else {
+            checks.insert("config_contract".to_string(), json!("warning"));
+            let keys = drift_keys
+                .iter()
+                .map(|row| text_value(row, "key"))
+                .collect::<Vec<_>>();
+            warnings.push(json!({
+                "code": "config_contract_drift",
+                "severity": "warning",
+                "message": "Configuration keys are not described by the config contract, or an enforced key is missing from configuration. Update CONTRACT in src/config_contract.rs so the key's real effect is recorded.",
+                "count": drift_keys.len(),
+                "keys": keys,
+                "details": drift_keys.clone()
+            }));
+        }
+
         let acknowledgements = self
             .overview_integrity_acknowledgements_value()
             .await
@@ -4049,6 +4122,7 @@ impl AppState {
                 .cloned()
                 .unwrap_or_else(|| json!([])),
             "acknowledged_issue_count": acknowledged_issue_count,
+            "config_contract": config_contract,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -5238,13 +5312,18 @@ impl AppState {
         json!({
             "enabled": true,
             "mode": "recommend_only",
-            "goal_version": 1,
+            // Goal version 2 (2026-07-25) replaces the previous 47%/30d
+            // "10x in 6 months" objective, which was roughly 70x the operator's
+            // actual target and pushed Hermes to evaluate every experiment
+            // against a return it could only reach by taking far more risk than
+            // the loss floors allow.
+            "goal_version": 2,
             "objective": {
-                "target_return_30d": 0.47,
-                "target_return_note": "Approximately 10x in 6 months if compounded monthly: 1.47^6 ~= 10.1",
+                "target_return_30d": 0.0117,
+                "target_return_note": "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15",
                 "max_drawdown": 0.20,
                 "min_sharpe": 1.0,
-                "failure_below_30d_return": -0.04,
+                "failure_below_30d_return": -0.02,
                 "reflection_every": "7d",
                 "one_variable_only": true
             },
@@ -5272,12 +5351,12 @@ impl AppState {
                     "still_requires_review": true
                 },
                 "promote_only_if": {
-                    "return_30d_gte": 0.47,
+                    "return_30d_gte": 0.0117,
                     "drawdown_lte": 0.20,
                     "sharpe_gte": 1.0
                 },
                 "rollback_if": {
-                    "return_30d_lte": -0.04,
+                    "return_30d_lte": -0.02,
                     "drawdown_gt": 0.20,
                     "safety_violation": true
                 }
@@ -5369,6 +5448,7 @@ impl AppState {
                 "Markov method signals are advisory analytics and do not place or approve orders.",
                 "Gate replay is a read-only historical target-gate comparison; a target-gate clear is not a full approval.",
                 "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
+                "Public editorial-research items are attributable secondary context only and do not place, approve, block, size, or otherwise modify orders.",
                 "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
                 "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
                 "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
@@ -5448,6 +5528,13 @@ impl AppState {
                 warn!("Hermes Quiver context degraded: {err:#}");
                 json!({"status": "degraded", "detail": err.to_string()})
             });
+        let editorial_research =
+            crate::editorial_research::compact_editorial_research_context(self, limit)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("Hermes editorial research context degraded: {err:#}");
+                    json!({"status": "degraded", "detail": err.to_string()})
+                });
         let daily_indicators = crate::daily_indicators::compact_indicator_context(self, limit)
             .await
             .unwrap_or_else(|err| {
@@ -5490,6 +5577,7 @@ impl AppState {
             },
             "markov_method": markov,
             "quiver_signals": quiver,
+            "editorial_research": editorial_research,
             "daily_indicators": daily_indicators,
             "hermes": {
                 "experiments": active_experiments,
@@ -8052,6 +8140,12 @@ impl AppState {
                 .await
                 .context("creating Quiver runtime tables")?;
         }
+        for sql in crate::editorial_research::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating editorial research runtime tables")?;
+        }
         for sql in crate::daily_indicators::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -8502,6 +8596,22 @@ fn overview_integrity_issue_key(issue: &JsonValue) -> String {
             .unwrap_or_else(|| "position-lots".to_string()),
         "stale_or_unreconciled_execution_orders" => "execution-orders".to_string(),
         "day_order_expiry_sync_pending" => "day-orders".to_string(),
+        // Scope by the exact key set so acknowledging today's drift cannot
+        // suppress tomorrow's newly uncontracted key.
+        "config_contract_drift" => issue
+            .get("keys")
+            .and_then(JsonValue::as_array)
+            .map(|keys| {
+                let mut keys = keys
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                keys.sort();
+                keys.join(",")
+            })
+            .filter(|scope| !scope.is_empty())
+            .unwrap_or_else(|| "config-contract".to_string()),
         _ => "general".to_string(),
     };
     format!(

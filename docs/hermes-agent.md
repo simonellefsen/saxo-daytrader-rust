@@ -12,13 +12,13 @@ Hermes should optimize against an explicit, versioned objective. The starting co
 hermes_self_improvement:
   enabled: false
   mode: recommend_only
-  goal_version: 1
+  goal_version: 2
   objective:
-    target_return_30d: 0.47
-    target_return_note: "Approximately 10x in 6 months if compounded monthly: 1.47^6 ~= 10.1"
+    target_return_30d: 0.0117
+    target_return_note: "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15"
     max_drawdown: 0.20
     min_sharpe: 1.0
-    failure_below_30d_return: -0.04
+    failure_below_30d_return: -0.02
     reflection_every: 7d
     one_variable_only: true
   constraints:
@@ -34,11 +34,11 @@ hermes_self_improvement:
     min_observation_days: 7
     min_closed_trades: 5
     promote_only_if:
-      return_30d_gte: 0.47
+      return_30d_gte: 0.0117
       drawdown_lte: 0.20
       sharpe_gte: 1.0
     rollback_if:
-      return_30d_lte: -0.04
+      return_30d_lte: -0.02
       drawdown_gt: 0.20
       safety_violation: true
 ```

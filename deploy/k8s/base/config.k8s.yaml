@@ -265,6 +265,25 @@ market_data:
         url: https://www.coindesk.com/arc/outboundfeeds/rss/
       - name: Cointelegraph
         url: https://cointelegraph.com/rss
+  editorial_research:
+    enabled: true
+    refresh_interval_minutes: 240
+    request_timeout_seconds: 15
+    max_items_per_source: 12
+    max_summary_chars: 800
+    retention_days: 90
+    sources:
+      - name: App Economy Insights
+        url: https://www.appeconomyinsights.com/feed
+        access_level: public_feed_metadata
+        symbol_aliases:
+          TSLA:xnas: [Tesla]
+          GOOGL:xnas: [Google, Alphabet]
+          AMZN:xnas: [Amazon]
+          NFLX:xnas: [Netflix]
+          UBER:xnys: [Uber]
+          TSM:xnys: [TSMC, Taiwan Semiconductor]
+          ASML:xams: [ASML]
 
 price_monitor:
   enabled: true
@@ -309,11 +328,15 @@ strategy:
     # Reduce the cycle-wide BUY budget while the monthly P/L is between this
     # floor and the hard halt. It must be a less-severe negative number than
     # monthly_loss_halt_dkk; invalid/disabled bands do not reduce deployment.
-    monthly_loss_soft_reduce_dkk: -25000
+    # Rescaled 2026-07-25 against the +15%/year goal on a ~300,000 DKK book.
+    # The previous -25,000/-50,000 pair was -8.2%/-16.4% of the portfolio in a
+    # single month, so one bad month could erase roughly a year of target gains
+    # before the hard halt fired. Now -3% soft and -6% hard, same 2:1 ratio.
+    monthly_loss_soft_reduce_dkk: -9000
     monthly_loss_soft_buy_multiplier: 0.50
     # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
     # hard floor; SELLs are never blocked. Set >= 0 to disable both loss tiers.
-    monthly_loss_halt_dkk: -50000
+    monthly_loss_halt_dkk: -18000
   markov:
     enabled: true
     timezone: Europe/Copenhagen
@@ -491,13 +514,17 @@ xai:
     currency: DKK
     week_start_weekday: 0
     week_end_weekday: 4
-    weekly_target_dkk: 5000
-    monthly_target_dkk: 20000
-    stretch_weekly_target_dkk: 7500
+    # Sized to roughly +15% per year on a ~300,000 DKK book (2026-07-25).
+    # Revisit these DKK figures when the portfolio value changes materially,
+    # otherwise the implied percentage target drifts silently.
+    weekly_target_dkk: 880
+    monthly_target_dkk: 3800
+    stretch_weekly_target_dkk: 1200
   goal: >
-    Target DKK 5,000 per Monday-Friday trading week and DKK 20,000 per
-    calendar month before tax. Maximise portfolio value while keeping risk
-    reasonable for a disciplined swing/day-trading horizon.
+    Target approximately +15% portfolio growth per year before tax, which is
+    about DKK 880 per Monday-Friday trading week and DKK 3,800 per calendar
+    month on the current book. Preserve capital first: a steady, disciplined
+    swing horizon beats chasing the target in any single week.
   timeout_seconds: 600
   retry_initial_backoff_seconds: 60
   retry_max_backoff_seconds: 600
