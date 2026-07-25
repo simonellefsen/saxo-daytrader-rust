@@ -434,11 +434,13 @@ async fn protective_stop_sim_payload(
         "stop",
     )
     .await?;
+    let order_type = supported_stop_order_type(state, &session, instrument).await?;
     let mut payload = protective_stop_precheck_payload(
         account_key(state, &session)?,
         instrument,
         quantity,
         normalized_stop_price,
+        &order_type,
     );
     if let Some(external_reference) = external_reference {
         payload["ExternalReference"] =
@@ -471,6 +473,7 @@ fn protective_stop_precheck_payload(
     instrument: &SaxoInstrument,
     quantity: f64,
     stop_price_local: f64,
+    order_type: &str,
 ) -> JsonValue {
     json!({
         "AccountKey": account_key,
@@ -480,7 +483,7 @@ fn protective_stop_precheck_payload(
         "ManualOrder": true,
         "OrderDuration": {"DurationType": "GoodTillCancel"},
         "OrderPrice": stop_price_local,
-        "OrderType": "Stop",
+        "OrderType": order_type,
         "Uic": instrument.uic,
     })
 }
@@ -3271,6 +3274,72 @@ fn normalize_order_price_with_tick(price: f64, tick: f64, action: &str, role: &s
     round_to_decimals(rounded * tick, decimals)
 }
 
+/// Stop order types this runtime will use, in preference order.
+///
+/// Saxo's `Stop` is the FX form (triggered on bid/offer). Equities use
+/// `StopIfTraded`, triggered by the traded price, which is what a protective
+/// stop on a share position means. Sending `Stop` for `AssetType: Stock` is
+/// rejected at placement with `OrderTypeNotSupported` -- and notably *not* at
+/// precheck, so precheck acceptance is not evidence that an order type is
+/// allowed.
+const PREFERRED_STOP_ORDER_TYPES: &[&str] = &["StopIfTraded", "Stop"];
+
+/// Resolves the stop order type Saxo actually supports for this instrument.
+///
+/// Read from `SupportedOrderTypes` in the reference data rather than assumed, so
+/// a different asset type or a SIM/LIVE difference cannot silently produce a
+/// rejected order. Fails closed, naming what the instrument does support.
+async fn supported_stop_order_type(
+    state: &AppState,
+    session: &JsonValue,
+    instrument: &SaxoInstrument,
+) -> Result<String> {
+    let details_path = format!(
+        "/ref/v1/instruments/details/{}/{}",
+        instrument.uic,
+        percent_encode_path_segment(&instrument.asset_type)
+    );
+    let details = saxo_get_json_optional(
+        state,
+        session,
+        &details_path,
+        &[("AccountKey", account_key(state, session)?)],
+        "Saxo instrument details lookup",
+    )
+    .await?;
+    let supported = details
+        .as_ref()
+        .and_then(|details| details.get("SupportedOrderTypes"))
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if supported.is_empty() {
+        // Reference data did not say. Use the equity form, which is correct for
+        // the asset types this runtime trades.
+        return Ok(PREFERRED_STOP_ORDER_TYPES[0].to_string());
+    }
+    for candidate in PREFERRED_STOP_ORDER_TYPES {
+        if supported
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case(candidate))
+        {
+            return Ok((*candidate).to_string());
+        }
+    }
+    bail!(
+        "Saxo does not support a protective stop order type for {} ({}); it supports: {}",
+        instrument.description,
+        instrument.asset_type,
+        supported.join(", ")
+    )
+}
+
 async fn instrument_tick_size(
     state: &AppState,
     session: &JsonValue,
@@ -3922,6 +3991,42 @@ mod tests {
         assert_eq!(execution_queue_gate("live", "saxo", false, false), None);
     }
 
+    /// Saxo rejected every protective stop on 2026-07-25 with
+    /// `OrderTypeNotSupported`, because `Stop` is the FX form (bid/offer
+    /// triggered) and equities need `StopIfTraded` (traded-price triggered).
+    /// The precheck accepted all of them first, so precheck acceptance is not
+    /// evidence that an order type is allowed.
+    #[test]
+    fn protective_stop_payload_carries_the_resolved_order_type() {
+        let instrument = SaxoInstrument {
+            uic: 12345,
+            asset_type: "Stock".to_string(),
+            exchange_id: "XNAS".to_string(),
+            description: "Example".to_string(),
+        };
+        for order_type in ["StopIfTraded", "Stop"] {
+            let payload = protective_stop_precheck_payload(
+                "account-key".to_string(),
+                &instrument,
+                2.0,
+                95.5,
+                order_type,
+            );
+            assert_eq!(payload["OrderType"], order_type);
+            assert_eq!(payload["BuySell"], "Sell");
+            assert_eq!(payload["OrderDuration"]["DurationType"], "GoodTillCancel");
+            // A protective stop must be a plain Stop: a StopLimit can trigger
+            // and then fail to fill through a fast decline.
+            assert!(payload.get("StopLimitPrice").is_none());
+        }
+    }
+
+    #[test]
+    fn preferred_stop_order_types_put_the_equity_form_first() {
+        assert_eq!(PREFERRED_STOP_ORDER_TYPES[0], "StopIfTraded");
+        assert!(PREFERRED_STOP_ORDER_TYPES.contains(&"Stop"));
+    }
+
     #[test]
     fn protective_stop_precheck_payload_is_gtc_sell_stop_and_sanitizes_account_key() {
         let instrument = SaxoInstrument {
@@ -3935,10 +4040,11 @@ mod tests {
             &instrument,
             2.0,
             95.5,
+            "StopIfTraded",
         );
 
         assert_eq!(payload["BuySell"], "Sell");
-        assert_eq!(payload["OrderType"], "Stop");
+        assert_eq!(payload["OrderType"], "StopIfTraded");
         assert_eq!(payload["OrderPrice"], 95.5);
         assert_eq!(payload["OrderDuration"]["DurationType"], "GoodTillCancel");
         assert!(payload.get("StopLimitPrice").is_none());
@@ -3962,11 +4068,12 @@ mod tests {
             &instrument,
             2.0,
             95.5,
+            "StopIfTraded",
         );
         payload["ExternalReference"] = json!("x".repeat(80).chars().take(50).collect::<String>());
         let sanitized = sanitized_order_payload(&payload);
 
-        assert_eq!(sanitized["OrderType"], "Stop");
+        assert_eq!(sanitized["OrderType"], "StopIfTraded");
         assert_eq!(sanitized["OrderDuration"]["DurationType"], "GoodTillCancel");
         assert_eq!(
             sanitized["ExternalReference"].as_str().map(str::len),
