@@ -1132,3 +1132,13 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - This had held overview `healthy` false continuously since 2026-05-05, roughly three months. The operational cost is desensitization: a genuine `executed`-without-ledger fill — the exact failure class repaired on 2026-07-08 — would have arrived as an increment to a warning already treated as normal.
 - The unreconciled-orders SQL and its adoption exclusion are now shared constants (`unreconciled_orders_sql`, `ADOPTED_ORDER_EXCLUSION`, `ADOPTED_ORDERS_WITHOUT_LEDGER_SQL`) so the regression test exercises the production query instead of a copy. The test was confirmed to fail against the previous behavior.
 - No order, gate, ledger row, or broker call was changed. Only the integrity classification of existing rows.
+
+## [2026-07-25] roadmap | Orphaned strategy_type on Trading Manager orders
+
+- Recorded a new item (urgent-todo U8) after the unreconciled-orders investigation surfaced that `strategy_type` is NULL on 101 of 156 `execution_orders`.
+- Not legacy residue: the newest NULL row is 2026-07-23. Legacy Python rows carry `swing` through 2026-05-07, the NULLs start 2026-05-12, and the stored timestamp format differs across the boundary (`+00:00` legacy, `Z` Rust). Every order the Rust Trading Manager has queued is affected.
+- Root cause: `CandidateOrder::from_json` reads `strategy_type` from the model's suggested-trade JSON, and the field is not in the decision-report schema at all. The neighbouring `strategy_key` avoided this because `unique_strategy_key` constructs it locally.
+- Operator-visible today: the Execution table renders `fallback_text(row, "strategy_type", "manual")`, so every automated order displays as `manual`; Slack `execution_source_label` falls through to `Execution` instead of `Trading Manager`.
+- Also blocks the roadmap's per-pulse attribution work, and the column is now load-bearing for the 2026-07-25 adoption exclusion in the integrity check — correct today only because adopted rows are among the populated ones.
+- Durable lesson for the wiki: record provenance in the component that knows it; do not ask the model to classify its own orders.
+- Documentation only. No code, schema, gate, or broker behavior was changed by this entry.

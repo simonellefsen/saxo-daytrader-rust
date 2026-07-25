@@ -26,6 +26,7 @@ Reviewed 2026-07-25 against `config.yaml`, `src/*.rs`, and the current roadmap.
 | U7 | Hermes can experiment on a dead variable | `deploy/k8s/base/hermes.yaml` lists `strategy.swing.cash_buffer_pct` in `experiment_policy.supported_variables`, and the config-contract audit proves nothing reads it. Hermes can therefore propose, run in SIM, observe, and promote a one-variable experiment whose variable has no effect — and attribute whatever the portfolio did to it. | Cross-check `supported_variables` against the config contract; a variable classified `unused` cannot be a supported experiment variable. Ideally enforced by a test so the two lists cannot drift. |
 | U4 | Prompt-injection screen for editorial research | The editorial-research path feeds third-party RSS titles and summaries into the decision prompt (`src/xai_decision.rs`) and into Hermes context. `normalize_text` (`src/editorial_research.rs`) strips HTML tags and collapses whitespace; it does not screen for instruction-shaped content. Every earlier prompt input — Markov, daily indicators, Quiver — is numeric and runtime-computed, so this is the first attacker-influenceable free text in the pipeline. It should be hardened before the configured feed catalog expands to Yahoo Finance, CNBC, and Reuters. | A deterministic instruction-pattern screen drops or flags items; feed text is structurally delimited and labelled untrusted where it enters the prompt; a regression test asserts an injection-shaped summary is rejected. |
 | U5 | CI on every push | The suite is 324 `#[test]`/`#[tokio::test]` functions across 24 modules and ran only when someone typed `make validate`. Deploy provenance was hardened on 2026-07-13 so the intended commit ships, but nothing verified that commit's tests pass. | Landed 2026-07-25: `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo check --all-targets`, and `cargo test` with `-D warnings` on push, pull request, and manual dispatch. **Remaining:** the first Actions run, which needs the embedded token removed from the `origin` remote first. |
+| U8 | `strategy_type` is never set on Trading Manager orders | `CandidateOrder::from_json` (`src/trading_manager.rs:1904`) reads `strategy_type` out of the model's suggested-trade JSON, but the decision-report schema has no such field — the string `strategy_type` does not appear anywhere in `src/xai_decision.rs`. So it is NULL on every order the Rust Trading Manager has ever queued: 101 of 156 rows, most recent 2026-07-23. The three populated values come from other paths (`portfolio_sync` and `clean_reconciliation` from `src/portfolio_reset.rs`, `manual` from the manual order path). Two live consequences: the Execution table renders `fallback_text(row, "strategy_type", "manual")` (`src/ui.rs:4261`), so **every automated order is displayed to the operator as "manual"**; and `execution_source_label` (`src/notifications.rs:1476`) falls through to "Execution" instead of "Trading Manager" in Slack. See [Orphaned strategy_type](#orphaned-strategy_type). | Set `strategy_type` locally at insert, the way `strategy_key` is already built locally by `unique_strategy_key` — the runtime knows the provenance; the model must not be asked to classify its own orders. Backfill existing rows from the `strategy_key` prefix. Fix the UI fallback so an unknown type renders as "unknown", never "manual". Add a test asserting a queued Trading Manager order carries a non-null type. |
 | U6 | Saxo rate-limit pacing for the unlimited nightly runs | `strategy.markov.max_symbols` and `strategy.swing.daily_indicators.max_symbols` were both raised to `0` (unlimited, ~199 symbols) on 2026-07-16. The roadmap's `Rate-limit-aware throttling` row — written while the cap was 20 — documents Saxo's 120 requests/minute per session per service group and estimates ~200 sequential chart calls for the Markov run alone. Two unlimited jobs now run back-to-back at 23:30 and 23:45 against the same limit, and only the Markov path retries 429s. | Token-bucket pacing to roughly 100 requests/minute per service group, driven by the `X-RateLimit-*` response headers, shared by the Markov and daily-indicator paths. Best delivered with the roadmap's unified Saxo HTTP client row. |
 
 ## Return Goal
@@ -48,6 +49,33 @@ Two follow-ups:
 
 - The DKK targets encode a percentage against a ~300,000 DKK book. They drift silently as the portfolio grows or shrinks. Consider deriving them from portfolio value instead of hardcoding DKK, or add a review reminder.
 - `max_drawdown: 0.20` in the goal contract is now loose relative to a 15%/year target and is still unenforced. Revisit it with U3.
+
+## Orphaned strategy_type
+
+Reference for U8. Found 2026-07-25 while investigating the unreconciled-orders false positive, which is itself the second consumer of this column.
+
+Production `execution_orders` on 2026-07-25:
+
+| `strategy_type` | Rows | Oldest | Newest | Written by |
+| --- | --- | --- | --- | --- |
+| `NULL` | 101 | 2026-05-12 | **2026-07-23** | Rust Trading Manager |
+| `clean_reconciliation` | 27 | 2026-05-13 | 2026-05-14 | `src/portfolio_reset.rs` |
+| `portfolio_sync` | 19 | 2026-05-05 | 2026-05-05 | portfolio adoption |
+| `swing` | 6 | 2026-05-06 | 2026-05-07 | legacy Python runtime |
+| `manual` | 3 | 2026-06-10 | 2026-06-10 | manual order path |
+
+The `swing` rows stop on 2026-05-07 and the NULLs begin on 2026-05-12. That gap is the Python-to-Rust port: the legacy runtime set the column, the Rust Trading Manager never has. The stored timestamp format corroborates it — populated legacy rows use `+00:00`, NULL rows use `Z`.
+
+This is not stale legacy data to be cleaned up once. It is an active defect: every order queued since the port is affected, including orders from two days ago.
+
+Why it happened: `strategy_type` is read from the model's response rather than set by the runtime, and the field was never part of the report schema. The neighbouring `strategy_key` avoided this because `unique_strategy_key` builds it locally. The lesson generalizes — provenance should be recorded by the component that knows it, never requested from the model.
+
+Why it matters beyond a blank column:
+
+- Every automated order is labelled **"manual"** in the Execution table, which inverts the most important fact about an order's provenance.
+- Slack execution alerts say "Execution" rather than "Trading Manager".
+- The roadmap's "realized and unrealized attribution by decision pulse" item is unbuildable on this column until it is fixed and backfilled.
+- It is now load-bearing: the 2026-07-25 unreconciled-orders fix keys its adoption exclusion on `COALESCE(strategy_type, '') <> 'portfolio_sync'`. That is correct today precisely because adopted rows are among the *populated* ones — but a second consumer of an unreliable column is a warning sign, not a pattern to repeat.
 
 ## Unwired Risk Configuration
 
