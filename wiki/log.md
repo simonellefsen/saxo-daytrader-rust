@@ -16,6 +16,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Execution view now presents explicit read-only exception rows for persisted broker positions with no complete broker-confirmed coverage, including the uncovered quantity, reason, and a non-mutating operator next step.
 - This does not place, amend, cancel, or reconcile a Saxo order, enable parent/child order automation, alter Trading Manager or Hermes behavior, or make a stop guarantee its fill price through a gap.
 
+## [2026-07-25] fix | Post-deploy smoke cleanup under strict shell mode
+
+- Guard cleanup now handles an empty port-forward PID list before iterating under `set -u`, so an early smoke-test failure reports the original mismatch without an unrelated unbound-array error.
+
 ## [2026-07-23] fix | TradingView Novonesis alias and resilient modal close
 
 - Mapped historical `NZYM-B:xcse`/`NZYMB:xcse` chart requests to current TradingView listing `OMXCOP:NSIS_B`; persisted Saxo symbols, historical keys, and trading behavior remain unchanged.
