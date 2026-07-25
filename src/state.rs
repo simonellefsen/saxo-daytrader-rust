@@ -72,6 +72,7 @@ const GATE_REPLAY_MIN_CONFLUENCES: i64 = 4;
 const SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS: i64 = 180;
 const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
+const PROTECTIVE_STOP_HERMES_POSITION_LIMIT: usize = 50;
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -1477,6 +1478,173 @@ fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
     })
 }
 
+/// Reconciles the latest persisted broker-position snapshot with locally
+/// recorded SELL Stop/StopLimit orders. It deliberately does not query Saxo
+/// and only classifies broker-confirmed order states as active protection.
+/// Queued or uncertain orders remain planned so the dashboard cannot imply a
+/// protection guarantee that the broker has not acknowledged.
+fn protective_stop_coverage_from_rows(
+    position_rows: &[JsonValue],
+    execution_order_rows: &[JsonValue],
+) -> JsonValue {
+    let mut stops_by_symbol: HashMap<String, Vec<&JsonValue>> = HashMap::new();
+    for order in execution_order_rows {
+        if !json_text(order, "action").eq_ignore_ascii_case("SELL") {
+            continue;
+        }
+        let order_type = json_text(order, "order_type").to_ascii_lowercase();
+        if order_type != "stop" && order_type != "stoplimit" {
+            continue;
+        }
+        let symbol = json_text(order, "symbol");
+        if !symbol.trim().is_empty() {
+            stops_by_symbol
+                .entry(symbol.trim().to_ascii_uppercase())
+                .or_default()
+                .push(order);
+        }
+    }
+
+    let mut positions = Vec::new();
+    let mut protected_count = 0usize;
+    let mut partial_count = 0usize;
+    let mut planned_count = 0usize;
+    let mut unprotected_count = 0usize;
+    let mut total_quantity = 0.0;
+    let mut confirmed_covered_quantity = 0.0;
+
+    for position in position_rows {
+        let quantity = value_f64(position, "quantity");
+        if !quantity.is_finite() || quantity <= 0.0 {
+            continue;
+        }
+        let symbol = json_text(position, "symbol");
+        if symbol.trim().is_empty() {
+            continue;
+        }
+        total_quantity += quantity;
+        let orders = stops_by_symbol
+            .get(&symbol.trim().to_ascii_uppercase())
+            .cloned()
+            .unwrap_or_default();
+        let active_orders = orders
+            .iter()
+            .copied()
+            .filter(|order| {
+                matches!(
+                    json_text(order, "status").as_str(),
+                    "submitted_to_broker"
+                        | "broker_working"
+                        | "broker_amended"
+                        | "broker_partially_filled"
+                        | "broker_replace_requested"
+                )
+            })
+            .collect::<Vec<_>>();
+        let planned_orders = orders
+            .iter()
+            .copied()
+            .filter(|order| {
+                matches!(
+                    json_text(order, "status").as_str(),
+                    "pending_execution"
+                        | "pending_approval"
+                        | "submitting_to_broker"
+                        | "planned_stop_loss"
+                        | "planned_child_order"
+                        | "waiting_for_market_open"
+                        | "waiting_for_cash_settlement"
+                        | "waiting_for_virtual_cash_budget"
+                )
+            })
+            .collect::<Vec<_>>();
+        let confirmed_quantity = active_orders
+            .iter()
+            .map(|order| value_f64(order, "quantity").max(0.0))
+            .sum::<f64>()
+            .min(quantity);
+        let active_stop_price = active_orders
+            .iter()
+            .filter_map(|order| {
+                let price = value_f64(order, "stop_price_local");
+                (price.is_finite() && price > 0.0).then_some(price)
+            })
+            .max_by(f64::total_cmp);
+        let planned_stop_price = planned_orders
+            .iter()
+            .filter_map(|order| {
+                let price = value_f64(order, "stop_price_local");
+                (price.is_finite() && price > 0.0).then_some(price)
+            })
+            .max_by(f64::total_cmp);
+        let protection_status =
+            if !active_orders.is_empty() && confirmed_quantity + 1e-6 >= quantity {
+                protected_count += 1;
+                "protected"
+            } else if !active_orders.is_empty() {
+                partial_count += 1;
+                "partial_protection"
+            } else if !planned_orders.is_empty() {
+                planned_count += 1;
+                "planned"
+            } else {
+                unprotected_count += 1;
+                "unprotected"
+            };
+        confirmed_covered_quantity += confirmed_quantity;
+        positions.push(json!({
+            "symbol": symbol,
+            "quantity": quantity,
+            "currency": json_text(position, "currency"),
+            "snapshot_updated_at": json_text(position, "updated_at"),
+            "protection_status": protection_status,
+            "confirmed_covered_quantity": confirmed_quantity,
+            "coverage_ratio": (confirmed_quantity / quantity).clamp(0.0, 1.0),
+            "active_stop_count": active_orders.len(),
+            "planned_stop_count": planned_orders.len(),
+            "active_stop_price_local": active_stop_price,
+            "planned_stop_price_local": planned_stop_price,
+        }));
+    }
+
+    let status = if positions.is_empty() {
+        "no_positive_broker_positions_recorded"
+    } else if unprotected_count > 0 || partial_count > 0 {
+        "attention_required"
+    } else if planned_count > 0 {
+        "planned_only"
+    } else {
+        "covered"
+    };
+    json!({
+        "status": status,
+        "summary": {
+            "position_count": positions.len(),
+            "protected_count": protected_count,
+            "partial_count": partial_count,
+            "planned_count": planned_count,
+            "unprotected_count": unprotected_count,
+            "total_quantity": total_quantity,
+            "confirmed_covered_quantity": confirmed_covered_quantity,
+        },
+        "positions": positions,
+        "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
+        "interpretation": "Coverage is inferred from the latest persisted broker-position snapshot and local SELL Stop or StopLimit records. Only broker-confirmed stop states count as protection; queued, unresolved, stale, cancelled, or failed orders do not. A broker-hosted stop can still fill away from its stop price during a market gap.",
+    })
+}
+
+fn compact_protective_stop_coverage_for_hermes(coverage: &JsonValue, limit: usize) -> JsonValue {
+    let mut compact = coverage.clone();
+    let position_limit = limit.clamp(1, PROTECTIVE_STOP_HERMES_POSITION_LIMIT);
+    if let Some(positions) = compact
+        .get_mut("positions")
+        .and_then(JsonValue::as_array_mut)
+    {
+        positions.truncate(position_limit);
+    }
+    compact
+}
+
 fn compact_candidate_market(value: &JsonValue) -> JsonValue {
     let quarantine_active = value
         .get("instrument_quarantine")
@@ -2094,6 +2262,21 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let execution_protection = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
+        {
+            self.protective_stop_coverage().await.unwrap_or_else(|err| {
+                warn!("dashboard protective-stop coverage degraded: {err:#}");
+                json!({
+                    "status": "unavailable",
+                    "summary": {},
+                    "positions": [],
+                    "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
+                    "interpretation": "Protective-stop coverage could not be loaded. No Saxo order was placed, replaced, or cancelled.",
+                })
+            })
+        } else {
+            JsonValue::Null
+        };
         let report_limit = match active_view.as_str() {
             "overview" => 5,
             "decisions" => 20,
@@ -2494,6 +2677,7 @@ impl AppState {
                 .get("integrity")
                 .cloned()
                 .unwrap_or_else(|| json!({"healthy": false, "warnings": [], "mismatches": []})),
+            execution_protection,
             market_status,
             trading_manager: overview
                 .get("trading_manager")
@@ -3923,6 +4107,26 @@ impl AppState {
         self.execution_orders_page(limit, 0).await
     }
 
+    async fn protective_stop_coverage(&self) -> Result<JsonValue> {
+        let positions = self
+            .select_json(
+                "SELECT symbol, updated_at, quantity, currency
+                 FROM broker_position_snapshots
+                 WHERE quantity > 0
+                 ORDER BY symbol ASC",
+            )
+            .await?;
+        let orders = self
+            .select_json(
+                "SELECT symbol, action, order_type, status, quantity, stop_price_local
+                 FROM execution_orders
+                 WHERE action = 'SELL'
+                 ORDER BY created_at DESC, id DESC",
+            )
+            .await?;
+        Ok(protective_stop_coverage_from_rows(&positions, &orders))
+    }
+
     pub async fn execution_orders_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, report_id, symbol, action, order_type, mode, status, adapter, quantity, price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk, approval_required, approved_at, ledger_id, parent_execution_order_id, strategy_type, strategy_session, strategy_key, strategy_role, error_text, broker_order_id, execution_result_json FROM execution_orders ORDER BY created_at DESC, id DESC LIMIT {} OFFSET {}",
@@ -4833,6 +5037,21 @@ impl AppState {
         let execution_failures = self.hermes_execution_failures(limit).await?;
         let execution_events = self.execution_events(limit).await.unwrap_or_default();
         let execution_fills = self.execution_fills(limit).await.unwrap_or_default();
+        let protective_stop_coverage = self
+            .protective_stop_coverage()
+            .await
+            .map(|coverage| {
+                compact_protective_stop_coverage_for_hermes(&coverage, limit as usize)
+            })
+            .unwrap_or_else(|err| {
+                warn!("Hermes protective-stop coverage degraded: {err:#}");
+                json!({
+                    "status": "unavailable",
+                    "summary": {},
+                    "positions": [],
+                    "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
+                })
+            });
         let performance = self
             .performance_history_with_current("1M", 500)
             .await
@@ -4904,7 +5123,8 @@ impl AppState {
                 "orders": execution_orders,
                 "failures": execution_failures,
                 "events": execution_events,
-                "fills": execution_fills
+                "fills": execution_fills,
+                "protective_stop_coverage": protective_stop_coverage
             },
             "performance": {
                 "range": "1M",
@@ -10977,6 +11197,52 @@ analysis_windows:
                 .unwrap_or_default()
                 .contains("descriptive, not causal")
         );
+    }
+
+    #[test]
+    fn protective_stop_coverage_requires_broker_confirmed_stop_state() {
+        let positions = vec![
+            json!({"symbol": "FULL:xnas", "quantity": 5.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "PART:xnas", "quantity": 5.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "PLAN:xnas", "quantity": 3.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+            json!({"symbol": "FAIL:xnas", "quantity": 2.0, "currency": "USD", "updated_at": "2026-07-25T12:00:00Z"}),
+        ];
+        let orders = vec![
+            json!({"symbol": "FULL:xnas", "action": "SELL", "order_type": "Stop", "status": "broker_working", "quantity": 5.0, "stop_price_local": 95.0, "raw_payload": "must not appear"}),
+            json!({"symbol": "PART:xnas", "action": "SELL", "order_type": "StopLimit", "status": "submitted_to_broker", "quantity": 2.0, "stop_price_local": 90.0}),
+            json!({"symbol": "PLAN:xnas", "action": "SELL", "order_type": "Stop", "status": "pending_execution", "quantity": 3.0, "stop_price_local": 85.0}),
+            json!({"symbol": "FAIL:xnas", "action": "SELL", "order_type": "Stop", "status": "execution_failed", "quantity": 2.0, "stop_price_local": 80.0}),
+        ];
+
+        let coverage = protective_stop_coverage_from_rows(&positions, &orders);
+        let rows = coverage["positions"].as_array().expect("coverage rows");
+        let find = |symbol: &str| {
+            rows.iter()
+                .find(|row| row["symbol"] == json!(symbol))
+                .expect("symbol row")
+        };
+        assert_eq!(coverage["status"], "attention_required");
+        assert_eq!(coverage["summary"]["protected_count"], 1);
+        assert_eq!(coverage["summary"]["partial_count"], 1);
+        assert_eq!(coverage["summary"]["planned_count"], 1);
+        assert_eq!(coverage["summary"]["unprotected_count"], 1);
+        assert_eq!(find("FULL:xnas")["protection_status"], "protected");
+        assert_eq!(find("PART:xnas")["protection_status"], "partial_protection");
+        assert_eq!(find("PLAN:xnas")["protection_status"], "planned");
+        assert_eq!(find("FAIL:xnas")["protection_status"], "unprotected");
+        assert!(!coverage.to_string().contains("must not appear"));
+    }
+
+    #[test]
+    fn protective_stop_coverage_for_hermes_is_bounded() {
+        let coverage = json!({
+            "status": "covered",
+            "summary": {"position_count": 3},
+            "positions": [json!({"symbol": "A:xnas"}), json!({"symbol": "B:xnas"}), json!({"symbol": "C:xnas"})],
+        });
+        let compact = compact_protective_stop_coverage_for_hermes(&coverage, 2);
+        assert_eq!(compact["positions"].as_array().map(Vec::len), Some(2));
+        assert_eq!(coverage["positions"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]

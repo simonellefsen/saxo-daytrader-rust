@@ -1068,3 +1068,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added a bounded 180-day, read-only evidence projection over persisted daily indicator closes. It groups recorded low/moderate/high support-break labels and compares each to its next available one- and five-run closes for the same symbol, reporting sample counts, average return, negative-return rate, confidence, and indicator-history coverage.
 - Decision Reports render the projection as `collecting` until at least 30 completed five-run observations exist; the same compact aggregate is included in the existing bounded gate-replay payload that Hermes reads. It is descriptive rather than causal and excludes costs, slippage, gap risk, provider calls, Saxo calls, configuration changes, lifecycle transitions, and order effects.
+
+## [2026-07-25] safety | Read-only protective-stop coverage audit
+
+- Added a bounded local reconciliation of persisted positive `broker_position_snapshots` against local SELL `Stop` and `StopLimit` execution records. Execution now shows protected, partial, planned, and unprotected coverage per snapshot position; Hermes receives the same sanitized, bounded context.
+- Only `submitted_to_broker`, `broker_working`, `broker_amended`, `broker_partially_filled`, and `broker_replace_requested` stop statuses count as broker-confirmed coverage. Queued, uncertain, cancelled, and failed rows remain non-protective by design.
+- The audit makes no Saxo HTTP call and cannot place, replace, cancel, or activate stops. It is a prerequisite visibility slice before any small-SIM broker-hosted `GoodTillCancel` Stop lifecycle experiment.

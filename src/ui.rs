@@ -3381,6 +3381,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { "Expires " strong { "{text(&data.saxo_auth, \"expires_in_minutes\")} min" } }
                 }
             }
+            ProtectiveStopCoveragePanel { coverage: data.execution_protection.clone(), prefs: prefs.clone() }
 
             // SIM-only: Reset portfolio from Live Positioner export
             {
@@ -3544,6 +3545,99 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn ProtectiveStopCoveragePanel(coverage: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&coverage, "status");
+    let summary = coverage.get("summary").cloned().unwrap_or(JsonValue::Null);
+    let positions = json_array(&coverage, "positions");
+    let tone = match status.as_str() {
+        "covered" => "good",
+        "attention_required" | "planned_only" => "warn",
+        "unavailable" => "bad",
+        _ => "",
+    };
+    let protected_count = value_i64(&summary, "protected_count");
+    let partial_count = value_i64(&summary, "partial_count");
+    let planned_count = value_i64(&summary, "planned_count");
+    let unprotected_count = value_i64(&summary, "unprotected_count");
+    let interpretation = fallback_text(
+        &coverage,
+        "interpretation",
+        "Protective-stop coverage is unavailable right now.",
+    );
+    rsx! {
+        section { class: "event candidate-scoring-panel",
+            strong { "Protective Stop Coverage" }
+            p { class: "muted", "Read-only local audit of broker-held long-position snapshots against locally recorded SELL Stop or StopLimit orders. It never places, replaces, or cancels Saxo orders." }
+            if status == "unavailable" {
+                span { class: "status bad", "unavailable" }
+            } else if status == "no_positive_broker_positions_recorded" {
+                span { class: "muted", "No positive broker-position snapshot rows are recorded yet." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status good", "{protected_count} protected" }
+                    span { class: if partial_count > 0 { "status warn" } else { "status" }, "{partial_count} partial" }
+                    span { class: if planned_count > 0 { "status warn" } else { "status" }, "{planned_count} planned" }
+                    span { class: if unprotected_count > 0 { "status warn" } else { "status" }, "{unprotected_count} unprotected" }
+                    span { class: "status {tone}", "{status}" }
+                }
+                div { class: "table-wrap candidate-scoring-table",
+                    table {
+                        thead { tr { th { "Symbol" } th { "Broker Qty" } th { "Coverage" } th { "Highest Stop" } th { "Snapshot" } th { "State" } } }
+                        tbody {
+                            for row in positions.iter() {
+                                ProtectiveStopCoverageRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            span { class: "muted block", "{interpretation}" }
+        }
+    }
+}
+
+#[component]
+fn ProtectiveStopCoverageRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let symbol = text_or(&row, "symbol", "n/a");
+    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
+    let covered_quantity = format_quantity(value_f64(&row, "confirmed_covered_quantity"), &prefs);
+    let currency = text(&row, "currency");
+    let active_stop = row
+        .get("active_stop_price_local")
+        .and_then(JsonValue::as_f64)
+        .map(|price| format_position_price(price, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let planned_stop = row
+        .get("planned_stop_price_local")
+        .and_then(JsonValue::as_f64)
+        .map(|price| format_position_price(price, &currency, &prefs));
+    let stop = if active_stop != "n/a" {
+        active_stop
+    } else if let Some(price) = planned_stop {
+        format!("planned {price}")
+    } else {
+        "n/a".to_string()
+    };
+    let state = text_or(&row, "protection_status", "unprotected").replace('_', " ");
+    let state_class = match state.as_str() {
+        "protected" => "status good",
+        "partial protection" | "planned" | "unprotected" => "status warn",
+        _ => "status",
+    };
+    let snapshot = format_timestamp(&text(&row, "snapshot_updated_at"), &prefs);
+    rsx! {
+        tr {
+            td { strong { class: "mono", "{symbol}" } }
+            td { "{quantity}" }
+            td { "{covered_quantity} / {quantity}" }
+            td { "{stop}" }
+            td { "{snapshot}" }
+            td { span { class: "{state_class}", "{state}" } }
         }
     }
 }
