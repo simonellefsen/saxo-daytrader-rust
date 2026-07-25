@@ -335,9 +335,9 @@ async fn store_item(state: &AppState, item: &EditorialResearchItem) -> Result<bo
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let updated = sqlx::query(
         "UPDATE editorial_research_items
-         SET source_url = ?, canonical_url = ?, title = ?, published_at = ?, access_level = ?,
-             summary = ?, matched_symbols_json = ?, last_seen_at = ?
-         WHERE id = ?",
+         SET source_url = $1, canonical_url = $2, title = $3, published_at = $4, access_level = $5,
+             summary = $6, matched_symbols_json = $7, last_seen_at = $8
+         WHERE id = $9",
     )
     .bind(&item.source_url)
     .bind(&item.canonical_url)
@@ -358,7 +358,7 @@ async fn store_item(state: &AppState, item: &EditorialResearchItem) -> Result<bo
         "INSERT INTO editorial_research_items (
             id, source_name, source_url, canonical_url, title, published_at, access_level,
             summary, matched_symbols_json, first_seen_at, last_seen_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(&item.id)
     .bind(&item.source_name)
@@ -385,7 +385,7 @@ async fn source_due(
     let row = sqlx::query(
         "SELECT completed_at
          FROM editorial_research_runs
-         WHERE source_name = ? AND status = 'ok'
+         WHERE source_name = $1 AND status = 'ok'
          ORDER BY completed_at DESC
          LIMIT 1",
     )
@@ -425,7 +425,7 @@ async fn record_run(
     sqlx::query(
         "INSERT INTO editorial_research_runs (
             id, source_name, started_at, completed_at, status, fetched_count, stored_count, error_summary
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(id)
     .bind(&source.name)
@@ -443,12 +443,12 @@ async fn record_run(
 
 async fn prune_old_records(state: &AppState, retention: Duration) -> Result<usize> {
     let cutoff = (Utc::now() - retention).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let item_result = sqlx::query("DELETE FROM editorial_research_items WHERE last_seen_at < ?")
+    let item_result = sqlx::query("DELETE FROM editorial_research_items WHERE last_seen_at < $1")
         .bind(&cutoff)
         .execute(&state.pool)
         .await
         .context("pruning expired editorial research items")?;
-    let run_result = sqlx::query("DELETE FROM editorial_research_runs WHERE completed_at < ?")
+    let run_result = sqlx::query("DELETE FROM editorial_research_runs WHERE completed_at < $1")
         .bind(&cutoff)
         .execute(&state.pool)
         .await

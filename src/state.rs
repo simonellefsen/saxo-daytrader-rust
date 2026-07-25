@@ -4415,7 +4415,7 @@ impl AppState {
         sqlx::query(
             "INSERT INTO protective_stop_prechecks (
                 created_at, environment, symbol, quantity, stop_price_local, status, result_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(environment)
@@ -4482,7 +4482,7 @@ impl AppState {
                 created_at, updated_at, source_precheck_id, environment, symbol, quantity, stop_price_local,
                 status, broker_order_id, external_reference, request_id, placement_result_json,
                 cancellation_result_json, reconciliation_json
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12, $13)",
         )
         .bind(&now)
         .bind(&now)
@@ -4623,9 +4623,9 @@ impl AppState {
         });
         let updated = sqlx::query(
             "UPDATE protective_stop_lifecycle_tests
-             SET updated_at = ?, status = ?, broker_order_id = ?, placement_result_json = ?,
-                 cancellation_result_json = ?, reconciliation_json = ?
-             WHERE id = ?",
+             SET updated_at = $1, status = $2, broker_order_id = $3, placement_result_json = $4,
+                 cancellation_result_json = $5, reconciliation_json = $6
+             WHERE id = $7",
         )
         .bind(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
         .bind(status)

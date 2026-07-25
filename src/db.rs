@@ -145,4 +145,55 @@ mod tests {
         let value = json!({"signed_signal": "0.63371605"});
         assert_eq!(value_f64(&value, "signed_signal"), 0.63371605);
     }
+
+    /// `?` placeholders are SQLite-only. The runtime opens an `AnyPool`, so the
+    /// same statement runs against local SQLite and Kubernetes PostgreSQL, and
+    /// PostgreSQL rejects `?` with a bare syntax error at execution time --
+    /// never at compile time, and never in a SQLite-backed test.
+    ///
+    /// That combination shipped two silently broken features on 2026-07-25: the
+    /// protective-stop precheck recorded nothing after a successful Saxo call,
+    /// and editorial-research ingestion failed on every scheduler cycle. Both
+    /// had passing tests. `$1`-style placeholders work on both backends.
+    ///
+    /// Test modules are exempt: they only ever run on SQLite.
+    #[test]
+    fn production_sql_uses_backend_portable_placeholders() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let entries = std::fs::read_dir(&dir).expect("src directory is readable");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // Everything from the first test module onward is SQLite-only.
+            let production = match source.find("#[cfg(test)]") {
+                Some(index) => &source[..index],
+                None => &source[..],
+            };
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("<unknown>")
+                .to_string();
+            for (offset, line) in production.lines().enumerate() {
+                // Patterns that only occur as SQL placeholders. Rust's `?`
+                // operator always appears as `)?`, `?;`, `?.`, or `?,` directly
+                // after an expression, none of which match these.
+                let sqlish = ["(?,", "(?)", ", ?)", ", ?,", "= ?", "< ?", "> ?"];
+                if sqlish.iter().any(|pattern| line.contains(pattern)) {
+                    offenders.push(format!("{name}:{}: {}", offset + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "SQLite-only `?` placeholders in production SQL (use $1, $2, ...):\n{}",
+            offenders.join("\n")
+        );
+    }
 }

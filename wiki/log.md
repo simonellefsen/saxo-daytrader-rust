@@ -1161,3 +1161,15 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Fails closed rather than guessing: no proposal when close or ATR14 is missing or non-positive, or when the computed level would be at or below zero. The payload states `tick_normalized: false` — rounding to Saxo's tick scheme requires instrument details and belongs to the precheck/placement path.
 - The config contract entry moved from `unused_risk` to `advisory`, and becomes `enforced` when slice 3 lands. The contract's own drift check is what forced this update.
 - Read-only. No Saxo call, no order, no reservation, no scheduler or Hermes involvement.
+
+## [2026-07-25] incident | SQLite-only placeholders broke two production writers
+
+- Surfaced when the operator ran the SIM protective-stop precheck and saw no feedback. The Saxo call had in fact succeeded — the API logged `SIM protective-stop precheck completed without placing an order` for both `V:xnys` and `LMND:xnys` — but the audit insert failed with `syntax error at or near ","` and `protective_stop_prechecks` stayed empty.
+- Root cause: `?` bind placeholders are SQLite-only. The runtime opens an `sqlx::AnyPool`, so the same statement runs against local SQLite and Kubernetes PostgreSQL, and PostgreSQL rejects `?` at execution time. Nothing catches it at compile time, and nothing catches it in a SQLite-backed test.
+- Two production writers were affected. `src/state.rs`: `record_protective_stop_precheck`, `prepare_protective_stop_lifecycle_test`, and `update_protective_stop_lifecycle_test`. `src/editorial_research.rs`: `store_item`, `source_due`, `record_run`, and `prune_old_records`.
+- `update_protective_stop_lifecycle_test` was the dangerous one. It records placement, cancellation, and reconciliation of a real broker order; had the operator continued past the precheck to the lifecycle test, a live SIM stop would have existed at Saxo with no local record of it at all.
+- Editorial research had never worked in production. Deployed 2026-07-25 with `editorial_research_items` and `editorial_research_runs` both at zero rows and the scheduler failing every cycle. Its four tests pass because they run on in-memory SQLite — passing tests were the misleading signal that argued for shipping it.
+- `src/portfolio_reset.rs` was checked and already uses `$1` correctly.
+- Fixed by renumbering to `$1`-style placeholders, verified to work on both backends, rather than converting to `format!` plus `sql_escape`. Parameter binding is kept deliberately: `editorial_research` stores untrusted third-party RSS text, which is exactly where string interpolation is worst.
+- Added `production_sql_uses_backend_portable_placeholders` in `src/db.rs`. It scans each source file up to its first test module for placeholder-shaped SQL and fails with file and line. Confirmed to catch the original defect at `state.rs:4418`. Test modules are exempt because they only ever run on SQLite.
+- Durable lesson: a green SQLite test suite does not evidence a PostgreSQL code path. Any future backend-specific behavior needs either a portability guard like this one or a PostgreSQL-backed test.
