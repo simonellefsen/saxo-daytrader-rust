@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-23
+updated: 2026-07-25
 ---
 
 # Daytrader Roadmap
@@ -21,6 +21,7 @@ This roadmap collects potential improvements for the Rust daytrader runtime, Her
 
 ## Recently Landed
 
+- 2026-07-25: Added a read-only multi-horizon support-risk projection to nightly daily indicators. It clusters daily pivot lows from up to five trading years of Saxo OHLC history, reports nearest and next lower support, downside to support, downside after a break, break-risk label, confidence, and returned-history coverage. The same sanitized snapshot reaches the Watchlist tooltip, the Decision Report manager-waterfall/context, and Hermes context. It is not a manager gate, sizing input, order change, or Hermes activation criterion; held-out backtesting remains required before any trading effect.
 - 2026-07-23: Hardened the lazy TradingView modal close path. Close clicks are handled during the capture phase, immediately hide the active target before removing its URL fragment, and Escape dismisses the current chart; close links also point at a non-modal fallback fragment. Added the historical Novozymes `NZYM-B:xcse` chart alias to current Novonesis `OMXCOP:NSIS_B`, without changing Saxo symbols or trading behavior.
 - 2026-07-23: Added Previous/Next Markov signal navigation beside the table heading as well as at the bottom, so operators can move between bounded server-side pages without scrolling through the current page.
 - 2026-07-23: Reworked the Rust Docker build into a dependency-only Cargo layer plus persistent BuildKit Cargo registry/target caches. A tracked build script injects the per-deploy Git SHA only for the final application build, so revision metadata recompiles correctly without invalidating dependencies. Screenshot directories are excluded from the Docker context; a cached rebuild transfers roughly 16 KB of source context and reuses every dependency layer.
@@ -250,6 +251,7 @@ The execution path should be more transparent and more resilient before expandin
 - Store normalized broker failure categories alongside raw error text: auth, market closed, instrument not tradable, commission setup, insufficient cash, tick size, quantity, session expired, unknown.
 - Add order expiry handling for day orders: show expected expiry time in local exchange time and reconcile expired broker orders promptly.
 - Add price/tick-size diagnostics directly into execution events for limit orders.
+- Add broker-hosted protective-stop lifecycle for filled BUY positions. Precheck and place a `GoodTillCancel` related SELL `Stop` when Saxo supports the order shape; persist parent/child linkage, reconcile protection status, and make an unprotected filled position an explicit operator-visible exception. Default to Stop rather than StopLimit so a fast decline cannot leave a triggered but unfilled protective order. Test the complete lifecycle on a small Saxo SIM position before enabling it for the strategy. A stop cannot guarantee the execution price through a market gap.
 - Landed 2026-07-21: Execution attribution links order -> report -> Trading Manager -> Hermes -> report-time Markov/technical/capital context. It prefers stored manager snapshots and labels current latest-signal reads as a fallback for historical records. Reconciled fill-ledger totals now add SELL realised P/L/costs or BUY position-book outcomes, with explicit partial/legacy labels; remaining work is holding-period and cross-order position lifecycle attribution.
 - Add a broker-safe simulation mode that runs all prechecks and manager decisions but never places orders.
 
@@ -265,6 +267,8 @@ Strategy changes should be evidence-driven and reversible.
 - Add cash utilization diagnostics that explain whether cash is held by policy, no qualifying candidates, conservative Hermes block, market closed, failed order, or stale signals.
 - Add drawdown guardrails that reduce buy budget or require review after threshold breaches.
 - Add explicit "do not trade" lists for instruments that repeatedly fail precheck, instrument resolution, commission setup, or market-scope checks.
+- Landed 2026-07-25: read-only multi-horizon support-risk context from daily Saxo OHLC data. The current model uses clustered pivot-low zones from up to 1-year and 5-year windows and exposes nearest/next support, downside measures, break risk, confidence, and actual history coverage in the Decision Report, Hermes context, and Watchlist. Follow-up: add volume-aware zone evidence only when a reliable daily-volume source is available; no trading decision currently depends on this projection.
+- Backtest the multi-horizon support/resistance features as a read-only risk overlay before allowing any Trading Manager effect. Compare held-out outcomes for candidates near support, candidates breaking support, and a no-overlay baseline; require a one-variable Hermes/SIM proposal with explicit sizing or review-only effect before promotion. Do not treat chart levels as deterministic floors or targets.
 
 ## Portfolio And Performance Analytics
 

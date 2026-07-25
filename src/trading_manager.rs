@@ -2189,6 +2189,17 @@ async fn apply_verified_technical(
         "min_confluences": signal.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
         "rsi14": signal.get("rsi14").cloned().unwrap_or(JsonValue::Null),
         "reward_risk": signal.get("reward_risk").cloned().unwrap_or(JsonValue::Null),
+        "support": {
+            "nearest_support": signal.get("nearest_support").cloned().unwrap_or(JsonValue::Null),
+            "next_support": signal.get("next_support").cloned().unwrap_or(JsonValue::Null),
+            "downside_to_support_pct": signal.get("downside_to_support_pct").cloned().unwrap_or(JsonValue::Null),
+            "downside_after_break_pct": signal.get("downside_after_break_pct").cloned().unwrap_or(JsonValue::Null),
+            "break_risk": signal.get("support_break_risk").cloned().unwrap_or(JsonValue::Null),
+            "break_risk_label": signal.get("support_break_risk_label").cloned().unwrap_or(JsonValue::Null),
+            "confidence": signal.get("support_confidence").cloned().unwrap_or(JsonValue::Null),
+            "history_coverage": signal.get("support_history_coverage").cloned().unwrap_or(JsonValue::Null),
+            "touch_count": signal.get("support_touch_count").cloned().unwrap_or(JsonValue::Null),
+        },
         "confluences": signal.get("confluences_json")
             .and_then(JsonValue::as_str)
             .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
@@ -4176,6 +4187,15 @@ mod tests {
                 atr14 REAL,
                 resistance REAL,
                 reward_risk REAL,
+                nearest_support REAL,
+                next_support REAL,
+                downside_to_support_pct REAL,
+                downside_after_break_pct REAL,
+                support_break_risk REAL,
+                support_break_risk_label TEXT,
+                support_confidence REAL,
+                support_history_coverage REAL,
+                support_touch_count INTEGER,
                 trend_bias TEXT,
                 sentiment TEXT,
                 confluence_count INTEGER,

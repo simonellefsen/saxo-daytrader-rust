@@ -29,6 +29,9 @@ const MACD_FAST: usize = 12;
 const MACD_SLOW: usize = 26;
 const MACD_SIGNAL: usize = 9;
 const RESISTANCE_LOOKBACK: usize = 60;
+const SUPPORT_SHORT_WINDOW: usize = 252;
+const SUPPORT_LONG_WINDOW: usize = 1_260;
+const SUPPORT_PIVOT_RADIUS: usize = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) struct IndicatorConfig {
@@ -63,6 +66,15 @@ pub(crate) struct IndicatorAnalysis {
     pub(crate) atr14: f64,
     pub(crate) resistance: f64,
     pub(crate) reward_risk: Option<f64>,
+    pub(crate) nearest_support: Option<f64>,
+    pub(crate) next_support: Option<f64>,
+    pub(crate) downside_to_support_pct: Option<f64>,
+    pub(crate) downside_after_break_pct: Option<f64>,
+    pub(crate) support_break_risk: f64,
+    pub(crate) support_break_risk_label: &'static str,
+    pub(crate) support_confidence: f64,
+    pub(crate) support_history_coverage: f64,
+    pub(crate) support_touch_count: i64,
     pub(crate) trend_bias: &'static str,
     pub(crate) sentiment: &'static str,
     pub(crate) bullish_confluences: Vec<&'static str>,
@@ -159,6 +171,15 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             atr14 DOUBLE PRECISION,
             resistance DOUBLE PRECISION,
             reward_risk DOUBLE PRECISION,
+            nearest_support DOUBLE PRECISION,
+            next_support DOUBLE PRECISION,
+            downside_to_support_pct DOUBLE PRECISION,
+            downside_after_break_pct DOUBLE PRECISION,
+            support_break_risk DOUBLE PRECISION,
+            support_break_risk_label TEXT,
+            support_confidence DOUBLE PRECISION,
+            support_history_coverage DOUBLE PRECISION,
+            support_touch_count INTEGER,
             trend_bias TEXT,
             sentiment TEXT,
             confluence_count INTEGER,
@@ -479,6 +500,130 @@ pub(crate) fn atr(bars: &[OhlcBar], period: usize) -> Option<f64> {
     Some(atr)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct SupportAnalysis {
+    nearest_support: Option<f64>,
+    next_support: Option<f64>,
+    downside_to_support_pct: Option<f64>,
+    downside_after_break_pct: Option<f64>,
+    break_risk: f64,
+    break_risk_label: &'static str,
+    confidence: f64,
+    history_coverage: f64,
+    touch_count: i64,
+}
+
+/// Find clustered daily pivot-low zones below the current close. This is
+/// intentionally an observational model: its output is persisted for the
+/// dashboard, decision context, and Hermes, but never changes a trade gate.
+fn support_analysis(
+    bars: &[OhlcBar],
+    close: f64,
+    atr14: f64,
+    trend_bias: &str,
+    rsi14: f64,
+    macd_histogram: f64,
+) -> SupportAnalysis {
+    let history_coverage = (bars.len() as f64 / SUPPORT_LONG_WINDOW as f64).clamp(0.0, 1.0);
+    let short_history_coverage = (bars.len() as f64 / SUPPORT_SHORT_WINDOW as f64).clamp(0.0, 1.0);
+    if bars.len() < SUPPORT_PIVOT_RADIUS * 2 + 1 || close <= f64::EPSILON {
+        return SupportAnalysis {
+            nearest_support: None,
+            next_support: None,
+            downside_to_support_pct: None,
+            downside_after_break_pct: None,
+            break_risk: 0.0,
+            break_risk_label: "unavailable",
+            confidence: 0.0,
+            history_coverage,
+            touch_count: 0,
+        };
+    }
+
+    let window_start = bars.len().saturating_sub(SUPPORT_LONG_WINDOW);
+    let candidate_lows = (window_start + SUPPORT_PIVOT_RADIUS..bars.len() - SUPPORT_PIVOT_RADIUS)
+        .filter_map(|index| {
+            let low = bars[index].low;
+            let neighborhood = &bars[index - SUPPORT_PIVOT_RADIUS..=index + SUPPORT_PIVOT_RADIUS];
+            (low > 0.0 && neighborhood.iter().all(|bar| low <= bar.low)).then_some(low)
+        })
+        .filter(|low| *low <= close * 1.005)
+        .collect::<Vec<_>>();
+
+    let zone_width = (atr14 * 0.75).max(close * 0.01).max(f64::EPSILON);
+    let mut zones = Vec::<(f64, i64)>::new();
+    for low in candidate_lows {
+        if let Some((level, touches)) = zones
+            .iter_mut()
+            .find(|(level, _)| (low - *level).abs() <= zone_width)
+        {
+            *level = (*level * *touches as f64 + low) / (*touches as f64 + 1.0);
+            *touches += 1;
+        } else {
+            zones.push((low, 1));
+        }
+    }
+    zones.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let Some((nearest_support, touch_count)) = zones.first().copied() else {
+        return SupportAnalysis {
+            nearest_support: None,
+            next_support: None,
+            downside_to_support_pct: None,
+            downside_after_break_pct: None,
+            break_risk: 0.0,
+            break_risk_label: "unavailable",
+            confidence: 0.0,
+            history_coverage,
+            touch_count: 0,
+        };
+    };
+    let next_support = zones.get(1).map(|(level, _)| *level);
+    let downside_to_support_pct = Some(((close - nearest_support) / close * 100.0).max(0.0));
+    let downside_after_break_pct = next_support.map(|lower_support| {
+        ((nearest_support - lower_support) / nearest_support * 100.0).max(0.0)
+    });
+
+    let proximity = (1.0 - ((close - nearest_support) / (atr14 * 4.0).max(zone_width)).min(1.0))
+        .clamp(0.0, 1.0);
+    let momentum_risk = [
+        (trend_bias == "bearish", 0.35),
+        (rsi14 < 45.0, 0.20),
+        (macd_histogram < 0.0, 0.20),
+    ]
+    .into_iter()
+    .filter_map(|(active, weight)| active.then_some(weight))
+    .sum::<f64>();
+    let break_risk = (momentum_risk + proximity * 0.25).clamp(0.0, 1.0);
+    let break_risk_label = if break_risk >= 0.65 {
+        "high"
+    } else if break_risk >= 0.35 {
+        "moderate"
+    } else {
+        "low"
+    };
+    let touch_confidence = (touch_count as f64 / 3.0).min(1.0);
+    let confidence =
+        (short_history_coverage * 0.35 + history_coverage * 0.30 + touch_confidence * 0.35)
+            .clamp(0.0, 1.0);
+    SupportAnalysis {
+        nearest_support: Some(nearest_support),
+        next_support,
+        downside_to_support_pct,
+        downside_after_break_pct,
+        break_risk,
+        break_risk_label,
+        confidence,
+        history_coverage,
+        touch_count,
+    }
+}
+
 pub(crate) fn analyze_bars(
     bars: &[OhlcBar],
     min_reward_risk: f64,
@@ -525,6 +670,7 @@ pub(crate) fn analyze_bars(
     } else {
         "neutral"
     };
+    let support = support_analysis(bars, close, atr14, trend_bias, rsi14, macd_histogram);
 
     let mut bullish_confluences = Vec::new();
     if close > sma20 {
@@ -592,6 +738,15 @@ pub(crate) fn analyze_bars(
         atr14,
         resistance,
         reward_risk,
+        nearest_support: support.nearest_support,
+        next_support: support.next_support,
+        downside_to_support_pct: support.downside_to_support_pct,
+        downside_after_break_pct: support.downside_after_break_pct,
+        support_break_risk: support.break_risk,
+        support_break_risk_label: support.break_risk_label,
+        support_confidence: support.confidence,
+        support_history_coverage: support.history_coverage,
+        support_touch_count: support.touch_count,
         trend_bias,
         sentiment,
         bullish_confluences,
@@ -644,6 +799,15 @@ fn signal_row_json(
         "atr14": analysis.map(|a| a.atr14),
         "resistance": analysis.map(|a| a.resistance),
         "reward_risk": analysis.and_then(|a| a.reward_risk),
+        "nearest_support": analysis.and_then(|a| a.nearest_support),
+        "next_support": analysis.and_then(|a| a.next_support),
+        "downside_to_support_pct": analysis.and_then(|a| a.downside_to_support_pct),
+        "downside_after_break_pct": analysis.and_then(|a| a.downside_after_break_pct),
+        "support_break_risk": analysis.map(|a| a.support_break_risk),
+        "support_break_risk_label": analysis.map(|a| a.support_break_risk_label),
+        "support_confidence": analysis.map(|a| a.support_confidence),
+        "support_history_coverage": analysis.map(|a| a.support_history_coverage),
+        "support_touch_count": analysis.map(|a| a.support_touch_count),
         "trend_bias": analysis.map(|a| a.trend_bias),
         "sentiment": analysis.map(|a| a.sentiment),
         "confluence_count": confluence_count,
@@ -682,12 +846,16 @@ async fn insert_signal(state: &AppState, row: &JsonValue) -> Result<()> {
             id, run_id, created_at, run_date, status, symbol, instrument_name, source,
             uic, asset_type, sample_count, close, sma20, sma50, sma200, rsi14,
             macd, macd_signal, macd_histogram, atr14, resistance, reward_risk,
+            nearest_support, next_support, downside_to_support_pct, downside_after_break_pct,
+            support_break_risk, support_break_risk_label, support_confidence,
+            support_history_coverage, support_touch_count,
             trend_bias, sentiment, confluence_count, min_confluences,
             confluences_json, bearish_confluences_json, error_text
         ) VALUES (
             '{}', '{}', '{}', '{}', '{}', '{}', {}, {},
             {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {}, {}, {},
+            {}, {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {},
             {}, {}, {}
         )",
@@ -715,6 +883,17 @@ async fn insert_signal(state: &AppState, row: &JsonValue) -> Result<()> {
         optional_number("atr14"),
         optional_number("resistance"),
         optional_number("reward_risk"),
+        optional_number("nearest_support"),
+        optional_number("next_support"),
+        optional_number("downside_to_support_pct"),
+        optional_number("downside_after_break_pct"),
+        optional_number("support_break_risk"),
+        optional_text("support_break_risk_label"),
+        optional_number("support_confidence"),
+        optional_number("support_history_coverage"),
+        row.get("support_touch_count")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
         optional_text("trend_bias"),
         optional_text("sentiment"),
         row.get("confluence_count")
@@ -779,7 +958,10 @@ pub(crate) async fn latest_indicator_signal(
 ) -> Result<Option<JsonValue>> {
     let sql = format!(
         "SELECT run_date, status, close, sma20, sma50, sma200, rsi14, macd, macd_signal,
-                macd_histogram, atr14, resistance, reward_risk, trend_bias, sentiment,
+                macd_histogram, atr14, resistance, reward_risk, nearest_support, next_support,
+                downside_to_support_pct, downside_after_break_pct, support_break_risk,
+                support_break_risk_label, support_confidence, support_history_coverage,
+                support_touch_count, trend_bias, sentiment,
                 confluence_count, min_confluences, confluences_json
          FROM daily_indicator_signals
          WHERE symbol = '{}' AND run_id = (
@@ -810,7 +992,10 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
         .unwrap_or_default();
     let rows = sqlx::query(&format!(
         "SELECT symbol, run_date, close, sma20, sma50, sma200, rsi14, macd_histogram,
-                atr14, reward_risk, trend_bias, sentiment, confluence_count, min_confluences,
+                atr14, reward_risk, nearest_support, next_support, downside_to_support_pct,
+                downside_after_break_pct, support_break_risk, support_break_risk_label,
+                support_confidence, support_history_coverage, support_touch_count,
+                trend_bias, sentiment, confluence_count, min_confluences,
                 confluences_json
          FROM daily_indicator_signals
          WHERE run_id = '{}' AND status = 'ok'
@@ -847,6 +1032,17 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
             "macd_histogram": row.get("macd_histogram").cloned().unwrap_or(JsonValue::Null),
             "atr14": row.get("atr14").cloned().unwrap_or(JsonValue::Null),
             "reward_risk": row.get("reward_risk").cloned().unwrap_or(JsonValue::Null),
+            "support": {
+                "nearest_support": row.get("nearest_support").cloned().unwrap_or(JsonValue::Null),
+                "next_support": row.get("next_support").cloned().unwrap_or(JsonValue::Null),
+                "downside_to_support_pct": row.get("downside_to_support_pct").cloned().unwrap_or(JsonValue::Null),
+                "downside_after_break_pct": row.get("downside_after_break_pct").cloned().unwrap_or(JsonValue::Null),
+                "break_risk": row.get("support_break_risk").cloned().unwrap_or(JsonValue::Null),
+                "break_risk_label": row.get("support_break_risk_label").cloned().unwrap_or(JsonValue::Null),
+                "confidence": row.get("support_confidence").cloned().unwrap_or(JsonValue::Null),
+                "history_coverage": row.get("support_history_coverage").cloned().unwrap_or(JsonValue::Null),
+                "touch_count": row.get("support_touch_count").cloned().unwrap_or(JsonValue::Null),
+            },
             "trend_bias": row.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
             "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null),
             "confluence_count": row.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
@@ -987,5 +1183,30 @@ mod tests {
         let analysis = analyze_bars(&uptrend_bars(120), 2.0, 3).unwrap();
         assert!(analysis.sma200.is_none());
         assert!(!analysis.bullish_confluences.contains(&"price_above_sma200"));
+    }
+
+    #[test]
+    fn clustered_pivot_lows_produce_nearest_and_next_support() {
+        let lows = [
+            108.0, 104.0, 100.0, 104.0, 108.0, 110.0, 105.0, 100.3, 105.0, 110.0, 108.0, 100.0,
+            90.0, 100.0, 108.0, 110.0,
+        ];
+        let bars = lows
+            .into_iter()
+            .map(|low| OhlcBar {
+                high: low + 4.0,
+                low,
+                close: 110.0,
+            })
+            .collect::<Vec<_>>();
+        let support = support_analysis(&bars, 110.0, 2.0, "bearish", 40.0, -0.5);
+
+        assert!((support.nearest_support.unwrap() - 100.1).abs() < 0.25);
+        assert!((support.next_support.unwrap() - 90.0).abs() < 0.01);
+        assert!(support.downside_to_support_pct.unwrap() > 8.0);
+        assert!(support.downside_after_break_pct.unwrap() > 9.0);
+        assert_eq!(support.break_risk_label, "high");
+        assert!(support.confidence > 0.2);
+        assert_eq!(support.touch_count, 2);
     }
 }

@@ -1051,3 +1051,15 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The initial one-variable comparisons test a Markov starter signed-signal threshold of `0.25` and a BUY technical-confluence threshold of `4`; results distinguish a target-gate flip from a full approval.
 - Replay is read-only: it cannot call a provider or Saxo, create orders, alter experiments, or mutate runtime configuration.
 - Added the safe replay summary to Hermes `get_context` and listed the Markov threshold as an allowed one-variable overlay proposal, so Hermes can use replay evidence without treating it as approval.
+
+## [2026-07-25] roadmap | Protective stops and multi-horizon technical risk
+
+- Recorded the current Rust technical-analysis boundary: daily Saxo OHLC analysis uses 260 daily samples with SMA20/50/200, RSI14, MACD, ATR14, and a 60-day resistance high for reward/risk. It does not calculate support zones or 5-year structural levels.
+- Added a SIM-first broker-hosted protective-stop lifecycle item: after a confirmed BUY fill, precheck/place and reconcile a GTC SELL Stop where Saxo supports related orders, with explicit unprotected-position visibility. Stop-market behavior remains subject to gaps and execution slippage.
+- Added a read-only, backtest-gated multi-horizon support/resistance roadmap item. It must demonstrate out-of-sample value as a risk overlay before Hermes or the Trading Manager can propose a one-variable activation.
+
+## [2026-07-25] improvement | Read-only support-risk context
+
+- Implemented the first multi-horizon support-risk slice from Saxo daily OHLC data. It clusters repeatable pivot lows from up to 1,260 daily bars, returns the nearest and next lower support, downside to each level, a bounded break-risk assessment, pivot-touch count, confidence, and actual returned-history coverage.
+- Persisted the compact projection beside each daily indicator signal with additive runtime schema migration. Watchlists show a concise risk label and an explanatory tooltip; Decision Report manager snapshots and the OpenRouter prompt receive the same sanitized context; Hermes receives it through its bounded daily-indicator context.
+- This is observation only. It does not change a technical gate, candidate quantity, Hermes lifecycle, broker order, or Saxo payload. The roadmap retains held-out backtesting and a one-variable SIM proposal as prerequisites for any future strategy effect.

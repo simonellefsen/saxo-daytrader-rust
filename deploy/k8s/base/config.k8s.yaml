@@ -362,7 +362,9 @@ strategy:
       # name outside current holdings.
       max_symbols: 0
       horizon_minutes: 1440
-      sample_count: 260
+      # Five daily trading years. The support-risk projection reports how much
+      # of this target was actually returned, rather than assuming full history.
+      sample_count: 1260
       min_confluences: 3
       min_reward_risk: 2.0
       daily_time: "23:45"

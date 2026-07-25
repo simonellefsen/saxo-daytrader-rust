@@ -2880,6 +2880,23 @@ impl AppState {
                 extra_symbols_added += 1;
             }
         }
+        let indicator_support_by_symbol: HashMap<String, JsonValue> = self
+            .select_json(
+                "SELECT symbol, run_date, status, nearest_support, next_support,
+                        downside_to_support_pct, downside_after_break_pct,
+                        support_break_risk, support_break_risk_label, support_confidence,
+                        support_history_coverage, support_touch_count
+                 FROM daily_indicator_signals
+                 WHERE run_id = (
+                    SELECT id FROM daily_indicator_runs
+                    ORDER BY run_date DESC, created_at DESC LIMIT 1
+                 )",
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (watchlist_symbol_key(&text_value(&row, "symbol")), row))
+            .collect();
         for item in &mut monitored {
             let symbol = text_value(item, "symbol");
             if let Some(obj) = item.as_object_mut() {
@@ -2893,6 +2910,26 @@ impl AppState {
                     .or_insert_with(|| JsonValue::from(instrument_name_for_symbol(&symbol)));
                 obj.entry("quote_status".to_string())
                     .or_insert_with(|| JsonValue::from("current_source"));
+                if let Some(indicator) =
+                    indicator_support_by_symbol.get(&watchlist_symbol_key(&symbol))
+                {
+                    obj.insert(
+                        "technical_risk".to_string(),
+                        json!({
+                            "run_date": indicator.get("run_date").cloned().unwrap_or(JsonValue::Null),
+                            "status": indicator.get("status").cloned().unwrap_or(JsonValue::Null),
+                            "nearest_support": indicator.get("nearest_support").cloned().unwrap_or(JsonValue::Null),
+                            "next_support": indicator.get("next_support").cloned().unwrap_or(JsonValue::Null),
+                            "downside_to_support_pct": indicator.get("downside_to_support_pct").cloned().unwrap_or(JsonValue::Null),
+                            "downside_after_break_pct": indicator.get("downside_after_break_pct").cloned().unwrap_or(JsonValue::Null),
+                            "break_risk": indicator.get("support_break_risk").cloned().unwrap_or(JsonValue::Null),
+                            "break_risk_label": indicator.get("support_break_risk_label").cloned().unwrap_or(JsonValue::Null),
+                            "confidence": indicator.get("support_confidence").cloned().unwrap_or(JsonValue::Null),
+                            "history_coverage": indicator.get("support_history_coverage").cloned().unwrap_or(JsonValue::Null),
+                            "touch_count": indicator.get("support_touch_count").cloned().unwrap_or(JsonValue::Null),
+                        }),
+                    );
+                }
             }
         }
         let mut nordic = Vec::new();
@@ -3974,6 +4011,9 @@ impl AppState {
     async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
         let sql = format!(
             "SELECT run_date, status, close, rsi14, macd_histogram, atr14, reward_risk,
+                    nearest_support, next_support, downside_to_support_pct,
+                    downside_after_break_pct, support_break_risk, support_break_risk_label,
+                    support_confidence, support_history_coverage, support_touch_count,
                     trend_bias, sentiment, confluence_count, min_confluences, error_text
              FROM daily_indicator_signals
              WHERE symbol = '{}' AND run_id = (
@@ -4629,6 +4669,12 @@ impl AppState {
                 warn!("Hermes Quiver context degraded: {err:#}");
                 json!({"status": "degraded", "detail": err.to_string()})
             });
+        let daily_indicators = crate::daily_indicators::compact_indicator_context(self, limit)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("Hermes daily-indicator context degraded: {err:#}");
+                json!({"status": "degraded", "detail": err.to_string()})
+            });
 
         Ok(json!({
             "status": "ok",
@@ -4664,6 +4710,7 @@ impl AppState {
             },
             "markov_method": markov,
             "quiver_signals": quiver,
+            "daily_indicators": daily_indicators,
             "hermes": {
                 "experiments": active_experiments,
                 "active_strategy_baseline": active_strategy_baseline,
@@ -7127,6 +7174,21 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating daily indicator runtime tables")?;
+        }
+        for column in [
+            "nearest_support DOUBLE PRECISION",
+            "next_support DOUBLE PRECISION",
+            "downside_to_support_pct DOUBLE PRECISION",
+            "downside_after_break_pct DOUBLE PRECISION",
+            "support_break_risk DOUBLE PRECISION",
+            "support_break_risk_label TEXT",
+            "support_confidence DOUBLE PRECISION",
+            "support_history_coverage DOUBLE PRECISION",
+            "support_touch_count INTEGER",
+        ] {
+            self.ensure_table_column("daily_indicator_signals", column)
+                .await
+                .context("migrating daily indicator support-risk columns")?;
         }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_hermes_reflections_created

@@ -1384,7 +1384,7 @@ fn WatchlistCategory(
             }
             div { class: "table-wrap compact-table",
                 table {
-                    thead { tr { th { "Symbol" } th { "Name" } th { "Decision" } th { "Trend" } th { "Exchange" } th { "Currency" } th { "Price" } th { "Daily Change" } th { "Quote Status" } } }
+                    thead { tr { th { "Symbol" } th { "Name" } th { "Decision" } th { "Trend" } th { "Support Risk" } th { "Exchange" } th { "Currency" } th { "Price" } th { "Daily Change" } th { "Quote Status" } } }
                     tbody {
                         for row in items.iter() {
                             tr {
@@ -1398,6 +1398,7 @@ fn WatchlistCategory(
                                     }
                                 }
                                 td { TrendSparkline { row: row.clone() } }
+                                td { WatchlistSupportRisk { row: row.clone(), prefs: prefs.clone() } }
                                 td { "{text(row, \"exchange\")}" }
                                 td { "{text(row, \"currency\")}" }
                                 td { "{format_local_money(value_f64(row, \"current_price_local\"), &text(row, \"currency\"), &prefs)}" }
@@ -1417,6 +1418,59 @@ fn WatchlistQuoteStatus(row: JsonValue) -> Element {
     let (label, tone, detail) = watchlist_quote_status(&row);
     rsx! {
         span { class: "status {tone}", title: "{detail}", "{label}" }
+    }
+}
+
+#[component]
+fn WatchlistSupportRisk(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let support = row
+        .get("technical_risk")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    if text(&support, "status") != "ok"
+        || support
+            .get("nearest_support")
+            .and_then(JsonValue::as_f64)
+            .filter(|value| *value > 0.0)
+            .is_none()
+    {
+        return rsx! { span { class: "muted", "No support data" } };
+    }
+    let currency = text(&row, "currency");
+    let nearest = format_local_money(value_f64(&support, "nearest_support"), &currency, &prefs);
+    let break_risk = fallback_text(&support, "break_risk_label", "n/a");
+    let risk_class = match break_risk.as_str() {
+        "high" => "bad-text",
+        "moderate" => "warn-text",
+        _ => "good-text",
+    };
+    let next = support
+        .get("next_support")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| *value > 0.0)
+        .map(|value| format_local_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let detail = format!(
+        "Nearest support {nearest}; downside to support {}; next support {next}; downside after a break {}; break risk {}; confidence {}; returned history {} across {} clustered pivot touches. Read-only context, not an automatic trading gate.",
+        format_optional_percentage_points(
+            support
+                .get("downside_to_support_pct")
+                .and_then(JsonValue::as_f64),
+            &prefs
+        ),
+        format_optional_percentage_points(
+            support
+                .get("downside_after_break_pct")
+                .and_then(JsonValue::as_f64),
+            &prefs
+        ),
+        break_risk,
+        format_pct(value_f64(&support, "confidence"), &prefs),
+        format_pct(value_f64(&support, "history_coverage"), &prefs),
+        value_i64(&support, "touch_count"),
+    );
+    rsx! {
+        span { class: "{risk_class}", title: "{detail}", "{break_risk} · {nearest}" }
     }
 }
 
@@ -2065,6 +2119,14 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     } else {
         preflight_technical_label.clone()
     };
+    let support_label = candidate_support_label(
+        if final_technical_recorded {
+            &final_technical
+        } else {
+            &technical
+        },
+        &prefs,
+    );
     let markov_label = if text(&markov, "status") == "unavailable" {
         "unavailable".to_string()
     } else {
@@ -2109,6 +2171,9 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
                 } else {
                     span { class: "muted block", "preflight only" }
                 }
+                if !support_label.is_empty() {
+                    span { class: "muted block", "{support_label}" }
+                }
             }
             td { "{markov_label}" }
             td { "{hermes_label}" }
@@ -2142,6 +2207,24 @@ fn candidate_technical_label(technical: &JsonValue) -> String {
         fallback_text(technical, "trend_bias", "n/a"),
         confluences,
         minimum,
+    )
+}
+
+fn candidate_support_label(technical: &JsonValue, prefs: &LocalizationPrefs) -> String {
+    let support = technical.get("support").unwrap_or(&JsonValue::Null);
+    let nearest = support
+        .get("nearest_support")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| *value > 0.0);
+    let Some(nearest) = nearest else {
+        return String::new();
+    };
+    format!(
+        "support {:.2}; break {} · confidence {} · history {}",
+        nearest,
+        fallback_text(support, "break_risk_label", "n/a"),
+        format_pct(value_f64(support, "confidence"), prefs),
+        format_pct(value_f64(support, "history_coverage"), prefs),
     )
 }
 
