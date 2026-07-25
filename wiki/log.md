@@ -1122,3 +1122,13 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Rescaled the monthly loss floors with the goal: -25,000/-50,000 was -8.2%/-16.4% of the portfolio in a single month, letting one bad month erase roughly a year of target gains before the hard halt fired. Now -9,000 soft (-3%) and -18,000 hard (-6%), preserving the 2:1 ratio and leaving SELLs unblocked.
 - Recorded two follow-ups in [urgent-todo](urgent-todo.md): the targets are stored as DKK against a ~300,000 DKK book and drift silently as the portfolio changes, and `max_drawdown: 0.20` is now loose relative to a 15%/year target while still being unenforced.
 - New finding U7: `deploy/k8s/base/hermes.yaml` lists `strategy.swing.cash_buffer_pct` as a supported experiment variable, and the config contract proves nothing reads it. Hermes can propose, run, observe, and promote an experiment whose variable has no effect.
+
+## [2026-07-25] integrity | Adopted positions are not unreconciled orders
+
+- Investigated the 15 orders the Overview integrity check reported as stale or unreconciled. All 15 were `status = 'executed'` with `ledger_id IS NULL` and a single shared `created_at` of `2026-05-05T05:20:09+00:00` — a bulk insert, not 15 separate events.
+- They are the original portfolio adoption: `strategy_type = 'portfolio_sync'`, 19 rows in total (ids 1-19), of which 4 are `execution_failed` for instruments that never resolved (ARKI:xlon, ARKK:xmil, FIGR:xnas, QOMP:xetr). Every order from id 20 onward carries a real strategy key and a ledger id.
+- Adopted rows record holdings that already existed at the broker when this system took over the book. No trade happened under this system, so a trade-ledger row is not merely missing — it would be wrong. The check was asserting an invariant that cannot hold for this row class.
+- Fixed by excluding `portfolio_sync` from the ledger-less arm of the check and reporting `adopted_orders_without_ledger` as a separate count in the integrity payload. The count stays visible; it no longer alerts.
+- This had held overview `healthy` false continuously since 2026-05-05, roughly three months. The operational cost is desensitization: a genuine `executed`-without-ledger fill — the exact failure class repaired on 2026-07-08 — would have arrived as an increment to a warning already treated as normal.
+- The unreconciled-orders SQL and its adoption exclusion are now shared constants (`unreconciled_orders_sql`, `ADOPTED_ORDER_EXCLUSION`, `ADOPTED_ORDERS_WITHOUT_LEDGER_SQL`) so the regression test exercises the production query instead of a copy. The test was confirmed to fail against the previous behavior.
+- No order, gate, ledger row, or broker call was changed. Only the integrity classification of existing rows.

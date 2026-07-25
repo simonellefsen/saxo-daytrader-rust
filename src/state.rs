@@ -3956,29 +3956,15 @@ impl AppState {
         let fill_cutoff =
             (Utc::now() - Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let unreconciled_orders = self
-            .select_json(&format!(
-                "SELECT id, created_at, symbol, action, status, quantity, currency, \
-                        limit_price_local, ledger_id, broker_order_id, error_text \
-                 FROM execution_orders \
-                 WHERE status = 'broker_state_unknown' \
-                    OR (status IN ('broker_working', 'submitted_to_broker', \
-                                   'broker_partially_filled', 'broker_replace_requested', \
-                                   'broker_cancel_requested', 'pending_execution', \
-                                   'waiting_for_market_open', \
-                                   'waiting_for_cash_settlement', \
-                                   'waiting_for_virtual_cash_budget', \
-                                   'waiting_for_technical_gate') \
-                        AND created_at < '{}') \
-                    OR (status = 'executed' \
-                        AND ledger_id IS NULL \
-                        AND created_at < '{}') \
-                 ORDER BY created_at ASC, id ASC \
-                 LIMIT 20",
-                sql_escape(&stale_cutoff),
-                sql_escape(&fill_cutoff)
-            ))
+            .select_json(&unreconciled_orders_sql(&stale_cutoff, &fill_cutoff))
             .await
             .unwrap_or_default();
+        let adopted_orders_without_ledger = self
+            .select_json(ADOPTED_ORDERS_WITHOUT_LEDGER_SQL)
+            .await
+            .ok()
+            .and_then(|rows| rows.first().map(|row| value_f64(row, "count") as i64))
+            .unwrap_or(0);
         if unreconciled_orders.is_empty() {
             checks.insert("unreconciled_orders".to_string(), json!("ok"));
         } else {
@@ -4116,6 +4102,7 @@ impl AppState {
             "warnings": warnings,
             "mismatches": mismatches,
             "unreconciled_orders": unreconciled_orders,
+            "adopted_orders_without_ledger": adopted_orders_without_ledger,
             "expiry_pending_orders": expiry_pending_orders,
             "acknowledgements": acknowledgements
                 .get("acknowledgements")
@@ -8540,6 +8527,49 @@ fn annotate_overview_integrity_acknowledgements(
     acknowledged_count
 }
 
+/// Adopted broker positions are bookkeeping for holdings that already existed
+/// at the broker when this system took over the book. No trade happened under
+/// this system, so they can never acquire a trade-ledger row.
+///
+/// Counting them as unreconciled held overview `healthy` false continuously
+/// from the 2026-05-05 adoption onward, which trains an operator to read this
+/// warning as background noise -- exactly how a genuine ledger-less fill would
+/// go unnoticed. They are reported as a separate count instead.
+const ADOPTED_ORDER_EXCLUSION: &str = "COALESCE(strategy_type, '') <> 'portfolio_sync'";
+
+/// Execution orders that are genuinely stuck or missing accounting. Shared by
+/// `overview_integrity` and its regression test so the two cannot drift.
+fn unreconciled_orders_sql(stale_cutoff: &str, fill_cutoff: &str) -> String {
+    format!(
+        "SELECT id, created_at, symbol, action, status, quantity, currency, \
+                limit_price_local, ledger_id, broker_order_id, error_text \
+         FROM execution_orders \
+         WHERE status = 'broker_state_unknown' \
+            OR (status IN ('broker_working', 'submitted_to_broker', \
+                           'broker_partially_filled', 'broker_replace_requested', \
+                           'broker_cancel_requested', 'pending_execution', \
+                           'waiting_for_market_open', \
+                           'waiting_for_cash_settlement', \
+                           'waiting_for_virtual_cash_budget', \
+                           'waiting_for_technical_gate') \
+                AND created_at < '{}') \
+            OR (status = 'executed' \
+                AND ledger_id IS NULL \
+                AND {} \
+                AND created_at < '{}') \
+         ORDER BY created_at ASC, id ASC \
+         LIMIT 20",
+        sql_escape(stale_cutoff),
+        ADOPTED_ORDER_EXCLUSION,
+        sql_escape(fill_cutoff)
+    )
+}
+
+const ADOPTED_ORDERS_WITHOUT_LEDGER_SQL: &str = "SELECT COUNT(*) AS count FROM execution_orders \
+     WHERE status = 'executed' \
+       AND ledger_id IS NULL \
+       AND COALESCE(strategy_type, '') = 'portfolio_sync'";
+
 fn overview_integrity_issue_key(issue: &JsonValue) -> String {
     let code = json_text(issue, "code");
     let severity = json_text(issue, "severity");
@@ -10465,6 +10495,72 @@ market_data:
             db_url: "sqlite::memory:".to_string(),
             pool,
         }
+    }
+
+    /// Adopted broker positions (`strategy_type = 'portfolio_sync'`) are
+    /// bookkeeping for holdings that already existed at the broker when this
+    /// system took over the book, so they never acquire a trade-ledger row.
+    /// Before 2026-07-25 the integrity check counted them as unreconciled,
+    /// which held `healthy` false continuously from the 2026-05-05 adoption and
+    /// buried the signal this check exists to raise.
+    #[tokio::test]
+    async fn unreconciled_orders_check_excludes_adopted_positions_but_not_real_fills() {
+        let state = runtime_settings_test_state("app: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                quantity REAL,
+                currency TEXT,
+                limit_price_local REAL,
+                ledger_id INTEGER,
+                broker_order_id TEXT,
+                error_text TEXT,
+                strategy_type TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution_orders test table");
+        sqlx::query(
+            "INSERT INTO execution_orders \
+                (id, created_at, symbol, action, status, ledger_id, strategy_type) VALUES \
+                (1, '2026-05-05T05:20:09+00:00', 'NVDA:xnas', 'BUY', 'executed', NULL, 'portfolio_sync'), \
+                (2, '2026-05-05T05:20:09+00:00', 'ORSTED:xcse', 'BUY', 'executed', NULL, 'portfolio_sync'), \
+                (3, '2026-05-06T09:00:00+00:00', 'AMD:xnas', 'BUY', 'executed', NULL, 'swing'), \
+                (4, '2026-05-06T09:00:00+00:00', 'V:xnys', 'BUY', 'executed', 7, 'swing')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert execution_orders test rows");
+
+        let cutoff = "2026-07-01T00:00:00+00:00";
+        let flagged = state
+            .select_json(&unreconciled_orders_sql(cutoff, cutoff))
+            .await
+            .expect("query unreconciled orders");
+        let flagged_ids = flagged
+            .iter()
+            .map(|row| value_f64(row, "id") as i64)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            flagged_ids,
+            vec![3],
+            "only the genuine ledger-less fill should be flagged"
+        );
+
+        let adopted = state
+            .select_json(ADOPTED_ORDERS_WITHOUT_LEDGER_SQL)
+            .await
+            .expect("count adopted orders");
+        assert_eq!(
+            adopted.first().map(|row| value_f64(row, "count") as i64),
+            Some(2),
+            "adopted positions stay visible as context rather than vanishing"
+        );
     }
 
     #[tokio::test]
