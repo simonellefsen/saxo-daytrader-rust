@@ -10,6 +10,12 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] trading-quality | Durable BUY trade-thesis provenance
+
+- The Trading Manager now records a compact, immutable thesis only when it admits a BUY to the execution queue. It includes the Decision Report/pulse reference, intended two-week holding window, rationale, catalyst or monitor, deterministic approval evidence, compact technical and Markov evidence, and a review-only invalidation condition.
+- Execution attribution can retrieve the latest recorded BUY thesis for a later same-symbol order, without looking ahead to later entries. This lets a future trim or exit be interpreted against the original admission evidence rather than only the mechanics of the latest order.
+- The thesis remains provenance, not policy: it cannot approve, size, place, amend, cancel, retain, or exit a broker order. Historical orders with no snapshot stay explicitly blank, and the next milestone is aggregate outcome measurement after enough mature observations exist.
+
 ## [2026-07-26] trading-quality | Read-only post-fill holding-period attribution
 
 - Execution-order attribution now uses the weighted price of reconciled fills and the first and fifth subsequent persisted daily-indicator closes to show 1-session and 5-session market and directional returns. This adds no Saxo or quote call while rendering the Execution view.

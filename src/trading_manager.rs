@@ -2539,6 +2539,89 @@ fn candidate_orders_from_report(report_json: &JsonValue) -> Vec<CandidateOrder> 
         .collect()
 }
 
+/// Builds the durable thesis snapshot attached to an approved BUY. The source
+/// report stays immutable; this compact record preserves only the report-time
+/// evidence needed to interpret later attribution. It must not become a new
+/// approval path or an automated exit rule.
+fn compact_trade_thesis(
+    report: &DecisionReport,
+    order: &CandidateOrder,
+    approval_reason: &str,
+) -> JsonValue {
+    if order.action != "BUY" {
+        return JsonValue::Null;
+    }
+    let symbol_key = normalize_symbol(&order.symbol);
+    let symbol_sentiment = report
+        .report_json
+        .get("symbol_sentiment")
+        .and_then(JsonValue::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| normalize_symbol(&text(item, "symbol")) == symbol_key)
+        })
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let selected_asset = report
+        .report_json
+        .get("selected_assets")
+        .and_then(JsonValue::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| normalize_symbol(&text(item, "symbol")) == symbol_key)
+        })
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let technical = compact_hermes_preflight_technical(order);
+    let markov = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("markov"))
+        .map(|value| {
+            json!({
+                "run_date": value.get("run_date").cloned().unwrap_or(JsonValue::Null),
+                "state": value.get("state").cloned().unwrap_or(JsonValue::Null),
+                "direction": value.get("direction").cloned().unwrap_or(JsonValue::Null),
+                "signed_signal": value.get("signed_signal").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .unwrap_or(JsonValue::Null);
+    json!({
+        "status": "recorded",
+        "evidence_source": "decision_report_and_manager_gate",
+        "report_id": report.id,
+        "report_created_at": report.created_at,
+        "pulse_key": report.pulse_key,
+        "pulse_label": report.pulse_label,
+        "symbol": order.symbol,
+        "strategy_key": order.strategy_key,
+        "strategy_role": order.strategy_role,
+        "intended_holding_window": "next_2_weeks",
+        "entry_rationale": compact_trade_thesis_text(&text(&symbol_sentiment, "rationale"), 360),
+        "catalyst_or_monitor": compact_trade_thesis_text(&text(&selected_asset, "notes"), 360),
+        "approval_evidence": compact_trade_thesis_text(approval_reason, 420),
+        "technical": technical,
+        "markov": markov,
+        "invalidation": "Re-evaluate on a fresh decision pulse if verified technical evidence or the Markov regime no longer supports the long setup. This records a review condition only; it is not an automatic exit rule.",
+        "safety": "Read-only provenance captured before queueing. It cannot approve, size, place, amend, cancel, or retain a broker order."
+    })
+}
+
+fn compact_trade_thesis_text(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control() || character.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
 /// Every order this module queues comes from a decision report, so it carries
 /// one strategy type. The pulse (scheduled EU/US or manual) is separate and
 /// lives in `strategy_session` and `strategy_key`.
@@ -3707,6 +3790,10 @@ async fn insert_execution_order(
     } else {
         format!("'{}'", sql_escape(&now))
     };
+    // A thesis is captured at BUY admission, before the broker sees the order.
+    // It is a compact, read-only record of the decision evidence, not a new
+    // gate and not an instruction to retain or exit a position automatically.
+    let trade_thesis = compact_trade_thesis(report, order, approval_reason);
     let request_json = json!({
         "source": "rust_trading_manager",
         "approval_reason": approval_reason,
@@ -3721,11 +3808,11 @@ async fn insert_execution_order(
             requested_weight_pct, quantity, price_local, limit_price_local, stop_price_local,
             currency, estimated_value_dkk, approval_required, approved_at, strategy_type,
             strategy_session, strategy_key, strategy_role, request_json, execution_result_json,
-            error_text
+            error_text, trade_thesis_json
         ) VALUES (
             '{}', {}, '{}', '{}', '{}', '{}', '{}', '{}',
             {}, {}, {}, {}, {},
-            {}, {}, {}, {}, {}, {}, '{}', {}, '{}', NULL, NULL
+            {}, {}, {}, {}, {}, {}, '{}', {}, '{}', NULL, NULL, {}
         )",
         sql_escape(&now),
         report.id,
@@ -3754,7 +3841,8 @@ async fn insert_execution_order(
         sql_opt_text(order.strategy_session.as_deref()),
         sql_escape(&order.strategy_key),
         sql_opt_text(order.strategy_role.as_deref()),
-        sql_escape(&serde_json::to_string(&request_json)?)
+        sql_escape(&serde_json::to_string(&request_json)?),
+        sql_json(&trade_thesis),
     );
     sqlx::query(&sql)
         .execute(&state.pool)
@@ -4675,6 +4763,16 @@ fn sql_num(value: Option<f64>) -> String {
         .unwrap_or_else(|| "NULL".to_string())
 }
 
+fn sql_json(value: &JsonValue) -> String {
+    if value.is_null() {
+        return "NULL".to_string();
+    }
+    serde_json::to_string(value)
+        .ok()
+        .map(|value| format!("'{}'", sql_escape(&value)))
+        .unwrap_or_else(|| "NULL".to_string())
+}
+
 fn sql_opt_text(value: Option<&str>) -> String {
     value
         .filter(|value| !value.trim().is_empty())
@@ -4748,7 +4846,8 @@ mod tests {
                 strategy_role TEXT,
                 request_json TEXT NOT NULL,
                 execution_result_json TEXT,
-                error_text TEXT
+                error_text TEXT,
+                trade_thesis_json TEXT
             )",
             "CREATE TABLE execution_order_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4832,6 +4931,45 @@ mod tests {
             pulse_label: "US open +1h15".to_string(),
             report_json: json!({"strategy_plan": {"swing_orders": []}}),
         }
+    }
+
+    #[test]
+    fn trade_thesis_is_compact_and_records_only_buy_admission_evidence() {
+        let mut report = scheduled_report(
+            "completed",
+            "2026-07-14T14:45:00Z",
+            "us_open_followup:2026-07-14",
+        );
+        report.report_json = json!({
+            "symbol_sentiment": [{
+                "symbol": "NVDA:xnas",
+                "rationale": "Fresh technical and Markov evidence supports a starter position."
+            }],
+            "selected_assets": [{
+                "symbol": "NVDA:xnas",
+                "notes": "Monitor the next earnings release."
+            }]
+        });
+        let buy = order("BUY", "BUY", "bullish", 4);
+        let thesis = compact_trade_thesis(
+            &report,
+            &buy,
+            "BUY approved by bullish technical confluence.",
+        );
+
+        assert_eq!(text(&thesis, "status"), "recorded");
+        assert_eq!(text(&thesis, "symbol"), "NVDA:xnas");
+        assert_eq!(text(&thesis, "intended_holding_window"), "next_2_weeks");
+        assert!(text(&thesis, "entry_rationale").contains("Markov"));
+        assert!(text(&thesis, "invalidation").contains("not an automatic exit"));
+        assert!(
+            compact_trade_thesis(
+                &report,
+                &order("SELL", "SELL", "bearish", 4),
+                "SELL approved."
+            )
+            .is_null()
+        );
     }
 
     #[test]
@@ -4923,8 +5061,19 @@ mod tests {
             .expect("count queue events")
             .try_get::<i64, _>("count")
             .expect("read queue-event count");
+        let thesis = sqlx::query("SELECT trade_thesis_json FROM execution_orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_one(&state.pool)
+            .await
+            .expect("read recorded trade thesis")
+            .try_get::<Option<String>, _>("trade_thesis_json")
+            .expect("read trade thesis column")
+            .and_then(|value| serde_json::from_str::<JsonValue>(&value).ok())
+            .expect("recorded BUY thesis");
         assert_eq!(order_count, 1);
         assert_eq!(event_count, 1);
+        assert_eq!(text(&thesis, "intended_holding_window"), "next_2_weeks");
+        assert_eq!(text(&thesis, "strategy_key"), candidate.strategy_key);
 
         let run_id = insert_trading_manager_run(
             &state,

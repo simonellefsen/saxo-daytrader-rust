@@ -5459,6 +5459,16 @@ impl AppState {
                 JsonValue::Null
             }
         };
+        let trade_thesis = match self.execution_order_trade_thesis(order).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    order_id = value_i64(order, "id"),
+                    "execution trade-thesis attribution degraded: {err:#}"
+                );
+                JsonValue::Null
+            }
+        };
         let delta = attribution_delta_label(&hermes_order, &manager_order, order);
 
         Ok(json!({
@@ -5490,6 +5500,7 @@ impl AppState {
             "ledger_outcome": ledger_outcome,
             "holding_period_outcome": holding_period_outcome,
             "position_lifecycle": position_lifecycle,
+            "trade_thesis": trade_thesis,
         }))
     }
 
@@ -5612,6 +5623,42 @@ impl AppState {
             ))
             .await?;
         Ok(compact_execution_position_lifecycle(order, &fills))
+    }
+
+    async fn execution_order_trade_thesis(&self, order: &JsonValue) -> Result<JsonValue> {
+        let order_id = value_i64(order, "id");
+        let symbol = json_text(order, "symbol");
+        let created_at = json_text(order, "created_at");
+        if order_id <= 0 || symbol.is_empty() || created_at.is_empty() {
+            return Ok(JsonValue::Null);
+        }
+        let thesis = self
+            .first_json(&format!(
+                "SELECT trade_thesis_json
+                 FROM execution_orders
+                 WHERE symbol = '{}' AND action = 'BUY'
+                   AND trade_thesis_json IS NOT NULL
+                   AND (created_at < '{}' OR (created_at = '{}' AND id <= {}))
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                sql_escape(&symbol),
+                sql_escape(&created_at),
+                sql_escape(&created_at),
+                order_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        let raw = thesis
+            .get("trade_thesis_json")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        if raw.is_object() {
+            return Ok(raw);
+        }
+        let Some(raw) = raw.as_str() else {
+            return Ok(JsonValue::Null);
+        };
+        Ok(serde_json::from_str(raw).unwrap_or(JsonValue::Null))
     }
 
     async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
@@ -9172,6 +9219,9 @@ impl AppState {
                 .await
                 .context("migrating daily indicator support-risk columns")?;
         }
+        self.ensure_table_column("execution_orders", "trade_thesis_json TEXT")
+            .await
+            .context("migrating execution-order trade-thesis provenance")?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_hermes_reflections_created
              ON hermes_reflections(created_at DESC)",
@@ -13138,6 +13188,49 @@ market_data:
         assert_eq!(value_i64(&outcome, "observed_order_count"), 2);
         assert_eq!(value_f64(&outcome, "observed_net_before"), 2.0);
         assert_eq!(value_f64(&outcome, "observed_net_after"), 1.0);
+    }
+
+    #[tokio::test]
+    async fn trade_thesis_attribution_uses_the_latest_prior_buy_for_the_symbol() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                trade_thesis_json TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution-order thesis table");
+        sqlx::query(
+            "INSERT INTO execution_orders (id, created_at, symbol, action, trade_thesis_json)
+             VALUES
+                (41, '2026-07-20T15:00:00Z', 'AMD:xnas', 'BUY',
+                 '{\"status\":\"recorded\",\"strategy_key\":\"starter_long\"}'),
+                (42, '2026-07-21T15:00:00Z', 'AMD:xnas', 'SELL', NULL),
+                (43, '2026-07-22T15:00:00Z', 'AMD:xnas', 'BUY',
+                 '{\"status\":\"recorded\",\"strategy_key\":\"add_on_strength\"}'),
+                (99, '2026-07-21T15:00:00Z', 'NVDA:xnas', 'BUY',
+                 '{\"status\":\"recorded\",\"strategy_key\":\"other_symbol\"}')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed execution-order theses");
+
+        let thesis = state
+            .execution_order_trade_thesis(&json!({
+                "id": 42,
+                "created_at": "2026-07-21T15:00:00Z",
+                "symbol": "AMD:xnas"
+            }))
+            .await
+            .expect("read prior BUY thesis");
+
+        assert_eq!(json_text(&thesis, "status"), "recorded");
+        assert_eq!(json_text(&thesis, "strategy_key"), "starter_long");
     }
 
     #[tokio::test]

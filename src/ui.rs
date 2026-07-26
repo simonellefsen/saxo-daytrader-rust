@@ -4610,6 +4610,7 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
     let ledger_outcome = attribution.get("ledger_outcome").unwrap_or(&null);
     let holding_period = attribution.get("holding_period_outcome").unwrap_or(&null);
     let position_lifecycle = attribution.get("position_lifecycle").unwrap_or(&null);
+    let trade_thesis = attribution.get("trade_thesis").unwrap_or(&null);
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -4825,6 +4826,24 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
             "interpretation",
             "Read-only local fill sequence; not broker position truth.",
         ));
+    }
+    if !trade_thesis.is_null() {
+        lines.push(format!(
+            "Trade thesis (recorded at BUY admission): {} · horizon {} · role {}",
+            fallback_text(trade_thesis, "evidence_source", "decision report"),
+            fallback_text(trade_thesis, "intended_holding_window", "n/a").replace('_', " "),
+            fallback_text(trade_thesis, "strategy_role", "n/a"),
+        ));
+        for (label, key) in [
+            ("Entry rationale", "entry_rationale"),
+            ("Catalyst / monitor", "catalyst_or_monitor"),
+            ("Thesis invalidation", "invalidation"),
+        ] {
+            let value = text(trade_thesis, key);
+            if !value.is_empty() {
+                lines.push(format!("{label}: {}", truncate_chars(&value, 420)));
+            }
+        }
     }
     lines.join("\n")
 }
@@ -8187,6 +8206,14 @@ mod tests {
                     "observed_net_after": 2.0,
                     "current_order_fill_count": 1,
                     "observed_order_count": 3
+                },
+                "trade_thesis": {
+                    "evidence_source": "decision_report_and_manager_gate",
+                    "intended_holding_window": "next_2_weeks",
+                    "strategy_role": "starter",
+                    "entry_rationale": "Fresh long regime and bullish technical trend.",
+                    "catalyst_or_monitor": "Monitor the next earnings release.",
+                    "invalidation": "Re-evaluate on a fresh decision pulse."
                 }
             }
         });
@@ -8202,6 +8229,9 @@ mod tests {
         assert!(detail.contains("Position lifecycle (observed fills): reduce"));
         assert!(detail.contains("net 4 -> 2"));
         assert!(detail.contains("observed local fills"));
+        assert!(detail.contains("Trade thesis (recorded at BUY admission)"));
+        assert!(detail.contains("horizon next 2 weeks"));
+        assert!(detail.contains("Entry rationale: Fresh long regime"));
         assert!(!detail.contains("RR 0"));
     }
 
