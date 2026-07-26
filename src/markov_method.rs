@@ -19,7 +19,6 @@ use crate::{
 const STATES: [Regime; 3] = [Regime::Bull, Regime::Sideways, Regime::Bear];
 const DEFAULT_DAILY_TIME: &str = "23:30";
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
-const SAXO_MARKOV_REQUEST_DELAY_MS: u64 = 500;
 const SAXO_MARKOV_MAX_ATTEMPTS: usize = 4;
 const DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS: i64 = 7;
 const NO_TRADABLE_INSTRUMENT_PREFIX: &str = "No tradable Saxo instrument match found for";
@@ -912,9 +911,14 @@ pub(crate) async fn saxo_get_json(
         .timeout(StdDuration::from_secs(30))
         .build()?;
     let url = format!("{}{}", openapi_base_url(state, session)?, path);
+    let requests_per_minute = crate::saxo_rate_limit::configured_rate(&state.config);
     let mut last_error = String::new();
     for attempt in 1..=SAXO_MARKOV_MAX_ATTEMPTS {
-        sleep(StdDuration::from_millis(SAXO_MARKOV_REQUEST_DELAY_MS)).await;
+        // Replaces a fixed 500 ms sleep chosen when this job was capped at 20
+        // symbols. The bucket is shared with the daily-indicator sweep, which
+        // calls through here too, so the two no longer pace independently
+        // against one limit.
+        crate::saxo_rate_limit::acquire(path, requests_per_minute).await;
         let response = client
             .get(&url)
             .bearer_auth(&access_token)
@@ -923,6 +927,7 @@ pub(crate) async fn saxo_get_json(
             .send()
             .await?;
         let status = response.status();
+        crate::saxo_rate_limit::observe(path, response.headers());
         let retry_after = response
             .headers()
             .get(header::RETRY_AFTER)

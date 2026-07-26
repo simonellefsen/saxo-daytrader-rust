@@ -494,6 +494,8 @@ async fn saxo_get_json(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
+    crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
+        .await;
     let response = client
         .get(format!("{}{}", openapi_base_url(state, session)?, path))
         .bearer_auth(access_token)
@@ -502,6 +504,7 @@ async fn saxo_get_json(
         .send()
         .await?;
     let status = response.status();
+    crate::saxo_rate_limit::observe(path, response.headers());
     let body = response.text().await.unwrap_or_default();
     let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
     if !status.is_success() {

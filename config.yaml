@@ -547,6 +547,12 @@ saxo:
   client_key: ENV:SAXO_CLIENT_KEY
   account_key: ENV:SAXO_ACCOUNT_KEY
   session_path: /tmp/daytrader/saxo_session.json
+  # Requests per minute per Saxo service group (the first path segment: chart,
+  # port, trade, ref). Saxo documents roughly 120 per session per group; this
+  # sits under it because the ceiling is where rejection starts, not where it
+  # is safe to sit. Clamped to 120 in code. The pacer also reads the
+  # X-RateLimit-* response headers and tightens on its own as quota depletes.
+  requests_per_minute: 100
 
 tradingview:
   username: ENV:TRADINGVIEW_USERNAME

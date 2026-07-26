@@ -1792,6 +1792,8 @@ async fn saxo_get_json(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
+    crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
+        .await;
     let response = client
         .get(format!("{}{}", openapi_base_url(state, session)?, path))
         .bearer_auth(access_token)
@@ -1799,6 +1801,7 @@ async fn saxo_get_json(
         .query(query)
         .send()
         .await?;
+    crate::saxo_rate_limit::observe(path, response.headers());
     saxo_response_json(response, "Saxo GET").await
 }
 
@@ -1814,6 +1817,8 @@ async fn saxo_get_json_optional(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
+    crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
+        .await;
     let response = client
         .get(format!("{}{}", openapi_base_url(state, session)?, path))
         .bearer_auth(access_token)
@@ -1822,6 +1827,7 @@ async fn saxo_get_json_optional(
         .send()
         .await?;
     let status = response.status();
+    crate::saxo_rate_limit::observe(path, response.headers());
     let body = response.text().await.unwrap_or_default();
     let payload = serde_json::from_str::<JsonValue>(&body).unwrap_or_else(|_| json!({}));
     if status == StatusCode::NOT_FOUND {
@@ -1868,7 +1874,13 @@ async fn saxo_post_json(
         if let Some(request_id) = request_id {
             request = request.header("x-request-id", request_id);
         }
+        crate::saxo_rate_limit::acquire(
+            path,
+            crate::saxo_rate_limit::configured_rate(&state.config),
+        )
+        .await;
         let response = request.send().await?;
+        crate::saxo_rate_limit::observe(path, response.headers());
         if response.status() != StatusCode::TOO_MANY_REQUESTS {
             return saxo_response_json(response, action).await;
         }
@@ -1894,6 +1906,8 @@ async fn saxo_delete_json(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
+    crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
+        .await;
     let response = client
         .delete(format!("{}{}", openapi_base_url(state, session)?, path))
         .bearer_auth(access_token)
@@ -1901,6 +1915,7 @@ async fn saxo_delete_json(
         .query(query)
         .send()
         .await?;
+    crate::saxo_rate_limit::observe(path, response.headers());
     saxo_response_json(response, action).await
 }
 

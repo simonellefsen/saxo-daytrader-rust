@@ -10,6 +10,16 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] performance | Saxo request pacing per service group (U6)
+
+- `src/saxo_rate_limit.rs` paces Saxo requests per service group (the first path segment: `chart`, `port`, `trade`, `ref`). Installed in the shared `markov_method::saxo_get_json`, which both the Markov and the daily-indicator sweeps already call, so the two share one budget instead of pacing independently against one limit. Also wired into the portfolio and order paths.
+- **Even spacing rather than a token bucket.** A bucket of 100/min lets a sweep fire a hundred requests back to back and then stall for a minute — inside the window, but the burstiest possible way to spend the quota, and worse behaviour than the fixed 500 ms sleep it replaces. Spacing cannot burst: 100/min is one request every 600 ms, sustained, which is strictly more conservative than the sleep it supersedes. An idle group accumulates no burst allowance.
+- **Driven by Saxo's own accounting.** `X-RateLimit-<dimension>-Remaining` over `-Reset` is the pace the server is telling us it will accept. It tightens automatically as quota depletes instead of waiting for the first 429 to learn something the headers already said, and the tightest reported dimension wins. Exhausted quota waits out the reset. A `Remaining` with no matching `Reset` is ignored rather than guessed at.
+- The configured rate is a ceiling, not a floor: `saxo.requests_per_minute` (default 100) is clamped to Saxo's documented 120 so a config typo cannot raise the pace above what the broker accepts, and a header-driven hold always wins when it is longer.
+- No single wait exceeds 30 s. `acquire` re-plans and sleeps again, so a pathological `Reset` slows a nightly job rather than stranding it.
+- **Scope limit, stated rather than hidden:** state is per process. Saxo's limit is per *session*, and the API and scheduler pods share one session, so they cannot see each other's usage. Coordinating would mean putting the limiter in the database, in front of every request. Both nightly sweeps run in the scheduler pod and the API pod's calls are sporadic and operator-driven, so process-local pacing plus header adaptation covers the real exposure. Revisit if the API pod ever starts sweeping.
+- 390 tests pass.
+
 ## [2026-07-26] safety | Portfolio drawdown guardrail makes max_drawdown real (U3)
 
 - `src/drawdown_guard.rs` enforces the `max_drawdown: 0.20` the Hermes goal contract has advertised since it was written. A soft band (10%) reduces the cycle-wide BUY budget; the hard floor (20%) suspends new BUYs. SELLs are never blocked, matching the monthly-loss breaker's shape so the operator has one mental model for both.

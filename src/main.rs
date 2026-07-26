@@ -20,6 +20,7 @@ mod quiver;
 mod saxo_error;
 mod saxo_order;
 mod saxo_portfolio;
+mod saxo_rate_limit;
 mod scheduler;
 mod state;
 mod strategy_journal;
