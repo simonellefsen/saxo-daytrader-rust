@@ -1346,3 +1346,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Wired `strategy.swing.max_holdings` into the Rust Trading Manager as a deterministic cap for new-symbol BUYs. It counts persisted positive-quantity holdings and reserves a slot for every new-symbol BUY approved earlier in the same scheduler cycle; adds to existing symbols do not consume a second slot.
 - An unavailable position snapshot fails closed for a new symbol. The active policy and sanitized holding count are stored in manager JSON and Hermes preflight, while the Hermes goal contract now correctly declares `constraints.max_positions` as runtime-enforced.
+## [2026-07-26] safety | Retired duplicate swing cash-buffer configuration (U2/U7)
+
+- Removed `strategy.swing.cash_buffer_pct` from both shipped configs and the config contract. The active and only supported cash reserve is `strategy.capital.min_cash_buffer_pct`.
+- Startup now purges both retired database runtime-setting keys (`strategy.capital.cash_buffer` and `strategy.swing.cash_buffer_pct`), so a historical override cannot resurrect an inert path.
+- Updated the Python reference's runtime settings, swing sizing, and decision prompt to consume the active capital reserve rather than a separate swing setting. Hermes already rejects the removed experiment variable.

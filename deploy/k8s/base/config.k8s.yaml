@@ -391,7 +391,6 @@ strategy:
     position_decision_stale_after_days: 7
     min_holding_weight_pct: 0.05
     max_holding_weight_pct: 0.25
-    cash_buffer_pct: 0.02
     # Maximum estimated initial loss for a BUY at its automatic ATR stop.
     # Uses a database-verified close, ATR14, and DKK share value; missing
     # evidence fails the BUY closed rather than trusting model-provided data.

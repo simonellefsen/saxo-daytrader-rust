@@ -309,10 +309,6 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "max_holding_weight_pct"],
         "No per-position weight ceiling is enforced.",
     ),
-    unused_risk(
-        &["strategy", "swing", "cash_buffer_pct"],
-        "Third cash-buffer path and the second dead one. Only strategy.capital.min_cash_buffer_pct bounds the BUY budget; strategy.capital.cash_buffer was retired 2026-07-22 and this one was never read.",
-    ),
     enforced(
         &["strategy", "swing", "risk_per_trade_pct"],
         "Caps each BUY's initial estimated loss at the database-verified ATR14 stop distance. The cap uses strategy.ladder.stop_loss_atr_multiple and requires automatic protective stops plus a verified close, ATR14, and DKK share value; missing evidence blocks the BUY.",
@@ -853,14 +849,14 @@ mod tests {
 
     #[test]
     fn unused_risk_key_present_in_config_produces_a_finding() {
-        let config = parse("strategy:\n  swing:\n    cash_buffer_pct: 0.02\n");
+        let config = parse("strategy:\n  max_assets_per_sector: 2\n");
         let (summary, findings) = audit_config(&config);
         assert_eq!(summary.unused, 1);
         assert_eq!(summary.unused_risk_surface, 1);
         let finding = findings
             .iter()
-            .find(|finding| finding.path == "strategy.swing.cash_buffer_pct")
-            .expect("cash_buffer_pct is reported");
+            .find(|finding| finding.path == "strategy.max_assets_per_sector")
+            .expect("max_assets_per_sector is reported");
         assert_eq!(finding.kind, FindingKind::UnusedKeyPresent);
         assert!(finding.risk_surface);
     }

@@ -56,7 +56,10 @@ const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
-const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &["strategy.capital.cash_buffer"];
+const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &[
+    "strategy.capital.cash_buffer",
+    "strategy.swing.cash_buffer_pct",
+];
 const HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT: i64 = 50;
 const HERMES_LESSONS_PENDING_REVIEW_LIMIT: usize = 30;
 const HERMES_LESSON_TEXT_MAX_CHARS: usize = 500;
@@ -1595,9 +1598,8 @@ fn support_risk_evidence_from_indicator_rows(rows: &[JsonValue]) -> JsonValue {
 /// One-variable overlay paths Hermes may propose. Cross-checked against the
 /// config contract by test, so a variable nothing reads cannot be offered.
 ///
-/// `strategy.swing.cash_buffer_pct` was removed on 2026-07-25: the audit proved
-/// nothing reads it, so an experiment on it could be proposed, run in SIM,
-/// observed, and promoted while changing nothing at all.
+/// Legacy cash-buffer paths are retired: the single active reserve is
+/// `strategy.capital.min_cash_buffer_pct`.
 pub(crate) const SUPPORTED_EXPERIMENT_VARIABLES: &[&str] = &[
     "execution.min_trade_value_dkk",
     "strategy.capital.min_cash_buffer_pct",
@@ -12104,7 +12106,7 @@ market_data:
     }
 
     #[tokio::test]
-    async fn purge_retired_runtime_settings_removes_only_the_legacy_cash_buffer() {
+    async fn purge_retired_runtime_settings_removes_all_legacy_cash_buffer_paths() {
         let state = runtime_settings_test_state("xai:\n  provider: openrouter\n").await;
         state
             .save_runtime_setting(
@@ -12113,6 +12115,13 @@ market_data:
             )
             .await
             .expect("seed retired cash-buffer override");
+        state
+            .save_runtime_setting(
+                "strategy.swing.cash_buffer_pct",
+                &json!({"cash_buffer_pct": 0.0}),
+            )
+            .await
+            .expect("seed retired swing cash-buffer override");
         state
             .save_runtime_setting("ai_model", &json!({"model": "openrouter/fusion"}))
             .await
@@ -12123,13 +12132,20 @@ market_data:
                 .purge_retired_runtime_settings()
                 .await
                 .expect("purge retired settings"),
-            1
+            2
         );
         assert!(
             state
                 .runtime_setting("strategy.capital.cash_buffer")
                 .await
                 .expect("read retired setting")
+                .is_none()
+        );
+        assert!(
+            state
+                .runtime_setting("strategy.swing.cash_buffer_pct")
+                .await
+                .expect("read retired swing setting")
                 .is_none()
         );
         assert_eq!(

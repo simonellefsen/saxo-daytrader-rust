@@ -505,7 +505,9 @@ def _build_context(config: dict[str, Any], connection) -> dict[str, Any]:
 
 
 def build_trading_prompt(context: dict[str, Any], config: dict[str, Any]) -> dict[str, str]:
-    swing_cfg = config.get("strategy", {}).get("swing", {})
+    strategy_cfg = config.get("strategy", {})
+    swing_cfg = strategy_cfg.get("swing", {})
+    capital_cfg = strategy_cfg.get("capital", {})
     excluded_symbols = list(config["risk"]["excluded_symbols"]) + list(swing_cfg.get("never_trade_symbols", []) or [])
     excluded_symbols_text = ", ".join(dict.fromkeys(excluded_symbols)) if excluded_symbols else "none configured"
     system_prompt = f"""
@@ -520,7 +522,7 @@ Hard rules:
 - New BUY recommendations must be present in the supplied current Watchlist context; existing Portfolio symbols are also in scope for HOLD, SELL, or FLATTEN decisions.
 - Never short. Long-only portfolio.
 - Total holdings must stay between {int(swing_cfg.get('min_holdings', 10))} and {int(swing_cfg.get('max_holdings', 25))}; every target holding must be between {float(swing_cfg.get('min_holding_weight_pct', 0.05)) * 100:.0f}% and {float(swing_cfg.get('max_holding_weight_pct', 0.25)) * 100:.0f}% of total equity.
-- Respect the {float(swing_cfg.get('cash_buffer_pct', 0.10)) * 100:g}% cash buffer. If cash is below buffer, prefer SELL / FLATTEN recommendations over new BUY recommendations.
+- Respect the {float(capital_cfg.get('min_cash_buffer_pct', 0.10)) * 100:g}% cash buffer. If cash is below buffer, prefer SELL / FLATTEN recommendations over new BUY recommendations.
 - Treat all pnl, commission, and taxation impacts in DKK.
 - Prefer liquid, news-catalyst-driven names in Nordic, EU/Euronext, UK, and US markets.
 - The strategy is not an end-of-day flattening strategy. Prefer positions you believe in across daily, weekly, and monthly horizons.

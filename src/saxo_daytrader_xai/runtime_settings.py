@@ -72,10 +72,8 @@ def apply_runtime_settings(config: dict[str, Any], connection) -> dict[str, Any]
     adjusted = copy.deepcopy(config)
     strategy_cfg = adjusted.setdefault("strategy", {})
     capital_cfg = strategy_cfg.setdefault("capital", {})
-    swing_cfg = strategy_cfg.setdefault("swing", {})
     capital_cfg["min_cash_buffer_pct"] = min_cash_buffer_pct
     capital_cfg["max_deployment_pct"] = max(0.0, min(1.0 - min_cash_buffer_pct, 1.0))
-    swing_cfg["cash_buffer_pct"] = min_cash_buffer_pct
     return adjusted
 
 
