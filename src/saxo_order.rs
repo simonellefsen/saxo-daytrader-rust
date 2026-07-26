@@ -20,6 +20,8 @@ use crate::{
 };
 
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
+const ENS_ACTIVITY_BACKFILL_LOOKBACK_DAYS: i64 = 14;
+const ENS_ACTIVITY_BACKFILL_PAGE_SIZE: i64 = 500;
 const ACTIVE_SELL_STATUSES: &[&str] = &[
     "pending_execution",
     "pending_approval",
@@ -612,6 +614,159 @@ pub async fn sync_saxo_broker_orders(state: &AppState) -> Result<JsonValue> {
         "processed": processed,
         "broker_read_model": broker_read_model
     }))
+}
+
+/// Read the recent broker-authored activity history once per UTC day. This is
+/// deliberately an observation only: it records aggregate coverage and
+/// whether Saxo activity can be matched to known local orders, but never
+/// inserts fills, changes order status, or mutates the broker.
+///
+/// A persisted daily cursor prevents rollout/restart loops from repeatedly
+/// querying the same fourteen-day history. Pagination and event-by-event
+/// reconciliation remain a later phase; a `partial` result makes that limit
+/// visible instead of silently treating a capped page as complete history.
+pub async fn backfill_saxo_ens_activities(state: &AppState) -> Result<JsonValue> {
+    let execution_mode =
+        yaml_string(&state.config, &["execution", "mode"]).unwrap_or_else(|| "simulation".into());
+    let adapter = yaml_string(&state.config, &["execution", "adapter"])
+        .unwrap_or_else(|| "simulation".into());
+    if !execution_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
+        return Ok(json!({
+            "status": "disabled",
+            "reason": "ENS activity backfill only runs when execution.mode=live and execution.adapter=saxo.",
+            "execution_mode": execution_mode,
+            "adapter": adapter,
+        }));
+    }
+
+    let completed_date = Utc::now().date_naive().to_string();
+    if state
+        .ens_activity_backfill_completed_date()
+        .await?
+        .as_deref()
+        == Some(completed_date.as_str())
+    {
+        return Ok(json!({
+            "status": "skipped",
+            "reason": "daily_backfill_already_completed",
+            "completed_date": completed_date,
+        }));
+    }
+
+    let session = state
+        .ensure_saxo_session_json("ens_activity_backfill")
+        .await
+        .context("loading Saxo session before ENS activity backfill")?;
+    let client_key = client_key(state, &session)?;
+    let from_datetime = (Utc::now() - ChronoDuration::days(ENS_ACTIVITY_BACKFILL_LOOKBACK_DAYS))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let to_datetime = now_iso();
+    let payload = saxo_get_json(
+        state,
+        &session,
+        "/ens/v1/activities",
+        &[
+            ("AccountKey", account_key(state, &session)?),
+            ("ClientKey", client_key),
+            ("Activities", "Orders".to_string()),
+            ("Activities", "Positions".to_string()),
+            ("FromDateTime", from_datetime.clone()),
+            ("ToDateTime", to_datetime.clone()),
+            ("$top", ENS_ACTIVITY_BACKFILL_PAGE_SIZE.to_string()),
+        ],
+    )
+    .await
+    .context("fetching Saxo ENS activities")?;
+    let known_broker_order_ids = local_saxo_broker_order_ids(state).await?;
+    let summary = summarize_ens_activities(&payload, &known_broker_order_ids);
+    state
+        .record_ens_activity_backfill(&completed_date, &summary)
+        .await?;
+
+    Ok(json!({
+        "status": summary.get("status").cloned().unwrap_or_else(|| json!("ok")),
+        "source": "ens/v1/activities",
+        "completed_date": completed_date,
+        "from_datetime": from_datetime,
+        "to_datetime": to_datetime,
+        "summary": summary,
+        "read_only": true,
+    }))
+}
+
+async fn local_saxo_broker_order_ids(state: &AppState) -> Result<HashSet<String>> {
+    let rows = sqlx::query(
+        "SELECT broker_order_id FROM execution_orders
+         WHERE mode = 'live'
+           AND adapter = 'saxo'
+           AND broker_order_id IS NOT NULL
+           AND broker_order_id <> ''",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("loading local Saxo broker order identifiers for ENS backfill")?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| row.try_get::<String, _>("broker_order_id").ok())
+        .collect())
+}
+
+fn summarize_ens_activities(
+    payload: &JsonValue,
+    known_broker_order_ids: &HashSet<String>,
+) -> JsonValue {
+    let activities = payload
+        .get("Data")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut order_activity_count = 0_u64;
+    let mut position_activity_count = 0_u64;
+    let mut matched_local_order_ids = HashSet::new();
+    let mut unmatched_managed_order_activity_count = 0_u64;
+    let mut latest_activity_at: Option<String> = None;
+
+    for activity in &activities {
+        match json_text(activity, "ActivityType").as_deref() {
+            Some("Orders") => order_activity_count += 1,
+            Some("Positions") => position_activity_count += 1,
+            _ => {}
+        }
+        if let Some(activity_time) = json_text(activity, "ActivityTime") {
+            if latest_activity_at
+                .as_ref()
+                .is_none_or(|current| activity_time > *current)
+            {
+                latest_activity_at = Some(activity_time);
+            }
+        }
+        let order_id = ["OrderId", "SourceOrderId"]
+            .iter()
+            .find_map(|key| json_identifier_text(activity, key));
+        if let Some(order_id) = order_id {
+            if known_broker_order_ids.contains(&order_id) {
+                matched_local_order_ids.insert(order_id);
+            } else if json_text(activity, "ExternalReference")
+                .is_some_and(|reference| reference.starts_with("saxo-rust-"))
+            {
+                unmatched_managed_order_activity_count += 1;
+            }
+        }
+    }
+
+    let has_next_page = payload.get("__next").is_some_and(JsonValue::is_string);
+    json!({
+        "status": if has_next_page { "partial" } else { "ok" },
+        "activity_count": activities.len(),
+        "order_activity_count": order_activity_count,
+        "position_activity_count": position_activity_count,
+        "matched_local_order_count": matched_local_order_ids.len(),
+        "unmatched_managed_order_activity_count": unmatched_managed_order_activity_count,
+        "latest_activity_at": latest_activity_at,
+        "has_next_page": has_next_page,
+        "page_size": ENS_ACTIVITY_BACKFILL_PAGE_SIZE,
+        "known_local_broker_order_count": known_broker_order_ids.len(),
+    })
 }
 
 async fn refresh_after_execution(state: &AppState) -> JsonValue {
@@ -3813,6 +3968,18 @@ fn json_text(value: &JsonValue, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn json_identifier_text(value: &JsonValue, key: &str) -> Option<String> {
+    value.get(key).and_then(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| value.as_i64().map(|value| value.to_string()))
+            .or_else(|| value.as_u64().map(|value| value.to_string()))
+    })
+}
+
 fn nested_json_text(value: &JsonValue, path: &[&str]) -> Option<String> {
     let mut current = value;
     for key in path {
@@ -6443,5 +6610,53 @@ execution:
             percent_encode_path_segment("ldJR0mfLg0buaAtllBotfQ=="),
             "ldJR0mfLg0buaAtllBotfQ%3D%3D"
         );
+    }
+
+    #[test]
+    fn ens_activity_backfill_summary_is_sanitized_and_flags_a_capped_page() {
+        let payload = json!({
+            "__next": "/ens/v1/activities?$skiptoken=opaque-broker-cursor",
+            "Data": [
+                {
+                    "ActivityType": "Orders",
+                    "ActivityTime": "2026-07-26T08:30:00Z",
+                    "OrderId": "5039132483",
+                    "ExternalReference": "saxo-rust-44"
+                },
+                {
+                    "ActivityType": "Positions",
+                    "ActivityTime": "2026-07-26T08:31:00Z",
+                    "SourceOrderId": 5039132483_i64,
+                    "Symbol": "TSLA:xnas",
+                    "ClientName": "private operator identity"
+                },
+                {
+                    "ActivityType": "Orders",
+                    "ActivityTime": "2026-07-26T08:32:00Z",
+                    "OrderId": "5039999999",
+                    "ExternalReference": "saxo-rust-45"
+                }
+            ]
+        });
+        let known = HashSet::from(["5039132483".to_string()]);
+
+        let summary = summarize_ens_activities(&payload, &known);
+
+        assert_eq!(summary.get("status"), Some(&json!("partial")));
+        assert_eq!(summary.get("activity_count"), Some(&json!(3)));
+        assert_eq!(summary.get("order_activity_count"), Some(&json!(2)));
+        assert_eq!(summary.get("position_activity_count"), Some(&json!(1)));
+        assert_eq!(summary.get("matched_local_order_count"), Some(&json!(1)));
+        assert_eq!(
+            summary.get("unmatched_managed_order_activity_count"),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            summary.get("latest_activity_at"),
+            Some(&json!("2026-07-26T08:32:00Z"))
+        );
+        assert!(summary.get("Symbol").is_none());
+        assert!(summary.get("ClientName").is_none());
+        assert!(summary.get("__next").is_none());
     }
 }

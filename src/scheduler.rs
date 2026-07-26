@@ -17,7 +17,7 @@ use crate::{
     notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
     protective_stops::run_automatic_protective_stop_sweep,
     quiver::run_quiver_signal_cycle,
-    saxo_order::{run_saxo_execution_queue, sync_saxo_broker_orders},
+    saxo_order::{backfill_saxo_ens_activities, run_saxo_execution_queue, sync_saxo_broker_orders},
     saxo_portfolio::refresh_broker_snapshots,
     state::AppState,
     strategy_journal::run_strategy_journal_cycle,
@@ -128,6 +128,18 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         }
     };
     record_step_duration(&mut step_durations, "broker_order_sync", step_started);
+    let step_started = Instant::now();
+    // A daily, bounded read of Saxo's broker-authored activity feed closes the
+    // recovery gap between order polling and the later ENS streaming phase.
+    // It is intentionally read-only and does not change orders, fills, or the
+    // ledger; a partial page is surfaced in scheduler history for follow-up.
+    let ens_activity_backfill = bounded_enrichment_step(
+        "ens_activity_backfill",
+        enrichment_step_timeout("ENS_ACTIVITY_BACKFILL", 45),
+        backfill_saxo_ens_activities(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "ens_activity_backfill", step_started);
     let step_started = Instant::now();
     // Read-only confirmation of already-placed protective stops. It asks Saxo
     // what state each stop is in and records the answer; it cannot place,
@@ -343,6 +355,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "saxo_session": saxo,
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,
+        "ens_activity_backfill": ens_activity_backfill,
         "protective_stop_adoption": protective_stop_adoption,
         "protective_stop_sweep": protective_stop_sweep,
         "decision_reports": decision_reports,

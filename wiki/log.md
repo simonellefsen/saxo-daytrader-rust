@@ -1370,3 +1370,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Default API and backup image tags now equal the validated full Git SHA of the clean worktree. The deploy metadata, Kubernetes image references, and binary build revision identify the same source without relying on a timestamp.
 - `IMAGE_TAG`, `API_IMAGE`, and `BACKUP_IMAGE` remain deliberate operator overrides. CI syntax-checks the deploy and post-deploy scripts alongside Rust formatting, checks, and tests.
+
+## [2026-07-26] operations | Read-only Saxo ENS activity backfill
+
+- Added a daily, bounded `ens/v1/activities` read over the preceding 14 days for Order and Position activity. The scheduler records only aggregate counts, local broker-order match counts, page-capping state, and latest activity time; it never persists raw broker activity, account or client identity, symbols, order identifiers, fills, or ledger changes.
+- The daily completion cursor survives rollouts in `runtime_settings`, preventing the 10-minute scheduler from repeatedly requesting the same lookback window. A capped response is explicitly marked `partial`; pagination and deterministic event-level reconciliation remain follow-up work.

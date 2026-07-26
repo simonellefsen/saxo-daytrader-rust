@@ -9258,6 +9258,37 @@ impl AppState {
         Ok(())
     }
 
+    /// The ENS activity backfill is a read-only daily reconciliation aid. Keep
+    /// its scheduler cursor in the database so a rollout does not turn one
+    /// intended broker read into a request on every scheduler heartbeat.
+    pub(crate) async fn ens_activity_backfill_completed_date(&self) -> Result<Option<String>> {
+        Ok(self
+            .runtime_setting("ens_activity_backfill")
+            .await?
+            .and_then(|value| {
+                value
+                    .get("completed_date")
+                    .and_then(JsonValue::as_str)
+                    .map(ToString::to_string)
+            }))
+    }
+
+    pub(crate) async fn record_ens_activity_backfill(
+        &self,
+        completed_date: &str,
+        summary: &JsonValue,
+    ) -> Result<()> {
+        self.save_runtime_setting(
+            "ens_activity_backfill",
+            &json!({
+                "completed_date": completed_date,
+                "completed_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "summary": summary,
+            }),
+        )
+        .await
+    }
+
     pub(crate) fn market_exchange_rows(&self) -> Vec<JsonValue> {
         let cache = current_saxo_exchange_calendar_cache();
         market_exchange_rows_for_config(&self.config, Utc::now(), cache.as_ref())
