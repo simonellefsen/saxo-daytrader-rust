@@ -1,4 +1,8 @@
-use std::{collections::HashMap, env, time::Duration as StdDuration};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    time::Duration as StdDuration,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -93,6 +97,15 @@ struct CostGuardConfig {
     cost_guard_multiple: f64,
 }
 
+/// Bounds the number of distinct instruments a single Decision Report may
+/// send through the deterministic manager gates. The provider keeps its full
+/// report for audit, but only the first distinct symbols in report order can
+/// consume Hermes evaluation, capital budget, or broker queue capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CandidateLimitConfig {
+    max_symbols: i64,
+}
+
 fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
     RiskPerTradeConfig {
         risk_per_trade_pct: yaml_f64(&state.config, &["strategy", "swing", "risk_per_trade_pct"])
@@ -117,6 +130,105 @@ fn cost_guard_config(state: &AppState) -> CostGuardConfig {
         cost_guard_multiple: yaml_f64(&state.config, &["strategy", "cost_guard_multiple"])
             .unwrap_or(1.5),
     }
+}
+
+fn candidate_limit_config(state: &AppState) -> CandidateLimitConfig {
+    CandidateLimitConfig {
+        max_symbols: yaml_i64(
+            &state.config,
+            &["strategy", "swing", "trading_manager", "max_symbols"],
+        )
+        .unwrap_or(30),
+    }
+}
+
+impl CandidateLimitConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "max_symbols": self.max_symbols,
+            "mode": if self.max_symbols == 0 { "unlimited" } else if self.max_symbols > 0 { "limited" } else { "invalid" },
+            "scope": "distinct_symbols_per_report",
+        })
+    }
+}
+
+fn candidate_symbol_key(order: &CandidateOrder) -> String {
+    order.symbol.trim().to_ascii_uppercase()
+}
+
+fn candidate_limit_skip_reason(config: CandidateLimitConfig) -> String {
+    if config.max_symbols < 0 {
+        "Candidate limit configuration is invalid: strategy.swing.trading_manager.max_symbols must be non-negative (0 means unlimited).".to_string()
+    } else {
+        format!(
+            "Candidate limit reached: only the first {} distinct symbols in this Decision Report are eligible for Trading Manager evaluation.",
+            config.max_symbols
+        )
+    }
+}
+
+fn attach_candidate_limit_metadata(
+    order: &mut CandidateOrder,
+    config: CandidateLimitConfig,
+    eligible: bool,
+) {
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "candidate_limit".to_string(),
+            json!({
+                "max_symbols": config.max_symbols,
+                "scope": "distinct_symbols_per_report",
+                "eligible": eligible,
+            }),
+        );
+    }
+}
+
+/// Preserves the provider's report order and keeps repeated actions for a
+/// symbol already inside the limit. This is a symbol cap, rather than an order
+/// cap, because a report can legitimately contain an adjustment and an exit
+/// for the same instrument while still representing one portfolio name.
+fn enforce_candidate_symbol_limit(
+    candidates: Vec<CandidateOrder>,
+    config: CandidateLimitConfig,
+) -> (Vec<CandidateOrder>, Vec<CandidateOrder>) {
+    if config.max_symbols < 0 {
+        let mut rejected = candidates;
+        for order in &mut rejected {
+            attach_candidate_limit_metadata(order, config, false);
+        }
+        return (Vec::new(), rejected);
+    }
+    if config.max_symbols == 0 {
+        let mut eligible = candidates;
+        for order in &mut eligible {
+            attach_candidate_limit_metadata(order, config, true);
+        }
+        return (eligible, Vec::new());
+    }
+
+    let limit = config.max_symbols as usize;
+    let mut eligible = Vec::new();
+    let mut rejected = Vec::new();
+    let mut included_symbols = HashSet::new();
+    for mut order in candidates {
+        let key = candidate_symbol_key(&order);
+        let within_limit = included_symbols.contains(&key) || included_symbols.len() < limit;
+        if within_limit {
+            included_symbols.insert(key);
+            attach_candidate_limit_metadata(&mut order, config, true);
+            eligible.push(order);
+        } else {
+            attach_candidate_limit_metadata(&mut order, config, false);
+            rejected.push(order);
+        }
+    }
+    (eligible, rejected)
 }
 
 pub(crate) fn markov_gate_config(state: &AppState) -> MarkovGateConfig {
@@ -931,16 +1043,20 @@ async fn run_for_report(
     quarantine_cfg: InstrumentQuarantineConfig,
     active_quarantines: &[InstrumentQuarantine],
 ) -> Result<JsonValue> {
-    let candidates = candidate_orders_from_report(&report.report_json);
-    let candidate_order_count = candidates.len();
-    let buy_candidate_count = candidates
+    let all_candidates = candidate_orders_from_report(&report.report_json);
+    let candidate_order_count = all_candidates.len();
+    let buy_candidate_count = all_candidates
         .iter()
         .filter(|order| order.action == "BUY")
         .count();
-    let sell_candidate_count = candidates
+    let sell_candidate_count = all_candidates
         .iter()
         .filter(|order| order.action == "SELL")
         .count();
+    let candidate_limit = candidate_limit_config(state);
+    let (candidates, candidate_limit_skipped) =
+        enforce_candidate_symbol_limit(all_candidates, candidate_limit);
+    let eligible_candidate_order_count = candidates.len();
     let excluded = excluded_symbols(state);
     let overlay_json = overlay
         .map(|overlay| overlay.clone().to_json())
@@ -1026,7 +1142,10 @@ async fn run_for_report(
             .eq_ignore_ascii_case("live");
 
     let mut approved = Vec::new();
-    let mut skipped = Vec::new();
+    let mut skipped = candidate_limit_skipped
+        .iter()
+        .map(|order| skip_order(order, &candidate_limit_skip_reason(candidate_limit)))
+        .collect::<Vec<_>>();
     for mut order in candidates {
         let mut has_order_specific_hermes_allow = false;
         if let Some(advice) = hermes_advice.for_order(&order) {
@@ -1425,6 +1544,10 @@ async fn run_for_report(
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "cost_guard": cost_guard.to_json(),
+        "candidate_order_count": candidate_order_count,
+        "eligible_candidate_order_count": eligible_candidate_order_count,
+        "candidate_limit_skipped_count": candidate_limit_skipped.len(),
+        "candidate_limit": candidate_limit.to_json(),
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
         "approved_orders": approved.iter().map(|(order, reason)| json!({
@@ -1531,6 +1654,7 @@ async fn hermes_decision_preflight_bundle(
     let today = Utc::now().date_naive();
     let markov_cfg = markov_gate_config(state);
     let cost_guard = cost_guard_config(state);
+    let candidate_limit = candidate_limit_config(state);
     let latest_markov_run = match state.latest_markov_run().await {
         Ok(run) if !run.is_null() => compact_hermes_preflight_markov_run(&run),
         _ => json!({"status": "unavailable"}),
@@ -1614,6 +1738,7 @@ async fn hermes_decision_preflight_bundle(
         "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
         "capital_budget": capital_budget.to_json(),
         "cost_guard": cost_guard.to_json(),
+        "candidate_limit": candidate_limit.to_json(),
         "monthly_loss_circuit_breaker": {
             "active": buy_halt.active,
             "threshold_breached": buy_halt.threshold_breached,
@@ -3526,6 +3651,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "hermes_context"
     } else if normalized.starts_with("hermes advisory") {
         "hermes_advice"
+    } else if normalized.starts_with("candidate limit") {
+        "candidate_limit"
     } else if normalized.starts_with("exchange ") {
         "market_open"
     } else if normalized.starts_with("symbol is excluded") {
@@ -5162,6 +5289,75 @@ mod tests {
         assert!(gate.reason.contains("model-supplied"), "{}", gate.reason);
     }
 
+    fn candidate_limit_order(symbol: &str, action: &str) -> CandidateOrder {
+        CandidateOrder::from_json(json!({
+            "symbol": symbol,
+            "action": action,
+            "quantity": 1.0,
+            "order_type": "Market",
+            "estimated_value_dkk": 1_000.0,
+            "strategy_key": format!("test:candidate-limit:{symbol}:{action}"),
+            "strategy_metadata": {
+                "technical": {"status": "missing"}
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn candidate_symbol_limit_preserves_report_order_and_allows_repeat_actions() {
+        let candidates = vec![
+            candidate_limit_order("AMD:xnas", "BUY"),
+            candidate_limit_order("NVDA:xnas", "BUY"),
+            candidate_limit_order("amd:xnas", "SELL"),
+            candidate_limit_order("MSFT:xnas", "BUY"),
+        ];
+        let (eligible, skipped) =
+            enforce_candidate_symbol_limit(candidates, CandidateLimitConfig { max_symbols: 2 });
+
+        assert_eq!(eligible.len(), 3);
+        assert_eq!(
+            eligible
+                .iter()
+                .map(|order| order.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AMD:xnas", "NVDA:xnas", "amd:xnas"]
+        );
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].symbol, "MSFT:xnas");
+        assert_eq!(
+            skipped[0].raw["strategy_metadata"]["candidate_limit"]["eligible"],
+            json!(false)
+        );
+        assert_eq!(
+            eligible[0].raw["strategy_metadata"]["candidate_limit"]["eligible"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn candidate_symbol_limit_treats_zero_as_unlimited_and_negative_as_invalid() {
+        let candidates = vec![
+            candidate_limit_order("AMD:xnas", "BUY"),
+            candidate_limit_order("NVDA:xnas", "BUY"),
+        ];
+        let (eligible, skipped) = enforce_candidate_symbol_limit(
+            candidates.clone(),
+            CandidateLimitConfig { max_symbols: 0 },
+        );
+        assert_eq!(eligible.len(), 2);
+        assert!(skipped.is_empty());
+
+        let (eligible, skipped) =
+            enforce_candidate_symbol_limit(candidates, CandidateLimitConfig { max_symbols: -1 });
+        assert!(eligible.is_empty());
+        assert_eq!(skipped.len(), 2);
+        assert!(
+            candidate_limit_skip_reason(CandidateLimitConfig { max_symbols: -1 })
+                .contains("must be non-negative")
+        );
+    }
+
     #[test]
     fn risk_per_trade_gate_downsizes_using_verified_atr_stop_distance() {
         // 10 shares at 1,000 DKK/share; 2 ATR is 20% of a 100-local close,
@@ -5609,6 +5805,10 @@ mod tests {
         assert_eq!(
             candidate_gate_reason_code("Cost guard rejected BUY: expected reward is below costs"),
             "cost_guard"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Candidate limit reached: only the first 30 symbols"),
+            "candidate_limit"
         );
     }
 }

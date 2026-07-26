@@ -422,6 +422,9 @@ strategy:
       enabled: true
       use_ai: true
       due_window_minutes: 20
+      # Maximum distinct report symbols evaluated per Decision Report in report
+      # order. Additional symbols remain visible as skipped audit rows. Set 0
+      # for explicit unlimited mode; a negative value fails closed.
       max_symbols: 30
     journal:
       enabled: true

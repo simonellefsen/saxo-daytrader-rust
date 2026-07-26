@@ -1319,3 +1319,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Wired `strategy.estimated_slippage_bps` and `strategy.cost_guard_multiple` into the Rust Trading Manager after price verification, technical evaluation, and ATR risk sizing. A BUY now needs database-verified indicator reward to exceed a deterministic lower-bound hurdle: the exchange minimum round-trip commission multiplied by the configured guard plus configured one-way slippage.
 - The manager records expected reward, commission floor, slippage, required reward, configuration, basis, and pass/fail outcome in sanitized manager JSON. The Decision Report waterfall renders the calculation for a blocked candidate, and Hermes receives the active policy in its preflight context.
 - The lower-bound estimate intentionally does not promise actual broker commission, FX cost, spread, or fill price. Missing/model-supplied indicator data and invalid negative configuration fail closed.
+
+## 2026-07-26 - Decision Report candidate ceiling becomes real
+
+- Wired `strategy.swing.trading_manager.max_symbols` into the Rust Trading Manager as an early, per-report distinct-symbol limit. The provider's raw report remains intact, while the first configured symbols in report order proceed to Hermes and deterministic gates; excess distinct symbols are stored as skipped audit rows rather than silently dropped.
+- Repeated actions for an already-admitted symbol remain eligible. `0` is explicit unlimited mode; a negative value records every candidate as skipped and creates no queueable order. Hermes receives the active cap and only eligible candidates.

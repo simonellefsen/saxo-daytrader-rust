@@ -391,9 +391,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "trading_manager", "due_window_minutes"],
         "Report freshness uses max_report_age_hours; this window is not read.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "swing", "trading_manager", "max_symbols"],
-        "No per-run candidate cap is applied from configuration.",
+        "Bounds distinct symbols evaluated from each Decision Report; excess report symbols are retained as skipped audit rows.",
     ),
     advisory(
         &[

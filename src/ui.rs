@@ -2431,6 +2431,9 @@ fn candidate_gate_detail(
     prefs: &LocalizationPrefs,
 ) -> String {
     let gate_code = text(row, "gate_code");
+    if gate_code == "candidate_limit" {
+        return "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached.".to_string();
+    }
     if gate_code == "cost_guard" {
         if !cost_guard
             .get("verified_from_db")
@@ -7693,6 +7696,21 @@ mod tests {
         assert_eq!(
             candidate_gate_detail(&row, &JsonValue::Null, false, &cost_guard, &prefs),
             "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
+        );
+    }
+
+    #[test]
+    fn waterfall_candidate_limit_explains_that_overflow_was_not_evaluated() {
+        let row = json!({"action": "BUY", "gate_code": "candidate_limit"});
+        assert_eq!(
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &default_prefs()
+            ),
+            "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached."
         );
     }
 
