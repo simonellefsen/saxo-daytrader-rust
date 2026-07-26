@@ -14,6 +14,7 @@ mod models;
 mod notifications;
 mod portfolio_reset;
 mod price_monitor;
+mod protective_stops;
 mod quiver;
 mod saxo_error;
 mod saxo_order;

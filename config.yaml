@@ -422,7 +422,7 @@ strategy:
     rung_count: 5
     min_rung_value_dkk: 5000
     submit_bracket_with_entry: false
-    submit_stop_loss_after_fill: false
+    submit_stop_loss_after_fill: true
     submit_take_profit_after_fill: false
     atr_spacing_min: 0.15
     atr_spacing_factor: 0.25
@@ -435,6 +435,7 @@ strategy:
     session_flatten_enabled: false
     flatten_minutes_before_tradable_close: 15
     trail_stop_atr_multiple: 1.25
+    min_ratchet_atr_fraction: 0.25
 
 execution:
   #mode: simulation

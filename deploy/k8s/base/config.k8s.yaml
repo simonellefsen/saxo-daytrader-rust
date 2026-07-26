@@ -434,6 +434,7 @@ strategy:
     rung_count: 5
     min_rung_value_dkk: 5000
     submit_bracket_with_entry: false
+    submit_stop_loss_after_fill: true
     atr_spacing_min: 0.15
     atr_spacing_factor: 0.25
     atr_spacing_max: 0.4
@@ -444,6 +445,7 @@ strategy:
     max_position_weight: 0.04
     flatten_minutes_before_tradable_close: 15
     trail_stop_atr_multiple: 1.25
+    min_ratchet_atr_fraction: 0.25
 
 execution:
   mode: live

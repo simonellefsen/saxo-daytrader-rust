@@ -8878,7 +8878,7 @@ impl AppState {
         Ok(row.map(|row| row_to_json(&row)))
     }
 
-    async fn select_json(&self, sql: &str) -> Result<Vec<JsonValue>> {
+    pub(crate) async fn select_json(&self, sql: &str) -> Result<Vec<JsonValue>> {
         let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_json).collect())
     }
@@ -9925,6 +9925,12 @@ fn hermes_experiment_status_blocks_duplicate(status: &str) -> bool {
     HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(status.trim()))
+}
+
+/// The exchange suffix of a `BASE:exchange` symbol, for callers outside this
+/// module.
+pub(crate) fn exchange_code_for(symbol: &str) -> String {
+    exchange_code(symbol)
 }
 
 fn exchange_code(symbol: &str) -> String {

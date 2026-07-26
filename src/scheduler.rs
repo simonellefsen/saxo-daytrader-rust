@@ -14,6 +14,7 @@ use crate::{
     editorial_research::run_editorial_research_cycle,
     markov_method::run_markov_method_cycle,
     notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
+    protective_stops::run_automatic_protective_stop_sweep,
     quiver::run_quiver_signal_cycle,
     saxo_order::{run_saxo_execution_queue, sync_saxo_broker_orders},
     saxo_portfolio::refresh_broker_snapshots,
@@ -166,6 +167,13 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "protective_stop_adoption",
         step_started,
     );
+    let step_started = Instant::now();
+    // Brings every held position's stop to the right size and level. Unlike the
+    // two steps above this one can place and cancel broker orders, so it is off
+    // unless `strategy.ladder.submit_stop_loss_after_fill` is set, SIM-only,
+    // bounded per cycle, and halts on the first failure.
+    let protective_stop_sweep = run_automatic_protective_stop_sweep(state).await;
+    record_step_duration(&mut step_durations, "protective_stop_sweep", step_started);
     let step_started = Instant::now();
     let decision_reports = match run_xai_decision_cycle(state).await {
         Ok(value) => value,
@@ -339,6 +347,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,
         "protective_stop_adoption": protective_stop_adoption,
+        "protective_stop_sweep": protective_stop_sweep,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
         "markov_method": markov_method,

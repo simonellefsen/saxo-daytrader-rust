@@ -503,9 +503,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "submit_bracket_with_entry"],
         "No bracket order is ever submitted with an entry.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "ladder", "submit_stop_loss_after_fill"],
-        "No protective stop is placed after a fill. Automatic stop placement is unbuilt; see wiki/urgent-todo.md U1.",
+        "Master switch for the automatic protective-stop sweep. False means no stop is placed, amended, or ratcheted without an operator action.",
     ),
     unused_risk(
         &["strategy", "ladder", "submit_take_profit_after_fill"],
@@ -523,9 +523,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "atr_spacing_max"],
         "Ladder entries are not implemented.",
     ),
-    advisory(
+    enforced(
         &["strategy", "ladder", "stop_loss_atr_multiple"],
-        "Sets the protective-stop distance in the read-only coverage audit's proposed stop level. Becomes enforced when automatic stop placement lands.",
+        "Distance of a newly placed protective stop below the last close, and the proposed level in the coverage audit.",
     ),
     unused(
         &["strategy", "ladder", "take_profit_rung_multiple"],
@@ -555,9 +555,13 @@ const CONTRACT: &[ContractEntry] = &[
         ],
         "No session flatten runs.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "ladder", "trail_stop_atr_multiple"],
-        "No trailing stop exists.",
+        "Distance of the trailing stop below the last close once a position is already protected. Tighter than the initial multiple; the ratchet is monotonic.",
+    ),
+    enforced(
+        &["strategy", "ladder", "min_ratchet_atr_fraction"],
+        "How far the trail must advance, as a fraction of ATR14, before the sweep cancels and replaces a resting stop.",
     ),
     // ---- risk ----
     enforced_subtree(

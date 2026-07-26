@@ -2894,6 +2894,96 @@ async fn resolve_order_currency(
         .to_string())
 }
 
+/// Cancels one resting protective stop so the automatic sweep can replace it
+/// with a correctly sized or higher one.
+///
+/// Separate from `cancel_protective_stops_before_sell` because the caller is
+/// different in an important way: that one clears the slot for an exit and the
+/// position is leaving anyway, while this one leaves a position held and
+/// briefly unprotected. It therefore refuses to report success until Saxo
+/// confirms the order is gone, so the sweep never places a second sell against
+/// a stop that is still working -- which the broker would reject, leaving the
+/// position with neither the old stop nor a new one.
+pub(crate) async fn cancel_protective_stop_for_replacement(
+    state: &AppState,
+    symbol: &str,
+    broker_order_id: &str,
+) -> Result<()> {
+    let session =
+        protective_stop_sim_session(state, "protective_stop_automatic_replacement").await?;
+    let client_key = client_key(state, &session)?;
+    saxo_delete_json(
+        state,
+        &session,
+        &format!(
+            "/trade/v2/orders/{}",
+            percent_encode_path_segment(broker_order_id)
+        ),
+        &[("AccountKey", account_key(state, &session)?)],
+        "protective-stop cancellation before replacement",
+    )
+    .await
+    .with_context(|| format!("cancelling protective stop {broker_order_id} on {symbol}"))?;
+    sleep(Duration::from_millis(1500)).await;
+    let broker_state =
+        fetch_broker_order_state(state, &session, &client_key, broker_order_id).await?;
+    if let Some(observed) = broker_state.as_ref() {
+        let payload = broker_payload(observed);
+        let status = broker_status_text(payload).unwrap_or_default();
+        let still_working = !status.eq_ignore_ascii_case("Cancelled")
+            && !is_final_fill_status(
+                &Some(status.clone()),
+                json_text(payload, "SubStatus").as_deref(),
+            )
+            && !is_terminal_failure_status(&Some(status));
+        if still_working {
+            bail!(
+                "Saxo accepted the cancellation of protective stop {broker_order_id} on {symbol} but the order is still working"
+            );
+        }
+    }
+    let observed = broker_state.unwrap_or_else(|| {
+        json!({
+            "source": "protective_stop_replacement_verification",
+            "broker_visibility": "not_found",
+            "broker_payload": {"Status": "Cancelled"},
+            "last_sync_at": now_iso()
+        })
+    });
+    let rows = sqlx::query(&format!(
+        "SELECT * FROM execution_orders
+         WHERE broker_order_id = '{}'
+           AND COALESCE(strategy_type, '') = '{}'
+         LIMIT 1",
+        sql_escape(broker_order_id),
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE)
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading the protective stop being replaced")?;
+    for row in rows.iter().map(row_to_json) {
+        let order_id = value_i64(&row, "id");
+        update_order_broker_status(state, &row, "broker_cancelled", &observed, None).await?;
+        insert_order_event(
+            state,
+            order_id,
+            Some(broker_order_id),
+            "protective_stop_cancelled_for_replacement",
+            &json!({
+                "reason": "the_resting_stop_no_longer_matches_the_position_size_or_the_trailing_level",
+                "symbol": symbol,
+                "broker_order_id": broker_order_id,
+                "verified": "broker_confirmed_not_working_before_the_replacement_was_requested"
+            }),
+        )
+        .await?;
+    }
+    state
+        .release_protective_stop_lifecycle_test(broker_order_id)
+        .await?;
+    Ok(())
+}
+
 /// Clears any resting protective stop on `symbol` so a decided exit can be
 /// submitted.
 ///
