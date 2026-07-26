@@ -417,10 +417,18 @@ The advice schema is intentionally conservative:
 The manager builds and persists the exact preflight bundle in
 `trading_manager_runs.manager_json.hermes_preflight`. It contains report and
 candidate summaries, candidate-relevant holdings/sellable quantities, exchange
-and risk/quarantine state, capital budget, circuit-breaker status, compact
+and risk/quarantine state, capital budget, the enforced per-symbol exposure-cap
+policy plus sanitized current exposure, circuit-breaker status, compact
 technical and Markov freshness, active experiment metadata, and classified
 recent execution failures. It deliberately excludes Saxo sessions, account
 identifiers, raw broker payloads, and raw execution-error text.
+
+The exposure cap is deterministic manager policy, not Hermes advice: for a BUY,
+the manager combines persisted position value with BUYs already approved for
+the symbol in the same cycle and limits the final quantity to
+`strategy.ladder.max_position_weight` of portfolio value. Hermes may recommend
+a smaller quantity or a stand-down, but cannot loosen, bypass, or replace this
+cap.
 
 Each manager run also records `hermes_advice_delta`, a normalized per-candidate
 audit of the advice actually applied. It records matching precedence

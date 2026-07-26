@@ -106,6 +106,25 @@ struct CandidateLimitConfig {
     max_symbols: i64,
 }
 
+/// Maximum total portfolio allocation permitted for one symbol. This is
+/// deliberately a portfolio-exposure cap, not a model target weight: it uses
+/// the persisted position value plus any BUYs already admitted in this
+/// scheduler cycle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PositionWeightConfig {
+    max_position_weight: f64,
+}
+
+/// A bounded local view of current position market values. It is loaded once
+/// per manager cycle and then reserved as BUYs are approved, so sequential
+/// reports cannot independently spend the same symbol headroom.
+#[derive(Clone, Debug, PartialEq)]
+struct PositionExposure {
+    values_dkk: HashMap<String, f64>,
+    invalid_symbols: HashSet<String>,
+    available: bool,
+}
+
 fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
     RiskPerTradeConfig {
         risk_per_trade_pct: yaml_f64(&state.config, &["strategy", "swing", "risk_per_trade_pct"])
@@ -140,6 +159,109 @@ fn candidate_limit_config(state: &AppState) -> CandidateLimitConfig {
         )
         .unwrap_or(30),
     }
+}
+
+fn position_weight_config(state: &AppState) -> PositionWeightConfig {
+    PositionWeightConfig {
+        // This is the established ladder allocation ceiling from the legacy
+        // strategy engine. The other historical weight keys remain unused
+        // until their distinct policies are deliberately reconciled.
+        max_position_weight: yaml_f64(
+            &state.config,
+            &["strategy", "ladder", "max_position_weight"],
+        )
+        .unwrap_or(0.04),
+    }
+}
+
+impl PositionWeightConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "max_position_weight": self.max_position_weight,
+            "scope": "total_symbol_exposure_after_approved_buy",
+            "basis": "persisted_portfolio_position_values",
+        })
+    }
+}
+
+impl PositionExposure {
+    async fn load(state: &AppState) -> Self {
+        let rows = match state.position_items(250).await {
+            Ok(rows) => rows,
+            Err(err) => {
+                warn!("position-weight gate could not load persisted position values: {err:#}");
+                return Self {
+                    values_dkk: HashMap::new(),
+                    invalid_symbols: HashSet::new(),
+                    available: false,
+                };
+            }
+        };
+
+        let mut values_dkk = HashMap::new();
+        let mut invalid_symbols = HashSet::new();
+        for row in rows {
+            let symbol = row
+                .get("symbol")
+                .and_then(JsonValue::as_str)
+                .map(normalize_symbol_key)
+                .unwrap_or_default();
+            let quantity = row.get("quantity").and_then(json_number).unwrap_or(0.0);
+            if symbol.is_empty() || quantity <= 0.0 {
+                continue;
+            }
+            let market_value_dkk = row.get("market_value_dkk").and_then(json_number);
+            if let Some(value) = market_value_dkk.filter(|value| value.is_finite() && *value > 0.0)
+            {
+                values_dkk.insert(symbol, value);
+            } else {
+                invalid_symbols.insert(symbol);
+            }
+        }
+        Self {
+            values_dkk,
+            invalid_symbols,
+            available: true,
+        }
+    }
+
+    fn value_for(&self, symbol: &str) -> Option<f64> {
+        self.values_dkk.get(&normalize_symbol_key(symbol)).copied()
+    }
+
+    fn has_invalid_value(&self, symbol: &str) -> bool {
+        self.invalid_symbols.contains(&normalize_symbol_key(symbol))
+    }
+
+    fn reserve_buy(&mut self, symbol: &str, value_dkk: f64) {
+        if !self.available || !value_dkk.is_finite() || value_dkk <= 0.0 {
+            return;
+        }
+        *self
+            .values_dkk
+            .entry(normalize_symbol_key(symbol))
+            .or_insert(0.0) += value_dkk;
+    }
+
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "status": if self.available { "available" } else { "unavailable" },
+            "valued_symbol_count": self.values_dkk.len(),
+            "invalid_value_symbol_count": self.invalid_symbols.len(),
+            "scope": "persisted_positions_plus_approved_buys_in_this_cycle",
+        })
+    }
+}
+
+fn normalize_symbol_key(symbol: &str) -> String {
+    symbol.trim().to_ascii_uppercase()
+}
+
+fn json_number(value: &JsonValue) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|value| value as f64))
+        .filter(|value| value.is_finite())
 }
 
 impl CandidateLimitConfig {
@@ -921,6 +1043,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
         .as_ref()
         .and_then(|overlay| overlay.f64_value("strategy.capital.min_cash_buffer_pct"));
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
+    let mut position_exposure = PositionExposure::load(state).await;
     let buy_halt = monthly_loss_buy_halt(state, &overview).await;
     let drawdown = portfolio_drawdown_guard(state).await;
     let mut soft_multipliers = Vec::new();
@@ -995,6 +1118,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             &open_codes,
             overlay.as_ref(),
             &mut capital_budget,
+            &mut position_exposure,
             &buy_halt,
             &drawdown,
             quarantine_cfg,
@@ -1038,6 +1162,7 @@ async fn run_for_report(
     open_codes: &[String],
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
+    position_exposure: &mut PositionExposure,
     buy_halt: &MonthlyLossBuyHalt,
     drawdown: &DrawdownGuard,
     quarantine_cfg: InstrumentQuarantineConfig,
@@ -1062,6 +1187,7 @@ async fn run_for_report(
         .map(|overlay| overlay.clone().to_json())
         .unwrap_or(JsonValue::Null);
     let initial_capital_budget = *capital_budget;
+    let position_weight = position_weight_config(state);
     let hermes_preflight = hermes_decision_preflight_bundle(
         state,
         report,
@@ -1069,6 +1195,8 @@ async fn run_for_report(
         &candidates,
         open_codes,
         &initial_capital_budget,
+        position_exposure,
+        position_weight,
         &overlay_json,
         &excluded,
         buy_halt,
@@ -1468,6 +1596,32 @@ async fn run_for_report(
             }
         }
         if gate.approved && order.action == "BUY" {
+            let position_weight_gate = position_weight_gate(
+                &mut order,
+                initial_capital_budget.total_market_value_dkk,
+                position_weight,
+                position_exposure,
+            );
+            if !position_weight_gate.approved {
+                gate = position_weight_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, position_weight_gate.reason);
+                // A concentration cap can downsize a clip after the earlier
+                // budget/risk checks. Keep the commission floor true for the
+                // final queued size rather than its original proposal.
+                let floor = buy_value_floor_dkk(&order.symbol);
+                let estimated = order.estimated_value_dkk.unwrap_or(0.0);
+                if estimated < floor {
+                    gate = GateDecision {
+                        approved: false,
+                        reason: format!(
+                            "BUY downsized by the position-weight cap to {estimated:.0} DKK, below the commission-efficiency floor of {floor:.0} DKK."
+                        ),
+                    };
+                }
+            }
+        }
+        if gate.approved && order.action == "BUY" {
             let cost_gate = cost_guard_gate(&mut order, cost_guard);
             if !cost_gate.approved {
                 gate = cost_gate;
@@ -1478,6 +1632,8 @@ async fn run_for_report(
         if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
+                position_exposure
+                    .reserve_buy(&order.symbol, order.estimated_value_dkk.unwrap_or(0.0));
             }
             approved.push((order, gate.reason));
         } else {
@@ -1544,6 +1700,8 @@ async fn run_for_report(
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "cost_guard": cost_guard.to_json(),
+        "position_weight_policy": position_weight.to_json(),
+        "position_exposure": position_exposure.to_json(),
         "candidate_order_count": candidate_order_count,
         "eligible_candidate_order_count": eligible_candidate_order_count,
         "candidate_limit_skipped_count": candidate_limit_skipped.len(),
@@ -1557,6 +1715,7 @@ async fn run_for_report(
             "gate_code": "approved",
             "final_technical": compact_hermes_preflight_technical(order),
             "final_cost_guard": compact_cost_guard(order),
+            "final_position_weight": compact_position_weight(order),
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
@@ -1578,6 +1737,7 @@ async fn run_for_report(
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
             "BUY orders must also have a database-verified indicator reward that exceeds the configured lower-bound round-trip commission/slippage hurdle; this cost guard does not claim to predict realised broker costs or fill prices.",
+            "BUY orders are capped to strategy.ladder.max_position_weight using persisted position values plus BUYs approved earlier in the same scheduler cycle; unavailable or invalid position-value evidence blocks the BUY rather than assuming zero exposure.",
             "The monthly-loss guardrail halves (by configuration) the cycle-wide BUY budget in its soft-loss band and suspends BUYs at the hard floor; SELLs are never blocked. An operator override can resume BUYs for the current month after the hard floor and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
@@ -1645,6 +1805,8 @@ async fn hermes_decision_preflight_bundle(
     candidates: &[CandidateOrder],
     open_codes: &[String],
     capital_budget: &CapitalBudget,
+    position_exposure: &PositionExposure,
+    position_weight: PositionWeightConfig,
     overlay_json: &JsonValue,
     excluded_symbols: &[String],
     buy_halt: &MonthlyLossBuyHalt,
@@ -1717,6 +1879,14 @@ async fn hermes_decision_preflight_bundle(
             "instrument_quarantine": quarantine,
             "current_position_quantity": position_quantity,
             "position_context_status": position_context_status,
+            "current_position_value_dkk": position_exposure.value_for(&order.symbol),
+            "position_value_context_status": if !position_exposure.available {
+                "unavailable"
+            } else if position_exposure.has_invalid_value(&order.symbol) {
+                "invalid"
+            } else {
+                "available"
+            },
             "sellable_quantity": sellable_quantity,
             "sellable_context_status": sellable_context_status,
             "technical": compact_hermes_preflight_technical(order),
@@ -1738,6 +1908,8 @@ async fn hermes_decision_preflight_bundle(
         "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
         "capital_budget": capital_budget.to_json(),
         "cost_guard": cost_guard.to_json(),
+        "position_weight_policy": position_weight.to_json(),
+        "position_exposure": position_exposure.to_json(),
         "candidate_limit": candidate_limit.to_json(),
         "monthly_loss_circuit_breaker": {
             "active": buy_halt.active,
@@ -2557,6 +2729,137 @@ fn risk_per_trade_gate(
     }
 }
 
+/// Enforce the total per-symbol portfolio allocation ceiling for BUYs. The
+/// incoming value has already been re-priced from database-backed market data;
+/// existing exposure comes from the persisted broker/local position view, and
+/// `PositionExposure` also carries BUYs approved earlier in this cycle.
+fn position_weight_gate(
+    order: &mut CandidateOrder,
+    total_market_value_dkk: f64,
+    config: PositionWeightConfig,
+    exposure: &PositionExposure,
+) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Position-weight cap applies to BUYs only.".to_string(),
+        };
+    }
+    if !config.max_position_weight.is_finite()
+        || !(0.0..=1.0).contains(&config.max_position_weight)
+        || config.max_position_weight <= 0.0
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.ladder.max_position_weight must be greater than zero and at most one."
+                .to_string(),
+        };
+    }
+    if !total_market_value_dkk.is_finite() || total_market_value_dkk <= 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Position-weight cap requires a positive portfolio value.".to_string(),
+        };
+    }
+    if !exposure.available {
+        return GateDecision {
+            approved: false,
+            reason: "Position-weight cap requires persisted position values, but the local position snapshot is unavailable."
+                .to_string(),
+        };
+    }
+    if exposure.has_invalid_value(&order.symbol) {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Position-weight cap requires a positive DKK market value for the existing {} holding.",
+                order.symbol
+            ),
+        };
+    }
+    let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+    if order.quantity < 1.0 || !estimated_value_dkk.is_finite() || estimated_value_dkk <= 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Position-weight cap requires a positive database-verified BUY quantity and DKK value."
+                .to_string(),
+        };
+    }
+
+    let current_position_value_dkk = exposure.value_for(&order.symbol).unwrap_or(0.0);
+    let max_position_value_dkk = total_market_value_dkk * config.max_position_weight;
+    let remaining_headroom_dkk = (max_position_value_dkk - current_position_value_dkk).max(0.0);
+    let original_quantity = order.quantity;
+    let original_value_dkk = estimated_value_dkk;
+    let mut downsized = false;
+
+    if estimated_value_dkk > remaining_headroom_dkk + 0.01 {
+        let per_share_dkk = estimated_value_dkk / order.quantity;
+        let max_quantity = if per_share_dkk.is_finite() && per_share_dkk > 0.0 {
+            (remaining_headroom_dkk / per_share_dkk).floor()
+        } else {
+            0.0
+        };
+        if max_quantity < 1.0 {
+            return GateDecision {
+                approved: false,
+                reason: format!(
+                    "Position-weight cap is {:.2}% ({max_position_value_dkk:.0} DKK); {} already has {:.0} DKK of persisted/planned exposure, leaving less than one share of headroom.",
+                    config.max_position_weight * 100.0,
+                    order.symbol,
+                    current_position_value_dkk,
+                ),
+            };
+        }
+        order.quantity = max_quantity;
+        order.estimated_value_dkk = Some(per_share_dkk * max_quantity);
+        downsized = true;
+    }
+
+    let approved_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+    let resulting_position_value_dkk = current_position_value_dkk + approved_value_dkk;
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "position_weight".to_string(),
+            json!({
+                "verified_from_state": true,
+                "max_position_weight": config.max_position_weight,
+                "portfolio_value_dkk": total_market_value_dkk,
+                "max_position_value_dkk": max_position_value_dkk,
+                "current_position_value_dkk": current_position_value_dkk,
+                "remaining_headroom_dkk": remaining_headroom_dkk,
+                "original_quantity": original_quantity,
+                "original_value_dkk": original_value_dkk,
+                "approved_quantity": order.quantity,
+                "approved_value_dkk": approved_value_dkk,
+                "resulting_position_value_dkk": resulting_position_value_dkk,
+                "downsized": downsized,
+                "basis": "persisted_position_value_plus_same_cycle_approved_buys",
+            }),
+        );
+    }
+    GateDecision {
+        approved: true,
+        reason: if downsized {
+            format!(
+                "BUY downsized from {original_quantity:.0} to {:.0} shares by the {:.2}% position-weight cap ({current_position_value_dkk:.0} DKK current exposure, {max_position_value_dkk:.0} DKK ceiling).",
+                order.quantity,
+                config.max_position_weight * 100.0,
+            )
+        } else {
+            format!(
+                "BUY fits the {:.2}% position-weight cap ({resulting_position_value_dkk:.0} DKK after order vs {max_position_value_dkk:.0} DKK ceiling).",
+                config.max_position_weight * 100.0,
+            )
+        },
+    }
+}
+
 impl CostGuardConfig {
     fn to_json(self) -> JsonValue {
         json!({
@@ -2720,6 +3023,28 @@ fn compact_cost_guard(order: &CandidateOrder) -> JsonValue {
         "required_reward_dkk": guard.get("required_reward_dkk").cloned().unwrap_or(JsonValue::Null),
         "passes": guard.get("passes").cloned().unwrap_or(JsonValue::Null),
         "basis": guard.get("basis").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_position_weight(order: &CandidateOrder) -> JsonValue {
+    let weight = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("position_weight"));
+    let Some(weight) = weight else {
+        return JsonValue::Null;
+    };
+    json!({
+        "verified_from_state": weight.get("verified_from_state").cloned().unwrap_or(JsonValue::Null),
+        "max_position_weight": weight.get("max_position_weight").cloned().unwrap_or(JsonValue::Null),
+        "portfolio_value_dkk": weight.get("portfolio_value_dkk").cloned().unwrap_or(JsonValue::Null),
+        "max_position_value_dkk": weight.get("max_position_value_dkk").cloned().unwrap_or(JsonValue::Null),
+        "current_position_value_dkk": weight.get("current_position_value_dkk").cloned().unwrap_or(JsonValue::Null),
+        "remaining_headroom_dkk": weight.get("remaining_headroom_dkk").cloned().unwrap_or(JsonValue::Null),
+        "approved_value_dkk": weight.get("approved_value_dkk").cloned().unwrap_or(JsonValue::Null),
+        "resulting_position_value_dkk": weight.get("resulting_position_value_dkk").cloned().unwrap_or(JsonValue::Null),
+        "downsized": weight.get("downsized").cloned().unwrap_or(JsonValue::Null),
+        "basis": weight.get("basis").cloned().unwrap_or(JsonValue::Null),
     })
 }
 
@@ -3641,6 +3966,7 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         // audit UI can explain the decision without raw inputs.
         "final_technical": compact_hermes_preflight_technical(order),
         "final_cost_guard": compact_cost_guard(order),
+        "final_position_weight": compact_position_weight(order),
         "technical_gate": reason,
     })
 }
@@ -3672,6 +3998,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "cash_budget"
     } else if normalized.contains("risk-per-trade") {
         "risk_per_trade"
+    } else if normalized.contains("position-weight cap") {
+        "position_weight"
     } else if normalized.starts_with("cost guard") {
         "cost_guard"
     } else if normalized.contains("commission-efficiency floor") {
@@ -5223,6 +5551,23 @@ mod tests {
         }
     }
 
+    fn position_weight_test_config() -> PositionWeightConfig {
+        PositionWeightConfig {
+            max_position_weight: 0.04,
+        }
+    }
+
+    fn position_exposure(values: &[(&str, f64)]) -> PositionExposure {
+        PositionExposure {
+            values_dkk: values
+                .iter()
+                .map(|(symbol, value)| (normalize_symbol_key(symbol), *value))
+                .collect(),
+            invalid_symbols: HashSet::new(),
+            available: true,
+        }
+    }
+
     fn cost_guard_test_config() -> CostGuardConfig {
         CostGuardConfig {
             estimated_slippage_bps: 8.0,
@@ -5413,6 +5758,79 @@ mod tests {
 
         assert!(!gate.approved);
         assert!(gate.reason.contains("protective stops"), "{}", gate.reason);
+    }
+
+    #[test]
+    fn position_weight_gate_downsizes_against_existing_symbol_exposure() {
+        // 4% of a 100,000 DKK portfolio is 4,000 DKK. AMD already holds
+        // 2,000 DKK, so a 5-share/5,000 DKK proposal is reduced to two.
+        let mut order = buy_order(5.0, 5_000.0);
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let gate = position_weight_gate(
+            &mut order,
+            100_000.0,
+            position_weight_test_config(),
+            &exposure,
+        );
+
+        assert!(gate.approved, "{}", gate.reason);
+        assert_eq!(order.quantity, 2.0);
+        assert_eq!(order.estimated_value_dkk, Some(2_000.0));
+        assert_eq!(
+            order.raw["strategy_metadata"]["position_weight"]["resulting_position_value_dkk"],
+            json!(4_000.0)
+        );
+        assert_eq!(
+            order.raw["strategy_metadata"]["position_weight"]["downsized"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn position_weight_gate_reserves_approved_buys_across_reports() {
+        let mut exposure = position_exposure(&[]);
+        let mut first = buy_order(3.0, 3_000.0);
+        let first_gate = position_weight_gate(
+            &mut first,
+            100_000.0,
+            position_weight_test_config(),
+            &exposure,
+        );
+        assert!(first_gate.approved, "{}", first_gate.reason);
+        exposure.reserve_buy(&first.symbol, first.estimated_value_dkk.unwrap());
+
+        let mut second = buy_order(3.0, 3_000.0);
+        let second_gate = position_weight_gate(
+            &mut second,
+            100_000.0,
+            position_weight_test_config(),
+            &exposure,
+        );
+        assert!(second_gate.approved, "{}", second_gate.reason);
+        assert_eq!(second.quantity, 1.0);
+        assert_eq!(second.estimated_value_dkk, Some(1_000.0));
+    }
+
+    #[test]
+    fn position_weight_gate_fails_closed_when_position_snapshot_is_unavailable() {
+        let mut order = buy_order(1.0, 1_000.0);
+        let exposure = PositionExposure {
+            values_dkk: HashMap::new(),
+            invalid_symbols: HashSet::new(),
+            available: false,
+        };
+        let gate = position_weight_gate(
+            &mut order,
+            100_000.0,
+            position_weight_test_config(),
+            &exposure,
+        );
+        assert!(!gate.approved);
+        assert!(
+            gate.reason.contains("snapshot is unavailable"),
+            "{}",
+            gate.reason
+        );
     }
 
     fn markov_evidence(signed_signal: f64, direction: &str, run_date: &str) -> JsonValue {

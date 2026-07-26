@@ -555,9 +555,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "min_position_weight"],
         "No per-position weight bound is enforced.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "ladder", "max_position_weight"],
-        "No per-position weight bound is enforced.",
+        "Caps total per-symbol exposure after a BUY using persisted position values plus BUYs already approved in the same scheduler cycle. Missing or invalid exposure evidence blocks the BUY.",
     ),
     unused_risk(
         &["strategy", "ladder", "session_flatten_enabled"],

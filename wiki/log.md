@@ -1324,3 +1324,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Wired `strategy.swing.trading_manager.max_symbols` into the Rust Trading Manager as an early, per-report distinct-symbol limit. The provider's raw report remains intact, while the first configured symbols in report order proceed to Hermes and deterministic gates; excess distinct symbols are stored as skipped audit rows rather than silently dropped.
 - Repeated actions for an already-admitted symbol remain eligible. `0` is explicit unlimited mode; a negative value records every candidate as skipped and creates no queueable order. Hermes receives the active cap and only eligible candidates.
+
+## 2026-07-26 - Per-symbol BUY exposure cap becomes real
+
+- Wired `strategy.ladder.max_position_weight` into the Rust Trading Manager as a deterministic total per-symbol BUY-exposure ceiling. It combines persisted DKK position value with BUYs approved earlier in the same scheduler cycle, sizes a new BUY only into remaining headroom, and blocks it if less than one share fits.
+- Missing/invalid portfolio or exposure evidence fails closed. The sanitized basis, cap, existing value, headroom, quantity reduction, and final value are stored in the manager run, rendered in the Candidate Scoring Waterfall, and passed to Hermes preflight. Hermes remains advisory and cannot relax the manager gate.

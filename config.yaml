@@ -454,6 +454,9 @@ strategy:
     take_profit_rung_multiple: 2.0
     max_take_profit_atr_multiple: 8.0
     min_position_weight: 0.02
+    # Hard cap for total exposure to one symbol after a BUY. The Trading
+    # Manager uses persisted position value plus BUYs already approved in the
+    # same scheduler cycle; missing or invalid exposure data blocks the BUY.
     max_position_weight: 0.04
     session_flatten_enabled: false
     flatten_minutes_before_tradable_close: 15

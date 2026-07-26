@@ -2272,6 +2272,10 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         .cloned()
         .unwrap_or(JsonValue::Null);
     let cost_guard = row.get("cost_guard").cloned().unwrap_or(JsonValue::Null);
+    let position_weight = row
+        .get("final_position_weight")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     let markov = row.get("markov").cloned().unwrap_or(JsonValue::Null);
     let hermes = row.get("hermes").cloned().unwrap_or(JsonValue::Null);
     let outcome = text(&row, "outcome");
@@ -2341,6 +2345,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         &final_technical,
         final_technical_recorded,
         &cost_guard,
+        &position_weight,
         &prefs,
     );
     let requested_quantity = value_f64(&hermes, "requested_quantity");
@@ -2428,6 +2433,7 @@ fn candidate_gate_detail(
     final_technical: &JsonValue,
     final_technical_recorded: bool,
     cost_guard: &JsonValue,
+    position_weight: &JsonValue,
     prefs: &LocalizationPrefs,
 ) -> String {
     let gate_code = text(row, "gate_code");
@@ -2451,6 +2457,29 @@ fn candidate_gate_detail(
             value_f64(cost_guard, "cost_guard_multiple"),
             value_f64(cost_guard, "estimated_slippage_bps"),
         );
+    }
+    if position_weight
+        .get("verified_from_state")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        return format!(
+            "Position exposure {} plus BUY {} = {} against a {} ceiling ({:.1}% of portfolio).",
+            format_dkk(
+                value_f64(position_weight, "current_position_value_dkk"),
+                prefs
+            ),
+            format_dkk(value_f64(position_weight, "approved_value_dkk"), prefs),
+            format_dkk(
+                value_f64(position_weight, "resulting_position_value_dkk"),
+                prefs
+            ),
+            format_dkk(value_f64(position_weight, "max_position_value_dkk"), prefs),
+            value_f64(position_weight, "max_position_weight") * 100.0,
+        );
+    }
+    if gate_code == "position_weight" {
+        return "The configured per-symbol allocation ceiling left less than one share of headroom, or position-value evidence was unavailable.".to_string();
     }
     if gate_code != "technical" {
         return String::new();
@@ -7658,6 +7687,7 @@ mod tests {
                 &final_technical,
                 true,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &default_prefs()
             ),
             "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
@@ -7672,6 +7702,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &default_prefs()
             ),
@@ -7694,8 +7725,41 @@ mod tests {
         });
 
         assert_eq!(
-            candidate_gate_detail(&row, &JsonValue::Null, false, &cost_guard, &prefs),
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &cost_guard,
+                &JsonValue::Null,
+                &prefs,
+            ),
             "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
+        );
+    }
+
+    #[test]
+    fn waterfall_position_weight_explains_total_symbol_exposure() {
+        let prefs = default_prefs();
+        let row = json!({"action": "BUY", "gate_code": "approved"});
+        let position_weight = json!({
+            "verified_from_state": true,
+            "max_position_weight": 0.04,
+            "current_position_value_dkk": 2000.0,
+            "approved_value_dkk": 2000.0,
+            "resulting_position_value_dkk": 4000.0,
+            "max_position_value_dkk": 4000.0,
+        });
+
+        assert_eq!(
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &position_weight,
+                &prefs,
+            ),
+            "Position exposure 2,000 DKK plus BUY 2,000 DKK = 4,000 DKK against a 4,000 DKK ceiling (4.0% of portfolio)."
         );
     }
 
@@ -7707,6 +7771,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &default_prefs()
             ),
