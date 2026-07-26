@@ -1336,6 +1336,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The dashboard labels the value as an estimate and shows the provisional tax. Invalid brackets, a non-DKK setting, or an unavailable ledger leave the gross value unchanged and surface an unavailable status.
 - The estimate is read-only: it does not rewrite ledger tax, affect performance accounting, change sizing, or make a Saxo request.
 
+## 2026-07-26 - Observed position-lifecycle attribution
+
+- Added read-only cross-order lifecycle evidence to Execution attribution from local reconciled fills ordered by timestamp and fill id. It labels a current order as `entry`, `add`, `reduce`, or `exit` only when that local sequence supports the claim.
+- A sequence beginning with a SELL or crossing below zero is explicitly `partial_history`; the UI states that local fill history excludes imported inventory, later broker adjustments, and broker position truth.
+- Added pure and database-backed regression coverage plus Execution detail rendering coverage. This path makes no Saxo, provider, or broker mutation call.
+
 ## 2026-07-26 - BUY cost guard becomes real
 
 - Wired `strategy.estimated_slippage_bps` and `strategy.cost_guard_multiple` into the Rust Trading Manager after price verification, technical evaluation, and ATR risk sizing. A BUY now needs database-verified indicator reward to exceed a deterministic lower-bound hurdle: the exchange minimum round-trip commission multiplied by the configured guard plus configured one-way slippage.

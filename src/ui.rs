@@ -4609,6 +4609,7 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
     let capital = attribution.get("capital_budget").unwrap_or(&null);
     let ledger_outcome = attribution.get("ledger_outcome").unwrap_or(&null);
     let holding_period = attribution.get("holding_period_outcome").unwrap_or(&null);
+    let position_lifecycle = attribution.get("position_lifecycle").unwrap_or(&null);
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -4802,6 +4803,27 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
             holding_period,
             "interpretation",
             "Read-only post-fill comparison; not realised P/L.",
+        ));
+    }
+    if !position_lifecycle.is_null() {
+        let history_note = match text(position_lifecycle, "history_status").as_str() {
+            "partial_history" => " · partial local history",
+            "observed_local_fills" => " · observed local fills",
+            _ => "",
+        };
+        lines.push(format!(
+            "Position lifecycle (observed fills): {} · net {} -> {} · {} fills across {} orders{}",
+            fallback_text(position_lifecycle, "phase", "n/a").replace('_', " "),
+            format_quantity(value_f64(position_lifecycle, "observed_net_before"), prefs),
+            format_quantity(value_f64(position_lifecycle, "observed_net_after"), prefs),
+            text_or(position_lifecycle, "current_order_fill_count", "0"),
+            text_or(position_lifecycle, "observed_order_count", "0"),
+            history_note,
+        ));
+        lines.push(text_or(
+            position_lifecycle,
+            "interpretation",
+            "Read-only local fill sequence; not broker position truth.",
         ));
     }
     lines.join("\n")
@@ -8157,6 +8179,14 @@ mod tests {
                     "realised_gain_dkk": 1_234.5,
                     "commission_dkk": 21.0,
                     "tax_dkk": 0.0
+                },
+                "position_lifecycle": {
+                    "phase": "reduce",
+                    "history_status": "observed_local_fills",
+                    "observed_net_before": 4.0,
+                    "observed_net_after": 2.0,
+                    "current_order_fill_count": 1,
+                    "observed_order_count": 3
                 }
             }
         });
@@ -8169,6 +8199,9 @@ mod tests {
         assert!(detail.contains("reinvestment pressure active"));
         assert!(detail.contains("Realised outcome (reconciled fills)"));
         assert!(detail.contains("fully filled"));
+        assert!(detail.contains("Position lifecycle (observed fills): reduce"));
+        assert!(detail.contains("net 4 -> 2"));
+        assert!(detail.contains("observed local fills"));
         assert!(!detail.contains("RR 0"));
     }
 

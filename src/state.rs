@@ -2369,6 +2369,101 @@ fn compact_holding_period_outcome(
     })
 }
 
+/// Reconstruct the local, reconciled-fill sequence around one order without
+/// treating it as broker position truth. Historical fills can be incomplete
+/// (for example after a portfolio import), so a SELL without an observed BUY
+/// is explicitly reported as partial rather than inferred as a reduction.
+fn compact_execution_position_lifecycle(
+    order: &JsonValue,
+    observed_fills: &[JsonValue],
+) -> JsonValue {
+    let order_id = value_i64(order, "id");
+    let side = json_text(order, "action").to_uppercase();
+    if order_id <= 0 || !matches!(side.as_str(), "BUY" | "SELL") {
+        return JsonValue::Null;
+    }
+
+    let mut observed_net: f64 = 0.0;
+    let mut minimum_observed_net: f64 = 0.0;
+    let mut net_before_current = None;
+    let mut net_after_current = None;
+    let mut current_fill_count = 0_i64;
+    let mut observed_order_ids = HashSet::new();
+    let mut first_fill_at = String::new();
+    let mut latest_fill_at = String::new();
+    let mut first_side = String::new();
+
+    for fill in observed_fills {
+        let fill_side = json_text(fill, "side").to_uppercase();
+        let quantity = value_f64(fill, "delta_quantity");
+        if quantity <= 0.0 || !matches!(fill_side.as_str(), "BUY" | "SELL") {
+            continue;
+        }
+        let fill_order_id = value_i64(fill, "execution_order_id");
+        if fill_order_id > 0 {
+            observed_order_ids.insert(fill_order_id);
+        }
+        let created_at = json_text(fill, "created_at");
+        if first_fill_at.is_empty() {
+            first_fill_at = created_at.clone();
+            first_side = fill_side.clone();
+        }
+        latest_fill_at = created_at;
+
+        if fill_order_id == order_id {
+            net_before_current.get_or_insert(observed_net);
+        }
+        let signed_quantity = if fill_side == "BUY" {
+            quantity
+        } else {
+            -quantity
+        };
+        observed_net += signed_quantity;
+        minimum_observed_net = minimum_observed_net.min(observed_net);
+        if fill_order_id == order_id {
+            current_fill_count += 1;
+            net_after_current = Some(observed_net);
+        }
+    }
+
+    let (Some(net_before), Some(net_after)) = (net_before_current, net_after_current) else {
+        return JsonValue::Null;
+    };
+    let history_status = if first_side == "SELL" || minimum_observed_net < -1e-9 {
+        "partial_history"
+    } else {
+        "observed_local_fills"
+    };
+    let phase = if history_status == "partial_history" {
+        "partial_history"
+    } else if side == "BUY" && net_before <= 1e-9 {
+        "entry"
+    } else if side == "BUY" {
+        "add"
+    } else if net_before <= 1e-9 || net_after < -1e-9 {
+        "partial_history"
+    } else if net_after <= 1e-9 {
+        "exit"
+    } else {
+        "reduce"
+    };
+
+    json!({
+        "evidence_source": "reconciled_execution_fills",
+        "history_status": history_status,
+        "phase": phase,
+        "side": side,
+        "observed_net_before": net_before,
+        "observed_net_after": net_after,
+        "current_order_fill_count": current_fill_count,
+        "observed_fill_count": observed_fills.len(),
+        "observed_order_count": observed_order_ids.len(),
+        "first_observed_fill_at": first_fill_at,
+        "latest_observed_fill_at": latest_fill_at,
+        "interpretation": "Read-only local reconciled-fill sequence. It excludes outside-ledger inventory and later broker adjustments; it is not broker position truth."
+    })
+}
+
 fn attribution_delta_label(
     hermes_order: &JsonValue,
     manager_order: &JsonValue,
@@ -5354,6 +5449,16 @@ impl AppState {
                 JsonValue::Null
             }
         };
+        let position_lifecycle = match self.execution_order_position_lifecycle(order).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    order_id = value_i64(order, "id"),
+                    "execution position-lifecycle attribution degraded: {err:#}"
+                );
+                JsonValue::Null
+            }
+        };
         let delta = attribution_delta_label(&hermes_order, &manager_order, order);
 
         Ok(json!({
@@ -5384,6 +5489,7 @@ impl AppState {
             "capital_budget": capital,
             "ledger_outcome": ledger_outcome,
             "holding_period_outcome": holding_period_outcome,
+            "position_lifecycle": position_lifecycle,
         }))
     }
 
@@ -5488,6 +5594,24 @@ impl AppState {
             &fill_summary,
             &subsequent_closes,
         ))
+    }
+
+    async fn execution_order_position_lifecycle(&self, order: &JsonValue) -> Result<JsonValue> {
+        let order_id = value_i64(order, "id");
+        let symbol = json_text(order, "symbol");
+        if order_id <= 0 || symbol.is_empty() {
+            return Ok(JsonValue::Null);
+        }
+        let fills = self
+            .select_json(&format!(
+                "SELECT id, execution_order_id, created_at, side, delta_quantity
+                 FROM execution_fills
+                 WHERE symbol = '{}' AND delta_quantity > 0
+                 ORDER BY created_at ASC, id ASC",
+                sql_escape(&symbol)
+            ))
+            .await?;
+        Ok(compact_execution_position_lifecycle(order, &fills))
     }
 
     async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
@@ -12863,6 +12987,51 @@ market_data:
         assert!(outcome["five_session"].is_null());
     }
 
+    #[test]
+    fn position_lifecycle_attribution_tracks_observed_add_reduce_and_exit() {
+        let fills = vec![
+            json!({"id": 1, "execution_order_id": 10, "created_at": "2026-07-20T15:00:00Z", "side": "BUY", "delta_quantity": 2.0}),
+            json!({"id": 2, "execution_order_id": 11, "created_at": "2026-07-21T15:00:00Z", "side": "BUY", "delta_quantity": 3.0}),
+            json!({"id": 3, "execution_order_id": 12, "created_at": "2026-07-22T15:00:00Z", "side": "SELL", "delta_quantity": 1.0}),
+            json!({"id": 4, "execution_order_id": 13, "created_at": "2026-07-23T15:00:00Z", "side": "SELL", "delta_quantity": 4.0}),
+        ];
+
+        let add = compact_execution_position_lifecycle(&json!({"id": 11, "action": "BUY"}), &fills);
+        assert_eq!(json_text(&add, "phase"), "add");
+        assert_eq!(json_text(&add, "history_status"), "observed_local_fills");
+        assert_eq!(value_f64(&add, "observed_net_before"), 2.0);
+        assert_eq!(value_f64(&add, "observed_net_after"), 5.0);
+
+        let reduce =
+            compact_execution_position_lifecycle(&json!({"id": 12, "action": "SELL"}), &fills);
+        assert_eq!(json_text(&reduce, "phase"), "reduce");
+        assert_eq!(value_f64(&reduce, "observed_net_before"), 5.0);
+        assert_eq!(value_f64(&reduce, "observed_net_after"), 4.0);
+
+        let exit =
+            compact_execution_position_lifecycle(&json!({"id": 13, "action": "SELL"}), &fills);
+        assert_eq!(json_text(&exit, "phase"), "exit");
+        assert_eq!(value_f64(&exit, "observed_net_after"), 0.0);
+    }
+
+    #[test]
+    fn position_lifecycle_attribution_refuses_to_infer_unobserved_inventory() {
+        let outcome = compact_execution_position_lifecycle(
+            &json!({"id": 14, "action": "SELL"}),
+            &[json!({
+                "id": 1,
+                "execution_order_id": 14,
+                "created_at": "2026-07-20T15:00:00Z",
+                "side": "SELL",
+                "delta_quantity": 2.0
+            })],
+        );
+
+        assert_eq!(json_text(&outcome, "phase"), "partial_history");
+        assert_eq!(json_text(&outcome, "history_status"), "partial_history");
+        assert!(json_text(&outcome, "interpretation").contains("not broker position truth"));
+    }
+
     #[tokio::test]
     async fn holding_period_attribution_reads_reconciled_fills_and_daily_closes() {
         let state = runtime_settings_test_state("{}").await;
@@ -12925,6 +13094,50 @@ market_data:
         assert!((value_f64(&outcome, "fill_price_local") - 107.5).abs() < 1e-9);
         assert_eq!(json_text(&outcome["one_session"], "as_of"), "2026-07-21");
         assert_eq!(json_text(&outcome["five_session"], "as_of"), "2026-07-27");
+    }
+
+    #[tokio::test]
+    async fn position_lifecycle_attribution_reads_symbol_scoped_reconciled_fills() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE execution_fills (
+                id INTEGER PRIMARY KEY,
+                execution_order_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                side TEXT NOT NULL,
+                delta_quantity REAL NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution-fill lifecycle table");
+        sqlx::query(
+            "INSERT INTO execution_fills
+                (id, execution_order_id, symbol, created_at, side, delta_quantity)
+             VALUES
+                (1, 41, 'AMD:xnas', '2026-07-20T15:00:00Z', 'BUY', 2),
+                (2, 42, 'AMD:xnas', '2026-07-21T15:00:00Z', 'SELL', 1),
+                (3, 99, 'NVDA:xnas', '2026-07-21T15:00:00Z', 'BUY', 9)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed execution-fill lifecycle rows");
+
+        let outcome = state
+            .execution_order_position_lifecycle(&json!({
+                "id": 42,
+                "symbol": "AMD:xnas",
+                "action": "SELL"
+            }))
+            .await
+            .expect("read position lifecycle attribution");
+
+        assert_eq!(json_text(&outcome, "phase"), "reduce");
+        assert_eq!(value_i64(&outcome, "observed_fill_count"), 2);
+        assert_eq!(value_i64(&outcome, "observed_order_count"), 2);
+        assert_eq!(value_f64(&outcome, "observed_net_before"), 2.0);
+        assert_eq!(value_f64(&outcome, "observed_net_after"), 1.0);
     }
 
     #[tokio::test]
