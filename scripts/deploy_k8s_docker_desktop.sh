@@ -6,9 +6,6 @@ CONTEXT="${KUBE_CONTEXT:-docker-desktop}"
 NAMESPACE="saxo"
 DB_NAMESPACE="${DB_NAMESPACE:-saxo}"
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
-IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d%H%M%S)}"
-API_IMAGE="${API_IMAGE:-daytrader-api:$IMAGE_TAG}"
-BACKUP_IMAGE="${BACKUP_IMAGE:-daytrader-backup:$IMAGE_TAG}"
 SANITIZED_ENV_FILE=""
 HERMES_ENV_FILE=""
 
@@ -37,6 +34,11 @@ if [[ ! "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   printf "GIT_SHA must be a full 40-character commit SHA, got: %s\n" "$GIT_SHA" >&2
   exit 1
 fi
+# A clean worktree gives every default image an immutable, source-identical tag.
+# IMAGE_TAG remains an explicit escape hatch for a deliberate operator image.
+IMAGE_TAG="${IMAGE_TAG:-$GIT_SHA}"
+API_IMAGE="${API_IMAGE:-daytrader-api:$IMAGE_TAG}"
+BACKUP_IMAGE="${BACKUP_IMAGE:-daytrader-backup:$IMAGE_TAG}"
 if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
   printf "Refusing to deploy a dirty worktree; commit or stash changes first.\n" >&2
   printf "Deployment provenance must identify the exact source in the image.\n" >&2

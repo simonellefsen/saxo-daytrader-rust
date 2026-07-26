@@ -1365,3 +1365,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Removed `strategy.min_selected_assets` from both shipped configs and the Rust config contract. The active Rust Trading Manager never read it, so leaving it configured suggested a minimum portfolio breadth that did not exist.
 - Removed the same fallback from the legacy selector. It now preserves its sector-screened candidate list instead of re-expanding it to reach a minimum. The actual `strategy.max_selected_assets` cap remains unchanged.
+
+## [2026-07-26] operations | Content-addressed deployment images
+
+- Default API and backup image tags now equal the validated full Git SHA of the clean worktree. The deploy metadata, Kubernetes image references, and binary build revision identify the same source without relying on a timestamp.
+- `IMAGE_TAG`, `API_IMAGE`, and `BACKUP_IMAGE` remain deliberate operator overrides. CI syntax-checks the deploy and post-deploy scripts alongside Rust formatting, checks, and tests.
