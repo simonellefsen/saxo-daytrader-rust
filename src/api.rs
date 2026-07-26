@@ -18,8 +18,8 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, DrawdownGuardOverrideRequest,
+        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
         PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
@@ -77,6 +77,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/settings/monthly-loss-breaker",
             post(update_monthly_loss_breaker_override),
+        )
+        .route(
+            "/api/settings/drawdown-guardrail",
+            post(update_drawdown_guard_override),
         )
         .route(
             "/api/settings/instrument-quarantine",
@@ -345,6 +349,52 @@ async fn update_monthly_loss_breaker_override(
         }
         Err(err) => {
             warn!("monthly-loss breaker override update failed: {err:#}");
+            json_result(Err(err))
+        }
+    }
+}
+
+/// Grant or clear the drawdown guardrail override.
+///
+/// Granting requires the peak the exemption is granted against -- normally the
+/// `peak_value_dkk` the Trading Manager report shows -- because that anchor is
+/// what lets the grant expire on its own once the book makes a new high. The
+/// operator reads it from the drawdown_guardrail block of the latest run.
+async fn update_drawdown_guard_override(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<DrawdownGuardOverrideRequest>,
+) -> Response {
+    let action = request.action.trim();
+    let enable = match action {
+        "resume_buys" => true,
+        "clear_override" => false,
+        _ => {
+            return json_result(Err(anyhow::anyhow!(
+                "Unsupported drawdown guardrail action: {action}"
+            )));
+        }
+    };
+    match state
+        .save_drawdown_guard_override(
+            enable,
+            request.peak_value_dkk,
+            request.notes.unwrap_or_default().trim(),
+        )
+        .await
+    {
+        Ok(value) => {
+            info!(
+                enabled = enable,
+                peak_value_dkk = value
+                    .get("peak_value_dkk")
+                    .and_then(JsonValue::as_f64)
+                    .unwrap_or(0.0),
+                "drawdown guardrail override updated"
+            );
+            redirect_to_app(&state, safe_return_to(request.return_to.as_deref())).into_response()
+        }
+        Err(err) => {
+            warn!("drawdown guardrail override update failed: {err:#}");
             json_result(Err(err))
         }
     }

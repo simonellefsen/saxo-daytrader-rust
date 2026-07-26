@@ -610,6 +610,20 @@ struct CashDeploymentSummary {
     breaker_override_month_key: String,
     breaker_override_updated_at: String,
     breaker_override_notes: String,
+    drawdown_status: String,
+    drawdown_active: bool,
+    drawdown_soft_reduction_active: bool,
+    drawdown_override_active: bool,
+    drawdown_pct: f64,
+    drawdown_halt_pct: f64,
+    drawdown_soft_reduce_pct: f64,
+    drawdown_soft_buy_multiplier: f64,
+    drawdown_peak_value_dkk: f64,
+    drawdown_current_value_dkk: f64,
+    drawdown_peak_at: String,
+    drawdown_lookback_days: i64,
+    drawdown_override_updated_at: String,
+    drawdown_override_notes: String,
     description: String,
 }
 
@@ -679,6 +693,57 @@ fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> 
                             }
                         }
                     }
+                    // Shown when the guardrail is restricting, has been
+                    // overridden, or cannot see. A blind guardrail matters as
+                    // much as an active one: without this row it is
+                    // indistinguishable from a satisfied one.
+                    if summary.drawdown_active
+                        || summary.drawdown_soft_reduction_active
+                        || summary.drawdown_override_active
+                        || summary.drawdown_status == "insufficient_history"
+                    {
+                        div { class: "event cash-diagnostic-reason",
+                            strong { "Portfolio drawdown guardrail" }
+                            span {
+                                if summary.drawdown_active {
+                                    "BUYs are suspended because the book is {format_pct(summary.drawdown_pct, &prefs)} below its {summary.drawdown_lookback_days}-day peak, at or beyond the {format_pct(summary.drawdown_halt_pct, &prefs)} floor. SELLs are unchanged."
+                                } else if summary.drawdown_soft_reduction_active {
+                                    "BUY budget is reduced to {format_pct(summary.drawdown_soft_buy_multiplier, &prefs)} because the book is {format_pct(summary.drawdown_pct, &prefs)} below its {summary.drawdown_lookback_days}-day peak, past the {format_pct(summary.drawdown_soft_reduce_pct, &prefs)} soft floor. SELLs are unchanged."
+                                } else if summary.drawdown_override_active {
+                                    "The book is {format_pct(summary.drawdown_pct, &prefs)} below its peak, but an operator override is suppressing the restriction. It lapses by itself once the portfolio makes a new high."
+                                } else {
+                                    "Too little portfolio history to measure a peak, so the guardrail is not restricting this run. It is not confirming the book is safe."
+                                }
+                            }
+                            if summary.drawdown_peak_value_dkk > 0.0 {
+                                span { class: "muted", "Peak {format_dkk(summary.drawdown_peak_value_dkk, &prefs)} at {summary.drawdown_peak_at} · now {format_dkk(summary.drawdown_current_value_dkk, &prefs)}" }
+                            }
+                            if !summary.drawdown_override_updated_at.is_empty() {
+                                span { class: "muted", "Override updated {summary.drawdown_override_updated_at}" }
+                            }
+                            if !summary.drawdown_override_notes.is_empty() {
+                                span { class: "muted", "Notes: {summary.drawdown_override_notes}" }
+                            }
+                            if summary.drawdown_peak_value_dkk > 0.0 {
+                                form { method: "post", action: "/api/settings/drawdown-guardrail", class: "inline-form",
+                                    input { r#type: "hidden", name: "return_to", value: "/" }
+                                    // The peak on screen is the peak recorded
+                                    // with the grant, so the exemption is
+                                    // anchored to what the operator judged.
+                                    input { r#type: "hidden", name: "peak_value_dkk", value: "{summary.drawdown_peak_value_dkk}" }
+                                    if summary.drawdown_override_active {
+                                        input { r#type: "hidden", name: "action", value: "clear_override" }
+                                        input { r#type: "text", name: "notes", placeholder: "Reason for clearing override" }
+                                        button { class: "button secondary", r#type: "submit", "Clear Override" }
+                                    } else {
+                                        input { r#type: "hidden", name: "action", value: "resume_buys" }
+                                        input { r#type: "text", name: "notes", placeholder: "Reason for resuming BUYs at this peak" }
+                                        button { class: "button", r#type: "submit", "Resume BUYs At This Peak" }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -707,6 +772,11 @@ fn cash_deployment_summary(
         .cloned()
         .unwrap_or(JsonValue::Null);
     let breaker_override = breaker.get("override").cloned().unwrap_or(JsonValue::Null);
+    let drawdown = manager
+        .get("drawdown_guardrail")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let drawdown_override = drawdown.get("override").cloned().unwrap_or(JsonValue::Null);
     let status = fallback_text(
         &diagnostics,
         "status",
@@ -755,6 +825,32 @@ fn cash_deployment_summary(
             prefs,
         ),
         breaker_override_notes: text(&breaker_override, "notes"),
+        drawdown_status: text(&drawdown, "status"),
+        drawdown_active: drawdown
+            .get("active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        drawdown_soft_reduction_active: drawdown
+            .get("soft_reduction_active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        drawdown_override_active: drawdown
+            .get("override_active")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        drawdown_pct: value_f64(&drawdown, "drawdown_pct"),
+        drawdown_halt_pct: value_f64(&drawdown, "halt_pct"),
+        drawdown_soft_reduce_pct: value_f64(&drawdown, "soft_reduce_pct"),
+        drawdown_soft_buy_multiplier: value_f64(&drawdown, "soft_buy_multiplier"),
+        drawdown_peak_value_dkk: value_f64(&drawdown, "peak_value_dkk"),
+        drawdown_current_value_dkk: value_f64(&drawdown, "current_value_dkk"),
+        drawdown_peak_at: format_timestamp(&text(&drawdown, "peak_at"), prefs),
+        drawdown_lookback_days: value_i64(&drawdown, "lookback_days"),
+        drawdown_override_updated_at: format_timestamp(
+            &text(&drawdown_override, "updated_at"),
+            prefs,
+        ),
+        drawdown_override_notes: text(&drawdown_override, "notes"),
         description: fallback_text(
             &diagnostics,
             "description",
@@ -8329,6 +8425,58 @@ mod tests {
         assert_eq!(summary.breaker_override_month_key, "2026-07");
         assert_eq!(summary.breaker_month_pnl_dkk, -12000.0);
         assert_eq!(summary.breaker_threshold_dkk, -10000.0);
+    }
+
+    #[test]
+    fn summarizes_drawdown_guardrail_from_manager_run() {
+        let latest_run = json!({
+            "created_at": "2026-07-26T08:00:00Z",
+            "status": "completed_no_orders",
+            "manager_json": {
+                "drawdown_guardrail": {
+                    "status": "halt",
+                    "active": true,
+                    "soft_reduction_active": false,
+                    "drawdown_pct": 0.223,
+                    "halt_pct": 0.20,
+                    "soft_reduce_pct": 0.10,
+                    "soft_buy_multiplier": 0.50,
+                    "peak_value_dkk": 318400.0,
+                    "current_value_dkk": 247400.0,
+                    "peak_at": "2026-06-14T21:00:00Z",
+                    "lookback_days": 90,
+                    "override_active": false,
+                    "override": {"enabled": false}
+                }
+            }
+        });
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert_eq!(summary.drawdown_status, "halt");
+        assert!(summary.drawdown_active);
+        assert!(!summary.drawdown_soft_reduction_active);
+        assert_eq!(summary.drawdown_pct, 0.223);
+        assert_eq!(summary.drawdown_halt_pct, 0.20);
+        assert_eq!(summary.drawdown_peak_value_dkk, 318400.0);
+        assert_eq!(summary.drawdown_lookback_days, 90);
+    }
+
+    #[test]
+    fn a_run_predating_the_drawdown_guardrail_reads_as_inactive_not_halted() {
+        // Every manager run recorded before the guardrail shipped has no
+        // drawdown_guardrail block. Defaulting any of these to true would show
+        // a suspension on the dashboard that is not actually in force.
+        let latest_run = json!({
+            "created_at": "2026-07-20T08:00:00Z",
+            "status": "completed_no_orders",
+            "manager_json": {}
+        });
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert!(!summary.drawdown_active);
+        assert!(!summary.drawdown_soft_reduction_active);
+        assert!(!summary.drawdown_override_active);
+        assert_eq!(summary.drawdown_status, "");
     }
 
     #[test]

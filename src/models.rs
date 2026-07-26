@@ -159,6 +159,17 @@ pub struct MonthlyLossBreakerOverrideRequest {
     pub return_to: Option<String>,
 }
 
+/// `peak_value_dkk` is required to enable the override: it anchors the grant to
+/// the peak the operator judged, so the exemption expires by itself once the
+/// book prints a higher one.
+#[derive(Debug, Deserialize)]
+pub struct DrawdownGuardOverrideRequest {
+    pub action: String,
+    pub peak_value_dkk: Option<f64>,
+    pub notes: Option<String>,
+    pub return_to: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct InstrumentQuarantineOverrideRequest {
     pub operation: String,

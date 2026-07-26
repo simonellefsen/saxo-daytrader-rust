@@ -337,6 +337,17 @@ strategy:
     # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
     # hard floor; SELLs are never blocked. Set >= 0 to disable both loss tiers.
     monthly_loss_halt_dkk: -18000
+    # Portfolio drawdown guardrail. Unlike the monthly floors above, this does
+    # not reset on the 1st: it measures the current total portfolio value
+    # against its highest value in the trailing window, so a decline that
+    # straddles a month boundary stays visible. drawdown_halt_pct is the same
+    # number the Hermes goal contract publishes as max_drawdown; the contract
+    # reads this key, so the two cannot drift apart. Set <= 0 to disable both
+    # tiers. Too little history disables the guardrail rather than tripping it.
+    drawdown_lookback_days: 90
+    drawdown_soft_reduce_pct: 0.10
+    drawdown_soft_buy_multiplier: 0.50
+    drawdown_halt_pct: 0.20
   markov:
     enabled: true
     timezone: Europe/Copenhagen
@@ -609,6 +620,7 @@ notifications:
     execution_failure_burst_threshold: 3
     execution_failure_burst_window_hours: 24
     monthly_loss_circuit_breaker_alert_enabled: true
+    drawdown_guardrail_alert_enabled: true
     instrument_quarantine_alert_enabled: true
     scheduler_stale_enabled: true
     scheduler_stale_minutes: 30

@@ -947,6 +947,8 @@ fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
         "order_shape"
     } else if normalized.starts_with("monthly-loss circuit breaker") {
         "monthly_loss_breaker"
+    } else if normalized.starts_with("portfolio drawdown guardrail") {
+        "drawdown_guardrail"
     } else if normalized.starts_with("buy would exceed available cash budget") {
         "cash_budget"
     } else if normalized.contains("commission-efficiency floor") {
@@ -977,6 +979,7 @@ fn candidate_gate_code(value: &JsonValue) -> String {
             | "quantity"
             | "order_shape"
             | "monthly_loss_breaker"
+            | "drawdown_guardrail"
             | "cash_budget"
             | "commission_floor"
             | "minimum_trade_value"
@@ -5679,61 +5682,151 @@ impl AppState {
     }
 
     pub fn hermes_goal_contract_value(&self) -> JsonValue {
-        json!({
-            "enabled": true,
-            "mode": "recommend_only",
-            // Goal version 2 (2026-07-25) replaces the previous 47%/30d
-            // "10x in 6 months" objective, which was roughly 70x the operator's
-            // actual target and pushed Hermes to evaluate every experiment
-            // against a return it could only reach by taking far more risk than
-            // the loss floors allow.
-            "goal_version": 2,
-            "objective": {
-                "target_return_30d": 0.0117,
-                "target_return_note": "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15",
-                "max_drawdown": 0.20,
-                "min_sharpe": 1.0,
-                "failure_below_30d_return": -0.02,
-                "reflection_every": "7d",
-                "one_variable_only": true
-            },
-            "constraints": {
-                "max_positions": yaml_i64(&self.config, &["strategy", "swing", "max_holdings"]).unwrap_or(25),
-                "slippage_tolerance": 0.02,
-                "gas_reserve": 0.05,
-                "min_cash_buffer_pct": yaml_f64(&self.config, &["strategy", "capital", "min_cash_buffer_pct"]).unwrap_or(0.10),
-                "allow_shorting": yaml_bool(&self.config, &["risk", "allow_shorting"]).unwrap_or(false),
-                "require_human_approval": true,
-                "require_backtest_before_activation": true,
-                "require_paper_or_sim_observation": true
-            },
-            "experiment_policy": {
-                "proposal_cadence": {
-                    "daily": "May create at most one pending-review proposal when a same-day learning is specific, evidence-backed, and safe to test in paper/SIM.",
-                    "weekly": "Should create one pending-review proposal when the week contains enough evidence and no duplicate active proposal already covers the same variable."
-                },
-                "proposal_requirement": "Hermes should turn concrete learnings into reviewable one-variable proposals instead of stopping at narrative reflection.",
-                "min_observation_days": 7,
-                "min_closed_trades": 5,
-                "daily_exception": {
-                    "allowed": true,
-                    "reason": "A daily proposal is allowed for operational learnings such as repeated execution failures, stale signals, missed scheduled reports, or clear risk-budget/cash-buffer friction.",
-                    "still_requires_review": true
-                },
-                "promote_only_if": {
-                    "return_30d_gte": 0.0117,
-                    "drawdown_lte": 0.20,
-                    "sharpe_gte": 1.0
-                },
-                "rollback_if": {
-                    "return_30d_lte": -0.02,
-                    "drawdown_gt": 0.20,
-                    "safety_violation": true
-                }
-            }
-        })
+        hermes_goal_contract_from_config(&self.config)
     }
+}
 
+/// Per-field honesty record for the goal contract.
+///
+/// `runtime_enforced` -- a gate can change or block an order because of it.
+/// `evaluation_only`  -- Hermes should weigh it; no gate reads it.
+/// `structural`       -- true because the code path does not exist at all.
+/// `documentation`    -- prose explaining a neighbouring field.
+/// `not_enforced`     -- advertised, but nothing applies it. Each of these is a
+///                       named debt, not a shrug.
+///
+/// Before this record existed the contract read as a list of enforced limits,
+/// of which almost none were enforced, and Hermes was judging every experiment
+/// against an envelope no gate defended.
+fn hermes_goal_contract_enforcement() -> JsonValue {
+    json!({
+            "note": "How the runtime treats each objective and constraint. Fields marked evaluation_only or not_enforced must not be read as limits the system will defend.",
+            "objective.target_return_30d": {
+                "status": "evaluation_only",
+                "detail": "The goal Hermes measures experiments against. No gate reads it."
+            },
+            "objective.target_return_note": {
+                "status": "documentation",
+                "detail": "Explains how the 30-day figure maps to the annual goal."
+            },
+            "objective.max_drawdown": {
+                "status": "runtime_enforced",
+                "detail": "The drawdown guardrail suspends new BUYs at this depth below the trailing peak and reduces the BUY budget in the soft band beneath it. SELLs are never blocked. Value is read from strategy.capital.drawdown_halt_pct, the same key the guardrail applies."
+            },
+            "objective.min_sharpe": {
+                "status": "evaluation_only",
+                "detail": "A promotion criterion for Hermes experiments. Sharpe is computed for evidence packs; no gate reads it."
+            },
+            "objective.failure_below_30d_return": {
+                "status": "evaluation_only",
+                "detail": "A rollback criterion for Hermes experiments."
+            },
+            "objective.reflection_every": {
+                "status": "evaluation_only",
+                "detail": "Reflection cadence expectation for Hermes."
+            },
+            "objective.one_variable_only": {
+                "status": "runtime_enforced",
+                "detail": "An overlay carries exactly one changed_variable_path, and only paths on the experiment variable allowlist are applied."
+            },
+            "constraints.max_positions": {
+                "status": "not_enforced",
+                "detail": "Published for context and shown on the dashboard. No queueing gate counts holdings against it; a cycle can open more positions than this."
+            },
+            "constraints.slippage_tolerance": {
+                "status": "not_enforced",
+                "detail": "No cost model exists, so slippage is never estimated before queueing. Tracked with strategy.estimated_slippage_bps and strategy.cost_guard_multiple in the config contract audit."
+            },
+            "constraints.min_cash_buffer_pct": {
+                "status": "runtime_enforced",
+                "detail": "Bounds the cycle-wide BUY budget in the capital plan."
+            },
+            "constraints.allow_shorting": {
+                "status": "structural",
+                "detail": "The runtime has no short path, so this is false regardless of configuration."
+            },
+            "constraints.require_human_approval": {
+                "status": "runtime_enforced",
+                "detail": "An experiment overlay is applied only from an operator-approved status; proposals cannot self-activate."
+            },
+            "constraints.require_backtest_before_activation": {
+                "status": "not_enforced",
+                "detail": "No backtest engine exists. Activation is gated on operator approval and SIM/paper observation instead."
+            },
+            "constraints.require_paper_or_sim_observation": {
+                "status": "runtime_enforced",
+                "detail": "Overlays are refused when execution mode is live against a non-SIM Saxo environment."
+            }
+    })
+}
+
+/// The Hermes goal contract, built from configuration alone so the whole
+/// payload -- including the enforcement record -- is testable without a live
+/// `AppState`.
+fn hermes_goal_contract_from_config(config: &YamlValue) -> JsonValue {
+    // Every drawdown limit the contract quotes comes from the one key the
+    // guardrail enforces, so the advertised and applied numbers cannot diverge.
+    let max_drawdown = crate::drawdown_guard::DrawdownPolicy::from_config(config).halt_pct;
+    json!({
+        "enabled": true,
+        "mode": "recommend_only",
+        // Goal version 2 (2026-07-25) replaces the previous 47%/30d
+        // "10x in 6 months" objective, which was roughly 70x the operator's
+        // actual target and pushed Hermes to evaluate every experiment against
+        // a return it could only reach by taking far more risk than the loss
+        // floors allow.
+        "goal_version": 2,
+        "objective": {
+            "target_return_30d": 0.0117,
+            "target_return_note": "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15",
+            "max_drawdown": max_drawdown,
+            "min_sharpe": 1.0,
+            "failure_below_30d_return": -0.02,
+            "reflection_every": "7d",
+            "one_variable_only": true
+        },
+        "constraints": {
+            "max_positions": yaml_i64(config, &["strategy", "swing", "max_holdings"]).unwrap_or(25),
+            "slippage_tolerance": 0.02,
+            "min_cash_buffer_pct": yaml_f64(config, &["strategy", "capital", "min_cash_buffer_pct"]).unwrap_or(0.10),
+            "allow_shorting": yaml_bool(config, &["risk", "allow_shorting"]).unwrap_or(false),
+            "require_human_approval": true,
+            "require_backtest_before_activation": true,
+            "require_paper_or_sim_observation": true
+        },
+        // Every objective and constraint above declares what the runtime
+        // actually does with it. `hermes_goal_contract_declares_enforcement_for_every_field`
+        // fails if a field is added without an entry, which is what keeps the
+        // two halves from drifting apart again.
+        "enforcement": hermes_goal_contract_enforcement(),
+        "experiment_policy": {
+            "proposal_cadence": {
+                "daily": "May create at most one pending-review proposal when a same-day learning is specific, evidence-backed, and safe to test in paper/SIM.",
+                "weekly": "Should create one pending-review proposal when the week contains enough evidence and no duplicate active proposal already covers the same variable."
+            },
+            "proposal_requirement": "Hermes should turn concrete learnings into reviewable one-variable proposals instead of stopping at narrative reflection.",
+            "min_observation_days": 7,
+            "min_closed_trades": 5,
+            "daily_exception": {
+                "allowed": true,
+                "reason": "A daily proposal is allowed for operational learnings such as repeated execution failures, stale signals, missed scheduled reports, or clear risk-budget/cash-buffer friction.",
+                "still_requires_review": true
+            },
+            "promote_only_if": {
+                "return_30d_gte": 0.0117,
+                "drawdown_lte": max_drawdown,
+                "sharpe_gte": 1.0
+            },
+            "rollback_if": {
+                "return_30d_lte": -0.02,
+                "drawdown_gt": max_drawdown,
+                "safety_violation": true
+            }
+        }
+    })
+}
+
+impl AppState {
     pub fn hermes_capabilities_value(&self) -> JsonValue {
         json!({
             "status": "ok",
@@ -7276,7 +7369,121 @@ impl AppState {
         }))
     }
 
-    async fn current_performance_row(&self) -> Result<JsonValue> {
+    /// Portfolio value snapshots for the drawdown guardrail's trailing window,
+    /// oldest first, with the live position aggregate appended.
+    ///
+    /// The live row matters: the stored snapshots are written on a schedule, so
+    /// on their own they can be hours stale, and a guardrail that reacts hours
+    /// late to a decline is not much of a guardrail. `observe_drawdown` filters
+    /// out a non-positive aggregate, so a batch that has not loaded yet is
+    /// dropped rather than read as a collapse to zero.
+    pub(crate) async fn portfolio_drawdown_history(
+        &self,
+        lookback_days: i64,
+    ) -> Result<Vec<JsonValue>> {
+        let mut rows = self.portfolio_drawdown_window(lookback_days).await?;
+        rows.push(self.current_performance_row().await?);
+        Ok(rows)
+    }
+
+    /// Snapshot rows for the drawdown window, without the live current row.
+    /// Split out so the window bounds can be tested on their own.
+    async fn portfolio_drawdown_window(&self, lookback_days: i64) -> Result<Vec<JsonValue>> {
+        let lookback_day = (Utc::now() - Duration::days(lookback_days.clamp(1, 3_650)))
+            .format("%Y-%m-%d")
+            .to_string();
+        // Never look back past a re-baselining. Dates are compared on the
+        // leading YYYY-MM-DD because `recorded_at` and `created_at` carry a
+        // mix of `Z` and `+00:00` offsets, which do not order consistently as
+        // whole strings.
+        let start_day = match self.latest_external_cash_flow_day().await? {
+            Some(flow_day) if flow_day >= lookback_day => flow_day,
+            _ => lookback_day,
+        };
+        let sql = format!(
+            "SELECT recorded_at, total_market_value_dkk FROM portfolio_value_history \
+             WHERE SUBSTR(recorded_at, 1, 10) > '{}' \
+             ORDER BY recorded_at ASC, id ASC LIMIT 20000",
+            sql_escape(&start_day)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    /// The day of the most recent deposit, withdrawal, or reconciliation
+    /// adjustment, if any.
+    ///
+    /// These rows mark the moments the portfolio value stopped being
+    /// comparable to what came before, so they bound how far back a drawdown
+    /// peak may reach. The whole day is excluded rather than the instant: an
+    /// adjustment is usually settled against snapshots taken around it, and
+    /// half a re-baselined day is not a value worth defending a peak with.
+    async fn latest_external_cash_flow_day(&self) -> Result<Option<String>> {
+        let row = self
+            .first_json(
+                "SELECT MAX(SUBSTR(created_at, 1, 10)) AS flow_day FROM trade_ledger \
+                 WHERE side IN ('DEPOSIT', 'WITHDRAWAL', 'ADJUSTMENT')",
+            )
+            .await?;
+        Ok(row
+            .as_ref()
+            .map(|row| json_text(row, "flow_day"))
+            .filter(|day| day.len() == 10))
+    }
+
+    /// The saved drawdown-guardrail override, as stored. Whether it still
+    /// applies is decided in `drawdown_guard` against the peak actually being
+    /// measured, so the expiry rule lives with the rule it modifies.
+    pub async fn drawdown_guard_override_value(&self) -> Result<JsonValue> {
+        let saved = self.runtime_setting("drawdown_guard_override").await?;
+        let mut value = json!({
+            "enabled": false,
+            "peak_value_dkk": null,
+            "notes": "",
+            "updated_at": null
+        });
+        if let Some(saved) = saved
+            && let Some(object) = value.as_object_mut()
+        {
+            for key in ["enabled", "peak_value_dkk", "notes", "updated_at"] {
+                if let Some(entry) = saved.get(key) {
+                    object.insert(key.to_string(), entry.clone());
+                }
+            }
+        }
+        Ok(value)
+    }
+
+    /// Grant or clear the drawdown override. The peak it is granted against is
+    /// recorded so the grant can expire by itself; without one the override is
+    /// refused rather than becoming permanent.
+    pub async fn save_drawdown_guard_override(
+        &self,
+        enabled: bool,
+        peak_value_dkk: Option<f64>,
+        notes: &str,
+    ) -> Result<JsonValue> {
+        if notes.len() > 500 {
+            anyhow::bail!("Drawdown guardrail override notes are too long");
+        }
+        let peak_value_dkk = match (enabled, peak_value_dkk) {
+            (true, Some(peak)) if peak.is_finite() && peak > 0.0 => Some(peak),
+            (true, _) => anyhow::bail!(
+                "Enabling the drawdown guardrail override requires the peak value it is granted against"
+            ),
+            (false, _) => None,
+        };
+        let value = json!({
+            "enabled": enabled,
+            "peak_value_dkk": peak_value_dkk,
+            "notes": notes,
+            "updated_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        });
+        self.save_runtime_setting("drawdown_guard_override", &value)
+            .await?;
+        self.drawdown_guard_override_value().await
+    }
+
+    pub(crate) async fn current_performance_row(&self) -> Result<JsonValue> {
         let latest_batch = self.latest_batch_id().await?;
         let aggregate = self.position_aggregate(latest_batch.as_deref()).await?;
         Ok(json!({
@@ -10418,6 +10625,102 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 mod tests {
     use super::*;
 
+    fn goal_contract_field_paths(contract: &JsonValue) -> Vec<String> {
+        ["objective", "constraints"]
+            .iter()
+            .flat_map(|section| {
+                contract
+                    .get(section)
+                    .and_then(JsonValue::as_object)
+                    .map(|fields| {
+                        fields
+                            .keys()
+                            .map(|key| format!("{section}.{key}"))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// The mechanism behind U3. The goal contract used to advertise a risk
+    /// envelope the runtime did not implement, and nothing made that visible.
+    /// Adding a field without declaring how the runtime treats it now fails the
+    /// build, so the contract cannot quietly start claiming things again.
+    #[test]
+    fn hermes_goal_contract_declares_enforcement_for_every_field() {
+        let contract = hermes_goal_contract_from_config(&YamlValue::Null);
+        let enforcement = contract
+            .get("enforcement")
+            .and_then(JsonValue::as_object)
+            .expect("contract carries an enforcement record");
+
+        for path in goal_contract_field_paths(&contract) {
+            let entry = enforcement
+                .get(&path)
+                .unwrap_or_else(|| panic!("{path} has no enforcement entry"));
+            let status = entry
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            assert!(
+                matches!(
+                    status,
+                    "runtime_enforced"
+                        | "evaluation_only"
+                        | "structural"
+                        | "documentation"
+                        | "not_enforced"
+                ),
+                "{path} declares unknown enforcement status {status:?}"
+            );
+            assert!(
+                !entry
+                    .get("detail")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty(),
+                "{path} declares a status with no explanation"
+            );
+        }
+
+        // The reverse direction: a stale entry for a field that no longer
+        // exists would misrepresent the contract just as badly.
+        let declared_fields = goal_contract_field_paths(&contract);
+        for key in enforcement.keys().filter(|key| key.as_str() != "note") {
+            assert!(
+                declared_fields.contains(key),
+                "enforcement declares {key}, which is not a contract field"
+            );
+        }
+    }
+
+    /// The drawdown limit Hermes is told about must be the one a gate applies,
+    /// otherwise U3 has only moved the dishonesty behind a config key.
+    #[test]
+    fn hermes_goal_contract_publishes_the_enforced_drawdown_limit() {
+        let config: YamlValue =
+            serde_yaml::from_str("strategy:\n  capital:\n    drawdown_halt_pct: 0.15\n")
+                .expect("parses");
+        let contract = hermes_goal_contract_from_config(&config);
+        let enforced = crate::drawdown_guard::DrawdownPolicy::from_config(&config).halt_pct;
+
+        assert_eq!(contract["objective"]["max_drawdown"], json!(enforced));
+        assert_eq!(
+            contract["experiment_policy"]["promote_only_if"]["drawdown_lte"],
+            json!(enforced)
+        );
+        assert_eq!(
+            contract["experiment_policy"]["rollback_if"]["drawdown_gt"],
+            json!(enforced)
+        );
+        assert_eq!(
+            contract["enforcement"]["objective.max_drawdown"]["status"],
+            "runtime_enforced"
+        );
+    }
+
     #[test]
     fn hermes_lessons_pending_review_projects_safe_recent_actions() {
         let reflections = vec![
@@ -10924,6 +11227,132 @@ market_data:
             db_url: "sqlite::memory:".to_string(),
             pool,
         }
+    }
+
+    async fn drawdown_history_test_state() -> AppState {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory drawdown test database");
+        for statement in [
+            "CREATE TABLE trade_ledger (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, side TEXT NOT NULL)",
+            "CREATE TABLE portfolio_value_history (id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, total_market_value_dkk REAL NOT NULL)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("create drawdown test table");
+        }
+        AppState {
+            config_path: std::path::PathBuf::from("drawdown-test.yaml"),
+            config: serde_yaml::Value::Null,
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
+
+    /// A drawdown peak must never reach back across a re-baselining.
+    ///
+    /// In mid-May 2026 a run of operator cash adjustments and a "Live export
+    /// reset" moved the book from roughly 351,000 to 265,000 DKK. Nothing was
+    /// lost, but a peak spanning that boundary reads as a 27% drawdown, which
+    /// under the 20% floor would have suspended all buying indefinitely.
+    #[tokio::test]
+    async fn the_drawdown_window_starts_after_the_latest_external_cash_flow() {
+        let state = drawdown_history_test_state().await;
+        for (created_at, side) in [
+            ("2026-05-13T04:11:30+00:00", "ADJUSTMENT"),
+            ("2026-05-18T18:53:24Z", "DEPOSIT"),
+            ("2026-05-19T11:01:10Z", "ADJUSTMENT"),
+            ("2026-06-04T09:00:00Z", "BUY"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO trade_ledger (created_at, side) VALUES ('{created_at}', '{side}')"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("insert ledger row");
+        }
+        for (recorded_at, total) in [
+            ("2026-05-08T21:00:00Z", 344_775.0),
+            ("2026-05-19T21:00:00Z", 351_559.0),
+            ("2026-06-04T21:00:00Z", 265_500.0),
+            ("2026-06-05T21:00:00Z", 266_232.0),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO portfolio_value_history (recorded_at, total_market_value_dkk) \
+                 VALUES ('{recorded_at}', {total})"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("insert snapshot");
+        }
+
+        let rows = state
+            .portfolio_drawdown_window(3_650)
+            .await
+            .expect("history");
+        let days = rows
+            .iter()
+            .map(|row| {
+                json_text(row, "recorded_at")
+                    .chars()
+                    .take(10)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        // The whole adjustment day is excluded, and so is everything before it.
+        assert!(
+            !days.iter().any(|day| day.as_str() <= "2026-05-19"),
+            "pre-re-baselining snapshots leaked into the window: {days:?}"
+        );
+        assert!(days.contains(&"2026-06-04".to_string()));
+        assert!(days.contains(&"2026-06-05".to_string()));
+    }
+
+    /// Without any external cash flow the window is the plain lookback, and a
+    /// flow older than the lookback must not extend it.
+    #[tokio::test]
+    async fn a_stale_cash_flow_does_not_widen_the_drawdown_window() {
+        let state = drawdown_history_test_state().await;
+        sqlx::query(
+            "INSERT INTO trade_ledger (created_at, side) VALUES ('2020-01-01T00:00:00Z', 'DEPOSIT')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert ledger row");
+        for (recorded_at, total) in [
+            ("2020-06-01T21:00:00Z", 100_000.0),
+            ("2026-07-20T21:00:00Z", 255_000.0),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO portfolio_value_history (recorded_at, total_market_value_dkk) \
+                 VALUES ('{recorded_at}', {total})"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("insert snapshot");
+        }
+
+        let rows = state.portfolio_drawdown_window(90).await.expect("history");
+        let days = rows
+            .iter()
+            .map(|row| {
+                json_text(row, "recorded_at")
+                    .chars()
+                    .take(10)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !days.contains(&"2020-06-01".to_string()),
+            "a 2020 deposit must not pull six-year-old snapshots into a 90-day window: {days:?}"
+        );
+        assert!(days.contains(&"2026-07-20".to_string()));
     }
 
     /// Adopted broker positions (`strategy_type = 'portfolio_sync'`) are

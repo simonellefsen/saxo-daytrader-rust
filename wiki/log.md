@@ -3,12 +3,27 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-25
+updated: 2026-07-26
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-26] safety | Portfolio drawdown guardrail makes max_drawdown real (U3)
+
+- `src/drawdown_guard.rs` enforces the `max_drawdown: 0.20` the Hermes goal contract has advertised since it was written. A soft band (10%) reduces the cycle-wide BUY budget; the hard floor (20%) suspends new BUYs. SELLs are never blocked, matching the monthly-loss breaker's shape so the operator has one mental model for both.
+- The contract now reads its limit from `strategy.capital.drawdown_halt_pct` — the same key the gate applies — in all three places it quotes one (`objective.max_drawdown`, `promote_only_if.drawdown_lte`, `rollback_if.drawdown_gt`). The advertised and enforced numbers can no longer drift.
+- Every objective and constraint declares an `enforcement` status. `hermes_goal_contract_declares_enforcement_for_every_field` fails the build if a field is added without one, in either direction. `max_positions`, `slippage_tolerance`, and `require_backtest_before_activation` are now explicitly `not_enforced` instead of implicitly claimed. `gas_reserve` was deleted as a crypto-template leftover that never meant anything for a Saxo equities account.
+- Two production data artifacts were found by checking what the rule would do against the live book *before* deploying, and both would have halted all buying on the first cycle:
+  - **A bad snapshot became a false peak.** Five consecutive scheduler snapshots on 2026-06-10 recorded 485,094 DKK with negative cash — a mid-settlement double-count on a book worth about 264,000 that day. As a peak it implied a 47% drawdown. Fixed by measuring peak-to-current on **daily closes** rather than intraday snapshots, which is the conventional definition anyway; the day's close was clean. Any glitch that does not survive to a close cannot set the high-water mark.
+  - **The peak reached back across a re-baselining.** Mid-May 2026 operator cash adjustments and a "Live export reset" moved the book from ~351,000 to ~265,000 DKK. Nothing was lost, but a peak spanning that boundary reads as a 27% drawdown. Fixed by starting the window after the most recent `DEPOSIT`/`WITHDRAWAL`/`ADJUSTMENT` row in `trade_ledger`. A peak from before a re-baselining describes a different portfolio.
+- With both fixed the guardrail reads **14.0%** against the live book (peak 297,463 on the post-reset series, current 255,823) — a real drawdown, inside the soft band, no halt.
+- Direction of failure is deliberately inverted from the rest of the risk code: thin or unusable history **disables** the guardrail loudly rather than tripping it. Failing closed here means halting all buying, and the inputs that go missing (an empty history after a restore, a position batch mid-load) are exactly the ones that occur when nothing has been lost.
+- Overlapping soft bands take the **strictest** multiplier, not the product. A losing month and a drawdown are usually one decline seen from two angles; multiplying them double-counts it and lands on a deployed capacity nobody chose.
+- The operator override is anchored to the peak it was granted against and lapses by itself once the book makes a new high, so a one-off exemption cannot become permanent. A grant with no recorded peak is refused rather than honoured forever.
+- Slack alerts fire only on the edges of the suspension, and a run recorded before the guardrail shipped reads as inactive rather than cleared.
+- 377 tests pass. No Saxo call and no order path is touched: this gate can only *withhold* BUYs.
 
 ## [2026-07-25] implementation | Public editorial research ingestion
 

@@ -205,6 +205,22 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "capital", "monthly_loss_halt_dkk"],
         "Hard monthly-loss floor; blocks new BUYs.",
     ),
+    enforced(
+        &["strategy", "capital", "drawdown_lookback_days"],
+        "Trailing window the drawdown guardrail measures its peak over.",
+    ),
+    enforced(
+        &["strategy", "capital", "drawdown_soft_reduce_pct"],
+        "Soft drawdown band; reduces the cycle BUY budget.",
+    ),
+    enforced(
+        &["strategy", "capital", "drawdown_soft_buy_multiplier"],
+        "Soft-tier BUY budget multiplier for the drawdown guardrail.",
+    ),
+    enforced(
+        &["strategy", "capital", "drawdown_halt_pct"],
+        "Hard drawdown floor; blocks new BUYs and is the max_drawdown the Hermes goal contract publishes.",
+    ),
     // ---- strategy.markov ----
     advisory(&["strategy", "markov", "enabled"], "Markov cycle switch."),
     advisory(&["strategy", "markov", "timezone"], "Markov run cadence."),

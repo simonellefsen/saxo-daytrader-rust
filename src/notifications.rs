@@ -193,6 +193,19 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
         &[
             "notifications",
             "alerts",
+            "drawdown_guardrail_alert_enabled",
+        ],
+    )
+    .unwrap_or(true)
+    {
+        maybe_push_unsent(state, &mut alerts, drawdown_guardrail_alert(state).await?).await?;
+    }
+
+    if yaml_bool(
+        &state.config,
+        &[
+            "notifications",
+            "alerts",
             "instrument_quarantine_alert_enabled",
         ],
     )
@@ -528,6 +541,96 @@ fn monthly_loss_circuit_breaker_alert_from_runs(runs: &[JsonValue]) -> Option<Sl
             "active": latest_active,
             "month_pnl_dkk": month_pnl_dkk,
             "threshold_dkk": threshold_dkk,
+            "latest_manager_run_id": latest_run_id,
+            "latest_manager_run_created_at": latest_created_at,
+            "previous_manager_run_id": previous_run_id,
+        }),
+    ))
+}
+
+async fn drawdown_guardrail_alert(state: &AppState) -> Result<Option<SlackAlert>> {
+    let rows = sqlx::query(
+        "SELECT id, created_at, status, manager_json
+         FROM trading_manager_runs
+         ORDER BY created_at DESC, id DESC
+         LIMIT 2",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("checking latest Trading Manager drawdown guardrail state")?;
+    let runs = rows.iter().map(row_to_json).collect::<Vec<_>>();
+    Ok(drawdown_guardrail_alert_from_runs(&runs))
+}
+
+/// Alert on the edges of the BUY suspension only.
+///
+/// A halt that nobody is told about looks exactly like a quiet market: no
+/// orders, no errors, nothing on the dashboard demanding attention. That is the
+/// specific failure this exists to prevent. Steady state stays silent so the
+/// alert keeps meaning something.
+fn drawdown_guardrail_alert_from_runs(runs: &[JsonValue]) -> Option<SlackAlert> {
+    let latest = runs.first()?;
+    let latest_guard = latest
+        .get("manager_json")
+        .and_then(|value| value.get("drawdown_guardrail"))?;
+    let latest_active = latest_guard
+        .get("active")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let previous_active = runs
+        .get(1)
+        .and_then(|run| run.get("manager_json"))
+        .and_then(|value| value.get("drawdown_guardrail"))
+        .and_then(|guard| guard.get("active"))
+        .and_then(JsonValue::as_bool);
+
+    let transition = match (latest_active, previous_active) {
+        (true, Some(true)) | (false, Some(false)) | (false, None) => return None,
+        (true, _) => "activated",
+        (false, Some(true)) => "cleared",
+    };
+
+    let latest_run_id = value_i64(latest, "id");
+    let previous_run_id = runs.get(1).map(|run| value_i64(run, "id")).unwrap_or(0);
+    let latest_created_at = fallback_text(latest, "created_at", "unknown");
+    let drawdown_pct = value_f64(latest_guard, "drawdown_pct") * 100.0;
+    let halt_pct = value_f64(latest_guard, "halt_pct") * 100.0;
+    let peak_value_dkk = value_f64(latest_guard, "peak_value_dkk");
+    let current_value_dkk = value_f64(latest_guard, "current_value_dkk");
+    let peak_at = fallback_text(latest_guard, "peak_at", "unknown");
+    let status_line = if latest_active {
+        "New BUYs are suspended while the guardrail is active; SELLs remain allowed."
+    } else {
+        "The BUY suspension is no longer active under the latest Trading Manager run."
+    };
+    let subject = if latest_active {
+        "Portfolio drawdown guardrail active"
+    } else {
+        "Portfolio drawdown guardrail cleared"
+    };
+    let severity = if latest_active { "high" } else { "medium" };
+    Some(operational_alert(
+        "drawdown_guardrail",
+        format!("ops:drawdown_guardrail:{transition}:run:{latest_run_id}:prev:{previous_run_id}"),
+        severity,
+        subject.to_string(),
+        vec![
+            format!("Portfolio drawdown guardrail {transition}."),
+            String::new(),
+            status_line.to_string(),
+            format!("Drawdown: {drawdown_pct:.2}% (floor {halt_pct:.2}%)"),
+            format!("Peak DKK: {peak_value_dkk:.2} at {peak_at}"),
+            format!("Current DKK: {current_value_dkk:.2}"),
+            format!("Latest manager run: #{latest_run_id} at {latest_created_at}"),
+            format!("Previous manager run: #{previous_run_id}"),
+        ],
+        json!({
+            "transition": transition,
+            "active": latest_active,
+            "drawdown_pct": value_f64(latest_guard, "drawdown_pct"),
+            "halt_pct": value_f64(latest_guard, "halt_pct"),
+            "peak_value_dkk": peak_value_dkk,
+            "current_value_dkk": current_value_dkk,
             "latest_manager_run_id": latest_run_id,
             "latest_manager_run_created_at": latest_created_at,
             "previous_manager_run_id": previous_run_id,
@@ -1694,6 +1797,86 @@ mod tests {
                 .contains("New BUYs are suspended while the breaker is active")
         );
         assert!(alert.scope_key.contains("activated:run:151:prev:150"));
+    }
+
+    fn drawdown_run(id: i64, created_at: &str, active: bool) -> JsonValue {
+        json!({
+            "id": id,
+            "created_at": created_at,
+            "manager_json": {
+                "drawdown_guardrail": {
+                    "status": if active { "halt" } else { "clear" },
+                    "active": active,
+                    "drawdown_pct": if active { 0.223 } else { 0.041 },
+                    "halt_pct": 0.20,
+                    "peak_value_dkk": 318_400.0,
+                    "current_value_dkk": if active { 247_400.0 } else { 305_350.0 },
+                    "peak_at": "2026-06-14T21:00:00Z"
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn builds_drawdown_guardrail_activation_alert() {
+        let runs = vec![
+            drawdown_run(212, "2026-07-26T16:55:00Z", true),
+            drawdown_run(211, "2026-07-26T15:55:00Z", false),
+        ];
+        let alert = drawdown_guardrail_alert_from_runs(&runs).expect("alert");
+        assert_eq!(alert.severity, "high");
+        assert_eq!(alert.subject, "Portfolio drawdown guardrail active");
+        assert!(
+            alert
+                .message_text
+                .contains("New BUYs are suspended while the guardrail is active")
+        );
+        assert!(alert.message_text.contains("22.30% (floor 20.00%)"));
+        assert!(alert.scope_key.contains("activated:run:212:prev:211"));
+    }
+
+    #[test]
+    fn drawdown_guardrail_alerts_only_on_the_edges_of_the_suspension() {
+        // A halt that stays on must not re-alert every cycle, or the alert
+        // stops carrying information and gets muted -- which is how a real
+        // suspension ends up unnoticed.
+        assert!(
+            drawdown_guardrail_alert_from_runs(&[
+                drawdown_run(212, "2026-07-26T16:55:00Z", true),
+                drawdown_run(211, "2026-07-26T15:55:00Z", true),
+            ])
+            .is_none()
+        );
+        assert!(
+            drawdown_guardrail_alert_from_runs(&[
+                drawdown_run(212, "2026-07-26T16:55:00Z", false),
+                drawdown_run(211, "2026-07-26T15:55:00Z", false),
+            ])
+            .is_none()
+        );
+
+        let cleared = drawdown_guardrail_alert_from_runs(&[
+            drawdown_run(212, "2026-07-26T16:55:00Z", false),
+            drawdown_run(211, "2026-07-26T15:55:00Z", true),
+        ])
+        .expect("alert");
+        assert_eq!(cleared.subject, "Portfolio drawdown guardrail cleared");
+        assert_eq!(cleared.severity, "medium");
+    }
+
+    #[test]
+    fn a_run_without_the_guardrail_block_produces_no_alert() {
+        // Runs recorded before the guardrail shipped have no block at all;
+        // reading that absence as "cleared" would fire a spurious alert on the
+        // first cycle after deploy.
+        assert!(
+            drawdown_guardrail_alert_from_runs(&[json!({
+                "id": 210,
+                "created_at": "2026-07-25T16:55:00Z",
+                "manager_json": {}
+            })])
+            .is_none()
+        );
     }
 
     #[test]

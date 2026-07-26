@@ -10,6 +10,7 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64},
+    drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
     state::AppState,
 };
 
@@ -619,6 +620,46 @@ fn monthly_loss_soft_reduction_active(
         && month_pnl_dkk > hard_threshold_dkk
 }
 
+/// Load the portfolio drawdown guardrail for this cycle.
+///
+/// A read failure disables the guardrail rather than halting the strategy: see
+/// the direction-of-failure note in `drawdown_guard`. It is logged at warn so a
+/// blind guardrail is never mistaken for a satisfied one.
+async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard {
+    let policy = DrawdownPolicy::from_config(&state.config);
+    let rows = state
+        .portfolio_drawdown_history(policy.lookback_days)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("drawdown guardrail history unavailable: {err:#}");
+            Vec::new()
+        });
+    let saved_override = state
+        .drawdown_guard_override_value()
+        .await
+        .unwrap_or_else(|err| {
+            warn!("drawdown guardrail override lookup degraded: {err:#}");
+            json!({"enabled": false})
+        });
+    evaluate_drawdown_guard(policy, &rows, saved_override)
+}
+
+/// The BUY-budget multiplier to apply when more than one soft guardrail is in
+/// its reduction band.
+///
+/// The strictest single multiplier wins rather than the product. The bands
+/// overlap in practice -- a losing month and a drawdown are usually the same
+/// event seen from two angles -- so multiplying them double-counts one decline
+/// and lands on a deployed capacity nobody chose. Taking the minimum keeps the
+/// reduced budget a number the operator can predict from configuration.
+fn combined_soft_buy_multiplier(multipliers: &[f64]) -> Option<f64> {
+    multipliers
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite() && (0.0..1.0).contains(value))
+        .min_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct InstrumentQuarantineConfig {
     enabled: bool,
@@ -700,14 +741,24 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     });
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
     let buy_halt = monthly_loss_buy_halt(state, &overview).await;
+    let drawdown = portfolio_drawdown_guard(state).await;
+    let mut soft_multipliers = Vec::new();
     if buy_halt.soft_reduction_active {
-        capital_budget.apply_buy_multiplier(buy_halt.soft_buy_multiplier);
+        soft_multipliers.push(buy_halt.soft_buy_multiplier);
+    }
+    if drawdown.reduces_buys() {
+        soft_multipliers.push(drawdown.policy.soft_buy_multiplier);
+    }
+    if let Some(multiplier) = combined_soft_buy_multiplier(&soft_multipliers) {
+        capital_budget.apply_buy_multiplier(multiplier);
         warn!(
             month_pnl_dkk = buy_halt.month_pnl_dkk,
-            soft_threshold_dkk = buy_halt.soft_threshold_dkk,
-            buy_multiplier = buy_halt.soft_buy_multiplier,
+            monthly_soft_reduction_active = buy_halt.soft_reduction_active,
+            drawdown_pct = drawdown.drawdown_pct(),
+            drawdown_soft_reduction_active = drawdown.reduces_buys(),
+            buy_multiplier = multiplier,
             available_buy_budget_dkk = capital_budget.available_buy_budget_dkk,
-            "monthly-loss soft guardrail reduced cycle-wide BUY budget"
+            "soft risk guardrail reduced cycle-wide BUY budget"
         );
     }
     if buy_halt.active {
@@ -715,6 +766,26 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             month_pnl_dkk = buy_halt.month_pnl_dkk,
             threshold_dkk = buy_halt.threshold_dkk,
             "monthly-loss circuit breaker active; all BUY candidates will be skipped"
+        );
+    }
+    if drawdown.halts_buys() {
+        warn!(
+            drawdown_pct = drawdown.drawdown_pct(),
+            halt_pct = drawdown.policy.halt_pct,
+            lookback_days = drawdown.policy.lookback_days,
+            "portfolio drawdown guardrail active; all BUY candidates will be skipped"
+        );
+    }
+    if drawdown.status == "insufficient_history" {
+        warn!(
+            lookback_days = drawdown.policy.lookback_days,
+            "portfolio drawdown guardrail has too little history to measure a peak; it is not restricting this cycle"
+        );
+    }
+    if drawdown.override_active {
+        warn!(
+            drawdown_pct = drawdown.drawdown_pct(),
+            "portfolio drawdown guardrail suppressed by an operator override"
         );
     }
     let quarantine_cfg = instrument_quarantine_config(state);
@@ -744,6 +815,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             overlay.as_ref(),
             &mut capital_budget,
             &buy_halt,
+            &drawdown,
             quarantine_cfg,
             &active_quarantines,
         )
@@ -780,6 +852,7 @@ async fn run_for_report(
     overlay: Option<&StrategyExperimentOverlay>,
     capital_budget: &mut CapitalBudget,
     buy_halt: &MonthlyLossBuyHalt,
+    drawdown: &DrawdownGuard,
     quarantine_cfg: InstrumentQuarantineConfig,
     active_quarantines: &[InstrumentQuarantine],
 ) -> Result<JsonValue> {
@@ -808,6 +881,7 @@ async fn run_for_report(
         &overlay_json,
         &excluded,
         buy_halt,
+        drawdown,
         active_quarantines,
     )
     .await;
@@ -1011,6 +1085,10 @@ async fn run_for_report(
                     buy_halt.month_pnl_dkk, buy_halt.threshold_dkk
                 ),
             ));
+            continue;
+        }
+        if order.action == "BUY" && drawdown.halts_buys() {
+            skipped.push(skip_order(&order, &drawdown.skip_reason()));
             continue;
         }
         let mut value_verified = false;
@@ -1229,6 +1307,7 @@ async fn run_for_report(
             "override_active": buy_halt.override_active,
             "override": buy_halt.override_value,
         },
+        "drawdown_guardrail": drawdown.to_json(),
         "instrument_quarantine": {
             "enabled": quarantine_cfg.enabled,
             "lookback_days": quarantine_cfg.lookback_days,
@@ -1338,6 +1417,7 @@ async fn hermes_decision_preflight_bundle(
     overlay_json: &JsonValue,
     excluded_symbols: &[String],
     buy_halt: &MonthlyLossBuyHalt,
+    drawdown: &DrawdownGuard,
     active_quarantines: &[InstrumentQuarantine],
 ) -> JsonValue {
     let today = Utc::now().date_naive();
@@ -1434,6 +1514,7 @@ async fn hermes_decision_preflight_bundle(
             "soft_reduction_active": buy_halt.soft_reduction_active,
             "override_active": buy_halt.override_active,
         },
+        "drawdown_guardrail": drawdown.to_json(),
         "open_exchange_codes": open_codes,
         "strategy_experiment_overlay": overlay_json,
         "markov": {
@@ -4761,6 +4842,26 @@ mod tests {
         assert_eq!(budget.available_buy_budget_dkk, 10_000.0);
         assert_eq!(budget.available_cash_above_buffer_dkk, 20_000.0);
         assert!(budget.reinvestment_pressure_active);
+    }
+
+    #[test]
+    fn overlapping_soft_guardrails_take_the_strictest_multiplier_not_the_product() {
+        // A losing month and a drawdown are usually one decline seen twice.
+        // Multiplying 0.5 by 0.5 would deploy a quarter of the budget on a
+        // rule nobody configured; the strictest single band is predictable.
+        assert_eq!(combined_soft_buy_multiplier(&[0.5, 0.5]), Some(0.5));
+        assert_eq!(combined_soft_buy_multiplier(&[0.75, 0.25]), Some(0.25));
+        assert_eq!(combined_soft_buy_multiplier(&[0.5]), Some(0.5));
+    }
+
+    #[test]
+    fn no_active_soft_band_leaves_the_buy_budget_untouched() {
+        // `None` means "do not call apply_buy_multiplier at all". A 1.0 here
+        // would be harmless today but invites a future multiplier of 0.0 or
+        // NaN to pass straight through.
+        assert_eq!(combined_soft_buy_multiplier(&[]), None);
+        assert_eq!(combined_soft_buy_multiplier(&[1.0]), None);
+        assert_eq!(combined_soft_buy_multiplier(&[f64::NAN, -1.0]), None);
     }
 
     #[test]
