@@ -5911,8 +5911,8 @@ fn hermes_goal_contract_enforcement() -> JsonValue {
                 "detail": "An overlay carries exactly one changed_variable_path, and only paths on the experiment variable allowlist are applied."
             },
             "constraints.max_positions": {
-                "status": "not_enforced",
-                "detail": "Published for context and shown on the dashboard. No queueing gate counts holdings against it; a cycle can open more positions than this."
+                "status": "runtime_enforced",
+                "detail": "Caps new-symbol BUYs using persisted positive-quantity positions plus new-symbol BUYs approved earlier in the scheduler cycle. Adds to an existing holding do not consume a slot; an unavailable position snapshot blocks a new-symbol BUY. Value is read from strategy.swing.max_holdings."
             },
             "constraints.slippage_tolerance": {
                 "status": "not_enforced",

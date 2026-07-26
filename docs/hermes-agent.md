@@ -430,6 +430,13 @@ the symbol in the same cycle and limits the final quantity to
 a smaller quantity or a stand-down, but cannot loosen, bypass, or replace this
 cap.
 
+The published `constraints.max_positions` is also deterministic manager policy:
+`strategy.swing.max_holdings` caps only new-symbol BUYs, counts persisted
+positive-quantity positions, and reserves slots for new names approved earlier
+in the same scheduler cycle. Adds to an existing holding do not consume another
+slot. An unavailable position snapshot blocks a new-symbol BUY rather than
+assuming an empty portfolio; Hermes cannot relax the cap.
+
 Each manager run also records `hermes_advice_delta`, a normalized per-candidate
 audit of the advice actually applied. It records matching precedence
 (`strategy_key`, then `symbol` plus `side`, then `symbol`), requested and

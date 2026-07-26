@@ -1329,3 +1329,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Wired `strategy.ladder.max_position_weight` into the Rust Trading Manager as a deterministic total per-symbol BUY-exposure ceiling. It combines persisted DKK position value with BUYs approved earlier in the same scheduler cycle, sizes a new BUY only into remaining headroom, and blocks it if less than one share fits.
 - Missing/invalid portfolio or exposure evidence fails closed. The sanitized basis, cap, existing value, headroom, quantity reduction, and final value are stored in the manager run, rendered in the Candidate Scoring Waterfall, and passed to Hermes preflight. Hermes remains advisory and cannot relax the manager gate.
+
+## 2026-07-26 - Maximum holdings becomes real
+
+- Wired `strategy.swing.max_holdings` into the Rust Trading Manager as a deterministic cap for new-symbol BUYs. It counts persisted positive-quantity holdings and reserves a slot for every new-symbol BUY approved earlier in the same scheduler cycle; adds to existing symbols do not consume a second slot.
+- An unavailable position snapshot fails closed for a new symbol. The active policy and sanitized holding count are stored in manager JSON and Hermes preflight, while the Hermes goal contract now correctly declares `constraints.max_positions` as runtime-enforced.

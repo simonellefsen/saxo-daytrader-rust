@@ -293,9 +293,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "min_holdings"],
         "No holdings floor is enforced.",
     ),
-    advisory(
+    enforced(
         &["strategy", "swing", "max_holdings"],
-        "Published to the model and Hermes as max_positions; not a queueing gate.",
+        "Caps concurrent held symbols for new BUYs using persisted positive-quantity positions plus new-symbol BUYs approved earlier in the same scheduler cycle. Adds to existing symbols do not consume a slot; an unavailable position snapshot blocks a new symbol BUY.",
     ),
     advisory(
         &["strategy", "swing", "position_decision_stale_after_days"],

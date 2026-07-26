@@ -115,6 +115,14 @@ struct PositionWeightConfig {
     max_position_weight: f64,
 }
 
+/// Maximum number of concurrently held symbols. This cap applies only when a
+/// BUY introduces a new symbol; adds to a current position do not consume a
+/// second slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HoldingLimitConfig {
+    max_holdings: i64,
+}
+
 /// A bounded local view of current position market values. It is loaded once
 /// per manager cycle and then reserved as BUYs are approved, so sequential
 /// reports cannot independently spend the same symbol headroom.
@@ -122,6 +130,7 @@ struct PositionWeightConfig {
 struct PositionExposure {
     values_dkk: HashMap<String, f64>,
     invalid_symbols: HashSet<String>,
+    held_symbols: HashSet<String>,
     available: bool,
 }
 
@@ -174,12 +183,28 @@ fn position_weight_config(state: &AppState) -> PositionWeightConfig {
     }
 }
 
+fn holding_limit_config(state: &AppState) -> HoldingLimitConfig {
+    HoldingLimitConfig {
+        max_holdings: yaml_i64(&state.config, &["strategy", "swing", "max_holdings"]).unwrap_or(25),
+    }
+}
+
 impl PositionWeightConfig {
     fn to_json(self) -> JsonValue {
         json!({
             "max_position_weight": self.max_position_weight,
             "scope": "total_symbol_exposure_after_approved_buy",
             "basis": "persisted_portfolio_position_values",
+        })
+    }
+}
+
+impl HoldingLimitConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "max_holdings": self.max_holdings,
+            "scope": "new_symbol_buys_only",
+            "basis": "persisted_positive_quantity_positions_plus_same_cycle_approved_buys",
         })
     }
 }
@@ -193,6 +218,7 @@ impl PositionExposure {
                 return Self {
                     values_dkk: HashMap::new(),
                     invalid_symbols: HashSet::new(),
+                    held_symbols: HashSet::new(),
                     available: false,
                 };
             }
@@ -200,6 +226,7 @@ impl PositionExposure {
 
         let mut values_dkk = HashMap::new();
         let mut invalid_symbols = HashSet::new();
+        let mut held_symbols = HashSet::new();
         for row in rows {
             let symbol = row
                 .get("symbol")
@@ -210,6 +237,7 @@ impl PositionExposure {
             if symbol.is_empty() || quantity <= 0.0 {
                 continue;
             }
+            held_symbols.insert(symbol.clone());
             let market_value_dkk = row.get("market_value_dkk").and_then(json_number);
             if let Some(value) = market_value_dkk.filter(|value| value.is_finite() && *value > 0.0)
             {
@@ -221,6 +249,7 @@ impl PositionExposure {
         Self {
             values_dkk,
             invalid_symbols,
+            held_symbols,
             available: true,
         }
     }
@@ -233,6 +262,14 @@ impl PositionExposure {
         self.invalid_symbols.contains(&normalize_symbol_key(symbol))
     }
 
+    fn has_position(&self, symbol: &str) -> bool {
+        self.held_symbols.contains(&normalize_symbol_key(symbol))
+    }
+
+    fn holding_count(&self) -> usize {
+        self.held_symbols.len()
+    }
+
     fn reserve_buy(&mut self, symbol: &str, value_dkk: f64) {
         if !self.available || !value_dkk.is_finite() || value_dkk <= 0.0 {
             return;
@@ -241,6 +278,7 @@ impl PositionExposure {
             .values_dkk
             .entry(normalize_symbol_key(symbol))
             .or_insert(0.0) += value_dkk;
+        self.held_symbols.insert(normalize_symbol_key(symbol));
     }
 
     fn to_json(&self) -> JsonValue {
@@ -248,6 +286,7 @@ impl PositionExposure {
             "status": if self.available { "available" } else { "unavailable" },
             "valued_symbol_count": self.values_dkk.len(),
             "invalid_value_symbol_count": self.invalid_symbols.len(),
+            "held_symbol_count": self.held_symbols.len(),
             "scope": "persisted_positions_plus_approved_buys_in_this_cycle",
         })
     }
@@ -1188,6 +1227,7 @@ async fn run_for_report(
         .unwrap_or(JsonValue::Null);
     let initial_capital_budget = *capital_budget;
     let position_weight = position_weight_config(state);
+    let holding_limit = holding_limit_config(state);
     let hermes_preflight = hermes_decision_preflight_bundle(
         state,
         report,
@@ -1197,6 +1237,7 @@ async fn run_for_report(
         &initial_capital_budget,
         position_exposure,
         position_weight,
+        holding_limit,
         &overlay_json,
         &excluded,
         buy_halt,
@@ -1596,6 +1637,14 @@ async fn run_for_report(
             }
         }
         if gate.approved && order.action == "BUY" {
+            let holding_gate = holding_limit_gate(&mut order, holding_limit, position_exposure);
+            if !holding_gate.approved {
+                gate = holding_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, holding_gate.reason);
+            }
+        }
+        if gate.approved && order.action == "BUY" {
             let position_weight_gate = position_weight_gate(
                 &mut order,
                 initial_capital_budget.total_market_value_dkk,
@@ -1700,6 +1749,7 @@ async fn run_for_report(
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "cost_guard": cost_guard.to_json(),
+        "holding_limit_policy": holding_limit.to_json(),
         "position_weight_policy": position_weight.to_json(),
         "position_exposure": position_exposure.to_json(),
         "candidate_order_count": candidate_order_count,
@@ -1715,6 +1765,7 @@ async fn run_for_report(
             "gate_code": "approved",
             "final_technical": compact_hermes_preflight_technical(order),
             "final_cost_guard": compact_cost_guard(order),
+            "final_holding_limit": compact_holding_limit(order),
             "final_position_weight": compact_position_weight(order),
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
@@ -1807,6 +1858,7 @@ async fn hermes_decision_preflight_bundle(
     capital_budget: &CapitalBudget,
     position_exposure: &PositionExposure,
     position_weight: PositionWeightConfig,
+    holding_limit: HoldingLimitConfig,
     overlay_json: &JsonValue,
     excluded_symbols: &[String],
     buy_halt: &MonthlyLossBuyHalt,
@@ -1880,6 +1932,8 @@ async fn hermes_decision_preflight_bundle(
             "current_position_quantity": position_quantity,
             "position_context_status": position_context_status,
             "current_position_value_dkk": position_exposure.value_for(&order.symbol),
+            "current_holding_count": position_exposure.holding_count(),
+            "already_held": position_exposure.has_position(&order.symbol),
             "position_value_context_status": if !position_exposure.available {
                 "unavailable"
             } else if position_exposure.has_invalid_value(&order.symbol) {
@@ -1909,6 +1963,7 @@ async fn hermes_decision_preflight_bundle(
         "capital_budget": capital_budget.to_json(),
         "cost_guard": cost_guard.to_json(),
         "position_weight_policy": position_weight.to_json(),
+        "holding_limit_policy": holding_limit.to_json(),
         "position_exposure": position_exposure.to_json(),
         "candidate_limit": candidate_limit.to_json(),
         "monthly_loss_circuit_breaker": {
@@ -2733,6 +2788,77 @@ fn risk_per_trade_gate(
 /// incoming value has already been re-priced from database-backed market data;
 /// existing exposure comes from the persisted broker/local position view, and
 /// `PositionExposure` also carries BUYs approved earlier in this cycle.
+fn holding_limit_gate(
+    order: &mut CandidateOrder,
+    config: HoldingLimitConfig,
+    exposure: &PositionExposure,
+) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Holding cap applies to BUYs only.".to_string(),
+        };
+    }
+    if config.max_holdings <= 0 {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.swing.max_holdings must be a positive whole-number cap."
+                .to_string(),
+        };
+    }
+    if !exposure.available {
+        return GateDecision {
+            approved: false,
+            reason: "Holding cap requires a persisted position snapshot, but the local position snapshot is unavailable."
+                .to_string(),
+        };
+    }
+    let holding_count = exposure.holding_count();
+    let already_held = exposure.has_position(&order.symbol);
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "holding_limit".to_string(),
+            json!({
+                "verified_from_state": true,
+                "max_holdings": config.max_holdings,
+                "holding_count_before": holding_count,
+                "already_held": already_held,
+                "basis": "persisted_positive_quantity_positions_plus_same_cycle_approved_buys",
+            }),
+        );
+    }
+    if already_held {
+        return GateDecision {
+            approved: true,
+            reason: format!(
+                "BUY adds to an existing {} holding and does not consume a new holding slot.",
+                order.symbol
+            ),
+        };
+    }
+    if holding_count >= config.max_holdings as usize {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Holding cap is {}; {} persisted/planned symbols already occupy every slot, so new {} BUY is blocked.",
+                config.max_holdings, holding_count, order.symbol
+            ),
+        };
+    }
+    GateDecision {
+        approved: true,
+        reason: format!(
+            "Holding cap allows a new {} position ({}/{} occupied slots before this BUY).",
+            order.symbol, holding_count, config.max_holdings
+        ),
+    }
+}
+
 fn position_weight_gate(
     order: &mut CandidateOrder,
     total_market_value_dkk: f64,
@@ -3045,6 +3171,23 @@ fn compact_position_weight(order: &CandidateOrder) -> JsonValue {
         "resulting_position_value_dkk": weight.get("resulting_position_value_dkk").cloned().unwrap_or(JsonValue::Null),
         "downsized": weight.get("downsized").cloned().unwrap_or(JsonValue::Null),
         "basis": weight.get("basis").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_holding_limit(order: &CandidateOrder) -> JsonValue {
+    let limit = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("holding_limit"));
+    let Some(limit) = limit else {
+        return JsonValue::Null;
+    };
+    json!({
+        "verified_from_state": limit.get("verified_from_state").cloned().unwrap_or(JsonValue::Null),
+        "max_holdings": limit.get("max_holdings").cloned().unwrap_or(JsonValue::Null),
+        "holding_count_before": limit.get("holding_count_before").cloned().unwrap_or(JsonValue::Null),
+        "already_held": limit.get("already_held").cloned().unwrap_or(JsonValue::Null),
+        "basis": limit.get("basis").cloned().unwrap_or(JsonValue::Null),
     })
 }
 
@@ -3966,6 +4109,7 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         // audit UI can explain the decision without raw inputs.
         "final_technical": compact_hermes_preflight_technical(order),
         "final_cost_guard": compact_cost_guard(order),
+        "final_holding_limit": compact_holding_limit(order),
         "final_position_weight": compact_position_weight(order),
         "technical_gate": reason,
     })
@@ -4000,6 +4144,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "risk_per_trade"
     } else if normalized.contains("position-weight cap") {
         "position_weight"
+    } else if normalized.contains("holding cap") {
+        "max_holdings"
     } else if normalized.starts_with("cost guard") {
         "cost_guard"
     } else if normalized.contains("commission-efficiency floor") {
@@ -5557,6 +5703,10 @@ mod tests {
         }
     }
 
+    fn holding_limit_test_config(max_holdings: i64) -> HoldingLimitConfig {
+        HoldingLimitConfig { max_holdings }
+    }
+
     fn position_exposure(values: &[(&str, f64)]) -> PositionExposure {
         PositionExposure {
             values_dkk: values
@@ -5564,6 +5714,10 @@ mod tests {
                 .map(|(symbol, value)| (normalize_symbol_key(symbol), *value))
                 .collect(),
             invalid_symbols: HashSet::new(),
+            held_symbols: values
+                .iter()
+                .map(|(symbol, _)| normalize_symbol_key(symbol))
+                .collect(),
             available: true,
         }
     }
@@ -5817,6 +5971,7 @@ mod tests {
         let exposure = PositionExposure {
             values_dkk: HashMap::new(),
             invalid_symbols: HashSet::new(),
+            held_symbols: HashSet::new(),
             available: false,
         };
         let gate = position_weight_gate(
@@ -5825,6 +5980,51 @@ mod tests {
             position_weight_test_config(),
             &exposure,
         );
+        assert!(!gate.approved);
+        assert!(
+            gate.reason.contains("snapshot is unavailable"),
+            "{}",
+            gate.reason
+        );
+    }
+
+    #[test]
+    fn holding_limit_blocks_new_symbols_after_all_slots_are_reserved() {
+        let mut exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut first = candidate_limit_order("NVDA:xnas", "BUY");
+        let first_gate = holding_limit_gate(&mut first, holding_limit_test_config(2), &exposure);
+        assert!(first_gate.approved, "{}", first_gate.reason);
+        exposure.reserve_buy("NVDA:xnas", 1_000.0);
+
+        let mut second = candidate_limit_order("MSFT:xnas", "BUY");
+        let second_gate = holding_limit_gate(&mut second, holding_limit_test_config(2), &exposure);
+        assert!(!second_gate.approved);
+        assert!(
+            second_gate.reason.contains("every slot"),
+            "{}",
+            second_gate.reason
+        );
+    }
+
+    #[test]
+    fn holding_limit_allows_add_to_existing_symbol_at_cap() {
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut order = candidate_limit_order("AMD:xnas", "BUY");
+        let gate = holding_limit_gate(&mut order, holding_limit_test_config(1), &exposure);
+        assert!(gate.approved, "{}", gate.reason);
+        assert!(gate.reason.contains("does not consume"), "{}", gate.reason);
+    }
+
+    #[test]
+    fn holding_limit_fails_closed_without_a_position_snapshot() {
+        let mut order = candidate_limit_order("AMD:xnas", "BUY");
+        let exposure = PositionExposure {
+            values_dkk: HashMap::new(),
+            invalid_symbols: HashSet::new(),
+            held_symbols: HashSet::new(),
+            available: false,
+        };
+        let gate = holding_limit_gate(&mut order, holding_limit_test_config(25), &exposure);
         assert!(!gate.approved);
         assert!(
             gate.reason.contains("snapshot is unavailable"),
@@ -6227,6 +6427,10 @@ mod tests {
         assert_eq!(
             candidate_gate_reason_code("Candidate limit reached: only the first 30 symbols"),
             "candidate_limit"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Holding cap is 25; every slot is occupied"),
+            "max_holdings"
         );
     }
 }

@@ -2272,6 +2272,10 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         .cloned()
         .unwrap_or(JsonValue::Null);
     let cost_guard = row.get("cost_guard").cloned().unwrap_or(JsonValue::Null);
+    let holding_limit = row
+        .get("final_holding_limit")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     let position_weight = row
         .get("final_position_weight")
         .cloned()
@@ -2345,6 +2349,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         &final_technical,
         final_technical_recorded,
         &cost_guard,
+        &holding_limit,
         &position_weight,
         &prefs,
     );
@@ -2433,6 +2438,7 @@ fn candidate_gate_detail(
     final_technical: &JsonValue,
     final_technical_recorded: bool,
     cost_guard: &JsonValue,
+    holding_limit: &JsonValue,
     position_weight: &JsonValue,
     prefs: &LocalizationPrefs,
 ) -> String {
@@ -2458,6 +2464,16 @@ fn candidate_gate_detail(
             value_f64(cost_guard, "estimated_slippage_bps"),
         );
     }
+    if gate_code == "max_holdings" {
+        let count = value_f64(holding_limit, "holding_count_before") as i64;
+        let maximum = value_f64(holding_limit, "max_holdings") as i64;
+        if maximum > 0 {
+            return format!(
+                "New symbol blocked: all {count} of {maximum} configured holding slots were already occupied."
+            );
+        }
+        return "The configured maximum holding count was already reached, or the persisted position snapshot was unavailable.".to_string();
+    }
     if position_weight
         .get("verified_from_state")
         .and_then(JsonValue::as_bool)
@@ -2480,6 +2496,29 @@ fn candidate_gate_detail(
     }
     if gate_code == "position_weight" {
         return "The configured per-symbol allocation ceiling left less than one share of headroom, or position-value evidence was unavailable.".to_string();
+    }
+    if holding_limit
+        .get("verified_from_state")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        let already_held = holding_limit
+            .get("already_held")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let count = value_f64(holding_limit, "holding_count_before") as i64;
+        let maximum = value_f64(holding_limit, "max_holdings") as i64;
+        return if already_held {
+            format!(
+                "Existing holding: {} of {} symbol slots were occupied before this BUY, so no new slot was required.",
+                count, maximum
+            )
+        } else {
+            format!(
+                "New holding: {} of {} symbol slots were occupied before this BUY.",
+                count, maximum
+            )
+        };
     }
     if gate_code != "technical" {
         return String::new();
@@ -7688,6 +7727,7 @@ mod tests {
                 true,
                 &JsonValue::Null,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &default_prefs()
             ),
             "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
@@ -7702,6 +7742,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &default_prefs()
@@ -7731,6 +7772,7 @@ mod tests {
                 false,
                 &cost_guard,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &prefs,
             ),
             "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
@@ -7756,10 +7798,35 @@ mod tests {
                 &JsonValue::Null,
                 false,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &position_weight,
                 &prefs,
             ),
             "Position exposure 2,000 DKK plus BUY 2,000 DKK = 4,000 DKK against a 4,000 DKK ceiling (4.0% of portfolio)."
+        );
+    }
+
+    #[test]
+    fn waterfall_holding_limit_explains_new_symbol_slot() {
+        let row = json!({"action": "BUY", "gate_code": "approved"});
+        let holding_limit = json!({
+            "verified_from_state": true,
+            "max_holdings": 25,
+            "holding_count_before": 12,
+            "already_held": false,
+        });
+
+        assert_eq!(
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &holding_limit,
+                &JsonValue::Null,
+                &default_prefs(),
+            ),
+            "New holding: 12 of 25 symbol slots were occupied before this BUY."
         );
     }
 
@@ -7771,6 +7838,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &default_prefs()
