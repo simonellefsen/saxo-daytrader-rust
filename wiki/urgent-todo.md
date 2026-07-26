@@ -162,32 +162,38 @@ Enforced-by-contrast examples: `strategy.capital.min_cash_buffer_pct`, `strategy
 
 ## Credential Hygiene
 
-A live GitHub OAuth token sits in the **global** git config on the development machine:
+**Resolved 2026-07-26.** No git config scope on the development machine holds a
+credential any more (`local`, `global`, and `system` all clean).
+
+What the problem was: a stale GitHub OAuth token (`gho_`, 41 chars) sat in the
+**global** git config as a URL rewrite rule,
 
 ```
 url.https://<token>:@github.com/.insteadOf  https://github.com/
 ```
 
-This is a URL rewrite rule, not a remote. It silently applies the token to every
-`https://github.com/...` URL on the machine, for every repository, and it is
-visible to anything that reads git configuration — `git config --list`, a
-diagnostics bundle, a shared terminal capture, or a screen share.
+which is worse than a token in a remote URL — it was not tied to any repository,
+so it silently applied to every `https://github.com/...` URL on the machine and
+was readable by anything that dumps git configuration.
 
-This repository's `origin` is now SSH (`git@github.com:simonellefsen/saxo-daytrader-rust.git`),
-so pushes from here no longer carry a credential and CI runs green. That
-sidestepped the problem for this repo; it did not remove the token.
+Two details that made it hard to find. It is an **OAuth** token, not a personal
+access token, so it never appears under *Developer settings → Personal access
+tokens*; OAuth grants live under *Settings → Applications → Authorized OAuth
+Apps*. And it was **not** the token the `gh` CLI was using — fingerprints
+differed — so it was an orphan from an earlier login, which is why removing it
+broke nothing.
 
-Removing the rule is an operator action — it is a credential and it affects
-every repository on the machine, not just this one:
+Current state:
 
-```
-git config --global --unset-all url.https://<token>:@github.com/.insteadOf
-```
+- `origin` is SSH (`git@github.com:...`); pushes carry no credential.
+- `gh` authenticates from the macOS keyring, git protocol `ssh`.
+- HTTPS git operations are brokered by `gh auth git-credential` for both
+  `github.com` and `gist.github.com`, so no token is written to a config file.
+- CI has run green on every push since 2026-07-25.
 
-Authentication should survive it: `credential.helper osxkeychain` is configured
-for HTTPS remotes, the `gh` CLI holds its own auth, and this repo uses SSH.
-The token should also be revoked at GitHub rather than only unset locally,
-since unsetting it does not invalidate it.
+Still open, and low urgency now that it is stored nowhere: the orphaned token
+was unset locally, which does not revoke it. Revoking the GitHub CLI OAuth app
+authorization invalidates it, at the cost of one `gh auth login` afterwards.
 
 ## Related Pages
 
