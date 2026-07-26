@@ -594,6 +594,38 @@ mod tests {
     }
 
     #[test]
+    fn with_equal_multiples_the_stop_moves_only_when_the_price_does() {
+        // The shipped configuration sets both multiples to 2.0 deliberately, so
+        // a ratchet is caused by the position gaining ground and never by the
+        // trail distance simply being tighter than the placement distance. A
+        // tighter trail multiple would rewrite every resting stop on the first
+        // sweep, before any position had appreciated at all.
+        let equal = StopPolicy {
+            stop_loss_atr_multiple: 2.0,
+            trail_stop_atr_multiple: 2.0,
+            min_ratchet_atr_fraction: 0.25,
+        };
+        // A stop placed at close - 2*ATR with the price unchanged.
+        assert_eq!(
+            decide_stop_action(&target(7.0, resting(7.0, 480.0), 500.0, 10.0), &equal),
+            StopAction::Hold {
+                reason: "resting_stop_matches_position_and_level"
+            },
+            "a flat price must not tighten a stop"
+        );
+        // The close has risen a full ATR; the stop follows it up by the same.
+        assert_eq!(
+            decide_stop_action(&target(7.0, resting(7.0, 480.0), 510.0, 10.0), &equal),
+            StopAction::Replace {
+                broker_order_id: "5100".to_string(),
+                quantity: 7.0,
+                stop_price: 490.0,
+                reason: "trail_advanced"
+            }
+        );
+    }
+
+    #[test]
     fn a_stop_already_above_the_close_is_left_alone_rather_than_rewritten() {
         // This state is self-contradictory -- a stop at 487.5 cannot still be
         // resting with the close at 400, it would have triggered -- so it means

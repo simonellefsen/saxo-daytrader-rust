@@ -444,7 +444,7 @@ strategy:
     min_position_weight: 0.02
     max_position_weight: 0.04
     flatten_minutes_before_tradable_close: 15
-    trail_stop_atr_multiple: 1.25
+    trail_stop_atr_multiple: 2.0
     min_ratchet_atr_fraction: 0.25
 
 execution:
