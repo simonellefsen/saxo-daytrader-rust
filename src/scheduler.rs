@@ -1,12 +1,13 @@
 use std::{
     env,
+    future::Future,
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::{
@@ -193,40 +194,36 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     };
     record_step_duration(&mut step_durations, "trading_manager", step_started);
     let step_started = Instant::now();
-    let markov_method = match run_markov_method_cycle(state).await {
-        Ok(value) => value,
-        Err(err) => {
-            warn!("Markov method cycle failed: {err:#}");
-            json!({"status": "error", "error": err.to_string()})
-        }
-    };
+    let markov_method = bounded_enrichment_step(
+        "markov_method",
+        enrichment_step_timeout("MARKOV", 240),
+        run_markov_method_cycle(state),
+    )
+    .await;
     record_step_duration(&mut step_durations, "markov_method", step_started);
     let step_started = Instant::now();
-    let quiver_signals = match run_quiver_signal_cycle(state).await {
-        Ok(value) => value,
-        Err(err) => {
-            warn!("Quiver signal cycle failed: {err:#}");
-            json!({"status": "error", "error": err.to_string()})
-        }
-    };
+    let quiver_signals = bounded_enrichment_step(
+        "quiver_signals",
+        enrichment_step_timeout("QUIVER", 45),
+        run_quiver_signal_cycle(state),
+    )
+    .await;
     record_step_duration(&mut step_durations, "quiver_signals", step_started);
     let step_started = Instant::now();
-    let editorial_research = match run_editorial_research_cycle(state).await {
-        Ok(value) => value,
-        Err(err) => {
-            warn!("editorial research cycle failed: {err:#}");
-            json!({"status": "error", "error": err.to_string()})
-        }
-    };
+    let editorial_research = bounded_enrichment_step(
+        "editorial_research",
+        enrichment_step_timeout("EDITORIAL", 45),
+        run_editorial_research_cycle(state),
+    )
+    .await;
     record_step_duration(&mut step_durations, "editorial_research", step_started);
     let step_started = Instant::now();
-    let daily_indicators = match run_daily_indicators_cycle(state).await {
-        Ok(value) => value,
-        Err(err) => {
-            warn!("daily indicators cycle failed: {err:#}");
-            json!({"status": "error", "error": err.to_string()})
-        }
-    };
+    let daily_indicators = bounded_enrichment_step(
+        "daily_indicators",
+        enrichment_step_timeout("DAILY_INDICATORS", 240),
+        run_daily_indicators_cycle(state),
+    )
+    .await;
     record_step_duration(&mut step_durations, "daily_indicators", step_started);
     let step_started = Instant::now();
     let execution_queue = match run_saxo_execution_queue(state).await {
@@ -387,6 +384,49 @@ fn record_step_duration(steps: &mut JsonMap<String, JsonValue>, key: &str, start
     );
 }
 
+/// Bound only read-only/enrichment work. Trading and broker lifecycle paths
+/// intentionally do not use this helper: timing out a mutation after it may
+/// have reached Saxo would hide an ambiguous order state instead of making the
+/// scheduler safer.
+async fn bounded_enrichment_step<F>(step: &str, budget: Duration, future: F) -> JsonValue
+where
+    F: Future<Output = Result<JsonValue>>,
+{
+    match timeout(budget, future).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
+            warn!(step, "scheduler enrichment step failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+        Err(_) => {
+            warn!(
+                step,
+                timeout_ms = elapsed_ms(budget),
+                "scheduler enrichment step timed out"
+            );
+            json!({
+                "status": "timeout",
+                "timeout_ms": elapsed_ms(budget),
+                "retry": "next_scheduler_cycle",
+                "safety_boundary": "read_only_enrichment_only",
+            })
+        }
+    }
+}
+
+fn enrichment_step_timeout(name: &str, default_seconds: u64) -> Duration {
+    let key = format!("SCHEDULER_{name}_TIMEOUT_SECONDS");
+    let seconds = bounded_timeout_seconds(env::var(&key).ok().as_deref(), default_seconds);
+    Duration::from_secs(seconds)
+}
+
+fn bounded_timeout_seconds(value: Option<&str>, default_seconds: u64) -> u64 {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (1..=900).contains(seconds))
+        .unwrap_or(default_seconds)
+}
+
 async fn maintain_saxo_session(state: &AppState) -> JsonValue {
     match state.refresh_saxo_session().await {
         Ok(status) => {
@@ -425,5 +465,57 @@ async fn maintain_saxo_session(state: &AppState) -> JsonValue {
             warn!("Saxo session maintenance failed: {err:#}");
             json!({"status": "error", "error": err.to_string()})
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_timeout_seconds_accepts_only_safe_timeout_values() {
+        assert_eq!(bounded_timeout_seconds(None, 45), 45);
+        assert_eq!(bounded_timeout_seconds(Some("invalid"), 45), 45);
+        assert_eq!(bounded_timeout_seconds(Some("0"), 45), 45);
+        assert_eq!(bounded_timeout_seconds(Some("901"), 45), 45);
+        assert_eq!(bounded_timeout_seconds(Some("1"), 45), 1);
+        assert_eq!(bounded_timeout_seconds(Some("240"), 45), 240);
+        assert_eq!(bounded_timeout_seconds(Some("900"), 45), 900);
+    }
+
+    #[tokio::test]
+    async fn bounded_enrichment_step_preserves_successful_result() {
+        let result = bounded_enrichment_step("test", Duration::from_millis(10), async {
+            Ok::<JsonValue, anyhow::Error>(json!({"status": "ok", "count": 1}))
+        })
+        .await;
+
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["count"], 1);
+    }
+
+    #[tokio::test]
+    async fn bounded_enrichment_step_records_safe_timeout_result() {
+        let result = bounded_enrichment_step("test", Duration::from_millis(1), async {
+            sleep(Duration::from_millis(25)).await;
+            Ok::<JsonValue, anyhow::Error>(json!({"status": "ok"}))
+        })
+        .await;
+
+        assert_eq!(result["status"], "timeout");
+        assert_eq!(result["timeout_ms"], 1);
+        assert_eq!(result["retry"], "next_scheduler_cycle");
+        assert_eq!(result["safety_boundary"], "read_only_enrichment_only");
+    }
+
+    #[tokio::test]
+    async fn bounded_enrichment_step_records_errors() {
+        let result = bounded_enrichment_step("test", Duration::from_millis(10), async {
+            Err::<JsonValue, _>(anyhow::anyhow!("provider unavailable"))
+        })
+        .await;
+
+        assert_eq!(result["status"], "error");
+        assert_eq!(result["error"], "provider unavailable");
     }
 }

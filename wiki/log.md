@@ -10,6 +10,12 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] resilience | Bounded scheduler advisory enrichment
+
+- The scheduler now enforces explicit deadline budgets around the four slow advisory-enrichment steps: Markov and daily indicators default to four minutes; Quiver and editorial research default to 45 seconds. Each can be tuned by a bounded one-to-900-second environment override.
+- A timeout persists a structured terminal result (`status: timeout`, retry on the next scheduler cycle) rather than failing the whole cycle, so operations can distinguish an unavailable enrichment source from a broker or decision-path failure.
+- The boundary is intentional: Saxo session/order work, protective stops, decision submission, Trading Manager queueing, execution, and reconciliation are not cancellable through this helper. A late broker mutation must be reconciled, not treated as safely absent.
+
 ## [2026-07-26] safety | ATR-based risk-per-trade sizing becomes enforced (U2)
 
 - `strategy.swing.risk_per_trade_pct` now caps each approved BUY's estimated initial stop loss instead of sitting unused in configuration. The cap uses a database-verified daily close and ATR14, the same configured stop multiple used by automatic protective-stop maintenance, and the already verified DKK share value.
