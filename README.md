@@ -323,7 +323,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `enabled`: enables the deterministic strategy overlay on top of xAI sentiment.
 - `mode`: `swing` is the default disciplined swing/day strategy. Set `ladder` only to use the legacy intraday ladder engine.
 - `selection_interval_minutes`: minimum spacing between strategy-driven re-selection passes.
-- `max_candidates` / `min_selected_assets`: legacy selection sizing; the Rust Trading Manager does not enforce either.
+- `max_candidates`: legacy candidate sizing; the Rust Trading Manager uses `strategy.swing.trading_manager.max_symbols` as its enforced preflight ceiling instead.
 - `max_selected_assets`: maximum distinct approved BUY symbols in one Decision Report after the deterministic gates. `0` disables the cap; a negative value blocks BUYs. SELLs and repeat BUYs for an already-selected symbol remain eligible.
 - `max_assets_per_sector`: optional diversification cap when sector labels are available.
 - `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.98` to preserve a 2% cash buffer.

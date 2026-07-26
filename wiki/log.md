@@ -1360,3 +1360,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added the production `strategy.quiver` policy to `config.yaml`: enabled on weekdays at 23:10 Europe/Copenhagen, with a 120-day lookback and a 60-symbol cap. The `QUIVERQUANT_API_KEY` remains environment-backed and is not stored in configuration or documentation.
 - Added a config-contract regression test that compares the full local and Kubernetes Quiver policy blocks. Local scheduler runs no longer silently use Rust defaults when validating advisory-data behavior.
+
+## [2026-07-26] safety | Retired inert minimum-selection floor
+
+- Removed `strategy.min_selected_assets` from both shipped configs and the Rust config contract. The active Rust Trading Manager never read it, so leaving it configured suggested a minimum portfolio breadth that did not exist.
+- Removed the same fallback from the legacy selector. It now preserves its sector-screened candidate list instead of re-expanding it to reach a minimum. The actual `strategy.max_selected_assets` cap remains unchanged.

@@ -681,7 +681,6 @@ def build_strategy_plan(
 
     scored.sort(key=lambda item: item["combined_score"], reverse=True)
     max_selected = int(_strategy_cfg(config).get("max_selected_assets", 8) or 8)
-    min_selected = int(_strategy_cfg(config).get("min_selected_assets", 3) or 3)
     selected: list[dict[str, Any]] = []
     sector_counts: dict[str, int] = {}
     for item in scored:
@@ -693,8 +692,6 @@ def build_strategy_plan(
         selected.append(item)
         if len(selected) >= max_selected:
             break
-    if len(selected) < min_selected:
-        selected = scored[: min(max_selected, max(min_selected, len(scored)))]
 
     position_map = _current_position_map(context)
     portfolio_summary = dict(context.get("portfolio_summary", {}) or {})

@@ -160,10 +160,6 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "max_candidates"],
         "Candidate breadth is bounded by the report prompt and trading_manager.max_symbols instead.",
     ),
-    unused_risk(
-        &["strategy", "min_selected_assets"],
-        "No breadth floor is enforced when queueing.",
-    ),
     enforced(
         &["strategy", "max_selected_assets"],
         "Caps distinct approved BUY symbols per Decision Report after the deterministic gates. SELLs and repeat BUYs for a previously selected symbol remain eligible; zero is unlimited and a negative value blocks BUYs.",
