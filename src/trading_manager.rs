@@ -106,6 +106,15 @@ struct CandidateLimitConfig {
     max_symbols: i64,
 }
 
+/// Maximum distinct BUY symbols a single Decision Report may approve after all
+/// deterministic gates have run. It limits simultaneous new exposure without
+/// suppressing SELLs or follow-up actions for a symbol already selected by the
+/// same report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectedAssetLimitConfig {
+    max_selected_assets: i64,
+}
+
 /// Maximum total portfolio allocation permitted for one symbol. This is
 /// deliberately a portfolio-exposure cap, not a model target weight: it uses
 /// the persisted position value plus any BUYs already admitted in this
@@ -167,6 +176,13 @@ fn candidate_limit_config(state: &AppState) -> CandidateLimitConfig {
             &["strategy", "swing", "trading_manager", "max_symbols"],
         )
         .unwrap_or(30),
+    }
+}
+
+fn selected_asset_limit_config(state: &AppState) -> SelectedAssetLimitConfig {
+    SelectedAssetLimitConfig {
+        max_selected_assets: yaml_i64(&state.config, &["strategy", "max_selected_assets"])
+            .unwrap_or(8),
     }
 }
 
@@ -310,6 +326,93 @@ impl CandidateLimitConfig {
             "mode": if self.max_symbols == 0 { "unlimited" } else if self.max_symbols > 0 { "limited" } else { "invalid" },
             "scope": "distinct_symbols_per_report",
         })
+    }
+}
+
+impl SelectedAssetLimitConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "max_selected_assets": self.max_selected_assets,
+            "mode": if self.max_selected_assets == 0 { "unlimited" } else if self.max_selected_assets > 0 { "limited" } else { "invalid" },
+            "scope": "distinct_approved_buy_symbols_per_report",
+        })
+    }
+}
+
+fn selected_asset_limit_gate(
+    order: &mut CandidateOrder,
+    config: SelectedAssetLimitConfig,
+    selected_buy_symbols: &mut HashSet<String>,
+) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Selection cap applies to BUYs only; SELLs remain eligible.".to_string(),
+        };
+    }
+    if config.max_selected_assets < 0 {
+        return GateDecision {
+            approved: false,
+            reason: "Selection cap configuration is invalid: strategy.max_selected_assets must be non-negative (0 means unlimited).".to_string(),
+        };
+    }
+
+    let symbol = candidate_symbol_key(order);
+    let selected_before = selected_buy_symbols.len();
+    let already_selected = selected_buy_symbols.contains(&symbol);
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "selected_asset_limit".to_string(),
+            json!({
+                "max_selected_assets": config.max_selected_assets,
+                "selected_buy_symbol_count_before": selected_before,
+                "already_selected": already_selected,
+                "scope": "distinct_approved_buy_symbols_per_report",
+            }),
+        );
+    }
+    if config.max_selected_assets > 0
+        && !already_selected
+        && selected_before >= config.max_selected_assets as usize
+    {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Selection cap is {}; {} distinct BUY symbols are already approved in this Decision Report, so additional {} BUY is blocked.",
+                config.max_selected_assets, selected_before, order.symbol
+            ),
+        };
+    }
+
+    selected_buy_symbols.insert(symbol);
+    if already_selected {
+        GateDecision {
+            approved: true,
+            reason: format!(
+                "Selection cap allows additional {} BUY because this symbol is already selected by this Decision Report.",
+                order.symbol
+            ),
+        }
+    } else if config.max_selected_assets == 0 {
+        GateDecision {
+            approved: true,
+            reason: "Selection cap is unlimited for this Decision Report.".to_string(),
+        }
+    } else {
+        GateDecision {
+            approved: true,
+            reason: format!(
+                "Selection cap allows {} BUY ({}/{} distinct BUY symbols selected).",
+                order.symbol,
+                selected_before + 1,
+                config.max_selected_assets
+            ),
+        }
     }
 }
 
@@ -1228,6 +1331,7 @@ async fn run_for_report(
     let initial_capital_budget = *capital_budget;
     let position_weight = position_weight_config(state);
     let holding_limit = holding_limit_config(state);
+    let selected_asset_limit = selected_asset_limit_config(state);
     let hermes_preflight = hermes_decision_preflight_bundle(
         state,
         report,
@@ -1238,6 +1342,7 @@ async fn run_for_report(
         position_exposure,
         position_weight,
         holding_limit,
+        selected_asset_limit,
         &overlay_json,
         &excluded,
         buy_halt,
@@ -1311,6 +1416,7 @@ async fn run_for_report(
             .eq_ignore_ascii_case("live");
 
     let mut approved = Vec::new();
+    let mut selected_buy_symbols = HashSet::new();
     let mut skipped = candidate_limit_skipped
         .iter()
         .map(|order| skip_order(order, &candidate_limit_skip_reason(candidate_limit)))
@@ -1679,6 +1785,18 @@ async fn run_for_report(
             }
         }
         if gate.approved {
+            let selection_gate = selected_asset_limit_gate(
+                &mut order,
+                selected_asset_limit,
+                &mut selected_buy_symbols,
+            );
+            if !selection_gate.approved {
+                gate = selection_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, selection_gate.reason);
+            }
+        }
+        if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
                 position_exposure
@@ -1750,6 +1868,7 @@ async fn run_for_report(
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "cost_guard": cost_guard.to_json(),
         "holding_limit_policy": holding_limit.to_json(),
+        "selected_asset_limit_policy": selected_asset_limit.to_json(),
         "position_weight_policy": position_weight.to_json(),
         "position_exposure": position_exposure.to_json(),
         "candidate_order_count": candidate_order_count,
@@ -1789,6 +1908,7 @@ async fn run_for_report(
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
             "BUY orders must also have a database-verified indicator reward that exceeds the configured lower-bound round-trip commission/slippage hurdle; this cost guard does not claim to predict realised broker costs or fill prices.",
             "BUY orders are capped to strategy.ladder.max_position_weight using persisted position values plus BUYs approved earlier in the same scheduler cycle; unavailable or invalid position-value evidence blocks the BUY rather than assuming zero exposure.",
+            "Distinct approved BUY symbols are capped by strategy.max_selected_assets per Decision Report after all deterministic gates; SELLs and repeated actions for a previously selected symbol remain eligible.",
             "The monthly-loss guardrail halves (by configuration) the cycle-wide BUY budget in its soft-loss band and suspends BUYs at the hard floor; SELLs are never blocked. An operator override can resume BUYs for the current month after the hard floor and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
@@ -1859,6 +1979,7 @@ async fn hermes_decision_preflight_bundle(
     position_exposure: &PositionExposure,
     position_weight: PositionWeightConfig,
     holding_limit: HoldingLimitConfig,
+    selected_asset_limit: SelectedAssetLimitConfig,
     overlay_json: &JsonValue,
     excluded_symbols: &[String],
     buy_halt: &MonthlyLossBuyHalt,
@@ -1964,6 +2085,7 @@ async fn hermes_decision_preflight_bundle(
         "cost_guard": cost_guard.to_json(),
         "position_weight_policy": position_weight.to_json(),
         "holding_limit_policy": holding_limit.to_json(),
+        "selected_asset_limit_policy": selected_asset_limit.to_json(),
         "position_exposure": position_exposure.to_json(),
         "candidate_limit": candidate_limit.to_json(),
         "monthly_loss_circuit_breaker": {
@@ -4146,6 +4268,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "position_weight"
     } else if normalized.contains("holding cap") {
         "max_holdings"
+    } else if normalized.starts_with("selection cap") {
+        "max_selected_assets"
     } else if normalized.starts_with("cost guard") {
         "cost_guard"
     } else if normalized.contains("commission-efficiency floor") {
@@ -5855,6 +5979,60 @@ mod tests {
             candidate_limit_skip_reason(CandidateLimitConfig { max_symbols: -1 })
                 .contains("must be non-negative")
         );
+    }
+
+    #[test]
+    fn selected_asset_limit_caps_new_buy_symbols_but_preserves_sells_and_repeats() {
+        let config = SelectedAssetLimitConfig {
+            max_selected_assets: 2,
+        };
+        let mut selected = HashSet::new();
+        let mut amd_buy = candidate_limit_order("AMD:xnas", "BUY");
+        let mut nvda_buy = candidate_limit_order("NVDA:xnas", "BUY");
+        let mut amd_follow_up = candidate_limit_order("amd:xnas", "BUY");
+        let mut msft_buy = candidate_limit_order("MSFT:xnas", "BUY");
+        let mut sell = candidate_limit_order("TSLA:xnas", "SELL");
+
+        assert!(selected_asset_limit_gate(&mut amd_buy, config, &mut selected).approved);
+        assert!(selected_asset_limit_gate(&mut nvda_buy, config, &mut selected).approved);
+        assert!(selected_asset_limit_gate(&mut amd_follow_up, config, &mut selected).approved);
+        let blocked = selected_asset_limit_gate(&mut msft_buy, config, &mut selected);
+        assert!(!blocked.approved);
+        assert!(blocked.reason.starts_with("Selection cap is 2"));
+        assert!(selected_asset_limit_gate(&mut sell, config, &mut selected).approved);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(
+            msft_buy.raw["strategy_metadata"]["selected_asset_limit"]["selected_buy_symbol_count_before"],
+            json!(2)
+        );
+    }
+
+    #[test]
+    fn selected_asset_limit_treats_zero_as_unlimited_and_negative_as_invalid() {
+        let mut unlimited_selected = HashSet::new();
+        let mut unlimited = candidate_limit_order("AMD:xnas", "BUY");
+        assert!(
+            selected_asset_limit_gate(
+                &mut unlimited,
+                SelectedAssetLimitConfig {
+                    max_selected_assets: 0,
+                },
+                &mut unlimited_selected,
+            )
+            .approved
+        );
+
+        let mut invalid_selected = HashSet::new();
+        let mut invalid = candidate_limit_order("AMD:xnas", "BUY");
+        let invalid_gate = selected_asset_limit_gate(
+            &mut invalid,
+            SelectedAssetLimitConfig {
+                max_selected_assets: -1,
+            },
+            &mut invalid_selected,
+        );
+        assert!(!invalid_gate.approved);
+        assert!(invalid_gate.reason.contains("must be non-negative"));
     }
 
     #[test]

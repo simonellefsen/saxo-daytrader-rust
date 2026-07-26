@@ -10,6 +10,12 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] safety | Decision-report BUY selection cap becomes enforced (U2)
+
+- `strategy.max_selected_assets` now limits the number of distinct approved BUY symbols per Decision Report. It runs only after Hermes and all deterministic trade gates, so it bounds cumulative new exposure without hiding a candidate from the audit trail.
+- SELLs remain eligible and a repeat BUY for an already-selected symbol does not spend another slot. `0` is explicit unlimited mode; a negative configuration fails new BUYs closed. Policy and per-order safe metadata are retained in the manager run, Hermes preflight, and Candidate Scoring Waterfall.
+- This removes one unused risk control from U2. The remaining risk-surface keys are now 14.
+
 ## [2026-07-26] resilience | Bounded scheduler advisory enrichment
 
 - The scheduler now enforces explicit deadline budgets around the four slow advisory-enrichment steps: Markov and daily indicators default to four minutes; Quiver and editorial research default to 45 seconds. Each can be tuned by a bounded one-to-900-second environment override.

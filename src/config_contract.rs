@@ -3,10 +3,10 @@
 //! A configuration key that was never wired into the runtime reads exactly like
 //! one that is enforced. That ambiguity is how the retired 2026-05-05
 //! `strategy.capital.cash_buffer` override survived, and a 2026-07-25 review
-//! found the same shape across the strategy risk knobs: `risk_per_trade_pct`,
-//! `max_assets_per_sector`, the whole `strategy.ladder.*` block, and the
-//! `taxation.share_income` brackets are all present in `config.yaml` and absent
-//! from the code.
+//! found the same shape across strategy risk knobs including
+//! `max_assets_per_sector`, several `strategy.ladder.*` members, and the
+//! `taxation.share_income` brackets: all were present in `config.yaml` but
+//! absent from the code.
 //!
 //! This module keeps an explicit table of every audited key and what the runtime
 //! actually does with it, then reports three kinds of drift:
@@ -164,9 +164,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "min_selected_assets"],
         "No breadth floor is enforced when queueing.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "max_selected_assets"],
-        "No breadth ceiling is enforced when queueing.",
+        "Caps distinct approved BUY symbols per Decision Report after the deterministic gates. SELLs and repeat BUYs for a previously selected symbol remain eligible; zero is unlimited and a negative value blocks BUYs.",
     ),
     unused_risk(
         &["strategy", "max_assets_per_sector"],

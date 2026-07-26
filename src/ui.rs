@@ -2474,6 +2474,9 @@ fn candidate_gate_detail(
         }
         return "The configured maximum holding count was already reached, or the persisted position snapshot was unavailable.".to_string();
     }
+    if gate_code == "max_selected_assets" {
+        return "This report had already approved its configured number of distinct BUY symbols. SELLs and repeated actions for a previously selected symbol remain eligible.".to_string();
+    }
     if position_weight
         .get("verified_from_state")
         .and_then(JsonValue::as_bool)
@@ -7844,6 +7847,23 @@ mod tests {
                 &default_prefs()
             ),
             "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached."
+        );
+    }
+
+    #[test]
+    fn waterfall_selection_limit_explains_buy_only_cap() {
+        let row = json!({"action": "BUY", "gate_code": "max_selected_assets"});
+        assert_eq!(
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &JsonValue::Null,
+                &JsonValue::Null,
+                &default_prefs()
+            ),
+            "This report had already approved its configured number of distinct BUY symbols. SELLs and repeated actions for a previously selected symbol remain eligible."
         );
     }
 

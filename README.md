@@ -323,7 +323,8 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `enabled`: enables the deterministic strategy overlay on top of xAI sentiment.
 - `mode`: `swing` is the default disciplined swing/day strategy. Set `ladder` only to use the legacy intraday ladder engine.
 - `selection_interval_minutes`: minimum spacing between strategy-driven re-selection passes.
-- `max_candidates`, `min_selected_assets`, `max_selected_assets`: selection funnel sizing.
+- `max_candidates` / `min_selected_assets`: legacy selection sizing; the Rust Trading Manager does not enforce either.
+- `max_selected_assets`: maximum distinct approved BUY symbols in one Decision Report after the deterministic gates. `0` disables the cap; a negative value blocks BUYs. SELLs and repeat BUYs for an already-selected symbol remain eligible.
 - `max_assets_per_sector`: optional diversification cap when sector labels are available.
 - `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.98` to preserve a 2% cash buffer.
 - `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.02`.
@@ -331,13 +332,14 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `quiver`: daily QuiverQuant alternative-data advisory signals for US portfolio/watchlist assets. The first source is Congress trading data and requires `QUIVERQUANT_API_KEY`.
 - `market_data.editorial_research`: bounded, cached ingestion of configured public RSS metadata into attributable, read-only Decision Report and Hermes context. It stores only source URL, publication time, title, compact summary, access level, and explicit configured ticker aliases, and prunes data after `retention_days` (default 90). It never fetches paid content, scrapes Yahoo quote pages, changes a Trading Manager gate, or alters broker execution.
 - `market_data.rss`: legacy Yahoo Finance, CNBC, Reuters, and macro RSS configuration retained as a reference source catalog. The active Rust port does not yet persist these feeds; see the roadmap for the controlled migration rather than treating configured entries as live decision input.
-- `swing.min_holdings` / `swing.max_holdings`: hard portfolio count guardrails, default `10` to `25`.
-- `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: hard target weight guardrails, default `5%` to `25%`.
+- `swing.min_holdings`: legacy portfolio-count floor; it is not enforced.
+- `swing.max_holdings`: hard concurrent-holdings cap for a new-symbol BUY. Adds to an existing holding do not consume a slot; default `25`.
+- `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: legacy target-weight settings; they are not enforced. The active per-symbol BUY-exposure ceiling is `ladder.max_position_weight`.
 - `swing.never_trade_symbols`: optional hard blacklist. Defaults to an empty list; use only for explicit temporary execution blocks.
 - `swing.daily_indicators`: daily-chart MA/MACD/RSI/Bollinger/Stochastic/Volume confluence settings used to filter swing entries.
 - `swing.journal`: daily/weekly/monthly learning journal cadence used to feed recent lessons back into decision prompts.
 - `swing.analysis_pulses`: timezone-aware daily decision triggers for the Nordic/EU open +1h15 report and the US open +1h15 report.
-- `ladder.*`: legacy rung count, ATR spacing, stop/take-profit multiples, per-position weights, flatten timing, and trailing-stop behavior used only when `mode: ladder`.
+- `ladder.*`: legacy rung, spacing, take-profit, and flatten settings remain inactive. `max_position_weight` and the automatic protective-stop controls (`submit_stop_loss_after_fill`, ATR multiples, and ratchet threshold) are runtime-enforced for swing BUYs/held positions.
 
 ### `execution`
 
