@@ -373,8 +373,8 @@ const CONTRACT: &[ContractEntry] = &[
     ),
     // ---- strategy.swing.trading_manager ----
     //
-    // Only max_report_age_hours is read, and it is absent from both shipped
-    // configs. Every knob an operator would reach for here is inert.
+    // Only enabled, max_symbols, and max_report_age_hours affect Rust queue
+    // creation. The remaining legacy controls stay explicitly unused.
     enforced(
         &["strategy", "swing", "trading_manager", "enabled"],
         "Stops the Trading Manager from creating new execution orders while preserving report and broker audit paths.",
@@ -398,7 +398,7 @@ const CONTRACT: &[ContractEntry] = &[
             "trading_manager",
             "max_report_age_hours",
         ],
-        "Scheduled-report freshness window. Read by the Trading Manager but supplied by neither shipped config, so the code default applies.",
+        "Scheduled-report freshness window. Reports older than this cannot create new execution orders.",
     ),
     // ---- strategy.swing.journal ----
     advisory(

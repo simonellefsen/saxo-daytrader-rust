@@ -1351,3 +1351,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Removed `strategy.swing.cash_buffer_pct` from both shipped configs and the config contract. The active and only supported cash reserve is `strategy.capital.min_cash_buffer_pct`.
 - Startup now purges both retired database runtime-setting keys (`strategy.capital.cash_buffer` and `strategy.swing.cash_buffer_pct`), so a historical override cannot resurrect an inert path.
 - Updated the Python reference's runtime settings, swing sizing, and decision prompt to consume the active capital reserve rather than a separate swing setting. Hermes already rejects the removed experiment variable.
+## [2026-07-26] safety | Trading Manager report freshness becomes explicit configuration
+
+- Added `strategy.swing.trading_manager.max_report_age_hours: 6` to both shipped configs. The Trading Manager already used this value as its Rust fallback; scheduled reports older than the window cannot create execution orders.
+- Updated the config contract, README, urgent todo, and roadmap so report freshness is now an operator-visible advisory policy rather than a contracted-but-absent default.

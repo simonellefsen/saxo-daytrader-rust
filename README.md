@@ -335,6 +335,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `swing.min_holdings`: legacy portfolio-count floor; it is not enforced.
 - `swing.max_holdings`: hard concurrent-holdings cap for a new-symbol BUY. Adds to an existing holding do not consume a slot; default `25`.
 - `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: legacy target-weight settings; they are not enforced. The active per-symbol BUY-exposure ceiling is `ladder.max_position_weight`.
+- `swing.trading_manager.max_report_age_hours`: reports older than this cannot create new execution orders. Default `6`; it is a freshness policy, not a report-generation cadence.
 - `swing.never_trade_symbols`: optional hard blacklist. Defaults to an empty list; use only for explicit temporary execution blocks.
 - `swing.daily_indicators`: daily-chart MA/MACD/RSI/Bollinger/Stochastic/Volume confluence settings used to filter swing entries.
 - `swing.journal`: daily/weekly/monthly learning journal cadence used to feed recent lessons back into decision prompts.

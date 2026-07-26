@@ -421,6 +421,10 @@ strategy:
       enabled: true
       use_ai: true
       due_window_minutes: 20
+      # A scheduled report older than this is not eligible to create new
+      # execution orders. Keep this explicit so the queue freshness policy
+      # cannot silently drift from the Rust default.
+      max_report_age_hours: 6
       # Maximum distinct report symbols evaluated per Decision Report in report
       # order. Additional symbols remain visible as skipped audit rows. Set 0
       # for explicit unlimited mode; a negative value fails closed.

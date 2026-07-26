@@ -129,7 +129,7 @@ Sequencing note: none of this should land before one placement has completed and
 
 Reference for U2. Established by extracting every `strategy.*`, `risk.*`, and `taxation.*` config access path from `src/*.rs` — both the `&["a", "b", "c"]` slice form and chained `.get("a").and_then(...)` — and comparing against the leaf keys in both shipped configs. Leaf-name grep alone over-counts badly (`cash_buffer_pct` appears to have 54 hits because it is a substring of `min_cash_buffer_pct`), so trust path extraction, not name matching.
 
-The audit implemented for U2 reports this automatically. After the 2026-07-26 automation-switch, exclusion, tax-estimate, risk-sizing, BUY-cost, candidate-ceiling, per-symbol exposure-cap, maximum-holdings, post-gate BUY-selection-cap, and duplicate-cash-buffer retirement remediations, the shipped configuration has **34 enforced, 29 advisory, 30 unused, 13 of them risk-surface**, 0 uncontracted, 8 contracted-but-absent.
+The audit implemented for U2 reports this automatically. After the 2026-07-26 automation-switch, exclusion, tax-estimate, risk-sizing, BUY-cost, candidate-ceiling, per-symbol exposure-cap, maximum-holdings, post-gate BUY-selection-cap, duplicate-cash-buffer retirement, and explicit report-freshness-policy remediations, the shipped configuration has **34 enforced, 30 advisory, 30 unused, 13 of them risk-surface**, 0 uncontracted, 7 contracted-but-absent.
 
 The remaining 13 keys that read as active risk controls and are not:
 
@@ -144,9 +144,8 @@ The remaining 13 keys that read as active risk controls and are not:
 
 A further 17 keys are unused without implying a missing safeguard (`strategy.mode`, `max_candidates`, `min_holdings`, the remaining `ladder.*` entries, the unported weekly/monthly journal cycle, `trading_manager.use_ai`, `trading_manager.due_window_minutes`, `analysis_pulses.timezone`, `taxation.share_income.currency`).
 
-Two further config divergences the audit surfaced:
+One further config divergence remains:
 
-- `strategy.swing.trading_manager.max_report_age_hours` is read by the Trading Manager but supplied by **neither** shipped config, so report freshness runs on the code default.
 - `strategy.quiver.*` is read by `src/quiver.rs` but exists only in `deploy/k8s/base/config.k8s.yaml`, so a local run silently uses different Quiver defaults than production.
 
 Enforced-by-contrast examples: `strategy.capital.min_cash_buffer_pct`, `strategy.capital.max_deployment_pct`, the `markov_gate` thresholds, `daily_indicators.min_confluences`/`min_reward_risk`, and `strategy.swing.never_trade_symbols` (`src/trading_manager.rs:3323`).
