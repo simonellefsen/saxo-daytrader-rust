@@ -3598,6 +3598,10 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 prefs: prefs.clone(),
                 sim_enabled: text(&data.saxo_auth, "environment").eq_ignore_ascii_case("SIM")
             }
+            TradeThesisOutcomeEvidencePanel {
+                evidence: data.execution_trade_thesis_evidence.clone(),
+                prefs: prefs.clone()
+            }
 
             // SIM-only: Reset portfolio from Live Positioner export
             {
@@ -3760,6 +3764,64 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&evidence, "status").replace('_', " ");
+    let recorded_count = value_i64(&evidence, "recorded_thesis_count");
+    let filled_count = value_i64(&evidence, "filled_thesis_count");
+    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
+    let outcome_label = |outcome: &JsonValue| {
+        let sample_count = value_i64(outcome, "sample_count");
+        let average = outcome
+            .get("average_directional_return_pct")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_signed_pct(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        let positive_rate = outcome
+            .get("positive_return_rate")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_pct(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        format!(
+            "{average} avg directional return · {positive_rate} positive · {sample_count} samples"
+        )
+    };
+    let one_session = evidence.get("one_session").unwrap_or(&JsonValue::Null);
+    let five_session = evidence.get("five_session").unwrap_or(&JsonValue::Null);
+    let interpretation = text_or(
+        &evidence,
+        "interpretation",
+        "Read-only post-fill evidence only.",
+    );
+    rsx! {
+        section { class: "section stack",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Trade Thesis Outcome Evidence" }
+                    p { class: "muted", "Read-only aggregation of recorded BUY theses and later stored daily closes. It does not backtest blocked candidates, claim causality, or change Hermes, gates, or broker orders." }
+                }
+                span { class: "status", "{status}" }
+            }
+            if text(&evidence, "status") == "no_recorded_theses" {
+                span { class: "muted", "No BUY admitted since thesis recording was deployed. New BUY admissions will add evidence automatically." }
+            } else if text(&evidence, "status") == "unavailable" {
+                span { class: "muted", "Trade-thesis outcome evidence is unavailable right now." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status", "{recorded_count} recorded" }
+                    span { class: "status", "{filled_count} reconciled fills" }
+                    span { class: "status", "{minimum_complete} five-session samples needed" }
+                }
+                div { class: "grid-2",
+                    div { class: "event", strong { "1 session" } span { class: "muted block", "{outcome_label(one_session)}" } }
+                    div { class: "event", strong { "5 sessions" } span { class: "muted block", "{outcome_label(five_session)}" } }
+                }
+                p { class: "muted", "{interpretation}" }
             }
         }
     }

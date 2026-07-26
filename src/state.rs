@@ -75,6 +75,8 @@ const GATE_REPLAY_MIN_CONFLUENCES: i64 = 4;
 const SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS: i64 = 180;
 const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
+const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
+const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const PROTECTIVE_STOP_HERMES_POSITION_LIMIT: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1432,6 +1434,18 @@ struct SupportRiskEvidenceStats {
     history_coverage_sum: f64,
 }
 
+#[derive(Default)]
+struct TradeThesisOutcomeStats {
+    recorded_thesis_count: usize,
+    filled_thesis_count: usize,
+    one_session_count: usize,
+    one_session_return_sum_pct: f64,
+    one_session_positive_count: usize,
+    five_session_count: usize,
+    five_session_return_sum_pct: f64,
+    five_session_positive_count: usize,
+}
+
 fn average_or_null(total: f64, count: usize) -> JsonValue {
     if count == 0 {
         JsonValue::Null
@@ -1446,6 +1460,83 @@ fn fraction_or_null(numerator: usize, denominator: usize) -> JsonValue {
     } else {
         json!(numerator as f64 / denominator as f64)
     }
+}
+
+/// Summarizes only the recorded BUY theses that have reconciled-fill outcome
+/// evidence. This is observational aggregation, not a backtest: it does not
+/// include blocked candidates, broker adjustments, FX, costs, or later
+/// position changes, and it does not claim that the thesis caused an outcome.
+fn trade_thesis_outcome_evidence_from_holding_outcomes(outcomes: &[JsonValue]) -> JsonValue {
+    let mut stats = TradeThesisOutcomeStats {
+        recorded_thesis_count: outcomes.len(),
+        ..TradeThesisOutcomeStats::default()
+    };
+    for outcome in outcomes {
+        if outcome.is_null() || value_f64(outcome, "filled_quantity") <= 0.0 {
+            continue;
+        }
+        stats.filled_thesis_count += 1;
+        for (session, count, return_sum, positive_count) in [
+            (
+                outcome.get("one_session").unwrap_or(&JsonValue::Null),
+                &mut stats.one_session_count,
+                &mut stats.one_session_return_sum_pct,
+                &mut stats.one_session_positive_count,
+            ),
+            (
+                outcome.get("five_session").unwrap_or(&JsonValue::Null),
+                &mut stats.five_session_count,
+                &mut stats.five_session_return_sum_pct,
+                &mut stats.five_session_positive_count,
+            ),
+        ] {
+            if session.is_null() {
+                continue;
+            }
+            let directional_return_pct = value_f64(session, "directional_return_pct");
+            if !directional_return_pct.is_finite() {
+                continue;
+            }
+            *count += 1;
+            *return_sum += directional_return_pct;
+            if directional_return_pct > 0.0 {
+                *positive_count += 1;
+            }
+        }
+    }
+    let status = if stats.recorded_thesis_count == 0 {
+        "no_recorded_theses"
+    } else if stats.five_session_count < TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS {
+        "collecting"
+    } else {
+        "preliminary"
+    };
+    let session_summary = |count: usize, return_sum_pct: f64, positive_count: usize| {
+        json!({
+            "sample_count": count,
+            "average_directional_return_pct": average_or_null(return_sum_pct, count),
+            "positive_return_rate": fraction_or_null(positive_count, count),
+        })
+    };
+    json!({
+        "status": status,
+        "recorded_thesis_count": stats.recorded_thesis_count,
+        "filled_thesis_count": stats.filled_thesis_count,
+        "one_session": session_summary(
+            stats.one_session_count,
+            stats.one_session_return_sum_pct,
+            stats.one_session_positive_count,
+        ),
+        "five_session": session_summary(
+            stats.five_session_count,
+            stats.five_session_return_sum_pct,
+            stats.five_session_positive_count,
+        ),
+        "minimum_complete_observations": TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS,
+        "scan_limit": TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT,
+        "safety": "read_only_local_execution_fills_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
+        "interpretation": "Directional returns compare reconciled BUY fills with later stored daily closes. They exclude blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and any causal claim about the thesis."
+    })
 }
 
 /// Groups stored daily signals by their recorded support-break label and
@@ -2715,6 +2806,21 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let execution_trade_thesis_evidence = if dashboard_loads_tab_exclusive_data(
+            &active_view,
+            "execution",
+        ) {
+            self.trade_thesis_outcome_evidence().await.unwrap_or_else(|err| {
+                    warn!("dashboard trade-thesis evidence degraded: {err:#}");
+                    json!({
+                        "status": "unavailable",
+                        "safety": "read_only_local_execution_fills_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
+                        "interpretation": "Trade-thesis outcome evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
+                    })
+                })
+        } else {
+            JsonValue::Null
+        };
         let execution_protection = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
         {
             self.protective_stop_coverage().await.unwrap_or_else(|err| {
@@ -3105,6 +3211,7 @@ impl AppState {
             orders,
             execution_fills,
             execution_events,
+            execution_trade_thesis_evidence,
             reports,
             manual_report_in_flight: self.manual_decision_report_in_flight().await,
             decision_pulse_statuses,
@@ -5659,6 +5766,42 @@ impl AppState {
             return Ok(JsonValue::Null);
         };
         Ok(serde_json::from_str(raw).unwrap_or(JsonValue::Null))
+    }
+
+    async fn trade_thesis_outcome_evidence(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, created_at, symbol, action, quantity, currency, trade_thesis_json
+                 FROM execution_orders
+                 WHERE action = 'BUY'
+                   AND trade_thesis_json IS NOT NULL
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT {}",
+                TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT
+            ))
+            .await?;
+        let mut outcomes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let raw_thesis = row
+                .get("trade_thesis_json")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let thesis = if raw_thesis.is_object() {
+                raw_thesis
+            } else {
+                raw_thesis
+                    .as_str()
+                    .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+                    .unwrap_or(JsonValue::Null)
+            };
+            if json_text(&thesis, "status") != "recorded" {
+                continue;
+            }
+            outcomes.push(self.execution_order_holding_period_outcome(&row).await?);
+        }
+        Ok(trade_thesis_outcome_evidence_from_holding_outcomes(
+            &outcomes,
+        ))
     }
 
     async fn latest_indicator_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
@@ -13144,6 +13287,85 @@ market_data:
         assert!((value_f64(&outcome, "fill_price_local") - 107.5).abs() < 1e-9);
         assert_eq!(json_text(&outcome["one_session"], "as_of"), "2026-07-21");
         assert_eq!(json_text(&outcome["five_session"], "as_of"), "2026-07-27");
+    }
+
+    #[tokio::test]
+    async fn trade_thesis_outcome_evidence_reads_only_recorded_buy_theses() {
+        let state = runtime_settings_test_state("{}").await;
+        for statement in [
+            "CREATE TABLE execution_orders (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                currency TEXT NOT NULL,
+                trade_thesis_json TEXT
+            )",
+            "CREATE TABLE execution_fills (
+                execution_order_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                delta_quantity REAL NOT NULL,
+                average_price_local REAL NOT NULL,
+                currency TEXT NOT NULL
+            )",
+            "CREATE TABLE daily_indicator_signals (
+                symbol TEXT NOT NULL,
+                run_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                close REAL NOT NULL
+            )",
+        ] {
+            sqlx::query(statement)
+                .execute(&state.pool)
+                .await
+                .expect("create trade-thesis evidence table");
+        }
+        sqlx::query(
+            "INSERT INTO execution_orders
+                (id, created_at, symbol, action, quantity, currency, trade_thesis_json)
+             VALUES
+                (41, '2026-07-20T15:00:00Z', 'AMD:xnas', 'BUY', 1, 'USD',
+                 '{\"status\":\"recorded\"}'),
+                (42, '2026-07-20T15:00:00Z', 'NVDA:xnas', 'BUY', 1, 'USD', NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed execution-order theses");
+        sqlx::query(
+            "INSERT INTO execution_fills
+                (execution_order_id, created_at, delta_quantity, average_price_local, currency)
+             VALUES (41, '2026-07-20T15:30:00Z', 1, 100, 'USD')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed reconciled thesis fill");
+        sqlx::query(
+            "INSERT INTO daily_indicator_signals (symbol, run_date, status, close) VALUES
+                ('AMD:xnas', '2026-07-21', 'ok', 101),
+                ('AMD:xnas', '2026-07-22', 'ok', 102),
+                ('AMD:xnas', '2026-07-23', 'ok', 103),
+                ('AMD:xnas', '2026-07-24', 'ok', 104),
+                ('AMD:xnas', '2026-07-27', 'ok', 105)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed later AMD closes");
+
+        let evidence = state
+            .trade_thesis_outcome_evidence()
+            .await
+            .expect("read trade-thesis outcome evidence");
+
+        assert_eq!(json_text(&evidence, "status"), "collecting");
+        assert_eq!(value_i64(&evidence, "recorded_thesis_count"), 1);
+        assert_eq!(value_i64(&evidence, "filled_thesis_count"), 1);
+        assert_eq!(value_i64(&evidence["one_session"], "sample_count"), 1);
+        assert_eq!(value_i64(&evidence["five_session"], "sample_count"), 1);
+        assert!(
+            (value_f64(&evidence["five_session"], "average_directional_return_pct") - 0.05).abs()
+                < 1e-9
+        );
     }
 
     #[tokio::test]

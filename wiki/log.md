@@ -1397,3 +1397,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added a daily, bounded `ens/v1/activities` read over the preceding 14 days for Order and Position activity. The scheduler records only aggregate counts, local broker-order match counts, page-capping state, and latest activity time; it never persists raw broker activity, account or client identity, symbols, order identifiers, fills, or ledger changes.
 - The daily completion cursor survives rollouts in `runtime_settings`, preventing the 10-minute scheduler from repeatedly requesting the same lookback window. A capped response is explicitly marked `partial`; pagination and deterministic event-level reconciliation remain follow-up work.
+
+## [2026-07-26] trading-quality | Read-only trade-thesis outcome evidence
+
+- Execution now aggregates only the latest 50 persisted, `recorded` BUY thesis snapshots against their reconciled local fills and later stored daily indicator closes. It reports directional return and positive-rate evidence at one and five sessions, and remains explicitly `collecting` until 20 mature five-session observations exist.
+- This is forward-only observational context, not a backtest or a causal measurement. It excludes blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and outside-ledger inventory; it performs no Saxo, provider, Hermes, configuration, gate, or order mutation.
