@@ -10,6 +10,11 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] trading-quality | Read-only post-fill holding-period attribution
+
+- Execution-order attribution now uses the weighted price of reconciled fills and the first and fifth subsequent persisted daily-indicator closes to show 1-session and 5-session market and directional returns. This adds no Saxo or quote call while rendering the Execution view.
+- BUY direction treats a higher later close as positive; SELL direction reverses that sign. The UI explicitly labels the comparison as evidence only: it excludes FX, commission, tax, slippage, fill timing, and later position changes, and is not realised P/L. Weekends and holidays contribute no synthetic session: only distinct available trading-day closes count.
+
 ## [2026-07-26] testing | Decision-report provider regression corpus
 
 - Added compact, source-controlled Decision Report fixtures that must conform to the OpenRouter strict schema before they are fed through the same parser and completion normalizer used at runtime. The corpus covers fenced/prefaced JSON, Nordic/EU exchange scope filtering, strategy-plan normalization, and dry-run execution safety without a provider, broker, database, or market-hours dependency.

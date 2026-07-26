@@ -4608,6 +4608,7 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
     let markov = attribution.get("markov").unwrap_or(&null);
     let capital = attribution.get("capital_budget").unwrap_or(&null);
     let ledger_outcome = attribution.get("ledger_outcome").unwrap_or(&null);
+    let holding_period = attribution.get("holding_period_outcome").unwrap_or(&null);
 
     let mut lines = Vec::new();
     lines.push(format!(
@@ -4767,6 +4768,41 @@ fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> S
                 format_dkk(value_f64(ledger_outcome, "commission_dkk"), prefs),
             ));
         }
+    }
+    if !holding_period.is_null() {
+        let describe_session = |value: &JsonValue, label: &str| {
+            if value.is_null() {
+                return format!("{label}: pending");
+            }
+            format!(
+                "{label}: {} at {} · market {} · directional {}",
+                format_local_money(
+                    value_f64(value, "close_local"),
+                    &fallback_text(holding_period, "currency", "DKK"),
+                    prefs
+                ),
+                format_timestamp(&text(value, "as_of"), prefs),
+                format_signed_pct(value_f64(value, "market_return_pct"), prefs),
+                format_signed_pct(value_f64(value, "directional_return_pct"), prefs),
+            )
+        };
+        lines.push(format!(
+            "Holding-period evidence: {} subsequent daily closes · {} · {}",
+            text_or(holding_period, "available_sessions", "0"),
+            describe_session(
+                holding_period.get("one_session").unwrap_or(&null),
+                "1 session"
+            ),
+            describe_session(
+                holding_period.get("five_session").unwrap_or(&null),
+                "5 sessions"
+            ),
+        ));
+        lines.push(text_or(
+            holding_period,
+            "interpretation",
+            "Read-only post-fill comparison; not realised P/L.",
+        ));
     }
     lines.join("\n")
 }

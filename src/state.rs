@@ -2308,6 +2308,67 @@ fn compact_execution_ledger_outcome(
     })
 }
 
+/// Post-fill market movement is attribution evidence, not realised P/L. It
+/// intentionally uses only persisted fills and daily-indicator closes: no
+/// Saxo/quote request occurs while rendering an execution row.
+fn compact_holding_period_outcome(
+    order: &JsonValue,
+    fill_summary: &JsonValue,
+    subsequent_closes: &[JsonValue],
+) -> JsonValue {
+    let side = json_text(order, "action").to_uppercase();
+    if !matches!(side.as_str(), "BUY" | "SELL") {
+        return JsonValue::Null;
+    }
+    let filled_quantity = value_f64(fill_summary, "filled_quantity");
+    let fill_price_local = value_f64(fill_summary, "average_fill_price_local");
+    let first_fill_at = json_text(fill_summary, "first_fill_at");
+    if filled_quantity <= 0.0 || fill_price_local <= 0.0 || first_fill_at.is_empty() {
+        return JsonValue::Null;
+    }
+
+    let directional_multiplier = if side == "BUY" { 1.0 } else { -1.0 };
+    let session_outcome = |session: usize, close: Option<&JsonValue>| {
+        let Some(close) = close else {
+            return JsonValue::Null;
+        };
+        let close_local = value_f64(close, "close");
+        if close_local <= 0.0 {
+            return JsonValue::Null;
+        }
+        let market_return_pct = close_local / fill_price_local - 1.0;
+        json!({
+            "as_of": json_text(close, "run_date"),
+            "session": session,
+            "close_local": close_local,
+            "market_return_pct": market_return_pct,
+            "directional_return_pct": market_return_pct * directional_multiplier,
+        })
+    };
+    let one_session = session_outcome(1, subsequent_closes.first());
+    let five_session = session_outcome(5, subsequent_closes.get(4));
+    let status = if !five_session.is_null() {
+        "complete"
+    } else if !one_session.is_null() {
+        "partial"
+    } else {
+        "pending_daily_close"
+    };
+    json!({
+        "status": status,
+        "evidence_source": "reconciled_fills_and_daily_indicator_closes",
+        "side": side,
+        "filled_quantity": filled_quantity,
+        "fill_price_local": fill_price_local,
+        "currency": json_text(fill_summary, "currency"),
+        "first_fill_at": first_fill_at,
+        "available_sessions": subsequent_closes.len(),
+        "one_session": one_session,
+        "five_session": five_session,
+        "interpretation": "Directional return is a read-only post-fill price comparison. It excludes FX, commissions, tax, slippage, and later position changes; it is not realised P/L."
+    })
+}
+
 fn attribution_delta_label(
     hermes_order: &JsonValue,
     manager_order: &JsonValue,
@@ -5282,6 +5343,17 @@ impl AppState {
                 JsonValue::Null
             }
         };
+        let holding_period_outcome = match self.execution_order_holding_period_outcome(order).await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    order_id = value_i64(order, "id"),
+                    "execution holding-period attribution degraded: {err:#}"
+                );
+                JsonValue::Null
+            }
+        };
         let delta = attribution_delta_label(&hermes_order, &manager_order, order);
 
         Ok(json!({
@@ -5311,6 +5383,7 @@ impl AppState {
             "markov": markov,
             "capital_budget": capital,
             "ledger_outcome": ledger_outcome,
+            "holding_period_outcome": holding_period_outcome,
         }))
     }
 
@@ -5365,6 +5438,55 @@ impl AppState {
             order,
             &legacy_ledger,
             "legacy_order_ledger",
+        ))
+    }
+
+    async fn execution_order_holding_period_outcome(&self, order: &JsonValue) -> Result<JsonValue> {
+        let order_id = value_i64(order, "id");
+        if order_id <= 0 {
+            return Ok(JsonValue::Null);
+        }
+        let fill_summary = self
+            .first_json(&format!(
+                "SELECT MIN(created_at) AS first_fill_at,
+                        COALESCE(SUM(delta_quantity), 0) AS filled_quantity,
+                        CASE WHEN COALESCE(SUM(delta_quantity), 0) > 0
+                             THEN SUM(delta_quantity * average_price_local) / SUM(delta_quantity)
+                             ELSE 0 END AS average_fill_price_local,
+                        MAX(currency) AS currency
+                 FROM execution_fills
+                 WHERE execution_order_id = {} AND delta_quantity > 0",
+                order_id
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        let first_fill_at = json_text(&fill_summary, "first_fill_at");
+        let fill_date = first_fill_at.chars().take(10).collect::<String>();
+        if fill_date.len() != 10 {
+            return Ok(JsonValue::Null);
+        }
+        let symbol = json_text(order, "symbol");
+        if symbol.is_empty() {
+            return Ok(JsonValue::Null);
+        }
+        // The next distinct daily closes are trading-session observations. A
+        // weekend/holiday does not manufacture a synthetic one-day outcome.
+        let subsequent_closes = self
+            .select_json(&format!(
+                "SELECT run_date, MAX(close) AS close
+                 FROM daily_indicator_signals
+                 WHERE symbol = '{}' AND status = 'ok' AND close > 0 AND run_date > '{}'
+                 GROUP BY run_date
+                 ORDER BY run_date ASC
+                 LIMIT 5",
+                sql_escape(&symbol),
+                sql_escape(&fill_date)
+            ))
+            .await?;
+        Ok(compact_holding_period_outcome(
+            order,
+            &fill_summary,
+            &subsequent_closes,
         ))
     }
 
@@ -12695,6 +12817,114 @@ market_data:
             outcome.get("fully_filled").and_then(JsonValue::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn holding_period_attribution_uses_available_trading_sessions_and_side() {
+        let fill = json!({
+            "first_fill_at": "2026-07-20T15:34:00Z",
+            "filled_quantity": 2.0,
+            "average_fill_price_local": 100.0,
+            "currency": "USD"
+        });
+        let closes = vec![
+            json!({"run_date": "2026-07-21", "close": 105.0}),
+            json!({"run_date": "2026-07-22", "close": 102.0}),
+            json!({"run_date": "2026-07-23", "close": 104.0}),
+            json!({"run_date": "2026-07-24", "close": 106.0}),
+            json!({"run_date": "2026-07-27", "close": 110.0}),
+        ];
+
+        let buy = compact_holding_period_outcome(&json!({"action": "BUY"}), &fill, &closes);
+        assert_eq!(json_text(&buy, "status"), "complete");
+        assert_eq!(value_i64(&buy, "available_sessions"), 5);
+        assert!((value_f64(&buy["one_session"], "market_return_pct") - 0.05).abs() < 1e-9);
+        assert!((value_f64(&buy["five_session"], "directional_return_pct") - 0.10).abs() < 1e-9);
+
+        let sell = compact_holding_period_outcome(&json!({"action": "SELL"}), &fill, &closes);
+        assert!((value_f64(&sell["one_session"], "directional_return_pct") + 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn holding_period_attribution_stays_partial_until_five_closes_exist() {
+        let outcome = compact_holding_period_outcome(
+            &json!({"action": "BUY"}),
+            &json!({
+                "first_fill_at": "2026-07-20T15:34:00Z",
+                "filled_quantity": 1.0,
+                "average_fill_price_local": 100.0,
+                "currency": "USD"
+            }),
+            &[json!({"run_date": "2026-07-21", "close": 98.0})],
+        );
+
+        assert_eq!(json_text(&outcome, "status"), "partial");
+        assert!((value_f64(&outcome["one_session"], "directional_return_pct") + 0.02).abs() < 1e-9);
+        assert!(outcome["five_session"].is_null());
+    }
+
+    #[tokio::test]
+    async fn holding_period_attribution_reads_reconciled_fills_and_daily_closes() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE execution_fills (
+                execution_order_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                delta_quantity REAL NOT NULL,
+                average_price_local REAL NOT NULL,
+                currency TEXT NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution fills");
+        sqlx::query(
+            "CREATE TABLE daily_indicator_signals (
+                symbol TEXT NOT NULL,
+                run_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                close REAL NOT NULL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create daily indicator signals");
+        sqlx::query(
+            "INSERT INTO execution_fills
+                (execution_order_id, created_at, delta_quantity, average_price_local, currency)
+             VALUES (42, '2026-07-20T15:34:00Z', 1, 100, 'USD'),
+                    (42, '2026-07-20T15:35:00Z', 3, 110, 'USD')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert reconciled fills");
+        sqlx::query(
+            "INSERT INTO daily_indicator_signals (symbol, run_date, status, close) VALUES
+                ('AMD:xnas', '2026-07-20', 'ok', 99),
+                ('AMD:xnas', '2026-07-21', 'ok', 108),
+                ('AMD:xnas', '2026-07-22', 'ok', 109),
+                ('AMD:xnas', '2026-07-23', 'ok', 110),
+                ('AMD:xnas', '2026-07-24', 'ok', 111),
+                ('AMD:xnas', '2026-07-27', 'ok', 112)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert daily closes");
+
+        let outcome = state
+            .execution_order_holding_period_outcome(&json!({
+                "id": 42,
+                "symbol": "AMD:xnas",
+                "action": "BUY"
+            }))
+            .await
+            .expect("read holding-period attribution");
+
+        assert_eq!(json_text(&outcome, "status"), "complete");
+        assert_eq!(value_f64(&outcome, "filled_quantity"), 4.0);
+        assert!((value_f64(&outcome, "fill_price_local") - 107.5).abs() < 1e-9);
+        assert_eq!(json_text(&outcome["one_session"], "as_of"), "2026-07-21");
+        assert_eq!(json_text(&outcome["five_session"], "as_of"), "2026-07-27");
     }
 
     #[tokio::test]
