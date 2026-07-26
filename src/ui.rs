@@ -2271,6 +2271,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         .get("final_technical")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let cost_guard = row.get("cost_guard").cloned().unwrap_or(JsonValue::Null);
     let markov = row.get("markov").cloned().unwrap_or(JsonValue::Null);
     let hermes = row.get("hermes").cloned().unwrap_or(JsonValue::Null);
     let outcome = text(&row, "outcome");
@@ -2335,7 +2336,13 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     };
     let hermes_effect = fallback_text(&hermes, "effect", "not recorded").replace('_', " ");
     let gate_code = text(&row, "gate_code").replace('_', " ");
-    let gate_detail = candidate_gate_detail(&row, &final_technical, final_technical_recorded);
+    let gate_detail = candidate_gate_detail(
+        &row,
+        &final_technical,
+        final_technical_recorded,
+        &cost_guard,
+        &prefs,
+    );
     let requested_quantity = value_f64(&hermes, "requested_quantity");
     let resulting_quantity = value_f64(&hermes, "resulting_quantity");
     let hermes_label = if requested_quantity > 0.0 {
@@ -2420,8 +2427,29 @@ fn candidate_gate_detail(
     row: &JsonValue,
     final_technical: &JsonValue,
     final_technical_recorded: bool,
+    cost_guard: &JsonValue,
+    prefs: &LocalizationPrefs,
 ) -> String {
-    if text(row, "gate_code") != "technical" {
+    let gate_code = text(row, "gate_code");
+    if gate_code == "cost_guard" {
+        if !cost_guard
+            .get("verified_from_db")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+        {
+            return "No database-verified cost calculation was recorded.".to_string();
+        }
+        return format!(
+            "Expected reward {} vs lower-bound hurdle {} (commission {}, slippage {}; {:.1}x, {:.1} bps).",
+            format_dkk(value_f64(cost_guard, "expected_reward_dkk"), prefs),
+            format_dkk(value_f64(cost_guard, "required_reward_dkk"), prefs),
+            format_dkk(value_f64(cost_guard, "round_trip_commission_dkk"), prefs),
+            format_dkk(value_f64(cost_guard, "one_way_slippage_dkk"), prefs),
+            value_f64(cost_guard, "cost_guard_multiple"),
+            value_f64(cost_guard, "estimated_slippage_bps"),
+        );
+    }
+    if gate_code != "technical" {
         return String::new();
     }
     if !final_technical_recorded {
@@ -7622,7 +7650,13 @@ mod tests {
             "HOLD / neutral / 1/3"
         );
         assert_eq!(
-            candidate_gate_detail(&row, &final_technical, true),
+            candidate_gate_detail(
+                &row,
+                &final_technical,
+                true,
+                &JsonValue::Null,
+                &default_prefs()
+            ),
             "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
         );
     }
@@ -7631,8 +7665,34 @@ mod tests {
     fn waterfall_technical_gate_labels_legacy_runs_without_final_snapshot() {
         let row = json!({"action": "BUY", "gate_code": "technical"});
         assert_eq!(
-            candidate_gate_detail(&row, &JsonValue::Null, false),
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &default_prefs()
+            ),
             "Final technical snapshot was not recorded for this legacy run."
+        );
+    }
+
+    #[test]
+    fn waterfall_cost_guard_explains_recorded_hurdle() {
+        let prefs = default_prefs();
+        let row = json!({"action": "BUY", "gate_code": "cost_guard"});
+        let cost_guard = json!({
+            "verified_from_db": true,
+            "expected_reward_dkk": 120.0,
+            "required_reward_dkk": 150.0,
+            "round_trip_commission_dkk": 40.0,
+            "one_way_slippage_dkk": 90.0,
+            "cost_guard_multiple": 1.5,
+            "estimated_slippage_bps": 8.0,
+        });
+
+        assert_eq!(
+            candidate_gate_detail(&row, &JsonValue::Null, false, &cost_guard, &prefs),
+            "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
         );
     }
 

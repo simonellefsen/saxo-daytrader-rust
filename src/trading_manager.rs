@@ -83,6 +83,16 @@ struct RiskPerTradeConfig {
     protective_stops_enabled: bool,
 }
 
+/// Deterministic lower-bound transaction-cost policy for BUYs. The estimate
+/// deliberately uses only the exchange minimum commission and configured
+/// slippage rather than claiming to know the broker's eventual commission or
+/// fill price.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CostGuardConfig {
+    estimated_slippage_bps: f64,
+    cost_guard_multiple: f64,
+}
+
 fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
     RiskPerTradeConfig {
         risk_per_trade_pct: yaml_f64(&state.config, &["strategy", "swing", "risk_per_trade_pct"])
@@ -97,6 +107,15 @@ fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
             &["strategy", "ladder", "submit_stop_loss_after_fill"],
         )
         .unwrap_or(false),
+    }
+}
+
+fn cost_guard_config(state: &AppState) -> CostGuardConfig {
+    CostGuardConfig {
+        estimated_slippage_bps: yaml_f64(&state.config, &["strategy", "estimated_slippage_bps"])
+            .unwrap_or(8.0),
+        cost_guard_multiple: yaml_f64(&state.config, &["strategy", "cost_guard_multiple"])
+            .unwrap_or(1.5),
     }
 }
 
@@ -993,6 +1012,7 @@ async fn run_for_report(
     let overlay_min_confluences = overlay
         .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
     let risk_per_trade = risk_per_trade_config(state);
+    let cost_guard = cost_guard_config(state);
     let mut markov_cfg = markov_gate_config(state);
     if let Some(value) = overlay
         .and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.min_signed_signal"))
@@ -1328,6 +1348,14 @@ async fn run_for_report(
                 }
             }
         }
+        if gate.approved && order.action == "BUY" {
+            let cost_gate = cost_guard_gate(&mut order, cost_guard);
+            if !cost_gate.approved {
+                gate = cost_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, cost_gate.reason);
+            }
+        }
         if gate.approved {
             if order.action == "BUY" {
                 capital_budget.reserve_buy(order.estimated_value_dkk.unwrap_or(0.0));
@@ -1396,6 +1424,7 @@ async fn run_for_report(
             "active": active_quarantines.iter().map(InstrumentQuarantine::to_json).collect::<Vec<_>>(),
         },
         "max_commission_pct_per_side": max_commission_pct_per_side,
+        "cost_guard": cost_guard.to_json(),
         "approved_order_count": approved.len(),
         "skipped_order_count": skipped.len(),
         "approved_orders": approved.iter().map(|(order, reason)| json!({
@@ -1404,6 +1433,7 @@ async fn run_for_report(
             "action": order.action,
             "gate_code": "approved",
             "final_technical": compact_hermes_preflight_technical(order),
+            "final_cost_guard": compact_cost_guard(order),
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
         "skipped_orders": skipped,
@@ -1424,6 +1454,7 @@ async fn run_for_report(
             "Orders are deduplicated by strategy_key before insertion.",
             "BUY orders are capped by cash available after the configured buffer and deployment cap.",
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
+            "BUY orders must also have a database-verified indicator reward that exceeds the configured lower-bound round-trip commission/slippage hurdle; this cost guard does not claim to predict realised broker costs or fill prices.",
             "The monthly-loss guardrail halves (by configuration) the cycle-wide BUY budget in its soft-loss band and suspends BUYs at the hard floor; SELLs are never blocked. An operator override can resume BUYs for the current month after the hard floor and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
             "BUY orders without technical confluence can pass as starter positions when a fresh database-verified Markov long signal supports them; starter size is capped by markov_gate.max_position_pct.",
@@ -1499,6 +1530,7 @@ async fn hermes_decision_preflight_bundle(
 ) -> JsonValue {
     let today = Utc::now().date_naive();
     let markov_cfg = markov_gate_config(state);
+    let cost_guard = cost_guard_config(state);
     let latest_markov_run = match state.latest_markov_run().await {
         Ok(run) if !run.is_null() => compact_hermes_preflight_markov_run(&run),
         _ => json!({"status": "unavailable"}),
@@ -1581,6 +1613,7 @@ async fn hermes_decision_preflight_bundle(
         "portfolio": overview.get("portfolio_summary").cloned().unwrap_or(JsonValue::Null),
         "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
         "capital_budget": capital_budget.to_json(),
+        "cost_guard": cost_guard.to_json(),
         "monthly_loss_circuit_breaker": {
             "active": buy_halt.active,
             "threshold_breached": buy_halt.threshold_breached,
@@ -2397,6 +2430,172 @@ fn risk_per_trade_gate(
             )
         },
     }
+}
+
+impl CostGuardConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "estimated_slippage_bps": self.estimated_slippage_bps,
+            "cost_guard_multiple": self.cost_guard_multiple,
+            "model": "exchange_minimum_commission_plus_one_way_slippage",
+            "scope": "BUY_only",
+        })
+    }
+}
+
+/// Require an indicator-implied target to clear a deterministic lower-bound
+/// cost hurdle. `reward_risk` is computed from the stored daily close,
+/// resistance, and a 2x ATR risk distance, so neither the provider nor a
+/// model-provided price can make a marginal trade appear economical.
+///
+/// This is intentionally not a P/L forecast. The actual commission, FX cost,
+/// spread, and fill price remain broker-dependent; using the exchange minimum
+/// makes the stored result a transparent floor, not an optimistic estimate.
+fn cost_guard_gate(order: &mut CandidateOrder, config: CostGuardConfig) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Cost guard applies to BUYs only.".to_string(),
+        };
+    }
+    if !config.estimated_slippage_bps.is_finite() || config.estimated_slippage_bps < 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.estimated_slippage_bps must be finite and non-negative."
+                .to_string(),
+        };
+    }
+    if !config.cost_guard_multiple.is_finite() || config.cost_guard_multiple < 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.cost_guard_multiple must be finite and non-negative."
+                .to_string(),
+        };
+    }
+    let Some(technical) = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("technical"))
+    else {
+        return GateDecision {
+            approved: false,
+            reason: "Cost guard requires database-verified daily close, ATR14, and reward/risk."
+                .to_string(),
+        };
+    };
+    if technical
+        .get("verified_from_db")
+        .and_then(JsonValue::as_bool)
+        != Some(true)
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Cost guard will not use model-supplied daily indicators.".to_string(),
+        };
+    }
+    let close = value_f64(technical, "close");
+    let atr14 = value_f64(technical, "atr14");
+    let reward_risk = value_f64(technical, "reward_risk");
+    let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+    if order.quantity < 1.0
+        || !close.is_finite()
+        || close <= 0.0
+        || !atr14.is_finite()
+        || atr14 <= 0.0
+        || !reward_risk.is_finite()
+        || reward_risk <= 0.0
+        || !estimated_value_dkk.is_finite()
+        || estimated_value_dkk <= 0.0
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Cost guard requires positive database-verified close, ATR14, reward/risk, quantity, and DKK value."
+                .to_string(),
+        };
+    }
+
+    let per_share_dkk = estimated_value_dkk / order.quantity;
+    let expected_reward_per_share_local = reward_risk * 2.0 * atr14;
+    let expected_reward_dkk =
+        expected_reward_per_share_local * order.quantity * (per_share_dkk / close);
+    let one_way_commission_dkk = crate::saxo_order::min_commission_dkk_for_exchange(
+        &exchange_code(&order.symbol).to_lowercase(),
+    );
+    let round_trip_commission_dkk = one_way_commission_dkk * 2.0;
+    let one_way_slippage_dkk = estimated_value_dkk * (config.estimated_slippage_bps / 10_000.0);
+    let required_reward_dkk =
+        (round_trip_commission_dkk * config.cost_guard_multiple) + one_way_slippage_dkk;
+    if !expected_reward_dkk.is_finite()
+        || !one_way_commission_dkk.is_finite()
+        || !required_reward_dkk.is_finite()
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Cost guard could not derive finite DKK reward and cost estimates.".to_string(),
+        };
+    }
+    let passes = expected_reward_dkk > required_reward_dkk;
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "cost_guard".to_string(),
+            json!({
+                "verified_from_db": true,
+                "estimated_slippage_bps": config.estimated_slippage_bps,
+                "cost_guard_multiple": config.cost_guard_multiple,
+                "reference_close_local": close,
+                "atr14": atr14,
+                "reward_risk": reward_risk,
+                "expected_reward_dkk": expected_reward_dkk,
+                "one_way_commission_dkk": one_way_commission_dkk,
+                "round_trip_commission_dkk": round_trip_commission_dkk,
+                "one_way_slippage_dkk": one_way_slippage_dkk,
+                "required_reward_dkk": required_reward_dkk,
+                "passes": passes,
+                "basis": "exchange_minimum_commission_plus_one_way_slippage",
+            }),
+        );
+    }
+    if !passes {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Cost guard rejected BUY: expected reward {expected_reward_dkk:.0} DKK does not exceed the {required_reward_dkk:.0} DKK lower-bound commission/slippage hurdle ({:.1}x commission plus {:.1} bps one-way slippage).",
+                config.cost_guard_multiple, config.estimated_slippage_bps,
+            ),
+        };
+    }
+    GateDecision {
+        approved: true,
+        reason: format!(
+            "Cost guard passed: expected reward {expected_reward_dkk:.0} DKK exceeds the {required_reward_dkk:.0} DKK lower-bound commission/slippage hurdle.",
+        ),
+    }
+}
+
+fn compact_cost_guard(order: &CandidateOrder) -> JsonValue {
+    let guard = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("cost_guard"));
+    let Some(guard) = guard else {
+        return JsonValue::Null;
+    };
+    json!({
+        "verified_from_db": guard.get("verified_from_db").cloned().unwrap_or(JsonValue::Null),
+        "estimated_slippage_bps": guard.get("estimated_slippage_bps").cloned().unwrap_or(JsonValue::Null),
+        "cost_guard_multiple": guard.get("cost_guard_multiple").cloned().unwrap_or(JsonValue::Null),
+        "expected_reward_dkk": guard.get("expected_reward_dkk").cloned().unwrap_or(JsonValue::Null),
+        "round_trip_commission_dkk": guard.get("round_trip_commission_dkk").cloned().unwrap_or(JsonValue::Null),
+        "one_way_slippage_dkk": guard.get("one_way_slippage_dkk").cloned().unwrap_or(JsonValue::Null),
+        "required_reward_dkk": guard.get("required_reward_dkk").cloned().unwrap_or(JsonValue::Null),
+        "passes": guard.get("passes").cloned().unwrap_or(JsonValue::Null),
+        "basis": guard.get("basis").cloned().unwrap_or(JsonValue::Null),
+    })
 }
 
 const INDICATOR_MAX_AGE_DAYS: i64 = 5;
@@ -3316,6 +3515,7 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         // with a fresh database signal. Persist only compact safe fields so the
         // audit UI can explain the decision without raw inputs.
         "final_technical": compact_hermes_preflight_technical(order),
+        "final_cost_guard": compact_cost_guard(order),
         "technical_gate": reason,
     })
 }
@@ -3345,6 +3545,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "cash_budget"
     } else if normalized.contains("risk-per-trade") {
         "risk_per_trade"
+    } else if normalized.starts_with("cost guard") {
+        "cost_guard"
     } else if normalized.contains("commission-efficiency floor") {
         "commission_floor"
     } else if normalized.starts_with("estimated trade value") {
@@ -4894,6 +5096,72 @@ mod tests {
         }
     }
 
+    fn cost_guard_test_config() -> CostGuardConfig {
+        CostGuardConfig {
+            estimated_slippage_bps: 8.0,
+            cost_guard_multiple: 1.5,
+        }
+    }
+
+    fn cost_guard_order(reward_risk: f64, verified_from_db: bool) -> CandidateOrder {
+        CandidateOrder::from_json(json!({
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "quantity": 10.0,
+            "order_type": "Market",
+            "estimated_value_dkk": 10_000.0,
+            "strategy_key": "test:cost-guard",
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "verified_from_db": verified_from_db,
+                    "close": 100.0,
+                    "atr14": 10.0,
+                    "reward_risk": reward_risk
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn cost_guard_passes_verified_reward_that_clears_lower_bound_costs() {
+        let mut order = cost_guard_order(2.0, true);
+        let gate = cost_guard_gate(&mut order, cost_guard_test_config());
+
+        assert!(gate.approved, "{}", gate.reason);
+        assert_eq!(
+            order.raw["strategy_metadata"]["cost_guard"]["verified_from_db"],
+            json!(true)
+        );
+        assert_eq!(
+            order.raw["strategy_metadata"]["cost_guard"]["passes"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn cost_guard_rejects_verified_reward_below_lower_bound_costs() {
+        let mut order = cost_guard_order(0.01, true);
+        let gate = cost_guard_gate(&mut order, cost_guard_test_config());
+
+        assert!(!gate.approved);
+        assert!(gate.reason.starts_with("Cost guard rejected BUY"));
+        assert_eq!(
+            order.raw["strategy_metadata"]["cost_guard"]["passes"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn cost_guard_rejects_model_supplied_indicator_values() {
+        let mut order = cost_guard_order(2.0, false);
+        let gate = cost_guard_gate(&mut order, cost_guard_test_config());
+
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("model-supplied"), "{}", gate.reason);
+    }
+
     #[test]
     fn risk_per_trade_gate_downsizes_using_verified_atr_stop_distance() {
         // 10 shares at 1,000 DKK/share; 2 ATR is 20% of a 100-local close,
@@ -5337,6 +5605,10 @@ mod tests {
                 "Risk-per-trade cap is below one share's estimated stop loss"
             ),
             "risk_per_trade"
+        );
+        assert_eq!(
+            candidate_gate_reason_code("Cost guard rejected BUY: expected reward is below costs"),
+            "cost_guard"
         );
     }
 }

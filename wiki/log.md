@@ -1313,3 +1313,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Ported the deterministic Danish share-income estimate from the legacy portfolio path into the Rust overview: progressive configured brackets now estimate the incremental tax on current-year realised SELL gains plus current unrealised P/L.
 - The dashboard labels the value as an estimate and shows the provisional tax. Invalid brackets, a non-DKK setting, or an unavailable ledger leave the gross value unchanged and surface an unavailable status.
 - The estimate is read-only: it does not rewrite ledger tax, affect performance accounting, change sizing, or make a Saxo request.
+
+## 2026-07-26 - BUY cost guard becomes real
+
+- Wired `strategy.estimated_slippage_bps` and `strategy.cost_guard_multiple` into the Rust Trading Manager after price verification, technical evaluation, and ATR risk sizing. A BUY now needs database-verified indicator reward to exceed a deterministic lower-bound hurdle: the exchange minimum round-trip commission multiplied by the configured guard plus configured one-way slippage.
+- The manager records expected reward, commission floor, slippage, required reward, configuration, basis, and pass/fail outcome in sanitized manager JSON. The Decision Report waterfall renders the calculation for a blocked candidate, and Hermes receives the active policy in its preflight context.
+- The lower-bound estimate intentionally does not promise actual broker commission, FX cost, spread, or fill price. Missing/model-supplied indicator data and invalid negative configuration fail closed.

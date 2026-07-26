@@ -172,13 +172,13 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "max_assets_per_sector"],
         "No concentration gate exists; the runtime has no sector metadata source at all.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "estimated_slippage_bps"],
-        "No cost model consumes it; slippage is not estimated before queueing.",
+        "BUY cost guard uses it as a one-way slippage estimate against database-verified indicator reward.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "cost_guard_multiple"],
-        "No cost model consumes it.",
+        "BUY cost guard multiplies the round-trip exchange-minimum commission hurdle.",
     ),
     // ---- strategy.capital ----
     enforced(

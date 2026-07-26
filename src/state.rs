@@ -1106,6 +1106,24 @@ fn compact_candidate_final_technical(value: &JsonValue) -> JsonValue {
     legacy_final_technical_from_gate_reason(value).unwrap_or(JsonValue::Null)
 }
 
+fn compact_candidate_cost_guard(value: &JsonValue) -> JsonValue {
+    let guard = value.get("final_cost_guard").unwrap_or(&JsonValue::Null);
+    if !guard.is_object() {
+        return JsonValue::Null;
+    }
+    json!({
+        "verified_from_db": guard.get("verified_from_db").and_then(JsonValue::as_bool).unwrap_or(false),
+        "estimated_slippage_bps": value_f64(guard, "estimated_slippage_bps"),
+        "cost_guard_multiple": value_f64(guard, "cost_guard_multiple"),
+        "expected_reward_dkk": value_f64(guard, "expected_reward_dkk"),
+        "round_trip_commission_dkk": value_f64(guard, "round_trip_commission_dkk"),
+        "one_way_slippage_dkk": value_f64(guard, "one_way_slippage_dkk"),
+        "required_reward_dkk": value_f64(guard, "required_reward_dkk"),
+        "passes": guard.get("passes").and_then(JsonValue::as_bool).unwrap_or(false),
+        "basis": json_text(guard, "basis"),
+    })
+}
+
 /// Recover only the known, deterministic SELL gate result from pre-persistence
 /// manager runs. This never exposes the stored reason text to the dashboard.
 fn legacy_final_technical_from_gate_reason(value: &JsonValue) -> Option<JsonValue> {
@@ -1983,6 +2001,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
                     "outcome": outcome,
                     "gate_code": candidate_gate_code(row),
                     "final_technical": compact_candidate_final_technical(row),
+                    "cost_guard": compact_candidate_cost_guard(row),
                 }),
             );
         }
@@ -2006,6 +2025,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "market": compact_candidate_market(&row),
             "technical": compact_candidate_technical(&row),
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
+            "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
             "markov": compact_candidate_markov(&row),
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -2033,6 +2053,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "market": {"exchange": "", "exchange_open": false, "risk_excluded": false, "quarantine_active": false},
             "technical": {"status": "unavailable", "sentiment": "", "trend_bias": "", "confluence_count": 0, "min_confluences": 0},
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
+            "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
             "markov": {"status": "unavailable", "fresh": false, "direction": "", "signed_signal": 0.0, "age_days": 0},
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),

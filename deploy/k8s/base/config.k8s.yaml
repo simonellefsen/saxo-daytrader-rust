@@ -319,7 +319,13 @@ strategy:
   min_selected_assets: 3
   max_selected_assets: 8
   max_assets_per_sector: 2
+  # BUYs require a verified indicator target to clear the exchange-minimum
+  # round-trip commission plus this one-way slippage estimate. This is a
+  # lower-bound cost model, not a realised-fill forecast.
   estimated_slippage_bps: 8
+  # Multiplies the round-trip minimum commission in the same BUY cost guard.
+  # Zero disables only this commission multiplier; invalid negative values
+  # fail closed during queueing.
   cost_guard_multiple: 1.5
   capital:
     max_deployment_pct: 0.98
