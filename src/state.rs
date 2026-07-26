@@ -1034,6 +1034,8 @@ fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
         "drawdown_guardrail"
     } else if normalized.starts_with("buy would exceed available cash budget") {
         "cash_budget"
+    } else if normalized.contains("risk-per-trade") {
+        "risk_per_trade"
     } else if normalized.contains("commission-efficiency floor") {
         "commission_floor"
     } else if normalized.starts_with("estimated trade value") {
@@ -1064,6 +1066,7 @@ fn candidate_gate_code(value: &JsonValue) -> String {
             | "monthly_loss_breaker"
             | "drawdown_guardrail"
             | "cash_budget"
+            | "risk_per_trade"
             | "commission_floor"
             | "minimum_trade_value"
             | "sellable_quantity"

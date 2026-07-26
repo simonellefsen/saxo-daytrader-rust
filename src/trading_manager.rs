@@ -72,6 +72,34 @@ pub(crate) struct MarkovGateConfig {
     pub(crate) max_signal_age_days: i64,
 }
 
+/// Deterministic BUY-sizing policy. The loss budget is tied to the same ATR
+/// distance the automatic protective-stop sweep will use, so a configured
+/// `risk_per_trade_pct` describes a concrete maximum loss rather than a
+/// model-supplied weight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RiskPerTradeConfig {
+    risk_per_trade_pct: f64,
+    stop_loss_atr_multiple: f64,
+    protective_stops_enabled: bool,
+}
+
+fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
+    RiskPerTradeConfig {
+        risk_per_trade_pct: yaml_f64(&state.config, &["strategy", "swing", "risk_per_trade_pct"])
+            .unwrap_or(0.01),
+        stop_loss_atr_multiple: yaml_f64(
+            &state.config,
+            &["strategy", "ladder", "stop_loss_atr_multiple"],
+        )
+        .unwrap_or(2.0),
+        protective_stops_enabled: yaml_bool(
+            &state.config,
+            &["strategy", "ladder", "submit_stop_loss_after_fill"],
+        )
+        .unwrap_or(false),
+    }
+}
+
 pub(crate) fn markov_gate_config(state: &AppState) -> MarkovGateConfig {
     MarkovGateConfig {
         enabled: yaml_bool(
@@ -964,6 +992,7 @@ async fn run_for_report(
     };
     let overlay_min_confluences = overlay
         .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
+    let risk_per_trade = risk_per_trade_config(state);
     let mut markov_cfg = markov_gate_config(state);
     if let Some(value) = overlay
         .and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.min_signed_signal"))
@@ -1269,6 +1298,33 @@ async fn run_for_report(
                         "{} Flatten fallback: no server-verified risk-off evidence (position is not under water and the Markov regime is not negative).",
                         gate.reason
                     );
+                }
+            }
+        }
+        if gate.approved && order.action == "BUY" {
+            let risk_gate = risk_per_trade_gate(
+                &mut order,
+                initial_capital_budget.total_market_value_dkk,
+                risk_per_trade,
+                value_verified,
+            );
+            if !risk_gate.approved {
+                gate = risk_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, risk_gate.reason);
+                // Risk sizing can downsize an otherwise economical clip below
+                // the commission floor checked above. Re-check the actual
+                // queued value rather than letting the earlier, larger value
+                // stand in for it.
+                let floor = buy_value_floor_dkk(&order.symbol);
+                let estimated = order.estimated_value_dkk.unwrap_or(0.0);
+                if estimated < floor {
+                    gate = GateDecision {
+                        approved: false,
+                        reason: format!(
+                            "BUY downsized by the risk-per-trade cap to {estimated:.0} DKK, below the commission-efficiency floor of {floor:.0} DKK."
+                        ),
+                    };
                 }
             }
         }
@@ -2179,6 +2235,170 @@ fn technical_gate(order: &CandidateOrder, overlay_min_confluences: Option<i64>) 
     }
 }
 
+/// Enforce the configured maximum loss of a BUY using only runtime-verified
+/// inputs. `estimated_value_dkk` is safe here only after `verify_buy_value`;
+/// ATR14 and close must come from `apply_verified_technical`, not the model.
+///
+/// The trade's initial loss distance is the configured automatic-stop
+/// distance. If automatic stop placement is disabled or the required daily
+/// data is unavailable, the BUY cannot honestly claim a bounded risk and is
+/// rejected. SELLs are intentionally outside this gate.
+fn risk_per_trade_gate(
+    order: &mut CandidateOrder,
+    total_market_value_dkk: f64,
+    config: RiskPerTradeConfig,
+    value_verified: bool,
+) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Risk-per-trade sizing applies to BUYs only.".to_string(),
+        };
+    }
+    if !config.protective_stops_enabled {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing requires automatic protective stops, but strategy.ladder.submit_stop_loss_after_fill is disabled.".to_string(),
+        };
+    }
+    if !config.risk_per_trade_pct.is_finite()
+        || !(0.0..=1.0).contains(&config.risk_per_trade_pct)
+        || config.risk_per_trade_pct <= 0.0
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.swing.risk_per_trade_pct must be greater than zero and at most one.".to_string(),
+        };
+    }
+    if !config.stop_loss_atr_multiple.is_finite() || config.stop_loss_atr_multiple <= 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Configured strategy.ladder.stop_loss_atr_multiple must be positive for risk-per-trade sizing.".to_string(),
+        };
+    }
+    if !total_market_value_dkk.is_finite() || total_market_value_dkk <= 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing requires a positive portfolio value.".to_string(),
+        };
+    }
+    if !value_verified || order.quantity < 1.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing requires a database-verified BUY value and at least one share.".to_string(),
+        };
+    }
+    let Some(technical) = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("technical"))
+    else {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing requires database-verified daily close and ATR14."
+                .to_string(),
+        };
+    };
+    if technical
+        .get("verified_from_db")
+        .and_then(JsonValue::as_bool)
+        != Some(true)
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing will not use model-supplied daily indicators."
+                .to_string(),
+        };
+    }
+    let close = value_f64(technical, "close");
+    let atr14 = value_f64(technical, "atr14");
+    let estimated_value_dkk = order.estimated_value_dkk.unwrap_or(0.0);
+    if !close.is_finite()
+        || close <= 0.0
+        || !atr14.is_finite()
+        || atr14 <= 0.0
+        || !estimated_value_dkk.is_finite()
+        || estimated_value_dkk <= 0.0
+    {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing requires positive database-verified close, ATR14, and DKK value.".to_string(),
+        };
+    }
+
+    let per_share_dkk = estimated_value_dkk / order.quantity;
+    let stop_distance_local = atr14 * config.stop_loss_atr_multiple;
+    let risk_per_share_dkk = per_share_dkk * (stop_distance_local / close);
+    let max_loss_dkk = total_market_value_dkk * config.risk_per_trade_pct;
+    if !risk_per_share_dkk.is_finite() || risk_per_share_dkk <= 0.0 {
+        return GateDecision {
+            approved: false,
+            reason: "Risk-per-trade sizing could not derive a positive DKK loss per share."
+                .to_string(),
+        };
+    }
+    let max_quantity = (max_loss_dkk / risk_per_share_dkk).floor();
+    if max_quantity < 1.0 {
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Risk-per-trade cap is {max_loss_dkk:.0} DKK ({:.2}% of portfolio), below one share's estimated stop loss of {risk_per_share_dkk:.0} DKK.",
+                config.risk_per_trade_pct * 100.0,
+            ),
+        };
+    }
+
+    let original_quantity = order.quantity;
+    let mut downsized = false;
+    if max_quantity < original_quantity {
+        order.quantity = max_quantity;
+        order.estimated_value_dkk = Some(per_share_dkk * max_quantity);
+        downsized = true;
+    }
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata.insert(
+            "risk_per_trade".to_string(),
+            json!({
+                "verified_from_db": true,
+                "risk_per_trade_pct": config.risk_per_trade_pct,
+                "portfolio_value_dkk": total_market_value_dkk,
+                "max_loss_dkk": max_loss_dkk,
+                "reference_close_local": close,
+                "atr14": atr14,
+                "stop_loss_atr_multiple": config.stop_loss_atr_multiple,
+                "stop_distance_local": stop_distance_local,
+                "risk_per_share_dkk": risk_per_share_dkk,
+                "original_quantity": original_quantity,
+                "approved_quantity": order.quantity,
+                "downsized": downsized,
+                "basis": "automatic_protective_stop_atr_distance",
+            }),
+        );
+    }
+    GateDecision {
+        approved: true,
+        reason: if downsized {
+            format!(
+                "BUY downsized from {original_quantity:.0} to {:.0} shares by the {:.2}% risk-per-trade cap ({max_loss_dkk:.0} DKK at {:.2} ATR).",
+                order.quantity,
+                config.risk_per_trade_pct * 100.0,
+                config.stop_loss_atr_multiple,
+            )
+        } else {
+            format!(
+                "BUY fits the {:.2}% risk-per-trade cap ({max_loss_dkk:.0} DKK at {:.2} ATR).",
+                config.risk_per_trade_pct * 100.0,
+                config.stop_loss_atr_multiple,
+            )
+        },
+    }
+}
+
 const INDICATOR_MAX_AGE_DAYS: i64 = 5;
 
 /// Server-verified per-share price in DKK for a symbol: close from our own
@@ -2298,6 +2518,8 @@ async fn apply_verified_technical(
         "source": "daily_indicators_db",
         "verified_from_db": true,
         "run_date": run_date.to_string(),
+        "close": signal.get("close").cloned().unwrap_or(JsonValue::Null),
+        "atr14": signal.get("atr14").cloned().unwrap_or(JsonValue::Null),
         "sentiment": signal.get("sentiment").cloned().unwrap_or(JsonValue::Null),
         "trend_bias": signal.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
         "confluence_count": signal.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
@@ -3121,6 +3343,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "monthly_loss_breaker"
     } else if normalized.starts_with("buy would exceed available cash budget") {
         "cash_budget"
+    } else if normalized.contains("risk-per-trade") {
+        "risk_per_trade"
     } else if normalized.contains("commission-efficiency floor") {
         "commission_floor"
     } else if normalized.starts_with("estimated trade value") {
@@ -4636,6 +4860,97 @@ mod tests {
         .unwrap()
     }
 
+    fn risk_sizing_order(
+        quantity: f64,
+        estimated_value_dkk: f64,
+        close: f64,
+        atr14: f64,
+        verified_from_db: bool,
+    ) -> CandidateOrder {
+        CandidateOrder::from_json(json!({
+            "symbol": "AMD:xnas",
+            "action": "BUY",
+            "quantity": quantity,
+            "order_type": "Market",
+            "estimated_value_dkk": estimated_value_dkk,
+            "strategy_key": "test:risk-sizing",
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "verified_from_db": verified_from_db,
+                    "close": close,
+                    "atr14": atr14
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn risk_per_trade_test_config() -> RiskPerTradeConfig {
+        RiskPerTradeConfig {
+            risk_per_trade_pct: 0.01,
+            stop_loss_atr_multiple: 2.0,
+            protective_stops_enabled: true,
+        }
+    }
+
+    #[test]
+    fn risk_per_trade_gate_downsizes_using_verified_atr_stop_distance() {
+        // 10 shares at 1,000 DKK/share; 2 ATR is 20% of a 100-local close,
+        // so each share risks 200 DKK. A 100,000 DKK portfolio at 1% may
+        // risk 1,000 DKK: five shares, not ten.
+        let mut order = risk_sizing_order(10.0, 10_000.0, 100.0, 10.0, true);
+        let gate = risk_per_trade_gate(&mut order, 100_000.0, risk_per_trade_test_config(), true);
+
+        assert!(gate.approved, "{}", gate.reason);
+        assert_eq!(order.quantity, 5.0);
+        assert_eq!(order.estimated_value_dkk, Some(5_000.0));
+        assert_eq!(
+            order.raw["strategy_metadata"]["risk_per_trade"]["downsized"],
+            json!(true)
+        );
+        assert_eq!(
+            order.raw["strategy_metadata"]["risk_per_trade"]["max_loss_dkk"],
+            json!(1_000.0)
+        );
+    }
+
+    #[test]
+    fn risk_per_trade_gate_rejects_when_one_share_exceeds_loss_budget() {
+        let mut order = risk_sizing_order(1.0, 1_000.0, 100.0, 60.0, true);
+        let gate = risk_per_trade_gate(&mut order, 100_000.0, risk_per_trade_test_config(), true);
+
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("below one share"), "{}", gate.reason);
+        assert_eq!(order.quantity, 1.0);
+    }
+
+    #[test]
+    fn risk_per_trade_gate_rejects_model_supplied_indicator_values() {
+        let mut order = risk_sizing_order(2.0, 2_000.0, 100.0, 10.0, false);
+        let gate = risk_per_trade_gate(&mut order, 100_000.0, risk_per_trade_test_config(), true);
+
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("model-supplied"), "{}", gate.reason);
+    }
+
+    #[test]
+    fn risk_per_trade_gate_requires_automatic_protective_stops() {
+        let mut order = risk_sizing_order(2.0, 2_000.0, 100.0, 10.0, true);
+        let gate = risk_per_trade_gate(
+            &mut order,
+            100_000.0,
+            RiskPerTradeConfig {
+                protective_stops_enabled: false,
+                ..risk_per_trade_test_config()
+            },
+            true,
+        );
+
+        assert!(!gate.approved);
+        assert!(gate.reason.contains("protective stops"), "{}", gate.reason);
+    }
+
     fn markov_evidence(signed_signal: f64, direction: &str, run_date: &str) -> JsonValue {
         json!({
             "status": "ok",
@@ -5016,6 +5331,12 @@ mod tests {
         assert_eq!(
             candidate_gate_reason_code("Technical confluence below configured minimum"),
             "technical"
+        );
+        assert_eq!(
+            candidate_gate_reason_code(
+                "Risk-per-trade cap is below one share's estimated stop loss"
+            ),
+            "risk_per_trade"
         );
     }
 }

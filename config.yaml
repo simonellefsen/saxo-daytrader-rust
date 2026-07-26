@@ -371,6 +371,9 @@ strategy:
     min_holding_weight_pct: 0.05
     max_holding_weight_pct: 0.25
     cash_buffer_pct: 0.02
+    # Maximum estimated initial loss for a BUY at its automatic ATR stop.
+    # Uses a database-verified close, ATR14, and DKK share value; missing
+    # evidence fails the BUY closed rather than trusting model-provided data.
     risk_per_trade_pct: 0.01
     never_trade_symbols: []
     daily_indicators:

@@ -10,6 +10,12 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] safety | ATR-based risk-per-trade sizing becomes enforced (U2)
+
+- `strategy.swing.risk_per_trade_pct` now caps each approved BUY's estimated initial stop loss instead of sitting unused in configuration. The cap uses a database-verified daily close and ATR14, the same configured stop multiple used by automatic protective-stop maintenance, and the already verified DKK share value.
+- The gate downsizes an order where possible and rejects it when even one share would exceed the loss budget. Missing/invalid inputs, model-supplied indicator data, a missing verified DKK value, or disabled automatic protective stops fail the BUY closed. It rechecks the commission-efficiency floor after downsizing.
+- This is a sizing guard, not a broker-fill guarantee: gaps can execute below a stop. Gate evaluation makes no Saxo request. The config-contract inventory moves to 28 enforced / 36 unused / 20 risk-surface settings.
+
 ## [2026-07-26] safety | Emergency risk exclusions become effective (U2)
 
 - `risk.excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS` is now resolved by the Rust Trading Manager, not merely described in the configuration. It merges with the versioned risk and never-trade lists, normalizes casing/whitespace, and applies before any candidate can queue.

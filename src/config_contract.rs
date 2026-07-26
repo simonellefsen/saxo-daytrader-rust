@@ -313,9 +313,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "cash_buffer_pct"],
         "Third cash-buffer path and the second dead one. Only strategy.capital.min_cash_buffer_pct bounds the BUY budget; strategy.capital.cash_buffer was retired 2026-07-22 and this one was never read.",
     ),
-    unused_risk(
+    enforced(
         &["strategy", "swing", "risk_per_trade_pct"],
-        "Position sizing is not risk-based; quantity comes from the model suggestion bounded by budget, minimum trade value, and the commission floor.",
+        "Caps each BUY's initial estimated loss at the database-verified ATR14 stop distance. The cap uses strategy.ladder.stop_loss_atr_multiple and requires automatic protective stops plus a verified close, ATR14, and DKK share value; missing evidence blocks the BUY.",
     ),
     enforced_subtree(
         &["strategy", "swing", "never_trade_symbols"],
@@ -853,14 +853,14 @@ mod tests {
 
     #[test]
     fn unused_risk_key_present_in_config_produces_a_finding() {
-        let config = parse("strategy:\n  swing:\n    risk_per_trade_pct: 0.01\n");
+        let config = parse("strategy:\n  swing:\n    cash_buffer_pct: 0.02\n");
         let (summary, findings) = audit_config(&config);
         assert_eq!(summary.unused, 1);
         assert_eq!(summary.unused_risk_surface, 1);
         let finding = findings
             .iter()
-            .find(|finding| finding.path == "strategy.swing.risk_per_trade_pct")
-            .expect("risk_per_trade_pct is reported");
+            .find(|finding| finding.path == "strategy.swing.cash_buffer_pct")
+            .expect("cash_buffer_pct is reported");
         assert_eq!(finding.kind, FindingKind::UnusedKeyPresent);
         assert!(finding.risk_surface);
     }
