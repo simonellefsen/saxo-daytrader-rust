@@ -191,9 +191,11 @@ Current state:
   `github.com` and `gist.github.com`, so no token is written to a config file.
 - CI has run green on every push since 2026-07-25.
 
-Still open, and low urgency now that it is stored nowhere: the orphaned token
-was unset locally, which does not revoke it. Revoking the GitHub CLI OAuth app
-authorization invalidates it, at the cost of one `gh auth login` afterwards.
+The orphaned token was also **revoked**, not merely unset. Both tokens were
+issued under the same GitHub CLI OAuth grant, so revoking that app authorization
+invalidated the leaked one too. Cost was one `gh auth login`; git itself never
+stopped working, because SSH key authentication is independent of the OAuth
+token. Nothing is outstanding.
 
 ## Related Pages
 
