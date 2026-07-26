@@ -213,7 +213,7 @@ These are specific changes that could improve the quality of trading decisions w
 | Strict normalized output | Keep the model schema small and deterministic, then enrich locally with calculated fields. | Lower provider/schema failure rate and less hallucinated math. |
 | Report confidence and quality score | Calculate parse validity, data freshness, market scope consistency, budget consistency, and number of unsupported claims. | Block low-quality reports before Trading Manager. |
 | Provider/model A/B harness | Run OpenRouter models side-by-side in dry-run mode over the same context. | Compare usefulness, parse reliability, cost, and latency before switching production. |
-| Prompt regression corpus | Keep a small set of known contexts and expected schema-valid outputs. | Catch prompt/schema regressions without waiting for market hours. |
+| Prompt regression corpus | Phase 1 landed 2026-07-26: source-controlled schema-valid provider fixtures exercise parser variants, EU scope enforcement, completion normalization, and dry-run safety without a provider call. Follow-up: add anonymized real incident fixtures whenever a provider/parser regression is diagnosed. | Catch prompt/schema regressions without waiting for market hours. |
 
 ### Saxo API And Broker Integration
 

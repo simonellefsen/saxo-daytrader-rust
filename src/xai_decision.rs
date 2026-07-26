@@ -2412,6 +2412,255 @@ mod tests {
         assert!(issues.is_empty(), "{path} schema issues: {issues:#?}");
     }
 
+    /// A deliberately small, source-controlled regression corpus for the
+    /// provider boundary. These fixtures represent contract-valid model
+    /// output, not market recommendations. They exercise the parser and the
+    /// local completion normalizer without a provider request or market-hours
+    /// dependency.
+    #[test]
+    fn prompt_regression_corpus_normalizes_known_provider_outputs() {
+        let schema = decision_report_json_schema();
+        for fixture in decision_report_regression_fixtures() {
+            assert_schema_accepts_fixture(
+                &schema,
+                &fixture.model_output,
+                &format!("fixture {}", fixture.name),
+            );
+
+            let response = json!({
+                "id": format!("chatcmpl-regression-{}", fixture.name),
+                "choices": [{"message": {"content": fixture.content}}]
+            });
+            let request = json!({
+                "capital_plan": {
+                    "cash_balance_dkk": 12_000.0,
+                    "available_buy_budget_dkk": 4_000.0,
+                    "cash_policy": "keep reserve",
+                    "reinvestment_decision": "wait",
+                    "near_term_opportunities": [],
+                    "medium_term_watchlist": []
+                }
+            });
+            let report_metadata = json!({
+                "created_at": "2026-07-26T10:15:00Z",
+                "analysis_pulse": fixture.pulse,
+            });
+
+            let normalized = completed_report_json_from_parts(
+                &request,
+                &report_metadata,
+                &response,
+                "openrouter",
+                json!({"model": "regression-fixture"}),
+                fixture.mode,
+            )
+            .unwrap_or_else(|error| panic!("fixture {} failed: {error:#}", fixture.name));
+
+            assert_eq!(normalized["status"], fixture.mode.completed_status());
+            assert_eq!(
+                normalized["suggested_trades"].as_array().map(Vec::len),
+                Some(fixture.expected_trade_count),
+                "fixture {} retained an unexpected number of scoped trades",
+                fixture.name
+            );
+            assert_eq!(
+                normalized["strategy_plan"]["swing_orders"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(fixture.expected_trade_count),
+                "fixture {} normalized an unexpected strategy plan",
+                fixture.name
+            );
+            assert_eq!(
+                normalized["execution_safety"]["mode"],
+                if fixture.mode.is_dry_run() {
+                    JsonValue::from("dry_run")
+                } else {
+                    JsonValue::from("live")
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_regression_fixture_validator_rejects_contract_drift() {
+        let mut output = regression_output_with_trades(vec![]);
+        output["unexpected"] = JsonValue::from("must not enter the model contract");
+        let error = std::panic::catch_unwind(|| {
+            assert_schema_accepts_fixture(&decision_report_json_schema(), &output, "drift");
+        });
+        assert!(error.is_err());
+    }
+
+    struct DecisionReportRegressionFixture {
+        name: &'static str,
+        content: String,
+        model_output: JsonValue,
+        pulse: JsonValue,
+        mode: DecisionReportSubmissionMode,
+        expected_trade_count: usize,
+    }
+
+    fn decision_report_regression_fixtures() -> Vec<DecisionReportRegressionFixture> {
+        let scoped_output = regression_output_with_trades(vec![
+            regression_trade("CHEMM:xcse", "BUY"),
+            regression_trade("AMD:xnas", "BUY"),
+        ]);
+        let no_action_output = regression_output_with_trades(vec![]);
+        vec![
+            DecisionReportRegressionFixture {
+                name: "europe_scope_with_fenced_json",
+                content: format!(
+                    "Provider preamble is ignored.\\n```json\\n{}\\n```",
+                    serde_json::to_string(&scoped_output).unwrap()
+                ),
+                model_output: scoped_output,
+                pulse: json!({
+                    "kind": "europe_open_followup",
+                    "exchange_codes": ["XCSE", "XLON"]
+                }),
+                mode: DecisionReportSubmissionMode::Live,
+                expected_trade_count: 1,
+            },
+            DecisionReportRegressionFixture {
+                name: "manual_dry_run_without_trade",
+                content: serde_json::to_string(&no_action_output).unwrap(),
+                model_output: no_action_output,
+                pulse: json!({"kind": "manual", "exchange_codes": []}),
+                mode: DecisionReportSubmissionMode::DryRun,
+                expected_trade_count: 0,
+            },
+        ]
+    }
+
+    fn regression_output_with_trades(suggested_trades: Vec<JsonValue>) -> JsonValue {
+        json!({
+            "report_title": "Regression decision report",
+            "market_view": {"bias": "neutral", "summary": "Fixture only; no market claim."},
+            "reasoning_steps": ["Validate the provider-output contract."],
+            "capital_plan": {
+                "cash_balance_dkk": 12_000.0,
+                "available_buy_budget_dkk": 4_000.0,
+                "cash_policy": "keep reserve",
+                "reinvestment_decision": "wait",
+                "near_term_opportunities": [],
+                "medium_term_watchlist": []
+            },
+            "selected_assets": [],
+            "symbol_sentiment": [],
+            "suggested_trades": suggested_trades,
+            "strategy_status": "observe",
+            "strategy_baseline_id": null,
+            "strategy_flow": {"portfolio": 1.0, "selected": 0.0, "trades": 0.0}
+        })
+    }
+
+    fn regression_trade(symbol: &str, action: &str) -> JsonValue {
+        json!({
+            "symbol": symbol,
+            "action": action,
+            "quantity": 1.0,
+            "order_type": "Limit",
+            "limit_price_local": 100.0,
+            "estimated_value_dkk": 700.0,
+            "strategy_key": "regression",
+            "strategy_role": "starter",
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "sentiment": "BUY",
+                    "trend_bias": "bullish",
+                    "confluence_count": 4.0,
+                    "min_confluences": 3.0
+                },
+                "markov": {
+                    "signed_signal": 0.4,
+                    "direction": "long",
+                    "state": "Bull",
+                    "run_date": "2026-07-26"
+                }
+            }
+        })
+    }
+
+    fn assert_schema_accepts_fixture(schema: &JsonValue, value: &JsonValue, path: &str) {
+        if let Some(expected_types) = schema.get("type") {
+            let matches_type = match expected_types {
+                JsonValue::String(expected) => fixture_value_matches_type(value, expected),
+                JsonValue::Array(expected) => expected
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .any(|expected| fixture_value_matches_type(value, expected)),
+                _ => false,
+            };
+            assert!(
+                matches_type,
+                "{path}: value {value} does not match {expected_types}"
+            );
+        }
+        if let Some(allowed) = schema.get("enum").and_then(JsonValue::as_array) {
+            assert!(
+                allowed.contains(value),
+                "{path}: {value} is outside enum {allowed:?}"
+            );
+        }
+        if schema.get("type") == Some(&JsonValue::from("object")) {
+            let object = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{path}: expected object"));
+            let properties = schema["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{path}: object schema lacks properties"));
+            for required in schema["required"].as_array().into_iter().flatten() {
+                let required = required.as_str().expect("fixture schema required name");
+                assert!(
+                    object.contains_key(required),
+                    "{path}: missing required {required}"
+                );
+            }
+            if schema["additionalProperties"] == JsonValue::from(false) {
+                for key in object.keys() {
+                    assert!(
+                        properties.contains_key(key),
+                        "{path}: unexpected property {key}"
+                    );
+                }
+            }
+            for (key, property_schema) in properties {
+                if let Some(property) = object.get(key) {
+                    assert_schema_accepts_fixture(
+                        property_schema,
+                        property,
+                        &format!("{path}.{key}"),
+                    );
+                }
+            }
+        }
+        if schema.get("type") == Some(&JsonValue::from("array")) {
+            let items = schema.get("items").expect("fixture array schema items");
+            for (index, item) in value
+                .as_array()
+                .unwrap_or_else(|| panic!("{path}: expected array"))
+                .iter()
+                .enumerate()
+            {
+                assert_schema_accepts_fixture(items, item, &format!("{path}[{index}]"));
+            }
+        }
+    }
+
+    fn fixture_value_matches_type(value: &JsonValue, expected: &str) -> bool {
+        match expected {
+            "array" => value.is_array(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            "number" => value.is_number(),
+            "object" => value.is_object(),
+            "string" => value.is_string(),
+            _ => false,
+        }
+    }
+
     #[test]
     fn non_openrouter_response_format_stays_json_object() {
         assert_eq!(

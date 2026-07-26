@@ -10,6 +10,11 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] testing | Decision-report provider regression corpus
+
+- Added compact, source-controlled Decision Report fixtures that must conform to the OpenRouter strict schema before they are fed through the same parser and completion normalizer used at runtime. The corpus covers fenced/prefaced JSON, Nordic/EU exchange scope filtering, strategy-plan normalization, and dry-run execution safety without a provider, broker, database, or market-hours dependency.
+- A deliberately narrow test-side schema instance checker rejects missing, mistyped, out-of-enum, or unexpected fields, so a changed provider contract cannot make the fixtures look valid by accident. Add an anonymized fixture whenever a future provider/parser incident is diagnosed.
+
 ## [2026-07-26] safety | Decision-report BUY selection cap becomes enforced (U2)
 
 - `strategy.max_selected_assets` now limits the number of distinct approved BUY symbols per Decision Report. It runs only after Hermes and all deterministic trade gates, so it bounds cumulative new exposure without hiding a candidate from the audit trail.
