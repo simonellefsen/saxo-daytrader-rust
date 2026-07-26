@@ -368,6 +368,15 @@ strategy:
       "HON:xnys": "HON:xnas"
       "LIN:xnys": "LIN:xnas"
       "SHELL:xlon": "SHEL:xlon"
+  # Keep local scheduler behavior aligned with the deployed advisory-data
+  # collection policy. The Quiver API key remains environment-backed.
+  quiver:
+    enabled: true
+    timezone: Europe/Copenhagen
+    daily_time: "23:10"
+    run_weekdays_only: true
+    lookback_days: 120
+    max_symbols: 60
   swing:
     min_holdings: 10
     max_holdings: 25

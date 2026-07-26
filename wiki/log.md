@@ -1355,3 +1355,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added `strategy.swing.trading_manager.max_report_age_hours: 6` to both shipped configs. The Trading Manager already used this value as its Rust fallback; scheduled reports older than the window cannot create execution orders.
 - Updated the config contract, README, urgent todo, and roadmap so report freshness is now an operator-visible advisory policy rather than a contracted-but-absent default.
+
+## [2026-07-26] operations | Local Quiver cadence matches production
+
+- Added the production `strategy.quiver` policy to `config.yaml`: enabled on weekdays at 23:10 Europe/Copenhagen, with a 120-day lookback and a 60-symbol cap. The `QUIVERQUANT_API_KEY` remains environment-backed and is not stored in configuration or documentation.
+- Added a config-contract regression test that compares the full local and Kubernetes Quiver policy blocks. Local scheduler runs no longer silently use Rust defaults when validating advisory-data behavior.

@@ -271,8 +271,8 @@ const CONTRACT: &[ContractEntry] = &[
     ),
     // ---- strategy.quiver ----
     //
-    // Read by src/quiver.rs but supplied only by the Kubernetes config, so a
-    // local run silently uses the code defaults.
+    // Read by src/quiver.rs. Both shipped configs declare this policy so local
+    // scheduler behavior matches the deployed advisory-data collection cadence.
     advisory(&["strategy", "quiver", "enabled"], "Quiver cycle switch."),
     advisory(&["strategy", "quiver", "timezone"], "Quiver run cadence."),
     advisory(&["strategy", "quiver", "daily_time"], "Quiver run cadence."),
@@ -924,8 +924,8 @@ mod tests {
     /// Guards the contract against silent drift: adding a key to either shipped
     /// config without contracting it fails here rather than only at runtime.
     ///
-    /// The two configs differ on purpose (Kubernetes carries `strategy.quiver`,
-    /// local does not), so both are checked.
+    /// Both shipped configs are checked independently because environment
+    /// injection may still differ without weakening contract coverage.
     fn assert_shipped_config_is_contracted(relative_path: &str) {
         let path = format!("{}/{relative_path}", env!("CARGO_MANIFEST_DIR"));
         let text = std::fs::read_to_string(&path)
@@ -964,5 +964,27 @@ mod tests {
     #[test]
     fn kubernetes_shipped_config_is_fully_contracted() {
         assert_shipped_config_is_contracted("deploy/k8s/base/config.k8s.yaml");
+    }
+
+    #[test]
+    fn shipped_configs_share_quiver_scheduler_policy() {
+        let local = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let kubernetes = parse(
+            &std::fs::read_to_string(format!(
+                "{}/deploy/k8s/base/config.k8s.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("Kubernetes config is readable"),
+        );
+        let path = ["strategy", "quiver"];
+
+        assert_eq!(
+            crate::config::yaml_at(&local, &path),
+            crate::config::yaml_at(&kubernetes, &path),
+            "local and Kubernetes Quiver policy must stay aligned"
+        );
     }
 }
