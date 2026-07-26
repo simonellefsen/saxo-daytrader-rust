@@ -8,10 +8,10 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    config::{yaml_bool, yaml_f64, yaml_i64, yaml_string},
+    config::{yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64},
     drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
-    state::AppState,
+    state::{AppState, SUPPORTED_EXPERIMENT_VARIABLES},
 };
 
 const DEFAULT_MAX_REPORT_AGE_HOURS: i64 = 6;
@@ -20,15 +20,6 @@ const EXPERIMENT_STATUS_ALLOWLIST: &[&str] = &[
     "active_sim",
     "approved_paper",
     "active_paper",
-];
-const EXPERIMENT_VARIABLE_ALLOWLIST: &[&str] = &[
-    "execution.min_trade_value_dkk",
-    "execution.max_commission_pct_per_side",
-    "strategy.capital.min_cash_buffer_pct",
-    "strategy.swing.cash_buffer_pct",
-    "strategy.swing.daily_indicators.min_confluences",
-    "strategy.swing.markov_gate.min_signed_signal",
-    "strategy.swing.markov_gate.max_position_pct",
 ];
 const HERMES_CONTEXT_SELF_CHECK_FIELDS: &[&str] = &[
     "latest_report",
@@ -699,7 +690,40 @@ impl InstrumentQuarantine {
     }
 }
 
+#[cfg(test)]
+mod automation_switch_tests {
+    use super::*;
+
+    #[test]
+    fn trading_manager_switches_default_open_but_honor_false() {
+        let enabled: serde_yaml::Value = serde_yaml::from_str(
+            "strategy:\n  enabled: true\n  swing:\n    trading_manager:\n      enabled: true\n",
+        )
+        .unwrap();
+        assert!(trading_manager_automation_enabled(&enabled));
+
+        let strategy_disabled: serde_yaml::Value = serde_yaml::from_str(
+            "strategy:\n  enabled: false\n  swing:\n    trading_manager:\n      enabled: true\n",
+        )
+        .unwrap();
+        assert!(!trading_manager_automation_enabled(&strategy_disabled));
+
+        let manager_disabled: serde_yaml::Value = serde_yaml::from_str(
+            "strategy:\n  enabled: true\n  swing:\n    trading_manager:\n      enabled: false\n",
+        )
+        .unwrap();
+        assert!(!trading_manager_automation_enabled(&manager_disabled));
+    }
+}
+
 pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
+    if !trading_manager_automation_enabled(&state.config) {
+        return Ok(json!({
+            "status": "disabled",
+            "reason": "strategy.enabled or strategy.swing.trading_manager.enabled is false",
+            "runs": []
+        }));
+    }
     let reports = fresh_unmanaged_reports(state).await?;
     if reports.is_empty() {
         info!("Trading Manager found no fresh scheduled decision reports to process");
@@ -734,11 +758,9 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
             warn!("Trading Manager experiment overlay disabled: {err:#}");
             None
         });
-    let overlay_min_cash_buffer_pct = overlay.as_ref().and_then(|overlay| {
-        overlay
-            .f64_value("strategy.capital.min_cash_buffer_pct")
-            .or_else(|| overlay.f64_value("strategy.swing.cash_buffer_pct"))
-    });
+    let overlay_min_cash_buffer_pct = overlay
+        .as_ref()
+        .and_then(|overlay| overlay.f64_value("strategy.capital.min_cash_buffer_pct"));
     let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
     let buy_halt = monthly_loss_buy_halt(state, &overview).await;
     let drawdown = portfolio_drawdown_guard(state).await;
@@ -844,6 +866,12 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     }))
 }
 
+fn trading_manager_automation_enabled(config: &serde_yaml::Value) -> bool {
+    crate::config::yaml_bool(config, &["strategy", "enabled"]).unwrap_or(true)
+        && crate::config::yaml_bool(config, &["strategy", "swing", "trading_manager", "enabled"])
+            .unwrap_or(true)
+}
+
 async fn run_for_report(
     state: &AppState,
     report: &DecisionReport,
@@ -921,12 +949,10 @@ async fn run_for_report(
     // exchange minimum commission stays under this share of the clip.
     // 14 days of live fills averaged ~3,500 DKK per clip at 0.67% one-way
     // commission drag, which no swing edge survives round trip.
-    let max_commission_pct_per_side = overlay
-        .and_then(|overlay| overlay.f64_value("execution.max_commission_pct_per_side"))
-        .unwrap_or_else(|| {
-            yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"]).unwrap_or(0.003)
-        })
-        .max(0.0);
+    let max_commission_pct_per_side =
+        yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
+            .unwrap_or(0.003)
+            .max(0.0);
     let buy_value_floor_dkk = |symbol: &str| -> f64 {
         if max_commission_pct_per_side <= f64::EPSILON {
             return min_trade_value_dkk;
@@ -943,11 +969,6 @@ async fn run_for_report(
         .and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.min_signed_signal"))
     {
         markov_cfg.min_signed_signal = value.max(0.0);
-    }
-    if let Some(value) =
-        overlay.and_then(|overlay| overlay.f64_value("strategy.swing.markov_gate.max_position_pct"))
-    {
-        markov_cfg.max_position_pct = value.clamp(0.0, 1.0);
     }
     let require_approval = yaml_bool(&state.config, &["execution", "require_approval_live"])
         .unwrap_or(true)
@@ -1031,7 +1052,7 @@ async fn run_for_report(
             ));
             continue;
         }
-        if excluded.iter().any(|symbol| symbol == &order.symbol) {
+        if is_excluded_symbol(&excluded, &order.symbol) {
             skipped.push(skip_order(
                 &order,
                 "Symbol is excluded by risk configuration.",
@@ -1480,7 +1501,7 @@ async fn hermes_decision_preflight_bundle(
             "strategy_role": &order.strategy_role,
             "exchange": exchange_code(&order.symbol),
             "exchange_open": open_codes.iter().any(|code| code == &exchange_code(&order.symbol)),
-            "risk_excluded": excluded_symbols.iter().any(|symbol| symbol == &order.symbol),
+            "risk_excluded": is_excluded_symbol(excluded_symbols, &order.symbol),
             "instrument_quarantine": quarantine,
             "current_position_quantity": position_quantity,
             "position_context_status": position_context_status,
@@ -3204,7 +3225,7 @@ fn experiment_overlays_allowed(execution_mode: &str, saxo_environment: &str) -> 
 impl StrategyExperimentOverlay {
     fn from_row(row: &JsonValue) -> Option<Self> {
         let changed_variable_path = text(row, "changed_variable_path");
-        if !EXPERIMENT_VARIABLE_ALLOWLIST
+        if !SUPPORTED_EXPERIMENT_VARIABLES
             .iter()
             .any(|path| *path == changed_variable_path)
         {
@@ -3405,11 +3426,30 @@ fn reinvestment_diagnostics(
 }
 
 fn excluded_symbols(state: &AppState) -> Vec<String> {
+    excluded_symbols_for_config(&state.config)
+}
+
+fn excluded_symbols_for_config(config: &serde_yaml::Value) -> Vec<String> {
     let mut values = Vec::new();
-    if let Some(items) = state
-        .config
-        .get("risk")
-        .and_then(|value| value.get("excluded_symbols"))
+    if let Some(items) =
+        yaml_at(config, &["risk", "excluded_symbols"]).and_then(serde_yaml::Value::as_sequence)
+    {
+        values.extend(
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(ToString::to_string),
+        );
+    }
+    if let Some(csv) = yaml_string(config, &["risk", "excluded_symbols_csv"]) {
+        values.extend(
+            csv.split([',', ';', '\n', '\r'])
+                .map(str::trim)
+                .filter(|symbol| !symbol.is_empty())
+                .map(ToString::to_string),
+        );
+    }
+    if let Some(items) = yaml_at(config, &["strategy", "swing", "never_trade_symbols"])
         .and_then(serde_yaml::Value::as_sequence)
     {
         values.extend(
@@ -3419,21 +3459,26 @@ fn excluded_symbols(state: &AppState) -> Vec<String> {
                 .map(ToString::to_string),
         );
     }
-    if let Some(items) = state
-        .config
-        .get("strategy")
-        .and_then(|value| value.get("swing"))
-        .and_then(|value| value.get("never_trade_symbols"))
-        .and_then(serde_yaml::Value::as_sequence)
-    {
-        values.extend(
-            items
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(ToString::to_string),
-        );
+    let mut normalized = Vec::new();
+    for value in values {
+        let symbol = normalize_symbol(&value);
+        if !symbol.is_empty() && !normalized.contains(&symbol) {
+            normalized.push(symbol);
+        }
     }
-    values
+    normalized
+}
+
+fn is_excluded_symbol(excluded_symbols: &[String], symbol: &str) -> bool {
+    let symbol = normalize_symbol(symbol);
+    !symbol.is_empty()
+        && excluded_symbols
+            .iter()
+            .any(|candidate| candidate == &symbol)
+}
+
+fn normalize_symbol(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 fn exchange_code(symbol: &str) -> String {
@@ -3492,6 +3537,30 @@ mod tests {
     use serde_json::json;
     use sqlx::{Row, any::AnyPoolOptions};
     use std::{path::PathBuf, sync::Once};
+
+    #[test]
+    fn risk_exclusion_csv_merges_with_configured_lists_case_insensitively() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            "risk:\n  excluded_symbols:\n    - ' AAPL:XNAS '\n    - TSLA:xnas\n  excluded_symbols_csv: 'NVDA:xnas, tsla:XNAS; MSTR:xnas, AMD:xnas'\nstrategy:\n  swing:\n    never_trade_symbols:\n      - NOVOB:xcse\n      - aapl:xnas\n",
+        )
+        .expect("parse test config");
+
+        let excluded = excluded_symbols_for_config(&config);
+        assert_eq!(
+            excluded,
+            vec![
+                "aapl:xnas",
+                "tsla:xnas",
+                "nvda:xnas",
+                "mstr:xnas",
+                "amd:xnas",
+                "novob:xcse",
+            ]
+        );
+        assert!(is_excluded_symbol(&excluded, "TSLA:XNAS"));
+        assert!(is_excluded_symbol(&excluded, " novob:XCSE "));
+        assert!(!is_excluded_symbol(&excluded, "MSFT:xnas"));
+    }
 
     async fn manager_queue_test_state() -> AppState {
         static INSTALL_DRIVERS: Once = Once::new();
@@ -4723,6 +4792,39 @@ mod tests {
             }))
             .is_none()
         );
+    }
+
+    #[test]
+    fn experiment_overlay_acceptance_matches_published_capabilities() {
+        for path in SUPPORTED_EXPERIMENT_VARIABLES {
+            assert!(
+                StrategyExperimentOverlay::from_row(&json!({
+                    "id": "published-variable",
+                    "status": "approved_sim",
+                    "changed_variable_path": path,
+                    "new_value_json": 0.15
+                }))
+                .is_some(),
+                "published variable {path} must be loadable by the Trading Manager"
+            );
+        }
+
+        for path in [
+            "strategy.swing.cash_buffer_pct",
+            "execution.max_commission_pct_per_side",
+            "strategy.swing.markov_gate.max_position_pct",
+        ] {
+            assert!(
+                StrategyExperimentOverlay::from_row(&json!({
+                    "id": "unsupported-variable",
+                    "status": "approved_sim",
+                    "changed_variable_path": path,
+                    "new_value_json": 0.15
+                }))
+                .is_none(),
+                "unpublished variable {path} must not affect Trading Manager queueing"
+            );
+        }
     }
 
     #[test]

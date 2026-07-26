@@ -378,7 +378,6 @@ Current allowlist:
 
 - `execution.min_trade_value_dkk`
 - `strategy.capital.min_cash_buffer_pct`
-- `strategy.swing.cash_buffer_pct`
 - `strategy.swing.daily_indicators.min_confluences`
 - `strategy.swing.markov_gate.min_signed_signal`
 

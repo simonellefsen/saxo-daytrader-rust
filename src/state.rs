@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::{
     auth,
-    config::{database_url, yaml_bool, yaml_f64, yaml_i64, yaml_string},
+    config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     localization::LocalizationPrefs,
     models::{
@@ -73,6 +73,89 @@ const SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS: i64 = 180;
 const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const PROTECTIVE_STOP_HERMES_POSITION_LIMIT: usize = 50;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShareIncomeTaxBracket {
+    up_to_dkk: Option<f64>,
+    rate: f64,
+}
+
+fn share_income_tax_brackets(config: &YamlValue) -> Option<Vec<ShareIncomeTaxBracket>> {
+    let values = yaml_at(config, &["taxation", "share_income", "brackets"])?.as_sequence()?;
+    if values.is_empty() {
+        return None;
+    }
+
+    let mut brackets = Vec::with_capacity(values.len());
+    let mut lower_bound = 0.0;
+    for (index, value) in values.iter().enumerate() {
+        let rate = value.get("rate").and_then(YamlValue::as_f64)?;
+        if !rate.is_finite() || !(0.0..=1.0).contains(&rate) {
+            return None;
+        }
+        let up_to_dkk = value.get("up_to_dkk").and_then(YamlValue::as_f64);
+        match up_to_dkk {
+            Some(upper_bound) if upper_bound.is_finite() && upper_bound > lower_bound => {
+                lower_bound = upper_bound;
+            }
+            Some(_) => return None,
+            None if index + 1 == values.len() => {}
+            None => return None,
+        }
+        brackets.push(ShareIncomeTaxBracket { up_to_dkk, rate });
+    }
+    Some(brackets)
+}
+
+fn share_income_tax_due_dkk(income_dkk: f64, brackets: &[ShareIncomeTaxBracket]) -> Option<f64> {
+    if !income_dkk.is_finite() || brackets.is_empty() {
+        return None;
+    }
+    let taxable_income = income_dkk.max(0.0);
+    let mut lower_bound = 0.0;
+    let mut tax_dkk = 0.0;
+    for bracket in brackets {
+        let taxable_slice = match bracket.up_to_dkk {
+            Some(upper_bound) => (taxable_income.min(upper_bound) - lower_bound).max(0.0),
+            None => (taxable_income - lower_bound).max(0.0),
+        };
+        tax_dkk += taxable_slice * bracket.rate;
+        if bracket.up_to_dkk.is_none() || taxable_income <= bracket.up_to_dkk.unwrap_or_default() {
+            return Some(tax_dkk);
+        }
+        lower_bound = bracket.up_to_dkk.unwrap_or(lower_bound);
+    }
+    None
+}
+
+fn incremental_share_income_tax_dkk(
+    realised_gain_ytd_dkk: f64,
+    unrealised_pnl_dkk: f64,
+    brackets: &[ShareIncomeTaxBracket],
+) -> Option<f64> {
+    if !realised_gain_ytd_dkk.is_finite() || !unrealised_pnl_dkk.is_finite() {
+        return None;
+    }
+    Some(
+        share_income_tax_due_dkk(realised_gain_ytd_dkk + unrealised_pnl_dkk, brackets)?
+            - share_income_tax_due_dkk(realised_gain_ytd_dkk, brackets)?,
+    )
+}
+
+fn unavailable_after_tax_summary(
+    gross_unrealised_pnl_dkk: f64,
+    tax_year: i32,
+    reason: &str,
+) -> JsonValue {
+    json!({
+        "status": "unavailable",
+        "tax_year": tax_year,
+        "gross_unrealised_pnl_dkk": gross_unrealised_pnl_dkk,
+        "estimated_tax_dkk": 0.0,
+        "unrealised_pnl_after_tax_dkk": gross_unrealised_pnl_dkk,
+        "reason": reason
+    })
+}
 
 #[derive(Clone, Debug)]
 struct SaxoExchangeCalendarCache {
@@ -2784,6 +2867,12 @@ impl AppState {
             cash_from_trades_dkk: json_f64(&summary, "cash_from_trades_dkk"),
             unrealised_pnl_dkk: json_f64(&summary, "total_unrealised_pnl_dkk"),
             unrealised_after_tax_dkk: json_f64(&after_tax_summary, "unrealised_pnl_after_tax_dkk"),
+            estimated_unrealised_tax_dkk: json_f64(&after_tax_summary, "estimated_tax_dkk"),
+            after_tax_estimate_status: after_tax_summary
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("unavailable")
+                .to_string(),
             daily_pnl_dkk: json_f64(&summary, "total_daily_pnl_dkk"),
             position_count: json_i64(&summary, "position_count"),
             position_decision_stale_after_days: yaml_i64(
@@ -2928,6 +3017,10 @@ impl AppState {
                 })
             });
 
+        let after_tax_summary = self
+            .after_tax_summary(value_f64(&aggregate, "total_unrealised_pnl_dkk"))
+            .await;
+
         Ok(json!({
             "app": {
                 "project_name": yaml_string(&self.config, &["app", "project_name"]),
@@ -2964,10 +3057,7 @@ impl AppState {
                 "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
                 "position_count": value_i64(&aggregate, "position_count"),
             },
-            "after_tax_summary": {
-                "unrealised_pnl_after_tax_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
-                "estimated_tax_dkk": 0.0
-            },
+            "after_tax_summary": after_tax_summary,
             "goal_tracking": self.goal_tracking(total_value).await,
             "integrity": integrity,
             "analysis_summary": self.market_status_payload().await.unwrap_or_else(|_| json!({"summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})).get("summary").cloned().unwrap_or_else(|| json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []})),
@@ -3826,6 +3916,68 @@ impl AppState {
             "cash_from_trades_dkk": cash_from_trades,
             "cash_balance_dkk": initial_cash + cash_from_trades,
         }))
+    }
+
+    async fn after_tax_summary(&self, gross_unrealised_pnl_dkk: f64) -> JsonValue {
+        let tax_year = Utc::now().year();
+        let currency = yaml_string(&self.config, &["taxation", "share_income", "currency"])
+            .unwrap_or_else(|| "DKK".to_string());
+        if !currency.eq_ignore_ascii_case("DKK") {
+            return unavailable_after_tax_summary(
+                gross_unrealised_pnl_dkk,
+                tax_year,
+                "unsupported_tax_currency",
+            );
+        }
+        let Some(brackets) = share_income_tax_brackets(&self.config) else {
+            return unavailable_after_tax_summary(
+                gross_unrealised_pnl_dkk,
+                tax_year,
+                "invalid_tax_brackets",
+            );
+        };
+        let realised_row = match self
+            .first_json(&format!(
+                "SELECT COALESCE(SUM(realised_gain_dkk), 0) AS realised_gain_ytd_dkk \
+                 FROM trade_ledger WHERE side = 'SELL' AND tax_year = {tax_year}"
+            ))
+            .await
+        {
+            Ok(Some(row)) => row,
+            Ok(None) => json!({}),
+            Err(err) => {
+                warn!(
+                    "after-tax estimate unavailable because the trade ledger could not be read: {err:#}"
+                );
+                return unavailable_after_tax_summary(
+                    gross_unrealised_pnl_dkk,
+                    tax_year,
+                    "trade_ledger_unavailable",
+                );
+            }
+        };
+        let realised_gain_ytd_dkk = value_f64(&realised_row, "realised_gain_ytd_dkk");
+        let Some(estimated_tax_dkk) = incremental_share_income_tax_dkk(
+            realised_gain_ytd_dkk,
+            gross_unrealised_pnl_dkk,
+            &brackets,
+        ) else {
+            return unavailable_after_tax_summary(
+                gross_unrealised_pnl_dkk,
+                tax_year,
+                "invalid_tax_inputs",
+            );
+        };
+        json!({
+            "status": "estimated",
+            "tax_year": tax_year,
+            "currency": "DKK",
+            "gross_unrealised_pnl_dkk": gross_unrealised_pnl_dkk,
+            "realised_gain_ytd_dkk": realised_gain_ytd_dkk,
+            "estimated_tax_dkk": estimated_tax_dkk,
+            "unrealised_pnl_after_tax_dkk": gross_unrealised_pnl_dkk - estimated_tax_dkk,
+            "basis": "incremental_share_income_tax_on_realised_gain_plus_unrealised_pnl"
+        })
     }
 
     async fn overview_integrity(
@@ -5409,6 +5561,11 @@ impl AppState {
                 "key": key,
                 "prefix": prefix,
                 "label": label,
+                "enabled": if key == "manual" {
+                    true
+                } else {
+                    crate::xai_decision::scheduled_pulse_is_enabled(self, key)
+                },
                 "latest": latest,
                 "last_success": last_success,
                 "last_failure": last_failure,
@@ -10624,6 +10781,35 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn share_income_tax_estimate_applies_progressive_brackets_incrementally() {
+        let config: YamlValue = serde_yaml::from_str(
+            "taxation:\n  share_income:\n    brackets:\n      - up_to_dkk: 79000\n        rate: 0.27\n      - up_to_dkk:\n        rate: 0.42\n",
+        )
+        .expect("parses tax configuration");
+        let brackets = share_income_tax_brackets(&config).expect("valid tax brackets");
+
+        let tax = share_income_tax_due_dkk(100_000.0, &brackets).expect("tax estimate");
+        assert!((tax - 30_150.0).abs() < 1e-9);
+
+        let incremental = incremental_share_income_tax_dkk(70_000.0, 20_000.0, &brackets)
+            .expect("incremental tax estimate");
+        assert!((incremental - 7_050.0).abs() < 1e-9);
+
+        let loss_offset = incremental_share_income_tax_dkk(90_000.0, -20_000.0, &brackets)
+            .expect("loss offset estimate");
+        assert!((loss_offset + 7_050.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn share_income_tax_rejects_malformed_or_nonterminal_open_brackets() {
+        let malformed: YamlValue = serde_yaml::from_str(
+            "taxation:\n  share_income:\n    brackets:\n      - up_to_dkk:\n        rate: 0.27\n      - up_to_dkk: 79000\n        rate: 0.42\n",
+        )
+        .expect("parses malformed tax configuration");
+        assert!(share_income_tax_brackets(&malformed).is_none());
+    }
 
     fn goal_contract_field_paths(contract: &JsonValue) -> Vec<String> {
         ["objective", "constraints"]

@@ -269,7 +269,15 @@ fn Dashboard(props: DashboardProps) -> Element {
                 SummaryMetricCard {
                     label: "Unrealised P/L",
                     value: format_dkk(data.unrealised_pnl_dkk, &prefs),
-                    subtitle: format!("After tax {}", format_dkk(data.unrealised_after_tax_dkk, &prefs)),
+                    subtitle: if data.after_tax_estimate_status == "estimated" {
+                        format!(
+                            "After est. tax {} · Tax {}",
+                            format_dkk(data.unrealised_after_tax_dkk, &prefs),
+                            format_dkk(data.estimated_unrealised_tax_dkk, &prefs)
+                        )
+                    } else {
+                        "After-tax estimate unavailable".to_string()
+                    },
                     tone: if data.unrealised_pnl_dkk >= 0.0 { "good-text" } else { "bad-text" }
                 }
                 SummaryMetricCard {
@@ -2536,10 +2544,16 @@ fn decision_pulse_health_from_status(
     key: &str,
 ) -> Option<DecisionPulseHealth> {
     let row = statuses.iter().find(|row| text(row, "key") == key)?;
+    let enabled = row
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true);
     let latest = row.get("latest").unwrap_or(&JsonValue::Null);
     let last_success = row.get("last_success").unwrap_or(&JsonValue::Null);
     let last_failure = row.get("last_failure").unwrap_or(&JsonValue::Null);
-    let latest_status = if latest.is_null() {
+    let latest_status = if !enabled {
+        "disabled".to_string()
+    } else if latest.is_null() {
         "missing".to_string()
     } else {
         fallback_text(latest, "status", "missing")
@@ -6031,6 +6045,18 @@ fn decision_pulse_operation_health(
         };
     };
     let latest = pulse.get("latest").unwrap_or(&JsonValue::Null);
+    let enabled = pulse
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true);
+    if !enabled {
+        return OperationHealthItem {
+            label: label.to_string(),
+            status: "disabled".to_string(),
+            tone: "neutral",
+            detail: format!("{label} is disabled by the active strategy pulse configuration."),
+        };
+    }
     if latest.is_null() {
         return OperationHealthItem {
             label: label.to_string(),
@@ -8709,6 +8735,16 @@ mod tests {
             decision_pulse_operation_health(&statuses, "europe_open_followup", "EU Report");
         assert_eq!(missing.status, "unknown");
         assert_eq!(missing.tone, "warn");
+
+        let disabled = vec![json!({
+            "key": "us_open_followup",
+            "enabled": false,
+            "latest": null,
+            "last_success": null,
+        })];
+        let paused = decision_pulse_operation_health(&disabled, "us_open_followup", "US Report");
+        assert_eq!(paused.status, "disabled");
+        assert_eq!(paused.tone, "neutral");
     }
 
     #[test]

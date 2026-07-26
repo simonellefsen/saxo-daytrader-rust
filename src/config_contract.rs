@@ -147,9 +147,9 @@ const fn unused_risk_subtree(path: &'static [&'static str], note: &'static str) 
 /// 2026-07-25; update an entry in the same change that changes its wiring.
 const CONTRACT: &[ContractEntry] = &[
     // ---- strategy (top level) ----
-    unused_risk(
+    enforced(
         &["strategy", "enabled"],
-        "No master switch is read; setting this to false does not stop the strategy cycle.",
+        "Stops new scheduled decision-report submission and Trading Manager queueing. Pending provider reports still reach a terminal state; read-only analysis, broker reconciliation, and protective stops continue.",
     ),
     unused(&["strategy", "mode"], "Strategy mode label is not read."),
     unused(
@@ -379,9 +379,9 @@ const CONTRACT: &[ContractEntry] = &[
     //
     // Only max_report_age_hours is read, and it is absent from both shipped
     // configs. Every knob an operator would reach for here is inert.
-    unused_risk(
+    enforced(
         &["strategy", "swing", "trading_manager", "enabled"],
-        "No switch is read; setting this to false does not stop the Trading Manager.",
+        "Stops the Trading Manager from creating new execution orders while preserving report and broker audit paths.",
     ),
     unused(
         &["strategy", "swing", "trading_manager", "use_ai"],
@@ -442,7 +442,7 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "analysis_pulses", "due_window_minutes"],
         "Pulse due window.",
     ),
-    unused_risk(
+    enforced(
         &[
             "strategy",
             "swing",
@@ -450,7 +450,7 @@ const CONTRACT: &[ContractEntry] = &[
             "europe_open_followup",
             "enabled",
         ],
-        "No switch is read; setting this to false does not disable the EU pulse.",
+        "Enables scheduled Nordic/EU open-followup report submission.",
     ),
     advisory(
         &[
@@ -472,7 +472,7 @@ const CONTRACT: &[ContractEntry] = &[
         ],
         "Market-scope filter for the EU pulse.",
     ),
-    unused_risk(
+    enforced(
         &[
             "strategy",
             "swing",
@@ -480,7 +480,7 @@ const CONTRACT: &[ContractEntry] = &[
             "us_open_followup",
             "enabled",
         ],
-        "No switch is read; setting this to false does not disable the US pulse.",
+        "Enables scheduled US open-followup report submission.",
     ),
     advisory(
         &[
@@ -584,9 +584,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["risk", "excluded_symbols"],
         "Blocks candidates in the Trading Manager.",
     ),
-    unused_risk(
+    enforced(
         &["risk", "excluded_symbols_csv"],
-        "Only the list form is read; this ENV pointer is never resolved, so exclusions supplied through RISK_EXCLUDED_SYMBOLS have no effect.",
+        "Resolved from RISK_EXCLUDED_SYMBOLS and merged with risk.excluded_symbols plus strategy.swing.never_trade_symbols before the Trading Manager gate.",
     ),
     enforced(
         &["risk", "instrument_quarantine", "enabled"],
@@ -613,13 +613,13 @@ const CONTRACT: &[ContractEntry] = &[
         "Published in the Hermes goal contract; the runtime has no short path regardless.",
     ),
     // ---- taxation ----
-    unused(
+    enforced(
         &["taxation", "share_income", "currency"],
-        "Tax estimation is not implemented.",
+        "The after-tax estimate is available only for the configured DKK share-income basis.",
     ),
-    unused_risk_subtree(
+    enforced_subtree(
         &["taxation", "share_income", "brackets"],
-        "estimated_tax_dkk is hardcoded to 0.0, so after-tax P/L equals pre-tax P/L and goal progress is overstated.",
+        "Progressive brackets estimate incremental Danish share-income tax on realised gains plus current unrealised P/L; display-only and never posted to the ledger.",
     ),
 ];
 

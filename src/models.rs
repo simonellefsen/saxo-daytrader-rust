@@ -18,6 +18,8 @@ pub struct DashboardView {
     pub cash_from_trades_dkk: f64,
     pub unrealised_pnl_dkk: f64,
     pub unrealised_after_tax_dkk: f64,
+    pub estimated_unrealised_tax_dkk: f64,
+    pub after_tax_estimate_status: String,
     pub daily_pnl_dkk: f64,
     pub position_count: i64,
     pub position_decision_stale_after_days: i64,

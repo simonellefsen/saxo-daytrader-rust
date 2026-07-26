@@ -10,6 +10,17 @@ updated: 2026-07-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-26] safety | Emergency risk exclusions become effective (U2)
+
+- `risk.excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS` is now resolved by the Rust Trading Manager, not merely described in the configuration. It merges with the versioned risk and never-trade lists, normalizes casing/whitespace, and applies before any candidate can queue.
+- The value comes from the already-injected `daytrader-env` secret in API and scheduler pods. A missing or empty variable is a no-op, preserving the current default behaviour. The config-contract inventory moves to 25 enforced / 39 unused / 22 risk-surface settings.
+
+## [2026-07-26] safety | Existing automation switches become enforced (U2)
+
+- `strategy.enabled` now prevents new scheduled Decision Report submissions and Trading Manager queueing, while previously submitted provider work still reaches a terminal audit state. It intentionally does not stop read-only market analysis, broker reconciliation, or protective-stop maintenance.
+- `strategy.swing.trading_manager.enabled` prevents new execution-order creation. The EU and US pulse switches suppress their own scheduled submissions, and Operations reports them as disabled rather than stale.
+- Kubernetes now states the Trading Manager settings explicitly. The config-contract inventory moves from 20 enforced / 44 unused / 27 risk-surface to 24 enforced / 40 unused / 23 risk-surface settings. Production defaults remain enabled; this change establishes an operator pause path without changing normal trading behaviour.
+
 ## [2026-07-26] performance | Saxo request pacing per service group (U6)
 
 - `src/saxo_rate_limit.rs` paces Saxo requests per service group (the first path segment: `chart`, `port`, `trade`, `ref`). Installed in the shared `markov_method::saxo_get_json`, which both the Markov and the daily-indicator sweeps already call, so the two share one budget instead of pacing independently against one limit. Also wired into the portfolio and order paths.
@@ -1286,3 +1297,13 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Three dead config keys became enforced: `submit_stop_loss_after_fill`, `stop_loss_atr_multiple`, `trail_stop_atr_multiple`. `min_ratchet_atr_fraction` is new — without hysteresis, ATR drift would rewrite twelve broker orders a day for no protective gain, each costing an unprotected window.
 - Worth flagging rather than burying: the configured trail multiple (1.25) is tighter than the initial one (2.0), so every existing stop becomes ratchet-eligible immediately, before any position has appreciated. The twelve stops placed yesterday at 2.0 ATR will be rewritten to 1.25 ATR over the first few sweeps. That follows from the configured pair, but it is a tightening of risk posture caused by a config relationship rather than by price, and 1.25 ATR is close to daily noise on a swing horizon.
 - Follow-up the same morning: the first live sweep reported `considered: 12, skipped_market_closed: 12` with an empty `held` list — every position was queued for a rewrite and only the closed exchanges prevented it. Confirmed against the data: all twelve stops sat at exactly 2.00 ATR. Setting `trail_stop_atr_multiple` to 2.0 makes the ratchet respond to price rather than to a config relationship, and a test now pins that semantics. The lesson is about observability rather than about stops: the sweep's own output made a mistimed risk change visible before it could execute, because it reports what it *would* do and not only what it did.
+## 2026-07-26 - Hermes experiment contract reconciliation
+
+- Reconciled the Trading Manager overlay loader to `SUPPORTED_EXPERIMENT_VARIABLES`, the same checked list published in Hermes capabilities.
+- Removed the retired `strategy.swing.cash_buffer_pct` alias and two manager-only unpublished paths from overlay acceptance; revised daily/weekly reflection prompts and operator documentation to match.
+- Added regression coverage proving published variables are loadable while retired or unpublished paths cannot affect queue creation.
+## 2026-07-26 - After-tax estimate becomes real
+
+- Ported the deterministic Danish share-income estimate from the legacy portfolio path into the Rust overview: progressive configured brackets now estimate the incremental tax on current-year realised SELL gains plus current unrealised P/L.
+- The dashboard labels the value as an estimate and shows the provisional tax. Invalid brackets, a non-DKK setting, or an unavailable ledger leave the gross value unchanged and surface an unavailable status.
+- The estimate is read-only: it does not rewrite ledger tax, affect performance accounting, change sizing, or make a Saxo request.

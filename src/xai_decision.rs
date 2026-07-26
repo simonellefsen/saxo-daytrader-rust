@@ -79,6 +79,17 @@ impl DecisionReportSubmissionMode {
 /// report immediately.
 pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
     let polled = poll_pending_deferred_reports(state).await?;
+    // Do not abandon an already-submitted provider request when an operator
+    // disables the strategy. Polling is read-only and lets the report reach a
+    // terminal audit state; only new scheduled submissions are disabled.
+    if !scheduled_decision_reports_enabled(&state.config) {
+        return Ok(json!({
+            "status": "disabled",
+            "reason": "strategy.enabled is false; scheduled decision-report submission is disabled",
+            "polled": polled,
+            "submitted": []
+        }));
+    }
     let submitted = submit_due_scheduled_reports(state).await?;
     Ok(json!({
         "status": "ok",
@@ -1632,43 +1643,68 @@ pub fn decision_pulse_summary(state: &AppState) -> JsonValue {
 fn configured_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
     let rows = state.market_exchange_rows();
     let mut pulses = Vec::new();
-    pulses.extend(grouped_open_followup_pulse_candidates(
-        &rows,
-        &configured_codes(
-            state,
-            &[
-                "strategy",
-                "swing",
-                "analysis_pulses",
-                "europe_open_followup",
-                "exchange_codes",
-            ],
-            &[
-                "XCSE", "XSTO", "XOSL", "XHEL", "XLON", "XETR", "XFRA", "XMIL", "XAMS",
-            ],
-        ),
-        "europe_open_followup",
-        "Nordic/EU Open +1h15 Decision Report",
-        minutes_after_open(state, "europe_open_followup"),
-    ));
-    pulses.extend(grouped_open_followup_pulse_candidates(
-        &rows,
-        &configured_codes(
-            state,
-            &[
-                "strategy",
-                "swing",
-                "analysis_pulses",
-                "us_open_followup",
-                "exchange_codes",
-            ],
-            &["XNAS", "XNYS"],
-        ),
-        "us_open_followup",
-        "US Open +1h15 Decision Report",
-        minutes_after_open(state, "us_open_followup"),
-    ));
+    if scheduled_pulse_enabled_for_config(&state.config, "europe_open_followup") {
+        pulses.extend(grouped_open_followup_pulse_candidates(
+            &rows,
+            &configured_codes(
+                state,
+                &[
+                    "strategy",
+                    "swing",
+                    "analysis_pulses",
+                    "europe_open_followup",
+                    "exchange_codes",
+                ],
+                &[
+                    "XCSE", "XSTO", "XOSL", "XHEL", "XLON", "XETR", "XFRA", "XMIL", "XAMS",
+                ],
+            ),
+            "europe_open_followup",
+            "Nordic/EU Open +1h15 Decision Report",
+            minutes_after_open(state, "europe_open_followup"),
+        ));
+    }
+    if scheduled_pulse_enabled_for_config(&state.config, "us_open_followup") {
+        pulses.extend(grouped_open_followup_pulse_candidates(
+            &rows,
+            &configured_codes(
+                state,
+                &[
+                    "strategy",
+                    "swing",
+                    "analysis_pulses",
+                    "us_open_followup",
+                    "exchange_codes",
+                ],
+                &["XNAS", "XNYS"],
+            ),
+            "us_open_followup",
+            "US Open +1h15 Decision Report",
+            minutes_after_open(state, "us_open_followup"),
+        ));
+    }
     pulses
+}
+
+pub(crate) fn scheduled_pulse_is_enabled(state: &AppState, key: &str) -> bool {
+    scheduled_pulse_enabled_for_config(&state.config, key)
+}
+
+fn scheduled_decision_reports_enabled(config: &serde_yaml::Value) -> bool {
+    crate::config::yaml_bool(config, &["strategy", "enabled"]).unwrap_or(true)
+}
+
+fn scheduled_decision_pulse_enabled(config: &serde_yaml::Value, key: &str) -> bool {
+    matches!(key, "europe_open_followup" | "us_open_followup")
+        && crate::config::yaml_bool(
+            config,
+            &["strategy", "swing", "analysis_pulses", key, "enabled"],
+        )
+        .unwrap_or(true)
+}
+
+fn scheduled_pulse_enabled_for_config(config: &serde_yaml::Value, key: &str) -> bool {
+    scheduled_decision_reports_enabled(config) && scheduled_decision_pulse_enabled(config, key)
 }
 
 fn grouped_open_followup_pulse_candidates(
@@ -2172,6 +2208,42 @@ mod tests {
             .unwrap()["status"],
             "ok"
         );
+    }
+
+    #[test]
+    fn scheduled_report_and_pulse_switches_default_open_but_honor_false() {
+        let enabled: serde_yaml::Value = serde_yaml::from_str(
+            "strategy:\n  enabled: true\n  swing:\n    analysis_pulses:\n      europe_open_followup:\n        enabled: true\n      us_open_followup:\n        enabled: true\n",
+        )
+        .unwrap();
+        assert!(scheduled_decision_reports_enabled(&enabled));
+        assert!(scheduled_decision_pulse_enabled(
+            &enabled,
+            "europe_open_followup"
+        ));
+        assert!(scheduled_decision_pulse_enabled(
+            &enabled,
+            "us_open_followup"
+        ));
+
+        let disabled: serde_yaml::Value = serde_yaml::from_str(
+            "strategy:\n  enabled: false\n  swing:\n    analysis_pulses:\n      europe_open_followup:\n        enabled: false\n      us_open_followup:\n        enabled: true\n",
+        )
+        .unwrap();
+        assert!(!scheduled_decision_reports_enabled(&disabled));
+        assert!(!scheduled_decision_pulse_enabled(
+            &disabled,
+            "europe_open_followup"
+        ));
+        assert!(scheduled_decision_pulse_enabled(
+            &disabled,
+            "us_open_followup"
+        ));
+        assert!(!scheduled_pulse_enabled_for_config(
+            &disabled,
+            "us_open_followup"
+        ));
+        assert!(!scheduled_decision_pulse_enabled(&enabled, "manual"));
     }
 
     #[test]

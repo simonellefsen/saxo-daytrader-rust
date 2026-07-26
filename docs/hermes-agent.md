@@ -380,12 +380,9 @@ Overlay loading rules:
 Supported one-variable overlay paths:
 
 - `execution.min_trade_value_dkk`
-- `execution.max_commission_pct_per_side`
 - `strategy.capital.min_cash_buffer_pct`
-- `strategy.swing.cash_buffer_pct`
 - `strategy.swing.daily_indicators.min_confluences`
 - `strategy.swing.markov_gate.min_signed_signal`
-- `strategy.swing.markov_gate.max_position_pct`
 
 Unsupported variables are ignored and logged. The overlay affects queue creation only; it does not call Saxo, approve live orders, mutate secrets, or activate live broker behavior.
 
@@ -511,7 +508,7 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflect
 - Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
 - Write exactly one concise reflection.
 - Create at most one pending-review experiment proposal when the day produced a concrete learning that can be tested safely with exactly one changed variable.
-- Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.cash_buffer_pct`, `strategy.swing.daily_indicators.min_confluences`, and `strategy.swing.markov_gate.min_signed_signal`.
+- Prefer supported overlay variables: `execution.min_trade_value_dkk`, `strategy.capital.min_cash_buffer_pct`, `strategy.swing.daily_indicators.min_confluences`, and `strategy.swing.markov_gate.min_signed_signal`.
 - Avoid duplicate proposals for the same `changed_variable_path`; exact active/pending matches are rejected by both the protected HTTP adapter and MCP tool. A small explicit set of related variable families returns advisory review context only (currently the two cash-buffer paths); do not treat that signal as permission to merge, reject, or activate a different variable. If evidence is insufficient or an exact duplicate exists, record the candidate in `proposed_actions` instead of creating an experiment.
 
 After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.

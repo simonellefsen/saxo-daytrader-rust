@@ -409,6 +409,11 @@ strategy:
       min_signed_signal: 0.15
       max_position_pct: 0.05
       max_signal_age_days: 5
+    trading_manager:
+      enabled: true
+      use_ai: true
+      due_window_minutes: 20
+      max_symbols: 30
     journal:
       enabled: true
       timezone: Europe/Copenhagen
