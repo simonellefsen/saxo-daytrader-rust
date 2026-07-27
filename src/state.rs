@@ -77,6 +77,7 @@ const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
+const HOLDING_THESIS_REVIEW_LIMIT: i64 = 50;
 const DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
@@ -2815,6 +2816,126 @@ fn compact_holding_period_outcome(
     })
 }
 
+/// Turns durable BUY-thesis records and the latest local broker-position
+/// snapshot into an operator review queue. A due review is deliberately not
+/// an exit recommendation: imported lots and later position changes can make
+/// a recorded entry only partial provenance for the broker holding.
+fn compact_holding_thesis_reviews(
+    positions: &[JsonValue],
+    thesis_rows: &[JsonValue],
+    stale_after_days: i64,
+    now: DateTime<Utc>,
+) -> JsonValue {
+    let stale_after_days = stale_after_days.max(1);
+    let held = positions
+        .iter()
+        .filter_map(|position| {
+            let symbol = json_text(position, "symbol");
+            (value_f64(position, "quantity") > 1e-9 && !symbol.is_empty())
+                .then(|| (watchlist_symbol_key(&symbol), position))
+        })
+        .collect::<HashMap<_, _>>();
+    let held_position_count = held.len();
+    let mut latest_thesis_by_symbol = HashMap::<String, (&JsonValue, JsonValue)>::new();
+    for row in thesis_rows {
+        let symbol = json_text(row, "symbol");
+        let raw = row
+            .get("trade_thesis_json")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let thesis = if raw.is_object() {
+            raw
+        } else {
+            raw.as_str()
+                .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+                .unwrap_or(JsonValue::Null)
+        };
+        if symbol.is_empty() || json_text(&thesis, "status") != "recorded" {
+            continue;
+        }
+        latest_thesis_by_symbol
+            .entry(watchlist_symbol_key(&symbol))
+            .or_insert((row, thesis));
+    }
+
+    let mut reviews = Vec::new();
+    for (symbol, position) in held {
+        let Some((row, thesis)) = latest_thesis_by_symbol.get(&symbol) else {
+            continue;
+        };
+        let mut tracked_at = json_text(row, "first_fill_at");
+        if tracked_at.is_empty() {
+            tracked_at = json_text(row, "created_at");
+        }
+        let Some(tracked_at) = DateTime::parse_from_rfc3339(&tracked_at)
+            .ok()
+            .map(|value| value.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        let age_days = (now - tracked_at).num_days().max(0);
+        let intended_window = json_text(thesis, "intended_holding_window");
+        let thesis_window_days = match intended_window.as_str() {
+            "next_1_week" => Some(7),
+            "next_2_weeks" => Some(14),
+            "next_1_month" => Some(30),
+            _ => None,
+        };
+        let decision_evidence_stale = age_days >= stale_after_days;
+        let thesis_window_elapsed = thesis_window_days.is_some_and(|days| age_days >= days);
+        if !decision_evidence_stale && !thesis_window_elapsed {
+            continue;
+        }
+        let status = if thesis_window_elapsed {
+            "thesis_window_elapsed"
+        } else {
+            "decision_evidence_stale"
+        };
+        reviews.push(json!({
+            "symbol": json_text(position, "symbol"),
+            "instrument_name": json_text(position, "instrument_name"),
+            "position_quantity": value_f64(position, "quantity"),
+            "latest_thesis_order_id": value_i64(row, "id"),
+            "tracked_entry_at": tracked_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "age_days": age_days,
+            "decision_stale_after_days": stale_after_days,
+            "intended_holding_window": intended_window,
+            "intended_holding_window_days": thesis_window_days,
+            "status": status,
+            "entry_rationale": compact_review_text(&json_text(thesis, "entry_rationale"), 240),
+            "invalidation": compact_review_text(&json_text(thesis, "invalidation"), 320),
+            "operator_next_step": "Request or wait for a fresh decision pulse, then compare current verified technical and Markov evidence with the recorded entry thesis. This review does not instruct an exit.",
+        }));
+    }
+    reviews.sort_by(|left, right| {
+        value_i64(right, "age_days")
+            .cmp(&value_i64(left, "age_days"))
+            .then_with(|| json_text(left, "symbol").cmp(&json_text(right, "symbol")))
+    });
+    json!({
+        "status": if reviews.is_empty() { "no_reviews_due" } else { "review_due" },
+        "held_position_count": held_position_count,
+        "review_count": reviews.len(),
+        "decision_stale_after_days": stale_after_days,
+        "reviews": reviews,
+        "safety": "read_only_local_broker_position_snapshot_execution_order_thesis_and_fill_audit_no_saxo_provider_hermes_or_order_mutation",
+        "interpretation": "A review identifies a held symbol with a recorded BUY thesis whose decision evidence is stale or intended window has elapsed. It is not a sell signal, sizing instruction, gate, or broker action."
+    })
+}
+
+fn compact_review_text(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control() || character.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
+}
+
 /// Reconstruct the local, reconciled-fill sequence around one order without
 /// treating it as broker position truth. Historical fills can be incomplete
 /// (for example after a portfolio import), so a SELL without an observed BUY
@@ -3173,6 +3294,21 @@ impl AppState {
                         "interpretation": "Trade-thesis outcome evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
                     })
                 })
+        } else {
+            JsonValue::Null
+        };
+        let execution_holding_thesis_reviews = if dashboard_loads_tab_exclusive_data(
+            &active_view,
+            "execution",
+        ) {
+            self.holding_thesis_reviews().await.unwrap_or_else(|err| {
+                warn!("dashboard holding-thesis reviews degraded: {err:#}");
+                json!({
+                    "status": "unavailable",
+                    "safety": "read_only_local_broker_position_snapshot_execution_order_thesis_and_fill_audit_no_saxo_provider_hermes_or_order_mutation",
+                    "interpretation": "Holding-thesis reviews could not be loaded. They do not affect gates, Hermes, configuration, or Saxo orders.",
+                })
+            })
         } else {
             JsonValue::Null
         };
@@ -3624,6 +3760,7 @@ impl AppState {
             execution_fills,
             execution_events,
             execution_trade_thesis_evidence,
+            execution_holding_thesis_reviews,
             execution_decision_pulse_evidence,
             reports,
             manual_report_in_flight: self.manual_decision_report_in_flight().await,
@@ -6220,6 +6357,37 @@ impl AppState {
         ))
     }
 
+    async fn holding_thesis_reviews(&self) -> Result<JsonValue> {
+        let positions = self.position_items(250).await?;
+        let thesis_rows = self
+            .select_json(&format!(
+                "SELECT eo.id, eo.created_at, eo.symbol, eo.trade_thesis_json,
+                        (SELECT MIN(f.created_at)
+                         FROM execution_fills f
+                         WHERE f.execution_order_id = eo.id
+                           AND f.delta_quantity > 0) AS first_fill_at
+                 FROM execution_orders eo
+                 WHERE eo.action = 'BUY'
+                   AND eo.trade_thesis_json IS NOT NULL
+                 ORDER BY eo.created_at DESC, eo.id DESC
+                 LIMIT {}",
+                HOLDING_THESIS_REVIEW_LIMIT
+            ))
+            .await?;
+        let stale_after_days = yaml_i64(
+            &self.config,
+            &["strategy", "swing", "position_decision_stale_after_days"],
+        )
+        .unwrap_or(DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS)
+        .max(1);
+        Ok(compact_holding_thesis_reviews(
+            &positions,
+            &thesis_rows,
+            stale_after_days,
+            Utc::now(),
+        ))
+    }
+
     async fn decision_pulse_outcome_evidence(&self) -> Result<JsonValue> {
         let rows = self
             .select_json(&format!(
@@ -7066,6 +7234,13 @@ impl AppState {
                     "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
                 })
             });
+        let holding_thesis_reviews = self.holding_thesis_reviews().await.unwrap_or_else(|err| {
+            warn!("Hermes holding-thesis review context degraded: {err:#}");
+            json!({
+                "status": "unavailable",
+                "safety": "read_only_local_broker_position_snapshot_execution_order_thesis_and_fill_audit_no_saxo_provider_hermes_or_order_mutation",
+            })
+        });
         let performance = self
             .performance_history_with_current("1M", 500)
             .await
@@ -7150,7 +7325,8 @@ impl AppState {
                 "failures": execution_failures,
                 "events": execution_events,
                 "fills": execution_fills,
-                "protective_stop_coverage": protective_stop_coverage
+                "protective_stop_coverage": protective_stop_coverage,
+                "holding_thesis_reviews": holding_thesis_reviews
             },
             "performance": {
                 "range": "1M",
@@ -14018,6 +14194,89 @@ market_data:
         assert_eq!(json_text(&outcome, "status"), "partial");
         assert!((value_f64(&outcome["one_session"], "directional_return_pct") + 0.02).abs() < 1e-9);
         assert!(outcome["five_session"].is_null());
+    }
+
+    #[test]
+    fn holding_thesis_reviews_only_flag_current_positions_with_due_recorded_theses() {
+        let now = DateTime::parse_from_rfc3339("2026-07-27T12:00:00Z")
+            .expect("fixed test timestamp")
+            .with_timezone(&Utc);
+        let reviews = compact_holding_thesis_reviews(
+            &[
+                json!({
+                    "symbol": "AMD:xnas",
+                    "instrument_name": "AMD",
+                    "quantity": 2.0
+                }),
+                json!({
+                    "symbol": "NVDA:xnas",
+                    "instrument_name": "NVIDIA",
+                    "quantity": 1.0
+                }),
+            ],
+            &[
+                json!({
+                    "id": 22,
+                    "symbol": "AMD:xnas",
+                    "created_at": "2026-07-12T15:00:00Z",
+                    "first_fill_at": "2026-07-12T15:30:00Z",
+                    "trade_thesis_json": {
+                        "status": "recorded",
+                        "intended_holding_window": "next_2_weeks",
+                        "entry_rationale": "Verified technical setup",
+                        "invalidation": "Fresh evidence no longer supports the long setup."
+                    }
+                }),
+                json!({
+                    "id": 23,
+                    "symbol": "MSFT:xnas",
+                    "created_at": "2026-07-01T15:00:00Z",
+                    "first_fill_at": "2026-07-01T15:30:00Z",
+                    "trade_thesis_json": {
+                        "status": "recorded",
+                        "intended_holding_window": "next_2_weeks"
+                    }
+                }),
+            ],
+            7,
+            now,
+        );
+
+        assert_eq!(json_text(&reviews, "status"), "review_due");
+        assert_eq!(value_i64(&reviews, "held_position_count"), 2);
+        assert_eq!(value_i64(&reviews, "review_count"), 1);
+        let item = reviews["reviews"][0].clone();
+        assert_eq!(json_text(&item, "symbol"), "AMD:xnas");
+        assert_eq!(json_text(&item, "status"), "thesis_window_elapsed");
+        assert_eq!(value_i64(&item, "age_days"), 14);
+        assert_eq!(value_i64(&item, "latest_thesis_order_id"), 22);
+        assert!(json_text(&item, "operator_next_step").contains("not instruct an exit"));
+        assert!(json_text(&reviews, "safety").contains("no_saxo"));
+    }
+
+    #[test]
+    fn holding_thesis_reviews_wait_until_the_stale_window() {
+        let now = DateTime::parse_from_rfc3339("2026-07-27T12:00:00Z")
+            .expect("fixed test timestamp")
+            .with_timezone(&Utc);
+        let reviews = compact_holding_thesis_reviews(
+            &[json!({"symbol": "AMD:xnas", "quantity": 2.0})],
+            &[json!({
+                "id": 22,
+                "symbol": "AMD:xnas",
+                "created_at": "2026-07-24T15:00:00Z",
+                "first_fill_at": "2026-07-24T15:30:00Z",
+                "trade_thesis_json": {
+                    "status": "recorded",
+                    "intended_holding_window": "next_2_weeks"
+                }
+            })],
+            7,
+            now,
+        );
+
+        assert_eq!(json_text(&reviews, "status"), "no_reviews_due");
+        assert_eq!(value_i64(&reviews, "review_count"), 0);
     }
 
     #[test]

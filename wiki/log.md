@@ -1440,3 +1440,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added `strategy.concentration.max_assets_per_exchange` and `strategy.concentration.max_assets_per_currency` to both shipped configs and the Rust config contract. Both defaults are `0`, an explicit unlimited policy, so the rollout exposes and audits the gate without silently changing live allocation policy.
 - A positive cap counts distinct positive-quantity persisted holdings plus BUYs approved earlier in the same Trading Manager cycle. It uses only the canonical exchange suffix and the local exchange-to-currency mapping, lets an add to an existing symbol retain its slot, and fails closed when snapshot or bucket evidence is unavailable. Negative configuration is invalid and blocks BUYs.
 - The policy, bucket counts, and outcome are included in the Trading Manager snapshot, Hermes preflight, and Candidate Scoring Waterfall. It never alters SELLs, queries a provider, or exposes broker/session data. Sector concentration remains deferred pending a durable sector-data source.
+
+## [2026-07-27] trading-quality | Read-only holding thesis reviews
+
+- Added a bounded Holding Thesis Reviews queue in Execution and sanitized it into Hermes context. It compares only the latest persisted broker-position snapshot with a recorded BUY thesis and reconciled fill timestamp when present; a missing thesis or ambiguous timestamp is omitted rather than inferred.
+- A row becomes review due when its decision evidence has aged beyond the configured seven-day horizon or its recorded two-week thesis window elapsed. The displayed next step is a fresh decision comparison against current verified technical and Markov evidence.
+- This is deliberately not a maximum-holding-period exit rule. It performs no Saxo/provider call, does not alter Hermes advice or Trading Manager gates, and cannot place, amend, cancel, size, approve, or retain a broker order.

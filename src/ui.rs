@@ -3742,6 +3742,10 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 evidence: data.execution_trade_thesis_evidence.clone(),
                 prefs: prefs.clone()
             }
+            HoldingThesisReviewPanel {
+                reviews: data.execution_holding_thesis_reviews.clone(),
+                prefs: prefs.clone()
+            }
             DecisionPulseOutcomeEvidencePanel {
                 evidence: data.execution_decision_pulse_evidence.clone(),
                 prefs: prefs.clone()
@@ -3908,6 +3912,84 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn HoldingThesisReviewPanel(reviews: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&reviews, "status").replace('_', " ");
+    let review_rows = reviews
+        .get("reviews")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let review_count = value_i64(&reviews, "review_count");
+    let held_count = value_i64(&reviews, "held_position_count");
+    let stale_after_days = value_i64(&reviews, "decision_stale_after_days");
+    let interpretation = text_or(
+        &reviews,
+        "interpretation",
+        "Read-only holding-thesis review only.",
+    );
+    rsx! {
+        section { class: "section stack",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Holding Thesis Reviews" }
+                    p { class: "muted", "Held symbols with a recorded BUY thesis that need a fresh decision comparison. This is a review queue, not an automated exit path." }
+                }
+                span { class: "status", "{status}" }
+            }
+            if text(&reviews, "status") == "unavailable" {
+                span { class: "muted", "Holding-thesis review data is unavailable right now." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status", "{review_count} due" }
+                    span { class: "status", "{held_count} held" }
+                    span { class: "status", "decision evidence after {stale_after_days} days" }
+                }
+                if review_rows.is_empty() {
+                    p { class: "muted", "No recorded thesis on a current holding is due for review." }
+                } else {
+                    div { class: "table-wrap",
+                        table {
+                            thead { tr {
+                                th { "Symbol" }
+                                th { "Review" }
+                                th { "Tracked Entry" }
+                                th { "Age" }
+                                th { "Thesis" }
+                            }}
+                            tbody {
+                                for row in review_rows {
+                                    tr {
+                                        td {
+                                            strong { "{text(&row, \"symbol\")}" }
+                                            if !text(&row, "instrument_name").is_empty() {
+                                                span { class: "muted block", "{text(&row, \"instrument_name\")}" }
+                                            }
+                                        }
+                                        td { "{text(&row, \"status\").replace('_', \" \")}" }
+                                        td { "{format_timestamp(&text(&row, \"tracked_entry_at\"), &prefs)}" }
+                                        td { "{value_i64(&row, \"age_days\")} days" }
+                                        td {
+                                            "{text(&row, \"intended_holding_window\").replace('_', \" \")}"
+                                            if !text(&row, "entry_rationale").is_empty() {
+                                                details { summary { "Entry rationale" } p { class: "detail-pre", "{text(&row, \"entry_rationale\")}" } }
+                                            }
+                                            if !text(&row, "invalidation").is_empty() {
+                                                details { summary { "Recorded invalidation" } p { class: "detail-pre", "{text(&row, \"invalidation\")}" } }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                p { class: "muted", "{interpretation}" }
             }
         }
     }
