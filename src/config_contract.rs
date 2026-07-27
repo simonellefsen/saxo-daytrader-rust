@@ -47,9 +47,9 @@ impl ContractStatus {
 
 /// Whether an entry describes one leaf or a whole data subtree.
 ///
-/// Operator-maintained data maps (`symbol_aliases`, `benchmark_indices`) grow
-/// new members routinely. Contracting them per member would make every new alias
-/// a drift finding, so they are contracted once at the parent.
+/// Operator-maintained data maps such as `symbol_aliases` grow new members
+/// routinely. Contracting them per member would make every new alias a drift
+/// finding, so they are contracted once at the parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContractScope {
     Leaf,
@@ -127,16 +127,6 @@ const fn unused_risk(path: &'static [&'static str], note: &'static str) -> Contr
         path,
         status: ContractStatus::Unused,
         scope: ContractScope::Leaf,
-        risk_surface: true,
-        note,
-    }
-}
-
-const fn unused_risk_subtree(path: &'static [&'static str], note: &'static str) -> ContractEntry {
-    ContractEntry {
-        path,
-        status: ContractStatus::Unused,
-        scope: ContractScope::Subtree,
         risk_surface: true,
         note,
     }
@@ -415,10 +405,6 @@ const CONTRACT: &[ContractEntry] = &[
     unused(
         &["strategy", "swing", "journal", "monthly_time"],
         "Only the daily journal cycle is ported to Rust.",
-    ),
-    unused_risk_subtree(
-        &["strategy", "swing", "journal", "benchmark_indices"],
-        "No benchmark comparison is computed in Rust; performance is reported without a benchmark.",
     ),
     // ---- strategy.swing.analysis_pulses ----
     unused(
@@ -871,6 +857,21 @@ mod tests {
             assert_eq!(finding.kind, FindingKind::UncontractedKey);
             assert!(finding.risk_surface);
         }
+    }
+
+    #[test]
+    fn retired_legacy_benchmark_indices_are_reported_as_uncontracted() {
+        let config = parse(
+            "strategy:\n  swing:\n    journal:\n      benchmark_indices:\n        US:\n          S&P 500: '^GSPC'\n",
+        );
+        let (summary, findings) = audit_config(&config);
+        assert_eq!(summary.uncontracted, 1);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.path == "strategy.swing.journal.benchmark_indices.US.S&P 500")
+            .expect("retired benchmark key is reported");
+        assert_eq!(finding.kind, FindingKind::UncontractedKey);
+        assert!(finding.risk_surface);
     }
 
     #[test]

@@ -439,20 +439,6 @@ strategy:
       weekly_weekday: 6
       weekly_time: "20:00"
       monthly_time: "22:45"
-      benchmark_indices:
-        UK:
-          FTSE 100: "^FTSE"
-        EU:
-          Euro Stoxx 50: "^STOXX50E"
-          DAX: "^GDAXI"
-        Nordics:
-          OMX Copenhagen 25: "^OMXC25"
-          OMX Stockholm 30: "^OMX"
-          Oslo OBX: "OBX.OL"
-        US:
-          S&P 500: "^GSPC"
-          Nasdaq Composite: "^IXIC"
-          Dow Jones: "^DJI"
     analysis_pulses:
       timezone: Europe/Copenhagen
       due_window_minutes: 20

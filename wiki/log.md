@@ -1461,3 +1461,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Removed `strategy.ladder.session_flatten_enabled` and `flatten_minutes_before_tradable_close` from both shipped configurations and the config contract. The Rust runtime has no session-flatten path and the swing strategy is explicitly designed to hold across market closes.
 - Protective stops remain the active intraday/overnight downside control. The legacy reference defaults remain disabled when these settings are absent, so the cleanup changes no active decision, scheduled exit, or broker behavior.
+
+## [2026-07-27] trading-quality | Retired legacy benchmark ticker configuration
+
+- Removed the legacy Yahoo ticker map at `strategy.swing.journal.benchmark_indices` from both shipped configurations and the Rust config contract. The Rust journal did not query or calculate from it, so leaving it configured implied a benchmark comparison that does not exist.
+- The legacy reference retains its own default map when run separately. A future Rust benchmark must use verified canonical Saxo symbols with daily-indicator close coverage, an explicit fixed comparison baseline, and coverage/freshness reporting. It will remain read-only and outside decision, Hermes, sizing, and broker paths until separately implemented and tested.

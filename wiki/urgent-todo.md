@@ -129,14 +129,13 @@ Sequencing note: none of this should land before one placement has completed and
 
 Reference for U2. Established by extracting every `strategy.*`, `risk.*`, and `taxation.*` config access path from `src/*.rs` — both the `&["a", "b", "c"]` slice form and chained `.get("a").and_then(...)` — and comparing against the leaf keys in both shipped configs. Leaf-name grep alone over-counts badly (`cash_buffer_pct` appears to have 54 hits because it is a substring of `min_cash_buffer_pct`), so trust path extraction, not name matching.
 
-The audit implemented for U2 reports this automatically. After the 2026-07-26 automation-switch, exclusion, tax-estimate, risk-sizing, BUY-cost, candidate-ceiling, per-symbol exposure-cap, maximum-holdings, post-gate BUY-selection-cap, duplicate-cash-buffer retirement, explicit report-freshness-policy, Quiver-cadence, minimum-selection-floor, unsupported-sector-cap, duplicate-position-weight, and session-flatten retirements, the deployed configuration has **34 enforced, 30 advisory, 29 unused, 5 of them risk-surface**, 0 uncontracted. Local configuration carries the same Quiver policy rather than silently falling back to code defaults.
+The audit implemented for U2 reports this automatically. After the 2026-07-26 automation-switch, exclusion, tax-estimate, risk-sizing, BUY-cost, candidate-ceiling, per-symbol exposure-cap, maximum-holdings, post-gate BUY-selection-cap, duplicate-cash-buffer retirement, explicit report-freshness-policy, Quiver-cadence, minimum-selection-floor, unsupported-sector-cap, duplicate-position-weight, session-flatten, and legacy-benchmark retirements, the deployed configuration has **34 enforced, 30 advisory, 28 unused, 4 of them risk-surface**, 0 uncontracted. Local configuration carries the same Quiver policy rather than silently falling back to code defaults.
 
-The remaining five keys that read as active risk controls and are not:
+The remaining four keys that read as active risk controls and are not:
 
 | Config key | Note |
 | --- | --- |
 | `strategy.ladder.submit_take_profit_after_fill`, `submit_bracket_with_entry` | No take-profit or entry bracket is implemented. Automatic protective stops and their ATR controls are enforced under U1. |
-| `strategy.swing.journal.benchmark_indices` | No benchmark comparison is computed in Rust; performance is reported without one. |
 
 A further 17 keys are unused without implying a missing safeguard (`strategy.mode`, `max_candidates`, `min_holdings`, the remaining `ladder.*` entries, the unported weekly/monthly journal cycle, `trading_manager.use_ai`, `trading_manager.due_window_minutes`, `analysis_pulses.timezone`, `taxation.share_income.currency`).
 
