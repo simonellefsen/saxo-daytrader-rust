@@ -1482,3 +1482,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Centralized the SIM/LIVE OpenAPI gateway selection in `src/saxo_http.rs`; OAuth client-context, Markov, portfolio, and order paths now share the same fail-closed mapping.
 - Pure unit tests pin the two valid gateways and ensure unknown environments remain rejected. Request pacing, session handling, retries, ids, parsing, and broker behavior were deliberately left at their existing call sites.
+
+## [2026-07-27] operations | Earlier Quiver advisory cycle
+
+- Moved the weekday Quiver signal cycle from 23:10 to 19:00 Europe/Copenhagen in the Rust fallback and both shipped configurations. The scheduler remains date-idempotent and skips the cycle until the configured local time.
+- Quiver's Congress-trading source is date-based advisory data, not official-close market data. The earlier run makes the latest completed signal available to evening Decision Report and Hermes context before end-of-day journaling, without altering Saxo, order creation, or execution behavior.

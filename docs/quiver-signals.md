@@ -17,7 +17,7 @@ strategy:
   quiver:
     enabled: true
     timezone: Europe/Copenhagen
-    daily_time: "23:10"
+    daily_time: "19:00"
     run_weekdays_only: true
     lookback_days: 120
     max_symbols: 60
@@ -68,13 +68,19 @@ The stored rows include normalized top events and source status, not API keys or
 - Dashboard: `/?view=quiver`
 - API: `/api/quiver/signals`
 - Manual refresh: `POST /api/actions/quiver-signals`
-- Scheduler: runs after `strategy.quiver.daily_time`
+- Scheduler: runs once on each weekday after `strategy.quiver.daily_time` (19:00 Europe/Copenhagen by default)
 - Decision prompt context: `quiver_signals`
 - Hermes context/MCP: `quiver_signals`, `get_quiver_signals`
 
 The manual refresh endpoint returns a compact run summary with ranked signal
 rows. Use `GET /api/quiver/signals` for the full latest table and stored top
 event details.
+
+The scheduled run deliberately occurs before the local end-of-day journal. The
+Congress-trading source is date-based rather than an official-close market-data
+feed, so waiting for US market close does not improve the input. The earlier
+cadence lets the evening decision and Hermes reflection consume the latest
+completed advisory run without changing any broker behavior.
 
 ## Current Status
 

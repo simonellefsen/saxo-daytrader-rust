@@ -378,7 +378,7 @@ strategy:
   quiver:
     enabled: true
     timezone: Europe/Copenhagen
-    daily_time: "23:10"
+    daily_time: "19:00"
     run_weekdays_only: true
     lookback_days: 120
     max_symbols: 60

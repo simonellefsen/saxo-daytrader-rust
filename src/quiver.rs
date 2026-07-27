@@ -16,7 +16,7 @@ use crate::{
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.quiverquant.com";
-const DEFAULT_DAILY_TIME: &str = "23:10";
+const DEFAULT_DAILY_TIME: &str = "19:00";
 const REQUEST_DELAY_MS: u64 = 350;
 const MAX_ATTEMPTS: usize = 3;
 const STRONG_BEARISH_CONFLICT_SIGNAL: f64 = -0.35;
