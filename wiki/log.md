@@ -15,6 +15,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Trading Manager now persists a compact count of skipped BUY candidates grouped by its stable gate code. The Overview Cash Deployment panel renders up to four ranked, human-readable blocks such as `cash budget: 3` or `market open: 1`.
 - This is an audit projection only. It does not reconstruct unrecorded causes, change capital policy, modify Hermes advice, or create, amend, or place Saxo orders.
 
+## [2026-07-27] trading-quality | Quiver held-position conflict review
+
+- Strong bearish Quiver Congress-trading signals against positive-quantity holdings are now presented as bounded review flags to the Decision Report prompt, Hermes, and the Quiver dashboard. The default threshold is `-0.35`; only symbols held by the current local/broker-aware position view are included.
+- The projection is advisory only. It cannot create an exit, approve or block an order, adjust a manager gate, or override technical, Markov, capital, or Saxo evidence.
+
 ## [2026-07-26] trading-quality | Durable BUY trade-thesis provenance
 
 - The Trading Manager now records a compact, immutable thesis only when it admits a BUY to the execution queue. It includes the Decision Report/pulse reference, intended two-week holding window, rationale, catalyst or monitor, deterministic approval evidence, compact technical and Markov evidence, and a review-only invalidation condition.

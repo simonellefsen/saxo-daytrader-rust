@@ -3234,6 +3234,21 @@ impl AppState {
             warn!("dashboard latest Quiver run degraded: {err:#}");
             JsonValue::Null
         });
+        let quiver_conflicts = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
+            let held_positions = self.position_items(250).await.unwrap_or_else(|err| {
+                warn!("dashboard Quiver conflict holdings degraded: {err:#}");
+                Vec::new()
+            });
+            let context = crate::quiver::compact_quiver_context(self, 250)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard Quiver conflict context degraded: {err:#}");
+                    json!({"signals": []})
+                });
+            crate::quiver::held_position_conflicts(&held_positions, &context)
+        } else {
+            JsonValue::Null
+        };
         let latest_daily_indicator_run =
             self.latest_daily_indicator_run()
                 .await
@@ -3386,6 +3401,7 @@ impl AppState {
             latest_markov_run,
             quiver_signals,
             latest_quiver_run,
+            quiver_conflicts,
             latest_daily_indicator_run,
             run_schedules: json!({
                 "markov": crate::markov_method::markov_config_json_for_state(self),
@@ -6764,6 +6780,11 @@ impl AppState {
                 warn!("Hermes Quiver context degraded: {err:#}");
                 json!({"status": "degraded", "detail": err.to_string()})
             });
+        let quiver_positions = self.position_items(250).await.unwrap_or_else(|err| {
+            warn!("Hermes Quiver conflict holdings degraded: {err:#}");
+            Vec::new()
+        });
+        let quiver_conflicts = crate::quiver::held_position_conflicts(&quiver_positions, &quiver);
         let editorial_research =
             crate::editorial_research::compact_editorial_research_context(self, limit)
                 .await
@@ -6813,6 +6834,7 @@ impl AppState {
             },
             "markov_method": markov,
             "quiver_signals": quiver,
+            "quiver_conflicts": quiver_conflicts,
             "editorial_research": editorial_research,
             "daily_indicators": daily_indicators,
             "hermes": {

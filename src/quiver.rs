@@ -1,4 +1,4 @@
-use std::time::Duration as StdDuration;
+use std::{collections::HashSet, time::Duration as StdDuration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
@@ -19,6 +19,7 @@ const DEFAULT_BASE_URL: &str = "https://api.quiverquant.com";
 const DEFAULT_DAILY_TIME: &str = "23:10";
 const REQUEST_DELAY_MS: u64 = 350;
 const MAX_ATTEMPTS: usize = 3;
+const STRONG_BEARISH_CONFLICT_SIGNAL: f64 = -0.35;
 
 #[derive(Clone, Debug)]
 struct QuiverConfig {
@@ -716,6 +717,59 @@ pub async fn compact_quiver_context(state: &AppState, limit: i64) -> Result<Json
     }))
 }
 
+/// Surfaces strong negative Quiver signals against currently held symbols.
+/// Quiver remains advisory: this projection does not approve, reject, size,
+/// or otherwise change an order.
+pub fn held_position_conflicts(positions: &[JsonValue], context: &JsonValue) -> JsonValue {
+    let held_symbols = positions
+        .iter()
+        .filter(|position| value_f64(position, "quantity") > 0.0)
+        .map(|position| text(position, "symbol").to_uppercase())
+        .filter(|symbol| !symbol.is_empty())
+        .collect::<HashSet<_>>();
+    let mut conflicts = context
+        .get("signals")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|signal| {
+            let symbol = text(signal, "symbol").to_uppercase();
+            let score = value_f64(signal, "signal");
+            (held_symbols.contains(&symbol) && score <= STRONG_BEARISH_CONFLICT_SIGNAL).then(|| {
+                json!({
+                    "symbol": symbol,
+                    "signal": score,
+                    "direction": text(signal, "direction"),
+                    "confidence": value_f64(signal, "confidence"),
+                    "event_count": signal.get("event_count").cloned().unwrap_or(JsonValue::Null),
+                    "latest_event_date": signal.get("latest_event_date").cloned().unwrap_or(JsonValue::Null),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    conflicts.sort_by(|left, right| {
+        value_f64(left, "signal")
+            .partial_cmp(&value_f64(right, "signal"))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| text(left, "symbol").cmp(&text(right, "symbol")))
+    });
+    let status = if held_symbols.is_empty() {
+        "no_positions"
+    } else if conflicts.is_empty() {
+        "clear"
+    } else {
+        "conflicts_detected"
+    };
+    json!({
+        "status": status,
+        "held_symbol_count": held_symbols.len(),
+        "strong_bearish_signal_lte": STRONG_BEARISH_CONFLICT_SIGNAL,
+        "conflicts": conflicts,
+        "safety": "advisory_quiver_context_only_no_gate_hermes_or_broker_mutation",
+        "interpretation": "A strong bearish Congress-trading signal conflicts with a current holding and deserves explicit review. It is not an exit instruction, a causality claim, or a replacement for technical, Markov, capital, or broker evidence.",
+    })
+}
+
 pub fn quiver_config_json_for_state(state: &AppState) -> JsonValue {
     quiver_config_json(&quiver_config(state))
 }
@@ -963,5 +1017,22 @@ mod tests {
             analyze_congress_trades(NaiveDate::from_ymd_opt(2026, 7, 3).unwrap(), 120, &trades);
         assert_eq!(analysis.direction, "bearish");
         assert!(analysis.signal < 0.0);
+    }
+
+    #[test]
+    fn surfaces_only_strong_bearish_signals_for_held_symbols() {
+        let conflicts = held_position_conflicts(
+            &[json!({"symbol": "NVDA:xnas", "quantity": 2.0})],
+            &json!({
+                "signals": [
+                    {"symbol": "NVDA:xnas", "signal": -0.48, "direction": "bearish", "confidence": 0.8, "event_count": 6},
+                    {"symbol": "AMZN:xnas", "signal": -0.72, "direction": "bearish", "confidence": 0.9, "event_count": 4},
+                    {"symbol": "NVDA:xnas", "signal": -0.10, "direction": "bearish", "confidence": 0.3, "event_count": 1}
+                ]
+            }),
+        );
+        assert_eq!(conflicts["status"], "conflicts_detected");
+        assert_eq!(conflicts["conflicts"].as_array().unwrap().len(), 1);
+        assert_eq!(conflicts["conflicts"][0]["symbol"], "NVDA:XNAS");
     }
 }

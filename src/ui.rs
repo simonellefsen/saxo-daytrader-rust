@@ -1772,6 +1772,7 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { "Sources congress_trading · US symbols only · daily time {text(&config, \"daily_time\")} · max symbols {text(&config, \"max_symbols\")}" }
                 }
             }
+            QuiverConflictPanel { conflicts: data.quiver_conflicts.clone(), prefs: prefs.clone() }
             div { class: "table-wrap compact-table",
                 div { class: "section-title-row compact",
                     h3 { "Signals" }
@@ -1805,6 +1806,56 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                     if data.quiver_page < total_pages {
                         a { class: "small-button", href: "{next_page_href}", "Next" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn QuiverConflictPanel(conflicts: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&conflicts, "status");
+    let rows = conflicts
+        .get("conflicts")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if status.is_empty() || status == "no_positions" || status == "clear" {
+        return rsx! {
+            section { class: "section stack",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Held-Position Quiver Conflicts" }
+                        p { class: "muted", "No strong bearish Quiver signal currently conflicts with a held position." }
+                    }
+                    span { class: "status", "clear" }
+                }
+            }
+        };
+    }
+    rsx! {
+        section { class: "section stack",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Held-Position Quiver Conflicts" }
+                    p { class: "muted", "Strong bearish Congress-trading signals against current holdings. Review flags only; they do not create an exit, alter a gate, or override technical and Markov evidence." }
+                }
+                span { class: "status bad-text", "{rows.len()} review flags" }
+            }
+            div { class: "table-wrap compact-table",
+                table { class: "data-table",
+                    thead { tr { th { "Symbol" } th { "Signal" } th { "Confidence" } th { "Events" } th { "Latest" } } }
+                    tbody {
+                        for row in rows.iter() {
+                            tr {
+                                td { SymbolLink { symbol: text(row, "symbol"), instrument_name: String::new() } }
+                                td { class: "bad-text", "{format_signed_pct(value_f64(row, \"signal\"), &prefs)}" }
+                                td { "{format_pct(value_f64(row, \"confidence\"), &prefs)}" }
+                                td { "{text(row, \"event_count\")}" }
+                                td { "{fallback_text(row, \"latest_event_date\", \"n/a\")}" }
+                            }
+                        }
                     }
                 }
             }
