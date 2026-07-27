@@ -518,11 +518,7 @@ fn openapi_base_url(state: &AppState, session: &JsonValue) -> Result<&'static st
         .or_else(|| yaml_string(&state.config, &["saxo", "environment"]))
         .unwrap_or_else(|| "sim".to_string())
         .to_lowercase();
-    match environment.as_str() {
-        "sim" => Ok("https://gateway.saxobank.com/sim/openapi"),
-        "live" => Ok("https://gateway.saxobank.com/openapi"),
-        _ => bail!("Unsupported Saxo environment: {environment}"),
-    }
+    crate::saxo_http::openapi_base_url(&environment)
 }
 
 fn json_text(value: &JsonValue, key: &str) -> Option<String> {

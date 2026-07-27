@@ -505,7 +505,10 @@ async fn fetch_initial_session_context(
     environment: &str,
     access_token: &str,
 ) -> Result<ClientMeResponse> {
-    let url = format!("{}/port/v1/clients/me", openapi_base_url(environment)?);
+    let url = format!(
+        "{}/port/v1/clients/me",
+        crate::saxo_http::openapi_base_url(environment)?
+    );
     let response = http_client()?
         .get(url)
         .bearer_auth(access_token)
@@ -856,14 +859,6 @@ fn auth_base_url(environment: &str) -> Result<&'static str> {
     match environment.to_lowercase().as_str() {
         "sim" => Ok("https://sim.logonvalidation.net"),
         "live" => Ok("https://live.logonvalidation.net"),
-        _ => bail!("Unsupported Saxo environment: {environment}"),
-    }
-}
-
-fn openapi_base_url(environment: &str) -> Result<&'static str> {
-    match environment.to_lowercase().as_str() {
-        "sim" => Ok("https://gateway.saxobank.com/sim/openapi"),
-        "live" => Ok("https://gateway.saxobank.com/openapi"),
         _ => bail!("Unsupported Saxo environment: {environment}"),
     }
 }

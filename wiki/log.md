@@ -1477,3 +1477,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Removed `strategy.ladder.submit_bracket_with_entry` from both shipped configurations and `submit_take_profit_after_fill` from local configuration plus the Rust config contract. The Rust runtime never submitted entry brackets or automatic take-profit orders, so these settings only implied protection that did not exist.
 - `strategy.ladder.submit_stop_loss_after_fill` remains the explicit, enforced switch for automatic protective-stop coverage. Legacy Python reference paths default the retired settings to false when absent, so this changes neither the active Rust strategy nor a reference-only run.
 - Any future bracket/target implementation must use Saxo's bundled related-order request shape and prove SIM parent/child lifecycle, cancellation, replacement, reconciliation, and unprotected-position behavior before exposing a new operator control.
+
+## [2026-07-27] operations | Shared Saxo gateway mapping
+
+- Centralized the SIM/LIVE OpenAPI gateway selection in `src/saxo_http.rs`; OAuth client-context, Markov, portfolio, and order paths now share the same fail-closed mapping.
+- Pure unit tests pin the two valid gateways and ensure unknown environments remain rejected. Request pacing, session handling, retries, ids, parsing, and broker behavior were deliberately left at their existing call sites.
