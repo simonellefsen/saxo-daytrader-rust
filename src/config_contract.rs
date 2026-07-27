@@ -542,18 +542,6 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "max_position_weight"],
         "Caps total per-symbol exposure after a BUY using persisted position values plus BUYs already approved in the same scheduler cycle. Missing or invalid exposure evidence blocks the BUY.",
     ),
-    unused_risk(
-        &["strategy", "ladder", "session_flatten_enabled"],
-        "No session flatten runs; nothing exits on a schedule.",
-    ),
-    unused_risk(
-        &[
-            "strategy",
-            "ladder",
-            "flatten_minutes_before_tradable_close",
-        ],
-        "No session flatten runs.",
-    ),
     enforced(
         &["strategy", "ladder", "trail_stop_atr_multiple"],
         "Distance of the trailing stop below the last close once a position is already protected. Tighter than the initial multiple; the ratchet is monotonic.",
@@ -855,6 +843,26 @@ mod tests {
             "strategy.swing.max_holding_weight_pct",
             "strategy.ladder.min_position_weight",
             "risk.max_position_weight",
+        ] {
+            let finding = findings
+                .iter()
+                .find(|finding| finding.path == path)
+                .unwrap_or_else(|| panic!("{path} is reported"));
+            assert_eq!(finding.kind, FindingKind::UncontractedKey);
+            assert!(finding.risk_surface);
+        }
+    }
+
+    #[test]
+    fn retired_session_flatten_keys_are_reported_as_uncontracted() {
+        let config = parse(
+            "strategy:\n  ladder:\n    session_flatten_enabled: false\n    flatten_minutes_before_tradable_close: 15\n",
+        );
+        let (summary, findings) = audit_config(&config);
+        assert_eq!(summary.uncontracted, 2);
+        for path in [
+            "strategy.ladder.session_flatten_enabled",
+            "strategy.ladder.flatten_minutes_before_tradable_close",
         ] {
             let finding = findings
                 .iter()

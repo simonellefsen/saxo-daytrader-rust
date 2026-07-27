@@ -1456,3 +1456,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Removed the three unused strategy weight knobs and the unused `risk.max_position_weight` override from both shipped configurations and the config contract. The Rust manager's existing `strategy.ladder.max_position_weight` remains the sole enforced 4% default cap on total held/planned BUY exposure for one symbol.
 - Legacy reference prompt, planning, and execution now derive their ceiling from that same supported setting. This changes no active Rust/Saxo decision or broker behavior, but prevents a future reference-only run from applying a contradictory 25% cap or a 2% minimum target weight.
+
+## [2026-07-27] risk | Retired inactive session-flatten controls
+
+- Removed `strategy.ladder.session_flatten_enabled` and `flatten_minutes_before_tradable_close` from both shipped configurations and the config contract. The Rust runtime has no session-flatten path and the swing strategy is explicitly designed to hold across market closes.
+- Protective stops remain the active intraday/overnight downside control. The legacy reference defaults remain disabled when these settings are absent, so the cleanup changes no active decision, scheduled exit, or broker behavior.
