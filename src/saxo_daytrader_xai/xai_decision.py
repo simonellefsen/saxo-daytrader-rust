@@ -521,7 +521,7 @@ Hard rules:
 - Never trade or recommend trading these symbols under any circumstances, even if already held: {excluded_symbols_text}.
 - New BUY recommendations must be present in the supplied current Watchlist context; existing Portfolio symbols are also in scope for HOLD, SELL, or FLATTEN decisions.
 - Never short. Long-only portfolio.
-- Total holdings must stay between {int(swing_cfg.get('min_holdings', 10))} and {int(swing_cfg.get('max_holdings', 25))}; every target holding must be between {float(swing_cfg.get('min_holding_weight_pct', 0.05)) * 100:.0f}% and {float(swing_cfg.get('max_holding_weight_pct', 0.25)) * 100:.0f}% of total equity.
+- Total holdings must stay below {int(swing_cfg.get('max_holdings', 25))}. The deterministic Trading Manager applies the configured {float(config.get('strategy', {}).get('ladder', {}).get('max_position_weight', 0.04)) * 100:.0f}% maximum total exposure per symbol; do not rely on model-generated target weights to bypass it.
 - Respect the {float(capital_cfg.get('min_cash_buffer_pct', 0.10)) * 100:g}% cash buffer. If cash is below buffer, prefer SELL / FLATTEN recommendations over new BUY recommendations.
 - Treat all pnl, commission, and taxation impacts in DKK.
 - Prefer liquid, news-catalyst-driven names in Nordic, EU/Euronext, UK, and US markets.

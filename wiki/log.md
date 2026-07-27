@@ -1451,3 +1451,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Removed `strategy.max_assets_per_sector` from the local and Kubernetes configurations, config contract, documentation, and legacy reference selector. The active Rust Trading Manager never read this setting, so the change does not modify deployed BUY/SELL behavior.
 - Exchange and currency concentration remain the supported, audited diversification controls. A sector cap can return only with a durable sector-data source and explicitly defined held/planned exposure semantics; it must not rely on model text or inferred labels.
+
+## [2026-07-27] risk | Retired duplicate position-weight controls
+
+- Removed the three unused strategy weight knobs and the unused `risk.max_position_weight` override from both shipped configurations and the config contract. The Rust manager's existing `strategy.ladder.max_position_weight` remains the sole enforced 4% default cap on total held/planned BUY exposure for one symbol.
+- Legacy reference prompt, planning, and execution now derive their ceiling from that same supported setting. This changes no active Rust/Saxo decision or broker behavior, but prevents a future reference-only run from applying a contradictory 25% cap or a 2% minimum target weight.

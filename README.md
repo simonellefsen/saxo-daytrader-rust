@@ -334,7 +334,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `market_data.rss`: legacy Yahoo Finance, CNBC, Reuters, and macro RSS configuration retained as a reference source catalog. The active Rust port does not yet persist these feeds; see the roadmap for the controlled migration rather than treating configured entries as live decision input.
 - `swing.min_holdings`: legacy portfolio-count floor; it is not enforced.
 - `swing.max_holdings`: hard concurrent-holdings cap for a new-symbol BUY. Adds to an existing holding do not consume a slot; default `25`.
-- `swing.min_holding_weight_pct` / `swing.max_holding_weight_pct`: legacy target-weight settings; they are not enforced. The active per-symbol BUY-exposure ceiling is `ladder.max_position_weight`.
+- `ladder.max_position_weight`: the single enforced total per-symbol BUY-exposure ceiling. The Trading Manager counts persisted exposure and same-cycle approved BUYs; it does not trust a model-generated target weight.
 - `swing.trading_manager.max_report_age_hours`: reports older than this cannot create new execution orders. Default `6`; it is a freshness policy, not a report-generation cadence.
 - `swing.never_trade_symbols`: optional hard blacklist. Defaults to an empty list; use only for explicit temporary execution blocks.
 - `swing.daily_indicators`: daily-chart MA/MACD/RSI/Bollinger/Stochastic/Volume confluence settings used to filter swing entries.
@@ -356,7 +356,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 
 - `excluded_symbols`: repo-safe list of blocked symbols.
 - `excluded_symbols_csv`: optional comma-separated override loaded from environment.
-- `max_position_weight`: maximum post-trade position weight as a fraction of total portfolio value.
+- `max_position_weight`: maximum post-trade position weight as a fraction of total portfolio value. This is the `strategy.ladder` setting, not a separate `risk` override.
 - `allow_shorting`: should remain `false` for this project.
 
 ### `taxation`

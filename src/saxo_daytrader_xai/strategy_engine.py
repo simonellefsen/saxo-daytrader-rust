@@ -698,7 +698,7 @@ def build_strategy_plan(
     )
     remaining_cash_dkk = capital_limits["spendable_cash_dkk"]
     remaining_capacity = int(config.get("execution", {}).get("max_daily_orders", 6) or 6)
-    min_weight = float(config.get("strategy", {}).get("ladder", {}).get("min_position_weight", 0.02) or 0.02)
+    min_weight = 0.0
     max_weight = float(config.get("strategy", {}).get("ladder", {}).get("max_position_weight", 0.04) or 0.04)
     orders: list[dict[str, Any]] = []
     selected_rows: list[dict[str, Any]] = []

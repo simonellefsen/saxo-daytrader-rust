@@ -1009,7 +1009,9 @@ def _create_or_fetch_orders(
     created_at = datetime.now(UTC).isoformat(timespec="seconds")
     new_orders: list[dict[str, Any]] = []
     result_orders: list[dict[str, Any]] = []
-    max_position_weight = float(config["risk"]["max_position_weight"])
+    max_position_weight = float(
+        config.get("strategy", {}).get("ladder", {}).get("max_position_weight", 0.04)
+    )
     min_trade_value_dkk = float(config["execution"]["min_trade_value_dkk"])
     remaining_capacity = _remaining_daily_order_capacity(connection, config)
     remaining_cash_dkk = float(portfolio_summary["cash_balance_dkk"] or 0.0)

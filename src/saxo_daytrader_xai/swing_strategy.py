@@ -331,8 +331,11 @@ def build_swing_strategy_plan(
     cfg = _swing_cfg(config)
     min_holdings = int(cfg.get("min_holdings", 10) or 10)
     max_holdings = int(cfg.get("max_holdings", 25) or 25)
-    min_weight = _safe_float(cfg.get("min_holding_weight_pct", 0.05), 0.05)
-    max_weight = _safe_float(cfg.get("max_holding_weight_pct", 0.25), 0.25)
+    min_weight = 0.0
+    max_weight = _safe_float(
+        config.get("strategy", {}).get("ladder", {}).get("max_position_weight", 0.04),
+        0.04,
+    )
     capital_cfg = config.get("strategy", {}).get("capital", {})
     cash_buffer = _safe_float(capital_cfg.get("min_cash_buffer_pct", 0.10), 0.10)
     risk_per_trade = _safe_float(cfg.get("risk_per_trade_pct", 0.01), 0.01)

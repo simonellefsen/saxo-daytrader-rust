@@ -300,14 +300,6 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "position_decision_stale_after_days"],
         "Dashboard decision-chip staleness horizon.",
     ),
-    unused_risk(
-        &["strategy", "swing", "min_holding_weight_pct"],
-        "No per-position weight floor is enforced.",
-    ),
-    unused_risk(
-        &["strategy", "swing", "max_holding_weight_pct"],
-        "No per-position weight ceiling is enforced.",
-    ),
     enforced(
         &["strategy", "swing", "risk_per_trade_pct"],
         "Caps each BUY's initial estimated loss at the database-verified ATR14 stop distance. The cap uses strategy.ladder.stop_loss_atr_multiple and requires automatic protective stops plus a verified close, ATR14, and DKK share value; missing evidence blocks the BUY.",
@@ -546,10 +538,6 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "max_take_profit_atr_multiple"],
         "Take-profit targets are not implemented.",
     ),
-    unused_risk(
-        &["strategy", "ladder", "min_position_weight"],
-        "No per-position weight bound is enforced.",
-    ),
     enforced(
         &["strategy", "ladder", "max_position_weight"],
         "Caps total per-symbol exposure after a BUY using persisted position values plus BUYs already approved in the same scheduler cycle. Missing or invalid exposure evidence blocks the BUY.",
@@ -598,10 +586,6 @@ const CONTRACT: &[ContractEntry] = &[
     enforced(
         &["risk", "instrument_quarantine", "active_days"],
         "Quarantine duration.",
-    ),
-    unused_risk(
-        &["risk", "max_position_weight"],
-        "No portfolio-level position weight cap is enforced.",
     ),
     advisory(
         &["risk", "allow_shorting"],
@@ -857,6 +841,28 @@ mod tests {
             .expect("max_assets_per_sector is reported");
         assert_eq!(finding.kind, FindingKind::UncontractedKey);
         assert!(finding.risk_surface);
+    }
+
+    #[test]
+    fn retired_position_weight_keys_are_reported_as_uncontracted() {
+        let config = parse(
+            "strategy:\n  swing:\n    min_holding_weight_pct: 0.05\n    max_holding_weight_pct: 0.25\n  ladder:\n    min_position_weight: 0.02\nrisk:\n  max_position_weight: 0.25\n",
+        );
+        let (summary, findings) = audit_config(&config);
+        assert_eq!(summary.uncontracted, 4);
+        for path in [
+            "strategy.swing.min_holding_weight_pct",
+            "strategy.swing.max_holding_weight_pct",
+            "strategy.ladder.min_position_weight",
+            "risk.max_position_weight",
+        ] {
+            let finding = findings
+                .iter()
+                .find(|finding| finding.path == path)
+                .unwrap_or_else(|| panic!("{path} is reported"));
+            assert_eq!(finding.kind, FindingKind::UncontractedKey);
+            assert!(finding.risk_surface);
+        }
     }
 
     #[test]

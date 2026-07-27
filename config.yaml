@@ -388,8 +388,6 @@ strategy:
     # Decision chips are advisory context, not evergreen instructions. Mark
     # report-derived symbols stale after this many days in the dashboard.
     position_decision_stale_after_days: 7
-    min_holding_weight_pct: 0.05
-    max_holding_weight_pct: 0.25
     # Maximum estimated initial loss for a BUY at its automatic ATR stop.
     # Uses a database-verified close, ATR14, and DKK share value; missing
     # evidence fails the BUY closed rather than trusting model-provided data.
@@ -470,7 +468,6 @@ strategy:
     stop_loss_atr_multiple: 2.0
     take_profit_rung_multiple: 2.0
     max_take_profit_atr_multiple: 8.0
-    min_position_weight: 0.02
     # Hard cap for total exposure to one symbol after a BUY. The Trading
     # Manager uses persisted position value plus BUYs already approved in the
     # same scheduler cycle; missing or invalid exposure data blocks the BUY.
@@ -511,7 +508,6 @@ risk:
     lookback_days: 14
     min_failures: 3
     active_days: 14
-  max_position_weight: 0.25
   allow_shorting: false
 
 taxation:
