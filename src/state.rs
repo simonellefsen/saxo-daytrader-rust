@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
     path::PathBuf,
     process,
@@ -78,6 +78,8 @@ const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
+const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
+const MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const PROTECTIVE_STOP_HERMES_POSITION_LIMIT: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1484,6 +1486,14 @@ struct TradeThesisOutcomeStats {
     five_session_positive_count: usize,
 }
 
+#[derive(Default)]
+struct MissedTradeShadowOutcomeStats {
+    recorded_shadow_count: usize,
+    observed_shadow_count: usize,
+    directional_return_sum_pct: f64,
+    positive_return_count: usize,
+}
+
 fn average_or_null(total: f64, count: usize) -> JsonValue {
     if count == 0 {
         JsonValue::Null
@@ -1574,6 +1584,84 @@ fn trade_thesis_outcome_evidence_from_holding_outcomes(outcomes: &[JsonValue]) -
         "scan_limit": TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT,
         "safety": "read_only_local_execution_fills_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
         "interpretation": "Directional returns compare reconciled BUY fills with later stored daily closes. They exclude blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and any causal claim about the thesis."
+    })
+}
+
+/// Summarizes quote-to-quote observations for the selected deterministic
+/// manager blocks. Each shadow gets equal weight so local-currency P/L is not
+/// combined across instruments. This remains an observational diagnostic, not
+/// evidence that a gate was wrong or a trading-rule backtest.
+fn missed_trade_shadow_outcome_evidence_from_rows(rows: &[JsonValue]) -> JsonValue {
+    let mut overall = MissedTradeShadowOutcomeStats {
+        recorded_shadow_count: rows.len(),
+        ..MissedTradeShadowOutcomeStats::default()
+    };
+    let mut by_gate: BTreeMap<String, MissedTradeShadowOutcomeStats> = BTreeMap::new();
+
+    for row in rows {
+        let Some(directional_return_pct) = row
+            .get("estimated_return_pct")
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+        else {
+            continue;
+        };
+        let gate = json_text(row, "source_gate");
+        let gate = if gate.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            gate
+        };
+        let gate_stats = by_gate.entry(gate).or_default();
+        for stats in [&mut overall, gate_stats] {
+            stats.observed_shadow_count += 1;
+            stats.directional_return_sum_pct += directional_return_pct;
+            if directional_return_pct > 0.0 {
+                stats.positive_return_count += 1;
+            }
+        }
+    }
+
+    let summary = |stats: &MissedTradeShadowOutcomeStats| {
+        json!({
+            "sample_count": stats.observed_shadow_count,
+            "average_directional_return_pct": average_or_null(
+                stats.directional_return_sum_pct,
+                stats.observed_shadow_count,
+            ),
+            "positive_return_rate": fraction_or_null(
+                stats.positive_return_count,
+                stats.observed_shadow_count,
+            ),
+        })
+    };
+    let status = if overall.recorded_shadow_count == 0 {
+        "no_recorded_shadows"
+    } else if overall.observed_shadow_count < MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS {
+        "collecting"
+    } else {
+        "preliminary"
+    };
+    let by_gate = by_gate
+        .into_iter()
+        .map(|(source_gate, stats)| {
+            json!({
+                "source_gate": source_gate,
+                "recorded_shadow_count": stats.observed_shadow_count,
+                "outcome": summary(&stats),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "status": status,
+        "recorded_shadow_count": overall.recorded_shadow_count,
+        "observed_shadow_count": overall.observed_shadow_count,
+        "overall": summary(&overall),
+        "by_gate": by_gate,
+        "minimum_complete_observations": MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS,
+        "scan_limit": MISSED_TRADE_SHADOW_EVIDENCE_LIMIT,
+        "safety": "read_only_local_quote_to_quote_observations_no_saxo_provider_hermes_or_order_mutation",
+        "interpretation": "Each observed manager-gate shadow has equal weight. Directional returns are quote-to-quote estimates for the blocked side only; they exclude fees, FX, slippage, tax, broker execution, later position changes, and any claim that a gate should have allowed the trade."
     })
 }
 
@@ -3047,6 +3135,23 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let missed_trade_shadow_evidence = if dashboard_loads_tab_exclusive_data(
+            &active_view,
+            "hermes",
+        ) {
+            self.missed_trade_shadow_outcome_evidence()
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard missed-trade shadow evidence degraded: {err:#}");
+                        json!({
+                            "status": "unavailable",
+                            "safety": "read_only_local_quote_to_quote_observations_no_saxo_provider_hermes_or_order_mutation",
+                            "interpretation": "Missed-trade shadow evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
+                        })
+                    })
+        } else {
+            JsonValue::Null
+        };
         let active_strategy_baseline = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
         {
             self.active_strategy_baseline().await.unwrap_or_else(|err| {
@@ -3274,6 +3379,7 @@ impl AppState {
             hermes_decision_advice_audit,
             hermes_counterfactuals,
             missed_trade_shadows,
+            missed_trade_shadow_evidence,
             active_strategy_baseline,
             hermes_baseline_evidence_pack,
             markov_signals,
@@ -7131,6 +7237,19 @@ impl AppState {
             clamp_limit(limit, 1, MISSED_TRADE_SHADOW_LIMIT)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    async fn missed_trade_shadow_outcome_evidence(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT source_gate, estimated_return_pct
+                 FROM missed_trade_shadows
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT {}",
+                MISSED_TRADE_SHADOW_EVIDENCE_LIMIT
+            ))
+            .await?;
+        Ok(missed_trade_shadow_outcome_evidence_from_rows(&rows))
     }
 
     pub async fn active_missed_trade_shadow_symbols(&self) -> Result<Vec<String>> {
@@ -13086,6 +13205,31 @@ market_data:
         assert!(!missed_trade_shadow_gate_is_eligible(
             "instrument_quarantine"
         ));
+    }
+
+    #[test]
+    fn missed_trade_shadow_outcomes_are_bounded_and_observational() {
+        let evidence = missed_trade_shadow_outcome_evidence_from_rows(&[
+            json!({"source_gate": "cash_budget", "estimated_return_pct": 0.10}),
+            json!({"source_gate": "cash_budget", "estimated_return_pct": -0.05}),
+            json!({"source_gate": "market_open", "estimated_return_pct": null}),
+        ]);
+        assert_eq!(evidence["status"], json!("collecting"));
+        assert_eq!(evidence["recorded_shadow_count"], json!(3));
+        assert_eq!(evidence["observed_shadow_count"], json!(2));
+        assert_eq!(evidence["overall"]["sample_count"], json!(2));
+        assert!(
+            (value_f64(&evidence["overall"], "average_directional_return_pct") - 0.025).abs()
+                < 1e-9
+        );
+        assert!((value_f64(&evidence["overall"], "positive_return_rate") - 0.5).abs() < 1e-9);
+        assert_eq!(evidence["by_gate"][0]["source_gate"], json!("cash_budget"));
+        assert_eq!(evidence["by_gate"][0]["outcome"]["sample_count"], json!(2));
+        assert!(
+            evidence["interpretation"]
+                .as_str()
+                .is_some_and(|value| value.contains("exclude fees"))
+        );
     }
 
     #[tokio::test]

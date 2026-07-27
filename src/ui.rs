@@ -3417,6 +3417,10 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "table-wrap",
                 h3 { "Missed-Trade Shadow Book" }
                 p { class: "muted", "Quote-to-quote observations for selected candidates the deterministic manager did not deploy because of timing, capital, capacity, or an active loss guardrail. They are not a backtest, do not claim the block was wrong, and exclude fees, FX, slippage, tax, and broker execution." }
+                MissedTradeShadowEvidencePanel {
+                    evidence: data.missed_trade_shadow_evidence.clone(),
+                    prefs: prefs.clone(),
+                }
                 if data.missed_trade_shadows.is_empty() {
                     span { class: "muted", "No eligible manager-gate shadows have been recorded yet." }
                 } else {
@@ -3851,6 +3855,71 @@ fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs
                 }
                 p { class: "muted", "{interpretation}" }
             }
+        }
+    }
+}
+
+#[component]
+fn MissedTradeShadowEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&evidence, "status").replace('_', " ");
+    let recorded_count = value_i64(&evidence, "recorded_shadow_count");
+    let observed_count = value_i64(&evidence, "observed_shadow_count");
+    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
+    let overall = evidence.get("overall").unwrap_or(&JsonValue::Null);
+    let average = overall
+        .get("average_directional_return_pct")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_signed_pct(value, &prefs))
+        .unwrap_or_else(|| "pending".to_string());
+    let positive_rate = overall
+        .get("positive_return_rate")
+        .and_then(JsonValue::as_f64)
+        .map(|value| format_pct(value, &prefs))
+        .unwrap_or_else(|| "pending".to_string());
+    let gate_breakdown = evidence
+        .get("by_gate")
+        .and_then(JsonValue::as_array)
+        .map(|rows| {
+            rows.iter()
+                .take(4)
+                .map(|row| {
+                    let gate = fallback_text(row, "source_gate", "unknown").replace('_', " ");
+                    let outcome = row.get("outcome").unwrap_or(&JsonValue::Null);
+                    let average = outcome
+                        .get("average_directional_return_pct")
+                        .and_then(JsonValue::as_f64)
+                        .map(|value| format_signed_pct(value, &prefs))
+                        .unwrap_or_else(|| "pending".to_string());
+                    let samples = value_i64(outcome, "sample_count");
+                    format!("{gate}: {average} across {samples}")
+                })
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "No observed gate outcomes yet.".to_string());
+    let interpretation = text_or(
+        &evidence,
+        "interpretation",
+        "Read-only quote-to-quote evidence only.",
+    );
+    rsx! {
+        if text(&evidence, "status") == "no_recorded_shadows" {
+            span { class: "muted", "No eligible manager-gate shadows have been recorded yet." }
+        } else if text(&evidence, "status") == "unavailable" {
+            span { class: "muted", "Missed-trade shadow outcome evidence is unavailable right now." }
+        } else {
+            div { class: "quality-score-row",
+                span { class: "status", "{status}" }
+                span { class: "status", "{recorded_count} recorded" }
+                span { class: "status", "{observed_count} observed" }
+                span { class: "status", "{minimum_complete} needed" }
+            }
+            div { class: "grid-2",
+                div { class: "event", strong { "Overall" } span { class: "muted block", "{average} avg directional return · {positive_rate} positive" } }
+                div { class: "event", strong { "By block" } span { class: "muted block", "{gate_breakdown}" } }
+            }
+            p { class: "muted", "{interpretation}" }
         }
     }
 }

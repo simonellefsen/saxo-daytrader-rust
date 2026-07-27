@@ -1406,4 +1406,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 ## [2026-07-27] trading-quality | Deterministic missed-trade shadow book
 
 - Added a separate, bounded quote-to-quote observation ledger for selected deterministic Trading Manager blocks: candidate limit, market timing, monthly-loss/drawdown guardrails, cash budget, risk/cost floors, and holding or selection capacity. The Hermes counterfactual ledger remains limited to quantity Hermes blocked or reduced.
+
+## [2026-07-27] trading-quality | Missed-trade shadow evidence aggregation
+
+- Added a bounded read-only aggregate for missed-trade shadows in the Hermes view. It shows equal-weighted directional quote outcomes overall and by recorded manager gate, remains `collecting` until 20 observed rows, and does not combine currency-denominated P/L.
+- The aggregate is diagnostic only: it neither reopens a deterministic gate nor changes Hermes advice, configuration, Saxo/provider calls, or order behavior. It excludes fees, FX, slippage, tax, broker execution, later position changes, and causal claims.
 - The new shadow book excludes technical/Markov validity failures, risk exclusions, and instrument quarantines. It records only compact gate provenance, local candidate quantity/price/currency, and later price observations; it is not a backtest, causal result, realised P/L, broker execution, or input to any gate, Hermes recommendation, or order.
