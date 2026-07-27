@@ -607,6 +607,7 @@ struct CashDeploymentSummary {
     approved_buy_count: i64,
     skipped_buy_count: i64,
     candidate_buy_count: i64,
+    blocked_buy_gates: Vec<JsonValue>,
     breaker_active: bool,
     breaker_threshold_breached: bool,
     breaker_override_active: bool,
@@ -666,6 +667,12 @@ fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> 
                     div { class: "event cash-diagnostic-reason",
                         strong { "Reason" }
                         span { "{summary.description}" }
+                    }
+                    if !summary.blocked_buy_gates.is_empty() {
+                        div { class: "event cash-diagnostic-reason",
+                            strong { "Top BUY blocks" }
+                            span { "{cash_deployment_blocked_gate_summary(&summary.blocked_buy_gates)}" }
+                        }
                     }
                     if summary.breaker_threshold_breached || summary.breaker_soft_reduction_active {
                         div { class: "event cash-diagnostic-reason",
@@ -807,6 +814,11 @@ fn cash_deployment_summary(
         approved_buy_count: value_i64(&diagnostics, "approved_buy_count"),
         skipped_buy_count: value_i64(&diagnostics, "skipped_buy_count"),
         candidate_buy_count: value_i64(&diagnostics, "buy_candidate_count"),
+        blocked_buy_gates: diagnostics
+            .get("blocked_buy_gates")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default(),
         breaker_active: breaker
             .get("active")
             .and_then(JsonValue::as_bool)
@@ -865,6 +877,19 @@ fn cash_deployment_summary(
             "No reinvestment diagnostic was recorded for this Trading Manager run.",
         ),
     }
+}
+
+fn cash_deployment_blocked_gate_summary(gates: &[JsonValue]) -> String {
+    gates
+        .iter()
+        .take(4)
+        .map(|gate| {
+            let code = fallback_text(gate, "gate_code", "other").replace('_', " ");
+            let count = value_i64(gate, "count");
+            format!("{code}: {count}")
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn cash_deployment_tone(status: &str) -> &'static str {
@@ -8971,6 +8996,15 @@ mod tests {
         assert_eq!(summary.approved_buy_count, 0);
         assert_eq!(summary.skipped_buy_count, 4);
         assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn cash_deployment_blocked_gate_summary_is_bounded_and_readable() {
+        let summary = cash_deployment_blocked_gate_summary(&[
+            json!({"gate_code": "cash_budget", "count": 3}),
+            json!({"gate_code": "market_open", "count": 1}),
+        ]);
+        assert_eq!(summary, "cash budget: 3 · market open: 1");
     }
 
     #[test]

@@ -1843,8 +1843,7 @@ async fn run_for_report(
             sell_candidate_count,
             approved.iter().filter(|(order, _)| order.action == "BUY").count(),
             approved.iter().filter(|(order, _)| order.action == "SELL").count(),
-            skipped.iter().filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("BUY")).count(),
-            skipped.iter().filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("SELL")).count(),
+            &skipped,
         ),
         "remaining_buy_budget_dkk": capital_budget.available_buy_budget_dkk,
         "monthly_loss_circuit_breaker": {
@@ -4645,9 +4644,35 @@ fn reinvestment_diagnostics(
     sell_candidate_count: usize,
     approved_buy_count: usize,
     approved_sell_count: usize,
-    skipped_buy_count: usize,
-    skipped_sell_count: usize,
+    skipped: &[JsonValue],
 ) -> JsonValue {
+    let skipped_buy_count = skipped
+        .iter()
+        .filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("BUY"))
+        .count();
+    let skipped_sell_count = skipped
+        .iter()
+        .filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("SELL"))
+        .count();
+    let mut blocked_buy_gate_counts = HashMap::<String, usize>::new();
+    for order in skipped
+        .iter()
+        .filter(|order| order.get("action").and_then(JsonValue::as_str) == Some("BUY"))
+    {
+        let gate = order
+            .get("gate_code")
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("other")
+            .to_string();
+        *blocked_buy_gate_counts.entry(gate).or_default() += 1;
+    }
+    let mut blocked_buy_gates = blocked_buy_gate_counts.into_iter().collect::<Vec<_>>();
+    blocked_buy_gates.sort_by(|(left_gate, left_count), (right_gate, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left_gate.cmp(right_gate))
+    });
     let status = if !budget.reinvestment_pressure_active {
         "within_policy"
     } else if buy_candidate_count == 0 {
@@ -4673,6 +4698,10 @@ fn reinvestment_diagnostics(
         "approved_sell_count": approved_sell_count,
         "skipped_buy_count": skipped_buy_count,
         "skipped_sell_count": skipped_sell_count,
+        "blocked_buy_gates": blocked_buy_gates.into_iter().map(|(gate_code, count)| json!({
+            "gate_code": gate_code,
+            "count": count,
+        })).collect::<Vec<_>>(),
         "message": match status {
             "excess_cash_without_buy_candidates" => "Cash is above policy, but the decision report supplied no BUY candidates.",
             "excess_cash_with_blocked_buy_candidates" => "Cash is above policy, but BUY candidates were blocked by exchange, budget, risk, minimum value, or technical gates.",
@@ -6610,12 +6639,54 @@ mod tests {
             }
         });
         let budget = capital_budget_from_overview(&overview, None);
-        let diagnostics = reinvestment_diagnostics(&budget, 1, 0, 1, 0, 1, 0, 0);
+        let diagnostics = reinvestment_diagnostics(&budget, 1, 0, 1, 0, 1, &[]);
         assert_eq!(
             diagnostics["status"],
             JsonValue::from("excess_cash_without_buy_candidates")
         );
         assert_eq!(diagnostics["active"], JsonValue::from(true));
+    }
+
+    #[test]
+    fn reinvestment_diagnostics_rank_buy_blocks_by_stable_gate_code() {
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 220000.0,
+                "cash_balance_dkk": 80000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            }
+        });
+        let budget = capital_budget_from_overview(&overview, None);
+        let diagnostics = reinvestment_diagnostics(
+            &budget,
+            4,
+            3,
+            1,
+            0,
+            1,
+            &[
+                json!({"action": "BUY", "gate_code": "market_open"}),
+                json!({"action": "BUY", "gate_code": "cash_budget"}),
+                json!({"action": "BUY", "gate_code": "cash_budget"}),
+                json!({"action": "SELL", "gate_code": "technical"}),
+            ],
+        );
+        assert_eq!(diagnostics["skipped_buy_count"], json!(3));
+        assert_eq!(
+            diagnostics["blocked_buy_gates"][0],
+            json!({"gate_code": "cash_budget", "count": 2})
+        );
+        assert_eq!(
+            diagnostics["blocked_buy_gates"][1],
+            json!({"gate_code": "market_open", "count": 1})
+        );
     }
 
     #[test]

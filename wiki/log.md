@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-27] trading-quality | Cash deployment BUY-gate diagnostics
+
+- The Trading Manager now persists a compact count of skipped BUY candidates grouped by its stable gate code. The Overview Cash Deployment panel renders up to four ranked, human-readable blocks such as `cash budget: 3` or `market open: 1`.
+- This is an audit projection only. It does not reconstruct unrecorded causes, change capital policy, modify Hermes advice, or create, amend, or place Saxo orders.
 
 ## [2026-07-26] trading-quality | Durable BUY trade-thesis provenance
 
