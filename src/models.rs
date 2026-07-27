@@ -50,6 +50,7 @@ pub struct DashboardView {
     pub execution_fills: Vec<JsonValue>,
     pub execution_events: Vec<JsonValue>,
     pub execution_trade_thesis_evidence: JsonValue,
+    pub execution_decision_pulse_evidence: JsonValue,
     pub reports: Vec<JsonValue>,
     pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<JsonValue>,

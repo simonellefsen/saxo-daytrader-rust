@@ -77,6 +77,7 @@ const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
+const DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
 const MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS: usize = 20;
@@ -1487,6 +1488,25 @@ struct TradeThesisOutcomeStats {
 }
 
 #[derive(Default)]
+struct DecisionPulseOutcomeStats {
+    attributed_order_count: usize,
+    buy_order_count: usize,
+    sell_order_count: usize,
+    hermes_reviewed_order_count: usize,
+    filled_buy_order_count: usize,
+    reconciled_sell_order_count: usize,
+    one_session_count: usize,
+    one_session_return_sum_pct: f64,
+    one_session_positive_count: usize,
+    five_session_count: usize,
+    five_session_return_sum_pct: f64,
+    five_session_positive_count: usize,
+    realised_sell_gain_dkk: f64,
+    realised_sell_commission_dkk: f64,
+    realised_sell_tax_dkk: f64,
+}
+
+#[derive(Default)]
 struct MissedTradeShadowOutcomeStats {
     recorded_shadow_count: usize,
     observed_shadow_count: usize,
@@ -1584,6 +1604,163 @@ fn trade_thesis_outcome_evidence_from_holding_outcomes(outcomes: &[JsonValue]) -
         "scan_limit": TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT,
         "safety": "read_only_local_execution_fills_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
         "interpretation": "Directional returns compare reconciled BUY fills with later stored daily closes. They exclude blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and any causal claim about the thesis."
+    })
+}
+
+fn normalized_decision_pulse(row: &JsonValue) -> (String, String) {
+    let configured_key = json_text(row, "analysis_pulse_key");
+    let configured_label = json_text(row, "analysis_pulse_label");
+    let strategy_type = json_text(row, "strategy_type");
+    let (key, fallback_label) = if strategy_type.eq_ignore_ascii_case("portfolio_sync") {
+        ("portfolio_sync", "Portfolio Sync")
+    } else if configured_key.starts_with("europe_open_followup") {
+        ("europe_open_followup", "EU Open +1h15")
+    } else if configured_key.starts_with("us_open_followup") {
+        ("us_open_followup", "US Open +1h15")
+    } else if configured_key.starts_with("manual_dry_run") {
+        ("manual_dry_run", "Manual Dry Run")
+    } else if configured_key.starts_with("manual") {
+        ("manual", "Manual")
+    } else {
+        ("other", "Other / legacy")
+    };
+    let label = if configured_label.trim().is_empty() {
+        fallback_label.to_string()
+    } else {
+        configured_label
+    };
+    (key.to_string(), label)
+}
+
+fn decision_pulse_outcome_summary(stats: &DecisionPulseOutcomeStats) -> JsonValue {
+    let directional_summary = |count: usize, return_sum_pct: f64, positive_count: usize| {
+        json!({
+            "sample_count": count,
+            "average_directional_return_pct": average_or_null(return_sum_pct, count),
+            "positive_return_rate": fraction_or_null(positive_count, count),
+        })
+    };
+    json!({
+        "attributed_order_count": stats.attributed_order_count,
+        "buy_order_count": stats.buy_order_count,
+        "sell_order_count": stats.sell_order_count,
+        "hermes_reviewed_order_count": stats.hermes_reviewed_order_count,
+        "filled_buy_order_count": stats.filled_buy_order_count,
+        "reconciled_sell_order_count": stats.reconciled_sell_order_count,
+        "one_session": directional_summary(
+            stats.one_session_count,
+            stats.one_session_return_sum_pct,
+            stats.one_session_positive_count,
+        ),
+        "five_session": directional_summary(
+            stats.five_session_count,
+            stats.five_session_return_sum_pct,
+            stats.five_session_positive_count,
+        ),
+        "realised_sell": {
+            "realised_gain_dkk": stats.realised_sell_gain_dkk,
+            "commission_dkk": stats.realised_sell_commission_dkk,
+            "tax_dkk": stats.realised_sell_tax_dkk,
+        },
+    })
+}
+
+/// Separates observed execution outcomes by their report pulse. BUYs use later
+/// stored closes as directional movement while SELLs use reconciled local-ledger
+/// DKK gains. The evidence is deliberately observational: Hermes presence is
+/// shown as review coverage, not proof that advice caused an outcome.
+fn decision_pulse_outcome_evidence_from_observations(observations: &[JsonValue]) -> JsonValue {
+    let mut overall = DecisionPulseOutcomeStats::default();
+    let mut by_pulse: BTreeMap<String, (String, DecisionPulseOutcomeStats)> = BTreeMap::new();
+    for observation in observations {
+        let (pulse_key, pulse_label) = normalized_decision_pulse(observation);
+        let pulse = by_pulse
+            .entry(pulse_key)
+            .or_insert_with(|| (pulse_label, DecisionPulseOutcomeStats::default()));
+        for stats in [&mut overall, &mut pulse.1] {
+            stats.attributed_order_count += 1;
+            if observation
+                .get("hermes_reviewed")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                stats.hermes_reviewed_order_count += 1;
+            }
+            let action = json_text(observation, "action").to_uppercase();
+            if action == "BUY" {
+                stats.buy_order_count += 1;
+                let outcome = observation
+                    .get("holding_period_outcome")
+                    .unwrap_or(&JsonValue::Null);
+                if value_f64(outcome, "filled_quantity") > 0.0 {
+                    stats.filled_buy_order_count += 1;
+                }
+                for (session, count, return_sum, positive_count) in [
+                    (
+                        outcome.get("one_session").unwrap_or(&JsonValue::Null),
+                        &mut stats.one_session_count,
+                        &mut stats.one_session_return_sum_pct,
+                        &mut stats.one_session_positive_count,
+                    ),
+                    (
+                        outcome.get("five_session").unwrap_or(&JsonValue::Null),
+                        &mut stats.five_session_count,
+                        &mut stats.five_session_return_sum_pct,
+                        &mut stats.five_session_positive_count,
+                    ),
+                ] {
+                    if session.is_null() {
+                        continue;
+                    }
+                    let directional_return_pct = value_f64(session, "directional_return_pct");
+                    if !directional_return_pct.is_finite() {
+                        continue;
+                    }
+                    *count += 1;
+                    *return_sum += directional_return_pct;
+                    if directional_return_pct > 0.0 {
+                        *positive_count += 1;
+                    }
+                }
+            } else if action == "SELL" {
+                stats.sell_order_count += 1;
+                let outcome = observation
+                    .get("ledger_outcome")
+                    .unwrap_or(&JsonValue::Null);
+                if json_text(outcome, "status") == "reconciled" {
+                    stats.reconciled_sell_order_count += 1;
+                    stats.realised_sell_gain_dkk += value_f64(outcome, "realised_gain_dkk");
+                    stats.realised_sell_commission_dkk += value_f64(outcome, "commission_dkk");
+                    stats.realised_sell_tax_dkk += value_f64(outcome, "tax_dkk");
+                }
+            }
+        }
+    }
+    let status = if overall.attributed_order_count == 0 {
+        "no_attributable_orders"
+    } else if overall.five_session_count < TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS {
+        "collecting"
+    } else {
+        "preliminary"
+    };
+    let pulses = by_pulse
+        .into_iter()
+        .map(|(pulse_key, (pulse_label, stats))| {
+            json!({
+                "pulse_key": pulse_key,
+                "pulse_label": pulse_label,
+                "outcome": decision_pulse_outcome_summary(&stats),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "status": status,
+        "overall": decision_pulse_outcome_summary(&overall),
+        "pulses": pulses,
+        "minimum_complete_observations": TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS,
+        "scan_limit": DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT,
+        "safety": "read_only_local_execution_orders_fills_ledger_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
+        "interpretation": "BUY rows show equal-weighted forward directional price movement after reconciled fills; they are not unrealised P/L. SELL rows sum local-ledger realised DKK gain, commission, and tax only after reconciliation. Hermes-reviewed counts mean an advice record existed for the source report; they do not establish causal advice impact. Portfolio-sync rows are imported-state context, not system-initiated trades."
     })
 }
 
@@ -2947,6 +3124,21 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let execution_decision_pulse_evidence = if dashboard_loads_tab_exclusive_data(
+            &active_view,
+            "execution",
+        ) {
+            self.decision_pulse_outcome_evidence().await.unwrap_or_else(|err| {
+                warn!("dashboard decision-pulse outcome evidence degraded: {err:#}");
+                json!({
+                    "status": "unavailable",
+                    "safety": "read_only_local_execution_orders_fills_ledger_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
+                    "interpretation": "Decision-pulse outcome evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
+                })
+            })
+        } else {
+            JsonValue::Null
+        };
         let execution_protection = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
         {
             self.protective_stop_coverage().await.unwrap_or_else(|err| {
@@ -3380,6 +3572,7 @@ impl AppState {
             execution_fills,
             execution_events,
             execution_trade_thesis_evidence,
+            execution_decision_pulse_evidence,
             reports,
             manual_report_in_flight: self.manual_decision_report_in_flight().await,
             decision_pulse_statuses,
@@ -5972,6 +6165,54 @@ impl AppState {
         }
         Ok(trade_thesis_outcome_evidence_from_holding_outcomes(
             &outcomes,
+        ))
+    }
+
+    async fn decision_pulse_outcome_evidence(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT eo.id, eo.created_at, eo.report_id, eo.symbol, eo.action, eo.quantity,
+                        eo.currency, eo.strategy_type,
+                        dr.analysis_pulse_key, dr.analysis_pulse_label,
+                        CASE WHEN EXISTS (
+                            SELECT 1
+                            FROM hermes_decision_advice h
+                            WHERE h.decision_report_id = eo.report_id
+                        ) THEN 1 ELSE 0 END AS hermes_reviewed
+                 FROM execution_orders eo
+                 LEFT JOIN decision_reports dr ON dr.id = eo.report_id
+                 WHERE eo.action IN ('BUY', 'SELL')
+                   AND (eo.report_id IS NOT NULL OR eo.strategy_type = 'portfolio_sync')
+                 ORDER BY eo.created_at DESC, eo.id DESC
+                 LIMIT {}",
+                DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT
+            ))
+            .await?;
+        let mut observations = Vec::with_capacity(rows.len());
+        for row in rows {
+            let action = json_text(&row, "action").to_uppercase();
+            let holding_period_outcome = if action == "BUY" {
+                self.execution_order_holding_period_outcome(&row).await?
+            } else {
+                JsonValue::Null
+            };
+            let ledger_outcome = if action == "SELL" {
+                self.execution_order_ledger_outcome(&row).await?
+            } else {
+                JsonValue::Null
+            };
+            observations.push(json!({
+                "analysis_pulse_key": json_text(&row, "analysis_pulse_key"),
+                "analysis_pulse_label": json_text(&row, "analysis_pulse_label"),
+                "strategy_type": json_text(&row, "strategy_type"),
+                "action": action,
+                "hermes_reviewed": value_i64(&row, "hermes_reviewed") > 0,
+                "holding_period_outcome": holding_period_outcome,
+                "ledger_outcome": ledger_outcome,
+            }));
+        }
+        Ok(decision_pulse_outcome_evidence_from_observations(
+            &observations,
         ))
     }
 
@@ -13882,6 +14123,72 @@ market_data:
             (value_f64(&evidence["five_session"], "average_directional_return_pct") - 0.05).abs()
                 < 1e-9
         );
+    }
+
+    #[test]
+    fn decision_pulse_outcome_evidence_keeps_buy_price_movement_and_sell_ledger_gains_separate() {
+        let evidence = decision_pulse_outcome_evidence_from_observations(&[
+            json!({
+                "analysis_pulse_key": "europe_open_followup:2026-07-20",
+                "analysis_pulse_label": "EU Open +1h15",
+                "action": "BUY",
+                "hermes_reviewed": true,
+                "holding_period_outcome": {
+                    "filled_quantity": 2.0,
+                    "one_session": {"directional_return_pct": 0.04},
+                    "five_session": {"directional_return_pct": 0.06},
+                },
+                "ledger_outcome": null,
+            }),
+            json!({
+                "analysis_pulse_key": "us_open_followup:2026-07-20",
+                "analysis_pulse_label": "US Open +1h15",
+                "action": "SELL",
+                "hermes_reviewed": false,
+                "holding_period_outcome": null,
+                "ledger_outcome": {
+                    "status": "reconciled",
+                    "realised_gain_dkk": 125.0,
+                    "commission_dkk": 3.0,
+                    "tax_dkk": 0.0,
+                },
+            }),
+            json!({
+                "strategy_type": "portfolio_sync",
+                "action": "BUY",
+                "hermes_reviewed": false,
+                "holding_period_outcome": {"filled_quantity": 0.0},
+                "ledger_outcome": null,
+            }),
+        ]);
+
+        assert_eq!(json_text(&evidence, "status"), "collecting");
+        assert_eq!(value_i64(&evidence["overall"], "attributed_order_count"), 3);
+        assert_eq!(
+            value_i64(&evidence["overall"], "hermes_reviewed_order_count"),
+            1
+        );
+        assert_eq!(
+            value_i64(&evidence["overall"]["one_session"], "sample_count"),
+            1
+        );
+        assert!(
+            (value_f64(
+                &evidence["overall"]["five_session"],
+                "average_directional_return_pct"
+            ) - 0.06)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (value_f64(&evidence["overall"]["realised_sell"], "realised_gain_dkk") - 125.0).abs()
+                < 1e-9
+        );
+        let pulses = evidence["pulses"].as_array().expect("pulse rows");
+        assert!(pulses.iter().any(|row| {
+            json_text(row, "pulse_key") == "portfolio_sync"
+                && json_text(row, "pulse_label") == "Portfolio Sync"
+        }));
     }
 
     #[tokio::test]

@@ -1422,3 +1422,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a bounded read-only aggregate for missed-trade shadows in the Hermes view. It shows equal-weighted directional quote outcomes overall and by recorded manager gate, remains `collecting` until 20 observed rows, and does not combine currency-denominated P/L.
 - The aggregate is diagnostic only: it neither reopens a deterministic gate nor changes Hermes advice, configuration, Saxo/provider calls, or order behavior. It excludes fees, FX, slippage, tax, broker execution, later position changes, and causal claims.
 - The new shadow book excludes technical/Markov validity failures, risk exclusions, and instrument quarantines. It records only compact gate provenance, local candidate quantity/price/currency, and later price observations; it is not a backtest, causal result, realised P/L, broker execution, or input to any gate, Hermes recommendation, or order.
+
+## [2026-07-27] trading-quality | Decision pulse outcome evidence
+
+- Added a bounded, read-only Execution aggregate grouped by report origin: EU open follow-up, US open follow-up, manual/manual dry-run, portfolio sync, and other/legacy. The source is only local execution orders, reconciled fills, local ledger rows, and stored daily indicator closes.
+- BUY outcomes retain the existing equal-weighted one- and five-session directional-return method; SELL outcomes separately sum reconciled local-ledger DKK gain, commission, and tax. This is not aggregate unrealised P/L, broker position truth, a backtest, or a causal claim.
+- Hermes is exposed only as reviewed coverage when a report had an advice record. A durable per-order advice-effect link is required before a Hermes-influenced performance subgroup can be measured safely. No Saxo, provider, Hermes, configuration, manager gate, or order mutation is performed.

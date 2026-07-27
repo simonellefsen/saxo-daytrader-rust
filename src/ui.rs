@@ -3710,6 +3710,10 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 evidence: data.execution_trade_thesis_evidence.clone(),
                 prefs: prefs.clone()
             }
+            DecisionPulseOutcomeEvidencePanel {
+                evidence: data.execution_decision_pulse_evidence.clone(),
+                prefs: prefs.clone()
+            }
 
             // SIM-only: Reset portfolio from Live Positioner export
             {
@@ -3928,6 +3932,104 @@ fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs
                 div { class: "grid-2",
                     div { class: "event", strong { "1 session" } span { class: "muted block", "{outcome_label(one_session)}" } }
                     div { class: "event", strong { "5 sessions" } span { class: "muted block", "{outcome_label(five_session)}" } }
+                }
+                p { class: "muted", "{interpretation}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&evidence, "status").replace('_', " ");
+    let overall = evidence.get("overall").unwrap_or(&JsonValue::Null);
+    let attributed_orders = value_i64(overall, "attributed_order_count");
+    let hermes_reviewed = value_i64(overall, "hermes_reviewed_order_count");
+    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
+    let outcome_label = |outcome: &JsonValue| {
+        let sample_count = value_i64(outcome, "sample_count");
+        let average = outcome
+            .get("average_directional_return_pct")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_signed_pct(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        let positive_rate = outcome
+            .get("positive_return_rate")
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_pct(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        format!("{average} forward movement · {positive_rate} positive · {sample_count} samples")
+    };
+    let realised_label = |outcome: &JsonValue| {
+        let reconciled = value_i64(outcome, "reconciled_sell_order_count");
+        let realised = outcome
+            .get("realised_sell")
+            .and_then(|value| value.get("realised_gain_dkk"))
+            .and_then(JsonValue::as_f64)
+            .map(|value| format_money(value, "DKK", &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        format!("{realised} local ledger gain · {reconciled} reconciled SELLs")
+    };
+    let pulses = evidence
+        .get("pulses")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let interpretation = text_or(
+        &evidence,
+        "interpretation",
+        "Read-only decision-pulse outcome evidence only.",
+    );
+    rsx! {
+        section { class: "section stack",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Decision Pulse Outcome Evidence" }
+                    p { class: "muted", "Read-only outcomes grouped by EU, US, manual, and imported-portfolio source. Hermes coverage means advice was present, not that it caused the outcome." }
+                }
+                span { class: "status", "{status}" }
+            }
+            if text(&evidence, "status") == "no_attributable_orders" {
+                span { class: "muted", "No report-linked or portfolio-sync orders have been recorded yet." }
+            } else if text(&evidence, "status") == "unavailable" {
+                span { class: "muted", "Decision-pulse outcome evidence is unavailable right now." }
+            } else {
+                div { class: "quality-score-row",
+                    span { class: "status", "{attributed_orders} orders" }
+                    span { class: "status", "{hermes_reviewed} Hermes reviewed" }
+                    span { class: "status", "{minimum_complete} five-session samples needed" }
+                }
+                div { class: "grid-2",
+                    div { class: "event",
+                        strong { "All BUYs · 1 session" }
+                        span { class: "muted block", "{outcome_label(overall.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
+                    }
+                    div { class: "event",
+                        strong { "All BUYs · 5 sessions" }
+                        span { class: "muted block", "{outcome_label(overall.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Hermes" } } }
+                        tbody {
+                            for row in pulses {
+                                {
+                                    let outcome = row.get("outcome").unwrap_or(&JsonValue::Null);
+                                    rsx! {
+                                        tr {
+                                            td { strong { "{fallback_text(&row, \"pulse_label\", \"Other / legacy\")}" } }
+                                            td { "{value_i64(outcome, \"attributed_order_count\")}" }
+                                            td { "{outcome_label(outcome.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
+                                            td { "{outcome_label(outcome.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
+                                            td { "{realised_label(outcome)}" }
+                                            td { "{value_i64(outcome, \"hermes_reviewed_order_count\")} reviewed" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 p { class: "muted", "{interpretation}" }
             }
