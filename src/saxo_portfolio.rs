@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
@@ -491,9 +488,7 @@ async fn saxo_get_json(
 ) -> Result<JsonValue> {
     let access_token = json_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
         .await;
     let response = client

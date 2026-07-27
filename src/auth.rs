@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::OnceLock, time::Duration};
+use std::{fs, path::PathBuf, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::http::{HeaderMap, header};
@@ -869,9 +869,7 @@ fn openapi_base_url(environment: &str) -> Result<&'static str> {
 }
 
 fn http_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?)
+    Ok(crate::saxo_http::client())
 }
 
 pub fn oauth_callback_html(ok: bool, title: &str, message: &str, return_to: &str) -> String {

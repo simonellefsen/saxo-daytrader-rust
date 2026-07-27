@@ -907,9 +907,7 @@ pub(crate) async fn saxo_get_json(
 ) -> Result<JsonValue> {
     let access_token = session_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     let url = format!("{}{}", openapi_base_url(state, session)?, path);
     let requests_per_minute = crate::saxo_rate_limit::configured_rate(&state.config);
     let mut last_error = String::new();

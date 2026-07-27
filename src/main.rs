@@ -18,6 +18,7 @@ mod price_monitor;
 mod protective_stops;
 mod quiver;
 mod saxo_error;
+mod saxo_http;
 mod saxo_order;
 mod saxo_portfolio;
 mod saxo_rate_limit;

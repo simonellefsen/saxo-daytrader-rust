@@ -1466,3 +1466,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Removed the legacy Yahoo ticker map at `strategy.swing.journal.benchmark_indices` from both shipped configurations and the Rust config contract. The Rust journal did not query or calculate from it, so leaving it configured implied a benchmark comparison that does not exist.
 - The legacy reference retains its own default map when run separately. A future Rust benchmark must use verified canonical Saxo symbols with daily-indicator close coverage, an explicit fixed comparison baseline, and coverage/freshness reporting. It will remain read-only and outside decision, Hermes, sizing, and broker paths until separately implemented and tested.
+
+## [2026-07-27] operations | Shared Saxo HTTP transport
+
+- Auth, Markov, daily-indicator, portfolio, and order calls now share a process-wide 30-second `reqwest::Client`, which permits connection-pool and HTTP/2 reuse instead of constructing a client for every request.
+- The transport refactor does not centralize policy: rate pacing, OAuth/session handling, request ids, retries, response parsing, and broker-mutation decisions remain at the prior call sites. Provider, Slack, editorial, and public-data clients keep separate transports and timeouts.

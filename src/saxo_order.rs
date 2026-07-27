@@ -1944,9 +1944,7 @@ async fn saxo_get_json(
 ) -> Result<JsonValue> {
     let access_token = session_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
         .await;
     let response = client
@@ -1969,9 +1967,7 @@ async fn saxo_get_json_optional(
 ) -> Result<Option<JsonValue>> {
     let access_token = session_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
         .await;
     let response = client
@@ -2015,9 +2011,7 @@ async fn saxo_post_json(
 ) -> Result<JsonValue> {
     let access_token = session_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     let mut last_error = None;
     for attempt in 0..=3 {
         let mut request = client
@@ -2058,9 +2052,7 @@ async fn saxo_delete_json(
 ) -> Result<JsonValue> {
     let access_token = session_text(session, "access_token")
         .ok_or_else(|| anyhow!("Saxo access token is missing from session"))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = crate::saxo_http::client();
     crate::saxo_rate_limit::acquire(path, crate::saxo_rate_limit::configured_rate(&state.config))
         .await;
     let response = client
