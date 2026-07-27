@@ -340,7 +340,7 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `swing.daily_indicators`: daily-chart MA/MACD/RSI/Bollinger/Stochastic/Volume confluence settings used to filter swing entries.
 - `swing.journal`: daily/weekly/monthly learning journal cadence used to feed recent lessons back into decision prompts.
 - `swing.analysis_pulses`: timezone-aware daily decision triggers for the Nordic/EU open +1h15 report and the US open +1h15 report.
-- `ladder.*`: legacy rung, spacing, take-profit, and flatten settings remain inactive. `max_position_weight` and the automatic protective-stop controls (`submit_stop_loss_after_fill`, ATR multiples, and ratchet threshold) are runtime-enforced for swing BUYs/held positions.
+- `ladder.*`: remaining legacy rung, spacing, and take-profit target-distance settings are inactive. `max_position_weight` and the automatic protective-stop controls (`submit_stop_loss_after_fill`, ATR multiples, and ratchet threshold) are runtime-enforced for swing BUYs/held positions. Entry brackets and automatic take-profit orders are not configured or implemented.
 
 ### `execution`
 

@@ -1471,3 +1471,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Auth, Markov, daily-indicator, portfolio, and order calls now share a process-wide 30-second `reqwest::Client`, which permits connection-pool and HTTP/2 reuse instead of constructing a client for every request.
 - The transport refactor does not centralize policy: rate pacing, OAuth/session handling, request ids, retries, response parsing, and broker-mutation decisions remain at the prior call sites. Provider, Slack, editorial, and public-data clients keep separate transports and timeouts.
+
+## [2026-07-27] risk | Retired inactive bracket and take-profit switches
+
+- Removed `strategy.ladder.submit_bracket_with_entry` from both shipped configurations and `submit_take_profit_after_fill` from local configuration plus the Rust config contract. The Rust runtime never submitted entry brackets or automatic take-profit orders, so these settings only implied protection that did not exist.
+- `strategy.ladder.submit_stop_loss_after_fill` remains the explicit, enforced switch for automatic protective-stop coverage. Legacy Python reference paths default the retired settings to false when absent, so this changes neither the active Rust strategy nor a reference-only run.
+- Any future bracket/target implementation must use Saxo's bundled related-order request shape and prove SIM parent/child lifecycle, cancellation, replacement, reconciliation, and unprotected-position behavior before exposing a new operator control.

@@ -121,17 +121,6 @@ const fn unused(path: &'static [&'static str], note: &'static str) -> ContractEn
     }
 }
 
-/// An unused key that reads like an active risk control but is not one.
-const fn unused_risk(path: &'static [&'static str], note: &'static str) -> ContractEntry {
-    ContractEntry {
-        path,
-        status: ContractStatus::Unused,
-        scope: ContractScope::Leaf,
-        risk_surface: true,
-        note,
-    }
-}
-
 /// The contract. Statuses were established by reading each key's call sites on
 /// 2026-07-25; update an entry in the same change that changes its wiring.
 const CONTRACT: &[ContractEntry] = &[
@@ -477,9 +466,8 @@ const CONTRACT: &[ContractEntry] = &[
     ),
     // ---- strategy.ladder ----
     //
-    // The entire ladder/bracket feature is configured and unimplemented. The
-    // stop-loss members are called out individually because they read as active
-    // downside protection and are not.
+    // Legacy ladder entries remain unimplemented. Protective-stop members are
+    // called out individually because they are active downside protection.
     unused(
         &["strategy", "ladder", "rung_count"],
         "Ladder entries are not implemented.",
@@ -488,17 +476,9 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "ladder", "min_rung_value_dkk"],
         "Ladder entries are not implemented.",
     ),
-    unused_risk(
-        &["strategy", "ladder", "submit_bracket_with_entry"],
-        "No bracket order is ever submitted with an entry.",
-    ),
     enforced(
         &["strategy", "ladder", "submit_stop_loss_after_fill"],
         "Master switch for the automatic protective-stop sweep. False means no stop is placed, amended, or ratcheted without an operator action.",
-    ),
-    unused_risk(
-        &["strategy", "ladder", "submit_take_profit_after_fill"],
-        "No take-profit order is placed after a fill.",
     ),
     unused(
         &["strategy", "ladder", "atr_spacing_min"],
@@ -872,6 +852,26 @@ mod tests {
             .expect("retired benchmark key is reported");
         assert_eq!(finding.kind, FindingKind::UncontractedKey);
         assert!(finding.risk_surface);
+    }
+
+    #[test]
+    fn retired_ladder_bracket_and_take_profit_keys_are_reported_as_uncontracted() {
+        let config = parse(
+            "strategy:\n  ladder:\n    submit_bracket_with_entry: false\n    submit_take_profit_after_fill: false\n",
+        );
+        let (summary, findings) = audit_config(&config);
+        assert_eq!(summary.uncontracted, 2);
+        for path in [
+            "strategy.ladder.submit_bracket_with_entry",
+            "strategy.ladder.submit_take_profit_after_fill",
+        ] {
+            let finding = findings
+                .iter()
+                .find(|finding| finding.path == path)
+                .unwrap_or_else(|| panic!("{path} is reported"));
+            assert_eq!(finding.kind, FindingKind::UncontractedKey);
+            assert!(finding.risk_surface);
+        }
     }
 
     #[test]

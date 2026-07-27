@@ -453,7 +453,6 @@ strategy:
   ladder:
     rung_count: 5
     min_rung_value_dkk: 5000
-    submit_bracket_with_entry: false
     submit_stop_loss_after_fill: true
     atr_spacing_min: 0.15
     atr_spacing_factor: 0.25
