@@ -1429,3 +1429,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - BUY outcomes retain the existing equal-weighted one- and five-session directional-return method; SELL outcomes separately sum reconciled local-ledger DKK gain, commission, and tax. This is not aggregate unrealised P/L, broker position truth, a backtest, or a causal claim.
 - Hermes effect coverage now comes from the matching candidate in the persisted Trading Manager `hermes_advice_delta` snapshot, keyed by the stored execution order's strategy key, symbol, and action. The panel reports effects such as `allowed` and `reduced`, never raw advice rationale or a reconstruction from live data.
 - The classification remains non-causal. It does not compare Hermes-effect subgroups, and separately recorded blocked/reduced counterfactuals remain in the Hermes view. No Saxo, provider, Hermes, configuration, manager gate, or order mutation is performed.
+
+## [2026-07-27] trading-quality | Decision pulse order-state coverage
+
+- Added bounded per-pulse counts of the local `execution_orders.status` values, including completed, working, expired, and failed states where those exact records exist. The panel does not query Saxo to fill missing data or infer a broker outcome from time or price.
+- Status coverage remains descriptive and non-causal. It does not classify root causes, modify local queue state, requeue an order, or alter Hermes, Trading Manager, configuration, or broker behavior.

@@ -1492,6 +1492,7 @@ struct DecisionPulseOutcomeStats {
     attributed_order_count: usize,
     buy_order_count: usize,
     sell_order_count: usize,
+    execution_status_counts: BTreeMap<String, usize>,
     hermes_reviewed_order_count: usize,
     hermes_effect_counts: BTreeMap<String, usize>,
     filled_buy_order_count: usize,
@@ -1645,6 +1646,7 @@ fn decision_pulse_outcome_summary(stats: &DecisionPulseOutcomeStats) -> JsonValu
         "attributed_order_count": stats.attributed_order_count,
         "buy_order_count": stats.buy_order_count,
         "sell_order_count": stats.sell_order_count,
+        "execution_status_counts": stats.execution_status_counts,
         "hermes_reviewed_order_count": stats.hermes_reviewed_order_count,
         "hermes_effect_counts": stats.hermes_effect_counts,
         "filled_buy_order_count": stats.filled_buy_order_count,
@@ -1681,6 +1683,13 @@ fn decision_pulse_outcome_evidence_from_observations(observations: &[JsonValue])
             .or_insert_with(|| (pulse_label, DecisionPulseOutcomeStats::default()));
         for stats in [&mut overall, &mut pulse.1] {
             stats.attributed_order_count += 1;
+            let execution_status = json_text(observation, "execution_status");
+            if !execution_status.is_empty() && execution_status != "not_recorded" {
+                *stats
+                    .execution_status_counts
+                    .entry(execution_status)
+                    .or_default() += 1;
+            }
             if observation
                 .get("hermes_reviewed")
                 .and_then(JsonValue::as_bool)
@@ -6178,7 +6187,7 @@ impl AppState {
         let rows = self
             .select_json(&format!(
                 "SELECT eo.id, eo.created_at, eo.report_id, eo.symbol, eo.action, eo.quantity,
-                        eo.currency, eo.strategy_type, eo.strategy_key,
+                        eo.currency, eo.strategy_type, eo.strategy_key, eo.status AS execution_status,
                         dr.analysis_pulse_key, dr.analysis_pulse_label,
                         CASE WHEN EXISTS (
                             SELECT 1
@@ -6241,6 +6250,7 @@ impl AppState {
                 "analysis_pulse_label": json_text(&row, "analysis_pulse_label"),
                 "strategy_type": json_text(&row, "strategy_type"),
                 "action": action,
+                "execution_status": json_text(&row, "execution_status"),
                 "hermes_reviewed": value_i64(&row, "hermes_reviewed") > 0,
                 "hermes_effect": hermes_effect,
                 "holding_period_outcome": holding_period_outcome,
@@ -14168,6 +14178,7 @@ market_data:
                 "analysis_pulse_key": "europe_open_followup:2026-07-20",
                 "analysis_pulse_label": "EU Open +1h15",
                 "action": "BUY",
+                "execution_status": "executed",
                 "hermes_reviewed": true,
                 "hermes_effect": "reduced",
                 "holding_period_outcome": {
@@ -14181,6 +14192,7 @@ market_data:
                 "analysis_pulse_key": "us_open_followup:2026-07-20",
                 "analysis_pulse_label": "US Open +1h15",
                 "action": "SELL",
+                "execution_status": "executed",
                 "hermes_reviewed": false,
                 "hermes_effect": "not_recorded",
                 "holding_period_outcome": null,
@@ -14194,6 +14206,7 @@ market_data:
             json!({
                 "strategy_type": "portfolio_sync",
                 "action": "BUY",
+                "execution_status": "not_recorded",
                 "hermes_reviewed": false,
                 "hermes_effect": "not_recorded",
                 "holding_period_outcome": {"filled_quantity": 0.0},
@@ -14226,6 +14239,10 @@ market_data:
         assert_eq!(
             evidence["overall"]["hermes_effect_counts"]["reduced"],
             json!(1)
+        );
+        assert_eq!(
+            evidence["overall"]["execution_status_counts"]["executed"],
+            json!(2)
         );
         let pulses = evidence["pulses"].as_array().expect("pulse rows");
         assert!(pulses.iter().any(|row| {

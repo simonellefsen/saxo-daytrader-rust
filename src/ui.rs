@@ -3992,6 +3992,28 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
             labels.join(" · ")
         }
     };
+    let execution_status_label = |outcome: &JsonValue| {
+        let Some(counts) = outcome
+            .get("execution_status_counts")
+            .and_then(JsonValue::as_object)
+        else {
+            return "no recorded state".to_string();
+        };
+        let labels = counts
+            .iter()
+            .filter_map(|(status, count)| {
+                count
+                    .as_i64()
+                    .filter(|count| *count > 0)
+                    .map(|count| format!("{}: {count}", status.replace('_', " ")))
+            })
+            .collect::<Vec<_>>();
+        if labels.is_empty() {
+            "no recorded state".to_string()
+        } else {
+            labels.join(" · ")
+        }
+    };
     let pulses = evidence
         .get("pulses")
         .and_then(JsonValue::as_array)
@@ -4033,7 +4055,7 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                 }
                 div { class: "table-wrap",
                     table {
-                        thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Hermes effect" } } }
+                        thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Order state" } th { "Hermes effect" } } }
                         tbody {
                             for row in pulses {
                                 {
@@ -4045,6 +4067,7 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                                             td { "{outcome_label(outcome.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
                                             td { "{outcome_label(outcome.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
                                             td { "{realised_label(outcome)}" }
+                                            td { "{execution_status_label(outcome)}" }
                                             td { "{hermes_effect_label(outcome)}" }
                                         }
                                     }
