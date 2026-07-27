@@ -4685,6 +4685,9 @@ impl AppState {
                 "market_value_dkk": market_value_dkk,
                 "unrealised_pnl_dkk": unrealised_pnl_dkk,
                 "daily_pnl_dkk": daily_pnl_dkk,
+                // Watchlist rows use `change_pct`; position views retain the
+                // explicit daily name. Keep both projections aligned.
+                "change_pct": daily_change_pct,
                 "daily_change_pct": daily_change_pct,
                 "total_return_pct": if cost_basis_dkk.abs() > 1e-9 { unrealised_pnl_dkk / cost_basis_dkk } else { 0.0 },
                 "allocation_pct": 0.0,
