@@ -1531,7 +1531,7 @@ fn WatchlistCategory(
                                 td { "{text(row, \"exchange\")}" }
                                 td { "{text(row, \"currency\")}" }
                                 td { "{format_local_money(value_f64(row, \"current_price_local\"), &text(row, \"currency\"), &prefs)}" }
-                                td { class: if value_f64(row, "change_pct") >= 0.0 { "good-text" } else { "bad-text" }, "{format_pct(value_f64(row, \"change_pct\"), &prefs)}" }
+                                td { WatchlistDailyChange { row: row.clone(), prefs: prefs.clone() } }
                                 td { WatchlistQuoteStatus { row: row.clone() } }
                             }
                         }
@@ -1540,6 +1540,19 @@ fn WatchlistCategory(
             }
         }
     }
+}
+
+#[component]
+fn WatchlistDailyChange(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let Some(change_pct) = optional_f64(&row, "change_pct") else {
+        return rsx! { span { class: "muted", title: "No current Saxo price-monitor quote is available, so a daily move cannot be calculated.", "n/a" } };
+    };
+    let tone = if change_pct >= 0.0 {
+        "good-text"
+    } else {
+        "bad-text"
+    };
+    rsx! { span { class: "{tone}", "{format_pct(change_pct, &prefs)}" } }
 }
 
 #[component]
@@ -5816,6 +5829,10 @@ fn DecisionCard(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 fn value_f64(value: &JsonValue, key: &str) -> f64 {
+    optional_f64(value, key).unwrap_or(0.0)
+}
+
+fn optional_f64(value: &JsonValue, key: &str) -> Option<f64> {
     value
         .get(key)
         .and_then(|value| {
@@ -5824,7 +5841,7 @@ fn value_f64(value: &JsonValue, key: &str) -> f64 {
                 .or_else(|| value.as_i64().map(|v| v as f64))
                 .or_else(|| value.as_str()?.parse().ok())
         })
-        .unwrap_or(0.0)
+        .filter(|value| value.is_finite())
 }
 
 fn value_i64(value: &JsonValue, key: &str) -> i64 {
@@ -8347,6 +8364,19 @@ mod tests {
             })),
             0.0
         );
+    }
+
+    #[test]
+    fn optional_watchlist_change_distinguishes_flat_from_unquoted() {
+        assert_eq!(
+            optional_f64(&json!({"change_pct": 0.0}), "change_pct"),
+            Some(0.0)
+        );
+        assert_eq!(
+            optional_f64(&json!({"change_pct": null}), "change_pct"),
+            None
+        );
+        assert_eq!(optional_f64(&json!({}), "change_pct"), None);
     }
 
     #[test]
