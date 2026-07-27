@@ -3970,6 +3970,28 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
             .unwrap_or_else(|| "pending".to_string());
         format!("{realised} local ledger gain · {reconciled} reconciled SELLs")
     };
+    let hermes_effect_label = |outcome: &JsonValue| {
+        let Some(counts) = outcome
+            .get("hermes_effect_counts")
+            .and_then(JsonValue::as_object)
+        else {
+            return "no recorded effect".to_string();
+        };
+        let labels = counts
+            .iter()
+            .filter_map(|(effect, count)| {
+                count
+                    .as_i64()
+                    .filter(|count| *count > 0)
+                    .map(|count| format!("{}: {count}", effect.replace('_', " ")))
+            })
+            .collect::<Vec<_>>();
+        if labels.is_empty() {
+            "no recorded effect".to_string()
+        } else {
+            labels.join(" · ")
+        }
+    };
     let pulses = evidence
         .get("pulses")
         .and_then(JsonValue::as_array)
@@ -3985,7 +4007,7 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
             div { class: "section-title-row compact",
                 div {
                     h3 { "Decision Pulse Outcome Evidence" }
-                    p { class: "muted", "Read-only outcomes grouped by EU, US, manual, and imported-portfolio source. Hermes coverage means advice was present, not that it caused the outcome." }
+                    p { class: "muted", "Read-only outcomes grouped by EU, US, manual, and imported-portfolio source. Hermes effects come from the persisted manager snapshot, not a causal performance claim." }
                 }
                 span { class: "status", "{status}" }
             }
@@ -4011,7 +4033,7 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                 }
                 div { class: "table-wrap",
                     table {
-                        thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Hermes" } } }
+                        thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Hermes effect" } } }
                         tbody {
                             for row in pulses {
                                 {
@@ -4023,7 +4045,7 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                                             td { "{outcome_label(outcome.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
                                             td { "{outcome_label(outcome.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
                                             td { "{realised_label(outcome)}" }
-                                            td { "{value_i64(outcome, \"hermes_reviewed_order_count\")} reviewed" }
+                                            td { "{hermes_effect_label(outcome)}" }
                                         }
                                     }
                                 }

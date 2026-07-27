@@ -1493,6 +1493,7 @@ struct DecisionPulseOutcomeStats {
     buy_order_count: usize,
     sell_order_count: usize,
     hermes_reviewed_order_count: usize,
+    hermes_effect_counts: BTreeMap<String, usize>,
     filled_buy_order_count: usize,
     reconciled_sell_order_count: usize,
     one_session_count: usize,
@@ -1645,6 +1646,7 @@ fn decision_pulse_outcome_summary(stats: &DecisionPulseOutcomeStats) -> JsonValu
         "buy_order_count": stats.buy_order_count,
         "sell_order_count": stats.sell_order_count,
         "hermes_reviewed_order_count": stats.hermes_reviewed_order_count,
+        "hermes_effect_counts": stats.hermes_effect_counts,
         "filled_buy_order_count": stats.filled_buy_order_count,
         "reconciled_sell_order_count": stats.reconciled_sell_order_count,
         "one_session": directional_summary(
@@ -1685,6 +1687,10 @@ fn decision_pulse_outcome_evidence_from_observations(observations: &[JsonValue])
                 .unwrap_or(false)
             {
                 stats.hermes_reviewed_order_count += 1;
+            }
+            let hermes_effect = json_text(observation, "hermes_effect");
+            if !hermes_effect.is_empty() && hermes_effect != "not_recorded" {
+                *stats.hermes_effect_counts.entry(hermes_effect).or_default() += 1;
             }
             let action = json_text(observation, "action").to_uppercase();
             if action == "BUY" {
@@ -1760,7 +1766,7 @@ fn decision_pulse_outcome_evidence_from_observations(observations: &[JsonValue])
         "minimum_complete_observations": TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS,
         "scan_limit": DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT,
         "safety": "read_only_local_execution_orders_fills_ledger_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
-        "interpretation": "BUY rows show equal-weighted forward directional price movement after reconciled fills; they are not unrealised P/L. SELL rows sum local-ledger realised DKK gain, commission, and tax only after reconciliation. Hermes-reviewed counts mean an advice record existed for the source report; they do not establish causal advice impact. Portfolio-sync rows are imported-state context, not system-initiated trades."
+        "interpretation": "BUY rows show equal-weighted forward directional price movement after reconciled fills; they are not unrealised P/L. SELL rows sum local-ledger realised DKK gain, commission, and tax only after reconciliation. Hermes effects come only from the durable Trading Manager advice-delta snapshot matched to the stored execution-order strategy key. They classify the advice applied to an order but do not establish causal performance impact. Portfolio-sync rows are imported-state context, not system-initiated trades."
     })
 }
 
@@ -6172,13 +6178,20 @@ impl AppState {
         let rows = self
             .select_json(&format!(
                 "SELECT eo.id, eo.created_at, eo.report_id, eo.symbol, eo.action, eo.quantity,
-                        eo.currency, eo.strategy_type,
+                        eo.currency, eo.strategy_type, eo.strategy_key,
                         dr.analysis_pulse_key, dr.analysis_pulse_label,
                         CASE WHEN EXISTS (
                             SELECT 1
                             FROM hermes_decision_advice h
                             WHERE h.decision_report_id = eo.report_id
-                        ) THEN 1 ELSE 0 END AS hermes_reviewed
+                        ) THEN 1 ELSE 0 END AS hermes_reviewed,
+                        (
+                            SELECT tm.manager_json
+                            FROM trading_manager_runs tm
+                            WHERE tm.report_id = eo.report_id
+                            ORDER BY tm.created_at DESC, tm.id DESC
+                            LIMIT 1
+                        ) AS manager_json
                  FROM execution_orders eo
                  LEFT JOIN decision_reports dr ON dr.id = eo.report_id
                  WHERE eo.action IN ('BUY', 'SELL')
@@ -6191,6 +6204,28 @@ impl AppState {
         let mut observations = Vec::with_capacity(rows.len());
         for row in rows {
             let action = json_text(&row, "action").to_uppercase();
+            let raw_manager_json = row.get("manager_json").cloned().unwrap_or(JsonValue::Null);
+            let manager_json = if raw_manager_json.is_object() {
+                raw_manager_json
+            } else {
+                raw_manager_json
+                    .as_str()
+                    .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
+                    .unwrap_or(JsonValue::Null)
+            };
+            let hermes_effect = manager_json
+                .get("hermes_advice_delta")
+                .and_then(|value| value.get("candidates"))
+                .and_then(|value| {
+                    matching_order_advice(
+                        Some(value),
+                        &json_text(&row, "strategy_key"),
+                        &json_text(&row, "symbol"),
+                        &action,
+                    )
+                })
+                .map(|value| json_text(&value, "effect"))
+                .unwrap_or_else(|| "not_recorded".to_string());
             let holding_period_outcome = if action == "BUY" {
                 self.execution_order_holding_period_outcome(&row).await?
             } else {
@@ -6207,6 +6242,7 @@ impl AppState {
                 "strategy_type": json_text(&row, "strategy_type"),
                 "action": action,
                 "hermes_reviewed": value_i64(&row, "hermes_reviewed") > 0,
+                "hermes_effect": hermes_effect,
                 "holding_period_outcome": holding_period_outcome,
                 "ledger_outcome": ledger_outcome,
             }));
@@ -14133,6 +14169,7 @@ market_data:
                 "analysis_pulse_label": "EU Open +1h15",
                 "action": "BUY",
                 "hermes_reviewed": true,
+                "hermes_effect": "reduced",
                 "holding_period_outcome": {
                     "filled_quantity": 2.0,
                     "one_session": {"directional_return_pct": 0.04},
@@ -14145,6 +14182,7 @@ market_data:
                 "analysis_pulse_label": "US Open +1h15",
                 "action": "SELL",
                 "hermes_reviewed": false,
+                "hermes_effect": "not_recorded",
                 "holding_period_outcome": null,
                 "ledger_outcome": {
                     "status": "reconciled",
@@ -14157,6 +14195,7 @@ market_data:
                 "strategy_type": "portfolio_sync",
                 "action": "BUY",
                 "hermes_reviewed": false,
+                "hermes_effect": "not_recorded",
                 "holding_period_outcome": {"filled_quantity": 0.0},
                 "ledger_outcome": null,
             }),
@@ -14183,6 +14222,10 @@ market_data:
         assert!(
             (value_f64(&evidence["overall"]["realised_sell"], "realised_gain_dkk") - 125.0).abs()
                 < 1e-9
+        );
+        assert_eq!(
+            evidence["overall"]["hermes_effect_counts"]["reduced"],
+            json!(1)
         );
         let pulses = evidence["pulses"].as_array().expect("pulse rows");
         assert!(pulses.iter().any(|row| {
