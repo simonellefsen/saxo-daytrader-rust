@@ -7782,8 +7782,11 @@ fn position_total_return_pct(row: &JsonValue) -> f64 {
 }
 
 fn position_daily_return_pct(row: &JsonValue) -> f64 {
-    let explicit = value_f64(row, "daily_change_pct");
-    if explicit.abs() > f64::EPSILON {
+    if let Some(explicit) = row
+        .get("daily_change_pct")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite())
+    {
         return explicit;
     }
     let daily = value_f64(row, "daily_pnl_dkk");
@@ -8331,6 +8334,18 @@ mod tests {
                 "",
                 "Price and technical context came from a recent decision report, not the current Saxo price monitor."
             )
+        );
+    }
+
+    #[test]
+    fn position_daily_return_preserves_an_explicit_flat_quote() {
+        assert_eq!(
+            position_daily_return_pct(&json!({
+                "daily_change_pct": 0.0,
+                "daily_pnl_dkk": 25.0,
+                "market_value_dkk": 125.0,
+            })),
+            0.0
         );
     }
 

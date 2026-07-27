@@ -3187,6 +3187,26 @@ fn hermes_experiment_next_status(current_status: &str, action: &str) -> Option<&
     }
 }
 
+/// Use the price-monitor calculation whenever it is available. In SIM,
+/// `InstrumentPriceDayPercentChange` may be zero for an approximated broker
+/// exposure even though the current infoprice and LastClose establish a move.
+fn daily_change_pct_from_sources(
+    price_snapshot: Option<&JsonValue>,
+    broker_exposure: Option<&JsonValue>,
+) -> f64 {
+    price_snapshot
+        .and_then(|row| row.get("change_pct"))
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite())
+        .or_else(|| {
+            broker_exposure
+                .and_then(|row| row.get("instrument_price_day_percent_change"))
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())
+        })
+        .unwrap_or(0.0)
+}
+
 impl AppState {
     // Associated functions are like static/class methods. `Self` means
     // `AppState`, so this returns a fully initialized application state.
@@ -4573,6 +4593,11 @@ impl AppState {
             let base = base_by_symbol.get(&symbol);
             let price = price_by_symbol.get(&symbol);
             let exposure = exposure_by_symbol.get(&symbol);
+            // The price monitor derives this from Saxo's LastClose and the
+            // current infoprice. Broker exposures can legitimately report
+            // zero for delayed/approximated SIM prices, so they are only a
+            // fallback when no monitored quote exists.
+            let daily_change_pct = daily_change_pct_from_sources(price, exposure);
             let currency = text_value(&broker, "currency")
                 .trim()
                 .to_string()
@@ -4660,7 +4685,7 @@ impl AppState {
                 "market_value_dkk": market_value_dkk,
                 "unrealised_pnl_dkk": unrealised_pnl_dkk,
                 "daily_pnl_dkk": daily_pnl_dkk,
-                "daily_change_pct": exposure.map(|row| value_f64(row, "instrument_price_day_percent_change")).unwrap_or(0.0),
+                "daily_change_pct": daily_change_pct,
                 "total_return_pct": if cost_basis_dkk.abs() > 1e-9 { unrealised_pnl_dkk / cost_basis_dkk } else { 0.0 },
                 "allocation_pct": 0.0,
                 "asset_class": text_value(&broker, "asset_type")
@@ -12779,6 +12804,32 @@ market_data:
         assert_eq!(
             configured_extra_watch_symbols(&config),
             vec!["SPCX:xnas".to_string(), "RKLB:xnas".to_string()]
+        );
+    }
+
+    #[test]
+    fn monitored_quote_change_wins_over_zero_broker_exposure() {
+        assert_eq!(
+            daily_change_pct_from_sources(
+                Some(&json!({"change_pct": 0.01914580265095732})),
+                Some(&json!({"instrument_price_day_percent_change": 0.0})),
+            ),
+            0.01914580265095732
+        );
+        assert_eq!(
+            daily_change_pct_from_sources(
+                Some(&json!({"change_pct": 0.0})),
+                Some(&json!({"instrument_price_day_percent_change": 0.03})),
+            ),
+            0.0,
+            "a verified flat quote must not be replaced by broker fallback data"
+        );
+        assert_eq!(
+            daily_change_pct_from_sources(
+                None,
+                Some(&json!({"instrument_price_day_percent_change": -0.01})),
+            ),
+            -0.01
         );
     }
 

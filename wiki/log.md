@@ -1493,3 +1493,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Investigated an all-row `No support data` Watchlist state. The newest successful daily-indicator run predated the support-risk fields and Sunday scheduling correctly skipped under the weekday-only policy, so its otherwise successful rows had null support columns.
 - Ran the explicit read-only manual indicator refresh: 173 of 201 assets completed with persisted support-risk fields; 28 cached unresolved Saxo mappings remain visible as partial coverage. The operation did not create, amend, or execute an order.
 - Aligned local and Kubernetes daily-indicator policy to the five-year 1,260-bar target and added a config-contract regression test that requires the two policy blocks to match.
+
+## [2026-07-27] market-data | Watchlist daily-change source precedence
+
+- Corrected held Watchlist rows that showed `0.0%` when Saxo's broker exposure supplied an approximated zero while the fresh price-monitor snapshot had a non-zero move from `LastClose` to the current infoprice. The monitored quote's `change_pct` now takes precedence, including a verified flat zero; broker exposure remains the fallback only when a quote snapshot is absent.
+- This is display and read-model correctness only. It does not change quotes, decision logic, Hermes context, order sizing, or broker behavior.
