@@ -1402,3 +1402,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Execution now aggregates only the latest 50 persisted, `recorded` BUY thesis snapshots against their reconciled local fills and later stored daily indicator closes. It reports directional return and positive-rate evidence at one and five sessions, and remains explicitly `collecting` until 20 mature five-session observations exist.
 - This is forward-only observational context, not a backtest or a causal measurement. It excludes blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and outside-ledger inventory; it performs no Saxo, provider, Hermes, configuration, gate, or order mutation.
+
+## [2026-07-27] trading-quality | Deterministic missed-trade shadow book
+
+- Added a separate, bounded quote-to-quote observation ledger for selected deterministic Trading Manager blocks: candidate limit, market timing, monthly-loss/drawdown guardrails, cash budget, risk/cost floors, and holding or selection capacity. The Hermes counterfactual ledger remains limited to quantity Hermes blocked or reduced.
+- The new shadow book excludes technical/Markov validity failures, risk exclusions, and instrument quarantines. It records only compact gate provenance, local candidate quantity/price/currency, and later price observations; it is not a backtest, causal result, realised P/L, broker execution, or input to any gate, Hermes recommendation, or order.

@@ -3414,6 +3414,34 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            div { class: "table-wrap",
+                h3 { "Missed-Trade Shadow Book" }
+                p { class: "muted", "Quote-to-quote observations for selected candidates the deterministic manager did not deploy because of timing, capital, capacity, or an active loss guardrail. They are not a backtest, do not claim the block was wrong, and exclude fees, FX, slippage, tax, and broker execution." }
+                if data.missed_trade_shadows.is_empty() {
+                    span { class: "muted", "No eligible manager-gate shadows have been recorded yet." }
+                } else {
+                    table {
+                        thead {
+                            tr {
+                                th { "Report" }
+                                th { "Symbol" }
+                                th { "Block" }
+                                th { "Shadow Qty" }
+                                th { "Reference" }
+                                th { "Latest" }
+                                th { "Estimated Return" }
+                                th { "Estimated P/L" }
+                                th { "Status" }
+                            }
+                        }
+                        tbody {
+                            for row in data.missed_trade_shadows.iter() {
+                                MissedTradeShadowRow { row: row.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
             if latest_reflection.is_null() {
                 div { class: "event",
                     strong { "No Hermes reflection exists yet." }
@@ -5566,6 +5594,67 @@ fn HermesCounterfactualRow(row: JsonValue, prefs: LocalizationPrefs) -> Element 
                 small { class: "muted block", "{action}" }
             }
             td { "{source}" }
+            td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
+            td { "{reference}" }
+            td {
+                span { "{latest}" }
+                if !text(&row, "latest_price_at").is_empty() {
+                    small { class: "muted block", "{format_timestamp(&text(&row, \"latest_price_at\"), &prefs)}" }
+                }
+            }
+            td { class: "{return_tone}", "{estimated_return}" }
+            td { class: "{return_tone}", "{estimated_pnl}" }
+            td {
+                span {
+                    class: "status {counterfactual_status_tone(&status)}",
+                    title: "Shadow observations never place or modify Saxo orders.",
+                    "{status}"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let currency = fallback_text(&row, "currency", "DKK");
+    let reference = optional_json_number(&row, "reference_price_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let latest = optional_json_number(&row, "latest_price_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let estimated_return = optional_json_number(&row, "estimated_return_pct")
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let estimated_pnl = optional_json_number(&row, "estimated_pnl_local")
+        .map(|value| format_money(value, &currency, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let return_tone = optional_json_number(&row, "estimated_return_pct")
+        .map(|value| {
+            if value > 0.0 {
+                "good-text"
+            } else if value < 0.0 {
+                "bad-text"
+            } else {
+                ""
+            }
+        })
+        .unwrap_or("");
+    let status = fallback_text(&row, "status", "unknown");
+    let gate = fallback_text(&row, "source_gate", "unknown").replace('_', " ");
+    let action = fallback_text(&row, "action", "n/a");
+    rsx! {
+        tr {
+            td {
+                span { "#{text(&row, \"report_id\")}" }
+                small { class: "muted block", "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            }
+            td {
+                strong { "{text(&row, \"symbol\")}" }
+                small { class: "muted block", "{action}" }
+            }
+            td { "{gate}" }
             td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
             td { "{reference}" }
             td {

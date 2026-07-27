@@ -1827,6 +1827,10 @@ async fn run_for_report(
         "status": if queued_orders.is_empty() { "completed_no_orders" } else { "queued" },
         "orders": queued_orders
     });
+    // Preserve only the compact, post-gate candidate snapshot. The separate
+    // shadow ledger is read-only and deliberately records no raw model or
+    // broker detail.
+    let missed_trade_shadow_candidates = skipped.clone();
     let hermes_advice_delta =
         with_hermes_advice_manager_outcomes(hermes_advice_delta, &approved, &skipped);
     let manager_json = json!({
@@ -1939,6 +1943,15 @@ async fn run_for_report(
             warn!(
                 report_id = report.id,
                 run_id, "Hermes counterfactual audit persistence degraded: {err:#}"
+            );
+        }
+        if let Err(err) = state
+            .record_missed_trade_shadows(report.id, run_id, &missed_trade_shadow_candidates)
+            .await
+        {
+            warn!(
+                report_id = report.id,
+                run_id, "missed-trade shadow persistence degraded: {err:#}"
             );
         }
     } else {
@@ -4313,6 +4326,9 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         "strategy_key": order.strategy_key,
         "symbol": order.symbol,
         "action": order.action,
+        "quantity": order.quantity,
+        "currency": order.currency,
+        "reference_price_local": order.limit_price_local.or(order.price_local),
         "gate_code": candidate_gate_reason_code(reason),
         // The final gate may have replaced model-provided technical metadata
         // with a fresh database signal. Persist only compact safe fields so the
@@ -4348,6 +4364,8 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "order_shape"
     } else if normalized.starts_with("monthly-loss circuit breaker") {
         "monthly_loss_breaker"
+    } else if normalized.starts_with("portfolio drawdown guardrail") {
+        "drawdown_guardrail"
     } else if normalized.starts_with("buy would exceed available cash budget") {
         "cash_budget"
     } else if normalized.contains("risk-per-trade") {

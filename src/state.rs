@@ -77,6 +77,7 @@ const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
 const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
+const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const PROTECTIVE_STOP_HERMES_POSITION_LIMIT: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -993,6 +994,28 @@ fn hermes_counterfactual_quote_metrics(
     ))
 }
 
+/// Gates whose blocks are useful to observe as an unfilled, quote-to-quote
+/// shadow. This intentionally excludes technical, Markov, risk exclusions,
+/// and instrument quarantine: those are validity failures, not candidates the
+/// runtime elected not to deploy because of capital, timing, or capacity.
+fn missed_trade_shadow_gate_is_eligible(gate_code: &str) -> bool {
+    matches!(
+        gate_code,
+        "candidate_limit"
+            | "market_open"
+            | "monthly_loss_breaker"
+            | "drawdown_guardrail"
+            | "cash_budget"
+            | "risk_per_trade"
+            | "position_weight"
+            | "max_holdings"
+            | "max_selected_assets"
+            | "cost_guard"
+            | "commission_floor"
+            | "minimum_trade_value"
+    )
+}
+
 fn json_text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -1020,6 +1043,8 @@ fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
         "hermes_context"
     } else if normalized.starts_with("hermes advisory") {
         "hermes_advice"
+    } else if normalized.starts_with("candidate limit") {
+        "candidate_limit"
     } else if normalized.starts_with("exchange ") {
         "market_open"
     } else if normalized.starts_with("symbol is excluded") {
@@ -1041,6 +1066,14 @@ fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
         "cash_budget"
     } else if normalized.contains("risk-per-trade") {
         "risk_per_trade"
+    } else if normalized.contains("position-weight cap") {
+        "position_weight"
+    } else if normalized.contains("holding cap") {
+        "max_holdings"
+    } else if normalized.starts_with("selection cap") {
+        "max_selected_assets"
+    } else if normalized.starts_with("cost guard") {
+        "cost_guard"
     } else if normalized.contains("commission-efficiency floor") {
         "commission_floor"
     } else if normalized.starts_with("estimated trade value") {
@@ -1063,6 +1096,7 @@ fn candidate_gate_code(value: &JsonValue) -> String {
         "approved"
             | "hermes_context"
             | "hermes_advice"
+            | "candidate_limit"
             | "market_open"
             | "risk_exclusion"
             | "instrument_quarantine"
@@ -1072,6 +1106,10 @@ fn candidate_gate_code(value: &JsonValue) -> String {
             | "drawdown_guardrail"
             | "cash_budget"
             | "risk_per_trade"
+            | "position_weight"
+            | "max_holdings"
+            | "max_selected_assets"
+            | "cost_guard"
             | "commission_floor"
             | "minimum_trade_value"
             | "sellable_quantity"
@@ -2999,6 +3037,16 @@ impl AppState {
         } else {
             Vec::new()
         };
+        let missed_trade_shadows = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            self.missed_trade_shadows(MISSED_TRADE_SHADOW_LIMIT)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard missed-trade shadows degraded: {err:#}");
+                    Vec::new()
+                })
+        } else {
+            Vec::new()
+        };
         let active_strategy_baseline = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
         {
             self.active_strategy_baseline().await.unwrap_or_else(|err| {
@@ -3225,6 +3273,7 @@ impl AppState {
             hermes_experiments,
             hermes_decision_advice_audit,
             hermes_counterfactuals,
+            missed_trade_shadows,
             active_strategy_baseline,
             hermes_baseline_evidence_pack,
             markov_signals,
@@ -6984,6 +7033,174 @@ impl AppState {
         Ok(updated)
     }
 
+    /// Records selected deterministic manager blocks as quote-to-quote
+    /// observations. It never re-opens a gate, makes a provider/Saxo call, or
+    /// creates an order. The candidate is an observed missed opportunity, not
+    /// evidence that the skipped trade should have been placed.
+    pub async fn record_missed_trade_shadows(
+        &self,
+        report_id: i64,
+        manager_run_id: i64,
+        skipped_candidates: &[JsonValue],
+    ) -> Result<JsonValue> {
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut created = 0usize;
+        let mut unpriced = 0usize;
+        let mut skipped = 0usize;
+
+        for (index, candidate) in skipped_candidates.iter().enumerate() {
+            let gate_code = json_text(candidate, "gate_code");
+            if !missed_trade_shadow_gate_is_eligible(&gate_code) {
+                skipped += 1;
+                continue;
+            }
+            let strategy_key = json_text(candidate, "strategy_key");
+            let symbol = json_text(candidate, "symbol");
+            let action = json_text(candidate, "action").to_uppercase();
+            let shadow_quantity = value_f64(candidate, "quantity");
+            if strategy_key.trim().is_empty()
+                || symbol.trim().is_empty()
+                || !matches!(action.as_str(), "BUY" | "SELL")
+                || !shadow_quantity.is_finite()
+                || shadow_quantity <= 0.0
+            {
+                skipped += 1;
+                continue;
+            }
+            let reference_price_local = candidate
+                .get("reference_price_local")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            let status = if reference_price_local.is_some() {
+                "tracking"
+            } else {
+                unpriced += 1;
+                "unpriced"
+            };
+            let reference_sql = reference_price_local
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let currency = json_text(candidate, "currency");
+            let id = format!("missed-trade-shadow-{manager_run_id}-{index}");
+            let result = sqlx::query(&format!(
+                "INSERT INTO missed_trade_shadows (
+                    id, created_at, updated_at, report_id, manager_run_id,
+                    strategy_key, symbol, action, source_gate, shadow_quantity,
+                    reference_price_local, currency, status, observation_count
+                ) VALUES (
+                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', 0
+                ) ON CONFLICT (manager_run_id, strategy_key) DO NOTHING",
+                sql_escape(&id),
+                sql_escape(&now),
+                sql_escape(&now),
+                report_id,
+                manager_run_id,
+                sql_escape(&strategy_key),
+                sql_escape(&symbol),
+                sql_escape(&action),
+                sql_escape(&gate_code),
+                shadow_quantity,
+                reference_sql,
+                sql_optional_text(Some(&currency)),
+                status,
+            ))
+            .execute(&self.pool)
+            .await
+            .context("recording missed-trade shadow")?;
+            created += result.rows_affected() as usize;
+        }
+
+        Ok(json!({
+            "status": "ok",
+            "created": created,
+            "unpriced": unpriced,
+            "skipped": skipped,
+            "safety": "quote_to_quote_observation_only_no_gate_or_order_mutation",
+        }))
+    }
+
+    pub async fn missed_trade_shadows(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, updated_at, report_id, manager_run_id, strategy_key,
+                    symbol, action, source_gate, shadow_quantity, reference_price_local,
+                    currency, status, latest_price_local, latest_price_at,
+                    estimated_return_pct, estimated_pnl_local, observation_count
+             FROM missed_trade_shadows
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, MISSED_TRADE_SHADOW_LIMIT)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn active_missed_trade_shadow_symbols(&self) -> Result<Vec<String>> {
+        let rows = self
+            .select_json(
+                "SELECT DISTINCT symbol
+                 FROM missed_trade_shadows
+                 WHERE status = 'tracking' AND reference_price_local > 0
+                 ORDER BY symbol",
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| json_text(row, "symbol"))
+            .filter(|symbol| !symbol.trim().is_empty())
+            .collect())
+    }
+
+    pub async fn refresh_missed_trade_shadow_price(
+        &self,
+        symbol: &str,
+        latest_price_local: f64,
+        observed_at: &str,
+    ) -> Result<usize> {
+        if symbol.trim().is_empty() || !latest_price_local.is_finite() || latest_price_local <= 0.0
+        {
+            return Ok(0);
+        }
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, action, shadow_quantity, reference_price_local
+                 FROM missed_trade_shadows
+                 WHERE symbol = '{}' AND status = 'tracking' AND reference_price_local > 0",
+                sql_escape(symbol)
+            ))
+            .await?;
+        let mut updated = 0usize;
+        for row in rows {
+            let id = json_text(&row, "id");
+            let Some((estimated_return_pct, estimated_pnl_local)) =
+                hermes_counterfactual_quote_metrics(
+                    &json_text(&row, "action"),
+                    value_f64(&row, "shadow_quantity"),
+                    value_f64(&row, "reference_price_local"),
+                    latest_price_local,
+                )
+            else {
+                continue;
+            };
+            let result = sqlx::query(&format!(
+                "UPDATE missed_trade_shadows
+                 SET updated_at = '{}', latest_price_local = {}, latest_price_at = '{}',
+                     estimated_return_pct = {}, estimated_pnl_local = {},
+                     observation_count = observation_count + 1
+                 WHERE id = '{}'",
+                sql_escape(observed_at),
+                latest_price_local,
+                sql_escape(observed_at),
+                estimated_return_pct,
+                estimated_pnl_local,
+                sql_escape(&id)
+            ))
+            .execute(&self.pool)
+            .await
+            .context("updating missed-trade shadow quote")?;
+            updated += result.rows_affected() as usize;
+        }
+        Ok(updated)
+    }
+
     pub async fn hermes_end_of_day_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, journal_date, cadence, status, summary, metrics_json, learnings_json, source_report_id, diary_json
@@ -9323,6 +9540,31 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating Hermes counterfactuals table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS missed_trade_shadows (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                manager_run_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_gate TEXT NOT NULL,
+                shadow_quantity REAL NOT NULL,
+                reference_price_local REAL,
+                currency TEXT,
+                status TEXT NOT NULL,
+                latest_price_local REAL,
+                latest_price_at TEXT,
+                estimated_return_pct REAL,
+                estimated_pnl_local REAL,
+                observation_count INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating missed-trade shadows table")?;
         for sql in crate::markov_method::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -9407,6 +9649,20 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating Hermes counterfactual tracking index")?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_missed_trade_shadows_manager_strategy
+             ON missed_trade_shadows(manager_run_id, strategy_key)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating missed-trade shadow manager strategy index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_missed_trade_shadows_tracking
+             ON missed_trade_shadows(status, symbol, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating missed-trade shadow tracking index")?;
         self.backfill_trading_manager_strategy_type().await?;
         Ok(())
     }
@@ -12819,6 +13075,100 @@ market_data:
     }
 
     #[test]
+    fn missed_trade_shadows_only_track_timing_capital_and_capacity_blocks() {
+        assert!(missed_trade_shadow_gate_is_eligible("cash_budget"));
+        assert!(missed_trade_shadow_gate_is_eligible("market_open"));
+        assert!(missed_trade_shadow_gate_is_eligible("drawdown_guardrail"));
+        assert!(missed_trade_shadow_gate_is_eligible("max_holdings"));
+        assert!(!missed_trade_shadow_gate_is_eligible("technical"));
+        assert!(!missed_trade_shadow_gate_is_eligible("markov"));
+        assert!(!missed_trade_shadow_gate_is_eligible("risk_exclusion"));
+        assert!(!missed_trade_shadow_gate_is_eligible(
+            "instrument_quarantine"
+        ));
+    }
+
+    #[tokio::test]
+    async fn missed_trade_shadows_record_selected_blocks_and_refresh_quotes() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE missed_trade_shadows (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                manager_run_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_gate TEXT NOT NULL,
+                shadow_quantity REAL NOT NULL,
+                reference_price_local REAL,
+                currency TEXT,
+                status TEXT NOT NULL,
+                latest_price_local REAL,
+                latest_price_at TEXT,
+                estimated_return_pct REAL,
+                estimated_pnl_local REAL,
+                observation_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(manager_run_id, strategy_key)
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create missed-trade shadow table");
+        let candidates = vec![
+            json!({
+                "strategy_key": "cash-buy:AMD:xnas:BUY",
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "quantity": 2.0,
+                "currency": "USD",
+                "reference_price_local": 100.0,
+                "gate_code": "cash_budget",
+            }),
+            json!({
+                "strategy_key": "technical-buy:NVDA:xnas:BUY",
+                "symbol": "NVDA:xnas",
+                "action": "BUY",
+                "quantity": 3.0,
+                "currency": "USD",
+                "reference_price_local": 200.0,
+                "gate_code": "technical",
+            }),
+        ];
+
+        let result = state
+            .record_missed_trade_shadows(41, 77, &candidates)
+            .await
+            .expect("record missed-trade shadows");
+        assert_eq!(result["created"], json!(1));
+        assert_eq!(result["skipped"], json!(1));
+        assert_eq!(
+            state
+                .active_missed_trade_shadow_symbols()
+                .await
+                .expect("list active missed-trade symbols"),
+            vec!["AMD:xnas".to_string()]
+        );
+        assert_eq!(
+            state
+                .refresh_missed_trade_shadow_price("AMD:xnas", 110.0, "2026-07-27T10:00:00Z")
+                .await
+                .expect("refresh missed-trade shadow quote"),
+            1
+        );
+        let rows = state
+            .missed_trade_shadows(10)
+            .await
+            .expect("read missed-trade shadows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source_gate"], json!("cash_budget"));
+        assert!((value_f64(&rows[0], "estimated_return_pct") - 0.1).abs() < 1e-9);
+        assert!((value_f64(&rows[0], "estimated_pnl_local") - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn broker_cash_reconciliation_requires_explicit_opt_in() {
         let default_config: YamlValue =
             serde_yaml::from_str("portfolio: {}").expect("parse default portfolio config");
@@ -14376,6 +14726,27 @@ analysis_windows:
             "technical_gate": "Hermes advisory rejected because do not render this"
         }));
         assert!(untrusted.is_null());
+    }
+
+    #[test]
+    fn candidate_waterfall_preserves_stable_manager_gate_codes() {
+        for gate_code in [
+            "candidate_limit",
+            "drawdown_guardrail",
+            "position_weight",
+            "max_holdings",
+            "max_selected_assets",
+            "cost_guard",
+        ] {
+            assert_eq!(
+                candidate_gate_code(&json!({"gate_code": gate_code})),
+                gate_code
+            );
+        }
+        assert_eq!(
+            candidate_gate_code_from_reason("Portfolio drawdown guardrail is active"),
+            "drawdown_guardrail"
+        );
     }
 
     #[test]
