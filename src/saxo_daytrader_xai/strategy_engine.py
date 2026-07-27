@@ -682,13 +682,7 @@ def build_strategy_plan(
     scored.sort(key=lambda item: item["combined_score"], reverse=True)
     max_selected = int(_strategy_cfg(config).get("max_selected_assets", 8) or 8)
     selected: list[dict[str, Any]] = []
-    sector_counts: dict[str, int] = {}
     for item in scored:
-        sector = str(item.get("sector") or "").strip().lower()
-        if sector:
-            if sector_counts.get(sector, 0) >= int(_strategy_cfg(config).get("max_assets_per_sector", 2) or 2):
-                continue
-            sector_counts[sector] = sector_counts.get(sector, 0) + 1
         selected.append(item)
         if len(selected) >= max_selected:
             break

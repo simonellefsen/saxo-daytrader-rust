@@ -3,10 +3,9 @@
 //! A configuration key that was never wired into the runtime reads exactly like
 //! one that is enforced. That ambiguity is how the retired 2026-05-05
 //! `strategy.capital.cash_buffer` override survived, and a 2026-07-25 review
-//! found the same shape across strategy risk knobs including
-//! `max_assets_per_sector`, several `strategy.ladder.*` members, and the
-//! `taxation.share_income` brackets: all were present in `config.yaml` but
-//! absent from the code.
+//! found the same shape across strategy risk knobs including several
+//! `strategy.ladder.*` members and the `taxation.share_income` brackets: all
+//! were present in `config.yaml` but absent from the code.
 //!
 //! This module keeps an explicit table of every audited key and what the runtime
 //! actually does with it, then reports three kinds of drift:
@@ -163,10 +162,6 @@ const CONTRACT: &[ContractEntry] = &[
     enforced(
         &["strategy", "max_selected_assets"],
         "Caps distinct approved BUY symbols per Decision Report after the deterministic gates. SELLs and repeat BUYs for a previously selected symbol remain eligible; zero is unlimited and a negative value blocks BUYs.",
-    ),
-    unused_risk(
-        &["strategy", "max_assets_per_sector"],
-        "No concentration gate exists; the runtime has no sector metadata source at all.",
     ),
     enforced(
         &["strategy", "concentration", "max_assets_per_exchange"],
@@ -852,16 +847,15 @@ mod tests {
     }
 
     #[test]
-    fn unused_risk_key_present_in_config_produces_a_finding() {
+    fn retired_sector_cap_is_reported_as_uncontracted() {
         let config = parse("strategy:\n  max_assets_per_sector: 2\n");
         let (summary, findings) = audit_config(&config);
-        assert_eq!(summary.unused, 1);
-        assert_eq!(summary.unused_risk_surface, 1);
+        assert_eq!(summary.uncontracted, 1);
         let finding = findings
             .iter()
             .find(|finding| finding.path == "strategy.max_assets_per_sector")
             .expect("max_assets_per_sector is reported");
-        assert_eq!(finding.kind, FindingKind::UnusedKeyPresent);
+        assert_eq!(finding.kind, FindingKind::UncontractedKey);
         assert!(finding.risk_surface);
     }
 

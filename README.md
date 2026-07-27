@@ -325,7 +325,6 @@ Example: with `offset_minutes_after_open: 30` and `duration_minutes: 0`, a marke
 - `selection_interval_minutes`: minimum spacing between strategy-driven re-selection passes.
 - `max_candidates`: legacy candidate sizing; the Rust Trading Manager uses `strategy.swing.trading_manager.max_symbols` as its enforced preflight ceiling instead.
 - `max_selected_assets`: maximum distinct approved BUY symbols in one Decision Report after the deterministic gates. `0` disables the cap; a negative value blocks BUYs. SELLs and repeat BUYs for an already-selected symbol remain eligible.
-- `max_assets_per_sector`: optional diversification cap when sector labels are available.
 - `concentration.max_assets_per_exchange` / `concentration.max_assets_per_currency`: optional caps on distinct held or same-cycle-approved BUY symbols in each canonical exchange/currency bucket. Both default to `0` (explicit unlimited policy) until an operator chooses limits. A positive cap fails new BUYs closed when position or canonical suffix/currency evidence is unavailable; a negative value is invalid and blocks BUYs. SELLs and additions to an existing symbol do not consume another bucket slot.
 - `capital.max_deployment_pct`: hard ceiling on deployed capital. Default `0.98` to preserve a 2% cash buffer.
 - `capital.min_cash_buffer_pct`: cash reserve kept out of new swing entries. Default `0.02`.

@@ -317,7 +317,6 @@ strategy:
   selection_interval_minutes: 15
   max_candidates: 20
   max_selected_assets: 8
-  max_assets_per_sector: 2
   # Exchange/currency concentration gates are wired and audited, but start in
   # explicit unlimited mode until an operator chooses live limits. Nonzero
   # values cap distinct held/planned BUY symbols; negative values fail BUYs

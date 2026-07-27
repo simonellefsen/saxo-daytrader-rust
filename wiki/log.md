@@ -1446,3 +1446,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Added a bounded Holding Thesis Reviews queue in Execution and sanitized it into Hermes context. It compares only the latest persisted broker-position snapshot with a recorded BUY thesis and reconciled fill timestamp when present; a missing thesis or ambiguous timestamp is omitted rather than inferred.
 - A row becomes review due when its decision evidence has aged beyond the configured seven-day horizon or its recorded two-week thesis window elapsed. The displayed next step is a fresh decision comparison against current verified technical and Markov evidence.
 - This is deliberately not a maximum-holding-period exit rule. It performs no Saxo/provider call, does not alter Hermes advice or Trading Manager gates, and cannot place, amend, cancel, size, approve, or retain a broker order.
+
+## [2026-07-27] risk | Retired unsupported sector concentration cap
+
+- Removed `strategy.max_assets_per_sector` from the local and Kubernetes configurations, config contract, documentation, and legacy reference selector. The active Rust Trading Manager never read this setting, so the change does not modify deployed BUY/SELL behavior.
+- Exchange and currency concentration remain the supported, audited diversification controls. A sector cap can return only with a durable sector-data source and explicitly defined held/planned exposure semantics; it must not rely on model text or inferred labels.
