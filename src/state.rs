@@ -1012,6 +1012,9 @@ fn missed_trade_shadow_gate_is_eligible(gate_code: &str) -> bool {
             | "risk_per_trade"
             | "position_weight"
             | "max_holdings"
+            | "concentration"
+            | "concentration_exchange"
+            | "concentration_currency"
             | "max_selected_assets"
             | "cost_guard"
             | "commission_floor"
@@ -1048,6 +1051,14 @@ fn candidate_gate_code_from_reason(reason: &str) -> &'static str {
         "hermes_advice"
     } else if normalized.starts_with("candidate limit") {
         "candidate_limit"
+    } else if normalized.starts_with("exchange concentration cap") {
+        "concentration_exchange"
+    } else if normalized.starts_with("currency concentration cap") {
+        "concentration_currency"
+    } else if normalized.starts_with("concentration cap configuration")
+        || normalized.starts_with("concentration cap requires")
+    {
+        "concentration"
     } else if normalized.starts_with("exchange ") {
         "market_open"
     } else if normalized.starts_with("symbol is excluded") {
@@ -1111,6 +1122,9 @@ fn candidate_gate_code(value: &JsonValue) -> String {
             | "risk_per_trade"
             | "position_weight"
             | "max_holdings"
+            | "concentration"
+            | "concentration_exchange"
+            | "concentration_currency"
             | "max_selected_assets"
             | "cost_guard"
             | "commission_floor"
@@ -1167,6 +1181,26 @@ fn compact_candidate_cost_guard(value: &JsonValue) -> JsonValue {
         "required_reward_dkk": value_f64(guard, "required_reward_dkk"),
         "passes": guard.get("passes").and_then(JsonValue::as_bool).unwrap_or(false),
         "basis": json_text(guard, "basis"),
+    })
+}
+
+fn compact_candidate_concentration(value: &JsonValue) -> JsonValue {
+    let concentration = value.get("final_concentration").unwrap_or(&JsonValue::Null);
+    if !concentration.is_object() {
+        return JsonValue::Null;
+    }
+    json!({
+        "status": json_text(concentration, "status"),
+        "verified_from_state": concentration.get("verified_from_state").and_then(JsonValue::as_bool).unwrap_or(false),
+        "max_assets_per_exchange": value_i64(concentration, "max_assets_per_exchange"),
+        "max_assets_per_currency": value_i64(concentration, "max_assets_per_currency"),
+        "exchange": json_text(concentration, "exchange"),
+        "currency": json_text(concentration, "currency"),
+        "exchange_count_before": value_i64(concentration, "exchange_count_before"),
+        "currency_count_before": value_i64(concentration, "currency_count_before"),
+        "already_held": concentration.get("already_held").and_then(JsonValue::as_bool).unwrap_or(false),
+        "unmapped_exchange_symbol_count": value_i64(concentration, "unmapped_exchange_symbol_count"),
+        "unmapped_currency_symbol_count": value_i64(concentration, "unmapped_currency_symbol_count"),
     })
 }
 
@@ -2413,6 +2447,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
                     "gate_code": candidate_gate_code(row),
                     "final_technical": compact_candidate_final_technical(row),
                     "cost_guard": compact_candidate_cost_guard(row),
+                    "concentration": compact_candidate_concentration(row),
                 }),
             );
         }
@@ -2437,6 +2472,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "technical": compact_candidate_technical(&row),
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
+            "concentration": outcome.get("concentration").cloned().unwrap_or(JsonValue::Null),
             "markov": compact_candidate_markov(&row),
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -2465,6 +2501,7 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "technical": {"status": "unavailable", "sentiment": "", "trend_bias": "", "confluence_count": 0, "min_confluences": 0},
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
+            "concentration": outcome.get("concentration").cloned().unwrap_or(JsonValue::Null),
             "markov": {"status": "unavailable", "fresh": false, "direction": "", "signed_signal": 0.0, "age_days": 0},
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),

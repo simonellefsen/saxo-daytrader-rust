@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
     time::Duration as StdDuration,
 };
@@ -132,6 +132,15 @@ struct HoldingLimitConfig {
     max_holdings: i64,
 }
 
+/// Caps distinct positive-quantity symbols within one exchange or trading
+/// currency. A zero cap is an explicit unlimited policy, allowing the policy
+/// surface to ship and be audited before an operator selects a live limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConcentrationConfig {
+    max_assets_per_exchange: i64,
+    max_assets_per_currency: i64,
+}
+
 /// A bounded local view of current position market values. It is loaded once
 /// per manager cycle and then reserved as BUYs are approved, so sequential
 /// reports cannot independently spend the same symbol headroom.
@@ -205,6 +214,21 @@ fn holding_limit_config(state: &AppState) -> HoldingLimitConfig {
     }
 }
 
+fn concentration_config(state: &AppState) -> ConcentrationConfig {
+    ConcentrationConfig {
+        max_assets_per_exchange: yaml_i64(
+            &state.config,
+            &["strategy", "concentration", "max_assets_per_exchange"],
+        )
+        .unwrap_or(0),
+        max_assets_per_currency: yaml_i64(
+            &state.config,
+            &["strategy", "concentration", "max_assets_per_currency"],
+        )
+        .unwrap_or(0),
+    }
+}
+
 impl PositionWeightConfig {
     fn to_json(self) -> JsonValue {
         json!({
@@ -222,6 +246,29 @@ impl HoldingLimitConfig {
             "scope": "new_symbol_buys_only",
             "basis": "persisted_positive_quantity_positions_plus_same_cycle_approved_buys",
         })
+    }
+}
+
+impl ConcentrationConfig {
+    fn to_json(self) -> JsonValue {
+        json!({
+            "max_assets_per_exchange": self.max_assets_per_exchange,
+            "max_assets_per_currency": self.max_assets_per_currency,
+            "exchange_mode": concentration_mode(self.max_assets_per_exchange),
+            "currency_mode": concentration_mode(self.max_assets_per_currency),
+            "scope": "distinct_positive_quantity_positions_plus_same_cycle_approved_buys",
+            "bucket_source": "canonical_symbol_exchange_suffix_and_exchange_currency_mapping",
+        })
+    }
+}
+
+fn concentration_mode(cap: i64) -> &'static str {
+    if cap == 0 {
+        "unlimited"
+    } else if cap > 0 {
+        "limited"
+    } else {
+        "invalid"
     }
 }
 
@@ -286,6 +333,49 @@ impl PositionExposure {
         self.held_symbols.len()
     }
 
+    fn exchange_count(&self, exchange: &str) -> usize {
+        self.held_symbols
+            .iter()
+            .filter(|symbol| exchange_code(symbol) == exchange)
+            .count()
+    }
+
+    fn currency_count(&self, currency: &str) -> usize {
+        self.held_symbols
+            .iter()
+            .filter(|symbol| currency_for_symbol(symbol).as_deref() == Some(currency))
+            .count()
+    }
+
+    fn unmapped_exchange_symbols(&self) -> Vec<String> {
+        self.held_symbols
+            .iter()
+            .filter(|symbol| exchange_code(symbol).is_empty())
+            .cloned()
+            .collect()
+    }
+
+    fn unmapped_currency_symbols(&self) -> Vec<String> {
+        self.held_symbols
+            .iter()
+            .filter(|symbol| currency_for_symbol(symbol).is_none())
+            .cloned()
+            .collect()
+    }
+
+    fn concentration_for_symbol(&self, symbol: &str) -> JsonValue {
+        let exchange = exchange_code(symbol);
+        let currency = currency_for_symbol(symbol);
+        json!({
+            "exchange": exchange,
+            "currency": currency,
+            "exchange_count_before": if exchange.is_empty() { JsonValue::Null } else { json!(self.exchange_count(&exchange)) },
+            "currency_count_before": currency.as_deref().map(|currency| json!(self.currency_count(currency))).unwrap_or(JsonValue::Null),
+            "already_held": self.has_position(symbol),
+            "position_snapshot_available": self.available,
+        })
+    }
+
     fn reserve_buy(&mut self, symbol: &str, value_dkk: f64) {
         if !self.available || !value_dkk.is_finite() || value_dkk <= 0.0 {
             return;
@@ -298,14 +388,37 @@ impl PositionExposure {
     }
 
     fn to_json(&self) -> JsonValue {
+        let mut exchange_counts = BTreeMap::new();
+        let mut currency_counts = BTreeMap::new();
+        let mut unmapped_exchange_symbols = self.unmapped_exchange_symbols();
+        let mut unmapped_currency_symbols = self.unmapped_currency_symbols();
+        unmapped_exchange_symbols.sort();
+        unmapped_currency_symbols.sort();
+        for symbol in &self.held_symbols {
+            let exchange = exchange_code(symbol);
+            if !exchange.is_empty() {
+                *exchange_counts.entry(exchange).or_insert(0_usize) += 1;
+            }
+            if let Some(currency) = currency_for_symbol(symbol) {
+                *currency_counts.entry(currency).or_insert(0_usize) += 1;
+            }
+        }
         json!({
             "status": if self.available { "available" } else { "unavailable" },
             "valued_symbol_count": self.values_dkk.len(),
             "invalid_value_symbol_count": self.invalid_symbols.len(),
             "held_symbol_count": self.held_symbols.len(),
+            "exchange_counts": exchange_counts,
+            "currency_counts": currency_counts,
+            "unmapped_exchange_symbols": unmapped_exchange_symbols,
+            "unmapped_currency_symbols": unmapped_currency_symbols,
             "scope": "persisted_positions_plus_approved_buys_in_this_cycle",
         })
     }
+}
+
+fn currency_for_symbol(symbol: &str) -> Option<String> {
+    crate::saxo_order::currency_for_exchange(&exchange_code(symbol)).map(str::to_string)
 }
 
 fn normalize_symbol_key(symbol: &str) -> String {
@@ -1331,6 +1444,7 @@ async fn run_for_report(
     let initial_capital_budget = *capital_budget;
     let position_weight = position_weight_config(state);
     let holding_limit = holding_limit_config(state);
+    let concentration = concentration_config(state);
     let selected_asset_limit = selected_asset_limit_config(state);
     let hermes_preflight = hermes_decision_preflight_bundle(
         state,
@@ -1342,6 +1456,7 @@ async fn run_for_report(
         position_exposure,
         position_weight,
         holding_limit,
+        concentration,
         selected_asset_limit,
         &overlay_json,
         &excluded,
@@ -1751,6 +1866,15 @@ async fn run_for_report(
             }
         }
         if gate.approved && order.action == "BUY" {
+            let concentration_gate =
+                concentration_gate(&mut order, concentration, position_exposure);
+            if !concentration_gate.approved {
+                gate = concentration_gate;
+            } else {
+                gate.reason = format!("{} {}", gate.reason, concentration_gate.reason);
+            }
+        }
+        if gate.approved && order.action == "BUY" {
             let position_weight_gate = position_weight_gate(
                 &mut order,
                 initial_capital_budget.total_market_value_dkk,
@@ -1871,6 +1995,7 @@ async fn run_for_report(
         "max_commission_pct_per_side": max_commission_pct_per_side,
         "cost_guard": cost_guard.to_json(),
         "holding_limit_policy": holding_limit.to_json(),
+        "concentration_policy": concentration.to_json(),
         "selected_asset_limit_policy": selected_asset_limit.to_json(),
         "position_weight_policy": position_weight.to_json(),
         "position_exposure": position_exposure.to_json(),
@@ -1888,6 +2013,7 @@ async fn run_for_report(
             "final_technical": compact_hermes_preflight_technical(order),
             "final_cost_guard": compact_cost_guard(order),
             "final_holding_limit": compact_holding_limit(order),
+            "final_concentration": compact_concentration(order),
             "final_position_weight": compact_position_weight(order),
             "technical_gate": reason,
         })).collect::<Vec<_>>(),
@@ -1911,6 +2037,7 @@ async fn run_for_report(
             "BUY orders below the commission-efficiency floor (exchange minimum commission / max_commission_pct_per_side) are rejected so fixed commissions stay a bounded share of each clip.",
             "BUY orders must also have a database-verified indicator reward that exceeds the configured lower-bound round-trip commission/slippage hurdle; this cost guard does not claim to predict realised broker costs or fill prices.",
             "BUY orders are capped to strategy.ladder.max_position_weight using persisted position values plus BUYs approved earlier in the same scheduler cycle; unavailable or invalid position-value evidence blocks the BUY rather than assuming zero exposure.",
+            "Exchange and currency concentration caps use canonical symbol exchange suffixes plus the local exchange-to-currency mapping. Zero is explicit unlimited policy; a nonzero cap fails closed if the position snapshot or bucket mapping is unavailable.",
             "Distinct approved BUY symbols are capped by strategy.max_selected_assets per Decision Report after all deterministic gates; SELLs and repeated actions for a previously selected symbol remain eligible.",
             "The monthly-loss guardrail halves (by configuration) the cycle-wide BUY budget in its soft-loss band and suspends BUYs at the hard floor; SELLs are never blocked. An operator override can resume BUYs for the current month after the hard floor and remains visible in manager JSON.",
             "Instruments with repeated identical hard execution failures are quarantined per symbol/action before queueing new orders unless an operator override is active for the exact symbol/action/signature.",
@@ -1991,6 +2118,7 @@ async fn hermes_decision_preflight_bundle(
     position_exposure: &PositionExposure,
     position_weight: PositionWeightConfig,
     holding_limit: HoldingLimitConfig,
+    concentration: ConcentrationConfig,
     selected_asset_limit: SelectedAssetLimitConfig,
     overlay_json: &JsonValue,
     excluded_symbols: &[String],
@@ -2067,6 +2195,7 @@ async fn hermes_decision_preflight_bundle(
             "current_position_value_dkk": position_exposure.value_for(&order.symbol),
             "current_holding_count": position_exposure.holding_count(),
             "already_held": position_exposure.has_position(&order.symbol),
+            "concentration": position_exposure.concentration_for_symbol(&order.symbol),
             "position_value_context_status": if !position_exposure.available {
                 "unavailable"
             } else if position_exposure.has_invalid_value(&order.symbol) {
@@ -2097,6 +2226,7 @@ async fn hermes_decision_preflight_bundle(
         "cost_guard": cost_guard.to_json(),
         "position_weight_policy": position_weight.to_json(),
         "holding_limit_policy": holding_limit.to_json(),
+        "concentration_policy": concentration.to_json(),
         "selected_asset_limit_policy": selected_asset_limit.to_json(),
         "position_exposure": position_exposure.to_json(),
         "candidate_limit": candidate_limit.to_json(),
@@ -3076,6 +3206,170 @@ fn holding_limit_gate(
     }
 }
 
+/// Enforce optional exchange and currency diversification caps. The buckets
+/// are derived solely from canonical symbol suffixes and the local exchange
+/// mapping, never from an untrusted provider/model currency field. When an
+/// operator enables a cap, missing portfolio or bucket evidence blocks BUYs
+/// rather than treating unknown exposure as zero.
+fn concentration_gate(
+    order: &mut CandidateOrder,
+    config: ConcentrationConfig,
+    exposure: &PositionExposure,
+) -> GateDecision {
+    if order.action != "BUY" {
+        return GateDecision {
+            approved: true,
+            reason: "Concentration caps apply to BUYs only.".to_string(),
+        };
+    }
+
+    let exchange = exchange_code(&order.symbol);
+    let currency = currency_for_symbol(&order.symbol);
+    let already_held = exposure.has_position(&order.symbol);
+    let exchange_count = (!exchange.is_empty()).then(|| exposure.exchange_count(&exchange));
+    let currency_count = currency
+        .as_deref()
+        .map(|currency| exposure.currency_count(currency));
+    let exchange_unmapped = exposure.unmapped_exchange_symbols();
+    let currency_unmapped = exposure.unmapped_currency_symbols();
+    let caps_enabled = config.max_assets_per_exchange > 0 || config.max_assets_per_currency > 0;
+
+    let record = |order: &mut CandidateOrder, status: &str| {
+        if let Some(metadata) = order
+            .raw
+            .as_object_mut()
+            .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+            .and_then(JsonValue::as_object_mut)
+        {
+            metadata.insert(
+                "concentration".to_string(),
+                json!({
+                    "status": status,
+                    "verified_from_state": exposure.available,
+                    "max_assets_per_exchange": config.max_assets_per_exchange,
+                    "max_assets_per_currency": config.max_assets_per_currency,
+                    "exchange": exchange,
+                    "currency": currency,
+                    "exchange_count_before": exchange_count,
+                    "currency_count_before": currency_count,
+                    "already_held": already_held,
+                    "unmapped_exchange_symbol_count": exchange_unmapped.len(),
+                    "unmapped_currency_symbol_count": currency_unmapped.len(),
+                    "basis": "persisted_positive_quantity_positions_plus_same_cycle_approved_buys",
+                    "bucket_source": "canonical_symbol_exchange_suffix_and_exchange_currency_mapping",
+                }),
+            );
+        }
+    };
+
+    if config.max_assets_per_exchange < 0 || config.max_assets_per_currency < 0 {
+        record(order, "invalid_config");
+        return GateDecision {
+            approved: false,
+            reason: "Concentration cap configuration is invalid: strategy.concentration limits must be non-negative whole numbers (0 means unlimited).".to_string(),
+        };
+    }
+    if !caps_enabled {
+        record(order, "unlimited");
+        return GateDecision {
+            approved: true,
+            reason: "Concentration policy is explicitly unlimited.".to_string(),
+        };
+    }
+    if !exposure.available {
+        record(order, "position_snapshot_unavailable");
+        return GateDecision {
+            approved: false,
+            reason: "Concentration cap requires a persisted position snapshot, but the local position snapshot is unavailable.".to_string(),
+        };
+    }
+    if config.max_assets_per_exchange > 0 && exchange.is_empty() {
+        record(order, "candidate_exchange_unmapped");
+        return GateDecision {
+            approved: false,
+            reason: "Exchange concentration cap cannot classify this BUY because its symbol has no exchange suffix.".to_string(),
+        };
+    }
+    if config.max_assets_per_exchange > 0 && !exchange_unmapped.is_empty() {
+        record(order, "held_exchange_unmapped");
+        return GateDecision {
+            approved: false,
+            reason: "Exchange concentration cap cannot be evaluated because one or more held symbols have no exchange suffix.".to_string(),
+        };
+    }
+    if config.max_assets_per_currency > 0 && currency.is_none() {
+        record(order, "candidate_currency_unmapped");
+        return GateDecision {
+            approved: false,
+            reason: "Currency concentration cap cannot classify this BUY because its exchange has no canonical currency mapping.".to_string(),
+        };
+    }
+    if config.max_assets_per_currency > 0 && !currency_unmapped.is_empty() {
+        record(order, "held_currency_unmapped");
+        return GateDecision {
+            approved: false,
+            reason: "Currency concentration cap cannot be evaluated because one or more held symbols have no canonical currency mapping.".to_string(),
+        };
+    }
+    if !already_held
+        && config.max_assets_per_exchange > 0
+        && exchange_count.unwrap_or(usize::MAX) >= config.max_assets_per_exchange as usize
+    {
+        record(order, "exchange_cap_reached");
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Exchange concentration cap is {}; {} distinct held/planned symbols already occupy the {} bucket, so new {} BUY is blocked.",
+                config.max_assets_per_exchange,
+                exchange_count.unwrap_or_default(),
+                exchange,
+                order.symbol,
+            ),
+        };
+    }
+    if !already_held
+        && config.max_assets_per_currency > 0
+        && currency_count.unwrap_or(usize::MAX) >= config.max_assets_per_currency as usize
+    {
+        record(order, "currency_cap_reached");
+        return GateDecision {
+            approved: false,
+            reason: format!(
+                "Currency concentration cap is {}; {} distinct held/planned symbols already occupy the {} bucket, so new {} BUY is blocked.",
+                config.max_assets_per_currency,
+                currency_count.unwrap_or_default(),
+                currency.as_deref().unwrap_or("unknown"),
+                order.symbol,
+            ),
+        };
+    }
+
+    record(
+        order,
+        if already_held {
+            "existing_symbol"
+        } else {
+            "allowed"
+        },
+    );
+    GateDecision {
+        approved: true,
+        reason: if already_held {
+            format!(
+                "Concentration caps allow an add to existing {} without consuming another bucket slot.",
+                order.symbol
+            )
+        } else {
+            format!(
+                "Concentration caps allow new {} exposure ({} exchange, {} currency symbols before this BUY).",
+                order.symbol,
+                exchange_count.unwrap_or_default(),
+                currency_count.unwrap_or_default(),
+            )
+        },
+    }
+}
+
 fn position_weight_gate(
     order: &mut CandidateOrder,
     total_market_value_dkk: f64,
@@ -3405,6 +3699,30 @@ fn compact_holding_limit(order: &CandidateOrder) -> JsonValue {
         "holding_count_before": limit.get("holding_count_before").cloned().unwrap_or(JsonValue::Null),
         "already_held": limit.get("already_held").cloned().unwrap_or(JsonValue::Null),
         "basis": limit.get("basis").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_concentration(order: &CandidateOrder) -> JsonValue {
+    let concentration = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|value| value.get("concentration"));
+    let Some(concentration) = concentration else {
+        return JsonValue::Null;
+    };
+    json!({
+        "status": concentration.get("status").cloned().unwrap_or(JsonValue::Null),
+        "verified_from_state": concentration.get("verified_from_state").cloned().unwrap_or(JsonValue::Null),
+        "max_assets_per_exchange": concentration.get("max_assets_per_exchange").cloned().unwrap_or(JsonValue::Null),
+        "max_assets_per_currency": concentration.get("max_assets_per_currency").cloned().unwrap_or(JsonValue::Null),
+        "exchange": concentration.get("exchange").cloned().unwrap_or(JsonValue::Null),
+        "currency": concentration.get("currency").cloned().unwrap_or(JsonValue::Null),
+        "exchange_count_before": concentration.get("exchange_count_before").cloned().unwrap_or(JsonValue::Null),
+        "currency_count_before": concentration.get("currency_count_before").cloned().unwrap_or(JsonValue::Null),
+        "already_held": concentration.get("already_held").cloned().unwrap_or(JsonValue::Null),
+        "unmapped_exchange_symbol_count": concentration.get("unmapped_exchange_symbol_count").cloned().unwrap_or(JsonValue::Null),
+        "unmapped_currency_symbol_count": concentration.get("unmapped_currency_symbol_count").cloned().unwrap_or(JsonValue::Null),
+        "basis": concentration.get("basis").cloned().unwrap_or(JsonValue::Null),
     })
 }
 
@@ -4335,6 +4653,7 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         "final_technical": compact_hermes_preflight_technical(order),
         "final_cost_guard": compact_cost_guard(order),
         "final_holding_limit": compact_holding_limit(order),
+        "final_concentration": compact_concentration(order),
         "final_position_weight": compact_position_weight(order),
         "technical_gate": reason,
     })
@@ -4348,6 +4667,14 @@ fn candidate_gate_reason_code(reason: &str) -> &'static str {
         "hermes_advice"
     } else if normalized.starts_with("candidate limit") {
         "candidate_limit"
+    } else if normalized.starts_with("exchange concentration cap") {
+        "concentration_exchange"
+    } else if normalized.starts_with("currency concentration cap") {
+        "concentration_currency"
+    } else if normalized.starts_with("concentration cap configuration")
+        || normalized.starts_with("concentration cap requires")
+    {
+        "concentration"
     } else if normalized.starts_with("exchange ") {
         "market_open"
     } else if normalized.starts_with("symbol is excluded") {
@@ -6027,6 +6354,13 @@ mod tests {
         HoldingLimitConfig { max_holdings }
     }
 
+    fn concentration_test_config(exchange: i64, currency: i64) -> ConcentrationConfig {
+        ConcentrationConfig {
+            max_assets_per_exchange: exchange,
+            max_assets_per_currency: currency,
+        }
+    }
+
     fn position_exposure(values: &[(&str, f64)]) -> PositionExposure {
         PositionExposure {
             values_dkk: values
@@ -6404,6 +6738,78 @@ mod tests {
             gate.reason.contains("snapshot is unavailable"),
             "{}",
             gate.reason
+        );
+    }
+
+    #[test]
+    fn concentration_gate_blocks_new_exchange_symbol_at_cap() {
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut order = candidate_limit_order("NVDA:xnas", "BUY");
+        let gate = concentration_gate(&mut order, concentration_test_config(1, 0), &exposure);
+        assert!(!gate.approved, "{}", gate.reason);
+        assert!(gate.reason.starts_with("Exchange concentration cap"));
+        assert_eq!(
+            order.raw["strategy_metadata"]["concentration"]["exchange"],
+            "XNAS"
+        );
+        assert_eq!(
+            order.raw["strategy_metadata"]["concentration"]["exchange_count_before"],
+            1
+        );
+    }
+
+    #[test]
+    fn concentration_gate_blocks_same_currency_across_exchanges() {
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut order = candidate_limit_order("BAC:xnys", "BUY");
+        let gate = concentration_gate(&mut order, concentration_test_config(0, 1), &exposure);
+        assert!(!gate.approved, "{}", gate.reason);
+        assert!(gate.reason.starts_with("Currency concentration cap"));
+        assert_eq!(
+            order.raw["strategy_metadata"]["concentration"]["currency"],
+            "USD"
+        );
+    }
+
+    #[test]
+    fn concentration_gate_allows_add_to_existing_symbol_at_cap() {
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut order = candidate_limit_order("AMD:xnas", "BUY");
+        let gate = concentration_gate(&mut order, concentration_test_config(1, 1), &exposure);
+        assert!(gate.approved, "{}", gate.reason);
+        assert!(gate.reason.contains("existing"), "{}", gate.reason);
+    }
+
+    #[test]
+    fn concentration_gate_counts_earlier_approved_buys_in_the_same_cycle() {
+        let mut exposure = position_exposure(&[]);
+        let mut first = candidate_limit_order("AMD:xnas", "BUY");
+        let first_gate = concentration_gate(&mut first, concentration_test_config(1, 0), &exposure);
+        assert!(first_gate.approved, "{}", first_gate.reason);
+        exposure.reserve_buy("AMD:xnas", 1_000.0);
+
+        let mut second = candidate_limit_order("NVDA:xnas", "BUY");
+        let second_gate =
+            concentration_gate(&mut second, concentration_test_config(1, 0), &exposure);
+        assert!(!second_gate.approved, "{}", second_gate.reason);
+    }
+
+    #[test]
+    fn concentration_gate_rejects_negative_config_and_keeps_zero_unlimited() {
+        let exposure = position_exposure(&[("AMD:xnas", 2_000.0)]);
+        let mut invalid = candidate_limit_order("NVDA:xnas", "BUY");
+        let invalid_gate =
+            concentration_gate(&mut invalid, concentration_test_config(-1, 0), &exposure);
+        assert!(!invalid_gate.approved);
+        assert!(invalid_gate.reason.contains("invalid"));
+
+        let mut unlimited = candidate_limit_order("NVDA:xnas", "BUY");
+        let unlimited_gate =
+            concentration_gate(&mut unlimited, concentration_test_config(0, 0), &exposure);
+        assert!(unlimited_gate.approved, "{}", unlimited_gate.reason);
+        assert_eq!(
+            unlimited.raw["strategy_metadata"]["concentration"]["status"],
+            "unlimited"
         );
     }
 

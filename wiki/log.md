@@ -1434,3 +1434,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added bounded per-pulse counts of the local `execution_orders.status` values, including completed, working, expired, and failed states where those exact records exist. The panel does not query Saxo to fill missing data or infer a broker outcome from time or price.
 - Status coverage remains descriptive and non-causal. It does not classify root causes, modify local queue state, requeue an order, or alter Hermes, Trading Manager, configuration, or broker behavior.
+
+## [2026-07-27] risk | Exchange and currency concentration gates
+
+- Added `strategy.concentration.max_assets_per_exchange` and `strategy.concentration.max_assets_per_currency` to both shipped configs and the Rust config contract. Both defaults are `0`, an explicit unlimited policy, so the rollout exposes and audits the gate without silently changing live allocation policy.
+- A positive cap counts distinct positive-quantity persisted holdings plus BUYs approved earlier in the same Trading Manager cycle. It uses only the canonical exchange suffix and the local exchange-to-currency mapping, lets an add to an existing symbol retain its slot, and fails closed when snapshot or bucket evidence is unavailable. Negative configuration is invalid and blocks BUYs.
+- The policy, bucket counts, and outcome are included in the Trading Manager snapshot, Hermes preflight, and Candidate Scoring Waterfall. It never alters SELLs, queries a provider, or exposes broker/session data. Sector concentration remains deferred pending a durable sector-data source.

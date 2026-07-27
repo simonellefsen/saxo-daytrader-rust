@@ -2352,6 +2352,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         .get("final_holding_limit")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let concentration = row.get("concentration").cloned().unwrap_or(JsonValue::Null);
     let position_weight = row
         .get("final_position_weight")
         .cloned()
@@ -2426,6 +2427,7 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
         final_technical_recorded,
         &cost_guard,
         &holding_limit,
+        &concentration,
         &position_weight,
         &prefs,
     );
@@ -2515,12 +2517,42 @@ fn candidate_gate_detail(
     final_technical_recorded: bool,
     cost_guard: &JsonValue,
     holding_limit: &JsonValue,
+    concentration: &JsonValue,
     position_weight: &JsonValue,
     prefs: &LocalizationPrefs,
 ) -> String {
     let gate_code = text(row, "gate_code");
     if gate_code == "candidate_limit" {
         return "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached.".to_string();
+    }
+    if matches!(
+        gate_code.as_str(),
+        "concentration_exchange" | "concentration_currency"
+    ) {
+        let bucket = if gate_code == "concentration_exchange" {
+            fallback_text(concentration, "exchange", "exchange")
+        } else {
+            fallback_text(concentration, "currency", "currency")
+        };
+        let count = if gate_code == "concentration_exchange" {
+            value_f64(concentration, "exchange_count_before") as i64
+        } else {
+            value_f64(concentration, "currency_count_before") as i64
+        };
+        let maximum = if gate_code == "concentration_exchange" {
+            value_f64(concentration, "max_assets_per_exchange") as i64
+        } else {
+            value_f64(concentration, "max_assets_per_currency") as i64
+        };
+        if maximum > 0 {
+            return format!(
+                "New symbol blocked: {count} of {maximum} configured {bucket} bucket slots were already occupied."
+            );
+        }
+        return "The enabled concentration bucket could not be evaluated from the persisted position snapshot.".to_string();
+    }
+    if gate_code == "concentration" {
+        return "The enabled concentration policy could not be evaluated because configuration, the position snapshot, or canonical symbol-bucket mapping was unavailable.".to_string();
     }
     if gate_code == "cost_guard" {
         if !cost_guard
@@ -8251,6 +8283,7 @@ mod tests {
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &default_prefs()
             ),
             "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
@@ -8265,6 +8298,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
@@ -8296,6 +8330,7 @@ mod tests {
                 &cost_guard,
                 &JsonValue::Null,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &prefs,
             ),
             "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
@@ -8320,6 +8355,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &position_weight,
@@ -8347,6 +8383,7 @@ mod tests {
                 &JsonValue::Null,
                 &holding_limit,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &default_prefs(),
             ),
             "New holding: 12 of 25 symbol slots were occupied before this BUY."
@@ -8361,6 +8398,7 @@ mod tests {
                 &row,
                 &JsonValue::Null,
                 false,
+                &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
@@ -8381,9 +8419,33 @@ mod tests {
                 &JsonValue::Null,
                 &JsonValue::Null,
                 &JsonValue::Null,
+                &JsonValue::Null,
                 &default_prefs()
             ),
             "This report had already approved its configured number of distinct BUY symbols. SELLs and repeated actions for a previously selected symbol remain eligible."
+        );
+    }
+
+    #[test]
+    fn waterfall_concentration_gate_explains_the_recorded_bucket_cap() {
+        let row = json!({"action": "BUY", "gate_code": "concentration_currency"});
+        let concentration = json!({
+            "currency": "USD",
+            "currency_count_before": 3,
+            "max_assets_per_currency": 3,
+        });
+        assert_eq!(
+            candidate_gate_detail(
+                &row,
+                &JsonValue::Null,
+                false,
+                &JsonValue::Null,
+                &JsonValue::Null,
+                &concentration,
+                &JsonValue::Null,
+                &default_prefs(),
+            ),
+            "New symbol blocked: 3 of 3 configured USD bucket slots were already occupied."
         );
     }
 

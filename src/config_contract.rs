@@ -169,6 +169,14 @@ const CONTRACT: &[ContractEntry] = &[
         "No concentration gate exists; the runtime has no sector metadata source at all.",
     ),
     enforced(
+        &["strategy", "concentration", "max_assets_per_exchange"],
+        "Caps distinct held/planned BUY symbols within each canonical exchange-suffix bucket. Zero is explicit unlimited policy; negative values fail BUYs closed, and missing bucket evidence blocks only when a positive cap is enabled.",
+    ),
+    enforced(
+        &["strategy", "concentration", "max_assets_per_currency"],
+        "Caps distinct held/planned BUY symbols within each canonical exchange-implied currency bucket. Zero is explicit unlimited policy; negative values fail BUYs closed, and missing bucket evidence blocks only when a positive cap is enabled.",
+    ),
+    enforced(
         &["strategy", "estimated_slippage_bps"],
         "BUY cost guard uses it as a one-way slippage estimate against database-verified indicator reward.",
     ),
@@ -867,6 +875,22 @@ mod tests {
                 .iter()
                 .any(|finding| finding.path == "strategy.capital.monthly_loss_halt_dkk")
         );
+    }
+
+    #[test]
+    fn concentration_limits_are_enforced_contract_keys() {
+        let config = parse(
+            "strategy:\n  concentration:\n    max_assets_per_exchange: 0\n    max_assets_per_currency: 0\n",
+        );
+        let (summary, findings) = audit_config(&config);
+        assert_eq!(summary.enforced, 2);
+        assert!(!findings.iter().any(|finding| {
+            matches!(
+                finding.path.as_str(),
+                "strategy.concentration.max_assets_per_exchange"
+                    | "strategy.concentration.max_assets_per_currency"
+            )
+        }));
     }
 
     #[test]

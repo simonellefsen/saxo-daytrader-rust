@@ -310,6 +310,13 @@ strategy:
   max_candidates: 20
   max_selected_assets: 8
   max_assets_per_sector: 2
+  # Exchange/currency concentration gates are wired and audited, but start in
+  # explicit unlimited mode until an operator chooses live limits. Nonzero
+  # values cap distinct held/planned BUY symbols; negative values fail BUYs
+  # closed rather than weakening diversification evidence.
+  concentration:
+    max_assets_per_exchange: 0
+    max_assets_per_currency: 0
   # BUYs require a verified indicator target to clear the exchange-minimum
   # round-trip commission plus this one-way slippage estimate. This is a
   # lower-bound cost model, not a realised-fill forecast.
