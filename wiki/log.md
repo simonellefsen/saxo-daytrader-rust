@@ -1487,3 +1487,9 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Moved the weekday Quiver signal cycle from 23:10 to 19:00 Europe/Copenhagen in the Rust fallback and both shipped configurations. The scheduler remains date-idempotent and skips the cycle until the configured local time.
 - Quiver's Congress-trading source is date-based advisory data, not official-close market data. The earlier run makes the latest completed signal available to evening Decision Report and Hermes context before end-of-day journaling, without altering Saxo, order creation, or execution behavior.
+
+## [2026-07-27] operations | Daily-indicator support-risk backfill
+
+- Investigated an all-row `No support data` Watchlist state. The newest successful daily-indicator run predated the support-risk fields and Sunday scheduling correctly skipped under the weekday-only policy, so its otherwise successful rows had null support columns.
+- Ran the explicit read-only manual indicator refresh: 173 of 201 assets completed with persisted support-risk fields; 28 cached unresolved Saxo mappings remain visible as partial coverage. The operation did not create, amend, or execute an order.
+- Aligned local and Kubernetes daily-indicator policy to the five-year 1,260-bar target and added a config-contract regression test that requires the two policy blocks to match.

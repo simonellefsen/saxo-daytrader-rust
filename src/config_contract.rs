@@ -1016,4 +1016,26 @@ mod tests {
             "local and Kubernetes Quiver policy must stay aligned"
         );
     }
+
+    #[test]
+    fn shipped_configs_share_daily_indicator_policy() {
+        let local = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let kubernetes = parse(
+            &std::fs::read_to_string(format!(
+                "{}/deploy/k8s/base/config.k8s.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("Kubernetes config is readable"),
+        );
+        let path = ["strategy", "swing", "daily_indicators"];
+
+        assert_eq!(
+            crate::config::yaml_at(&local, &path),
+            crate::config::yaml_at(&kubernetes, &path),
+            "local and Kubernetes daily-indicator policy must stay aligned"
+        );
+    }
 }
