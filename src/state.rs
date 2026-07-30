@@ -4020,6 +4020,7 @@ impl AppState {
             "position_count": latest_positions,
             "range_return_pct": range_return_pct,
             "range_max_drawdown_pct": range_max_drawdown_pct,
+            "confidence": performance_confidence(history, Utc::now()),
         })
     }
 
@@ -8789,8 +8790,10 @@ impl AppState {
             .is_some_and(|latest| performance_rows_have_same_values(latest, &current));
         if !latest_matches_current {
             history.push(current);
-        } else if history.len() == 1 {
-            history[0] = current;
+        } else if let Some(latest) = history.last_mut() {
+            // Preserve the chart shape but expose the source and timestamp of
+            // the aggregate that was actually read for this response.
+            *latest = current;
         }
         Ok(history)
     }
@@ -10806,6 +10809,63 @@ fn performance_range_metrics(history: &[JsonValue]) -> (Option<f64>, Option<f64>
     )
 }
 
+/// Describes the evidence behind the account-value display without making any
+/// claim about individual quote, benchmark, or broker-order freshness.
+fn performance_confidence(history: &[JsonValue], now: DateTime<Utc>) -> JsonValue {
+    let latest = history.last();
+    let valid_points = history
+        .iter()
+        .filter(|row| {
+            row.get("total_market_value_dkk")
+                .and_then(JsonValue::as_f64)
+                .is_some_and(|value| value.is_finite() && value > 0.0)
+        })
+        .count();
+    let latest_value_valid = latest
+        .and_then(|row| row.get("total_market_value_dkk"))
+        .and_then(JsonValue::as_f64)
+        .is_some_and(|value| value.is_finite() && value > 0.0);
+    let latest_recorded_at = latest
+        .and_then(|row| row.get("recorded_at"))
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let latest_snapshot_type = latest
+        .map(|row| text_value(row, "snapshot_type"))
+        .filter(|value| !value.is_empty());
+    let latest_source = latest
+        .map(|row| text_value(row, "source"))
+        .filter(|value| !value.is_empty());
+    let age_minutes = latest_recorded_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| {
+            now.signed_duration_since(value.with_timezone(&Utc))
+                .num_minutes()
+                .max(0)
+        });
+    let status = if !latest_value_valid {
+        "unavailable"
+    } else if valid_points < 2 {
+        "partial"
+    } else if latest_snapshot_type.as_deref() == Some("runtime_current") {
+        "current"
+    } else if age_minutes.is_none_or(|minutes| minutes > 90) {
+        "stale"
+    } else {
+        "stored"
+    };
+    json!({
+        "status": status,
+        "valid_points": valid_points,
+        "latest_recorded_at": latest_recorded_at,
+        "latest_snapshot_type": latest_snapshot_type,
+        "latest_source": latest_source,
+        "age_minutes": age_minutes,
+        "scope": "account_value_only",
+    })
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12390,6 +12450,45 @@ mod tests {
         ]);
         assert!((return_pct.unwrap_or_default() - 10.0).abs() < 1e-9);
         assert!((drawdown_pct.unwrap_or_default() + 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn performance_confidence_distinguishes_current_partial_stale_and_unavailable_evidence() {
+        let now = DateTime::parse_from_rfc3339("2026-07-30T12:00:00Z")
+            .expect("parses fixed timestamp")
+            .with_timezone(&Utc);
+        let current = performance_confidence(
+            &[
+                json!({"recorded_at": "2026-07-29T12:00:00Z", "total_market_value_dkk": 250_000.0}),
+                json!({"recorded_at": "2026-07-30T12:00:00Z", "snapshot_type": "runtime_current", "source": "saxo_broker_snapshot", "total_market_value_dkk": 251_000.0}),
+            ],
+            now,
+        );
+        assert_eq!(current["status"], json!("current"));
+        assert_eq!(current["valid_points"], json!(2));
+
+        let partial = performance_confidence(
+            &[
+                json!({"recorded_at": "2026-07-30T12:00:00Z", "snapshot_type": "runtime_current", "total_market_value_dkk": 251_000.0}),
+            ],
+            now,
+        );
+        assert_eq!(partial["status"], json!("partial"));
+
+        let stale = performance_confidence(
+            &[
+                json!({"recorded_at": "2026-07-28T12:00:00Z", "total_market_value_dkk": 250_000.0}),
+                json!({"recorded_at": "2026-07-30T10:00:00Z", "snapshot_type": "daily_close", "total_market_value_dkk": 251_000.0}),
+            ],
+            now,
+        );
+        assert_eq!(stale["status"], json!("stale"));
+
+        let unavailable = performance_confidence(
+            &[json!({"snapshot_type": "runtime_current", "total_market_value_dkk": 0.0})],
+            now,
+        );
+        assert_eq!(unavailable["status"], json!("unavailable"));
     }
 
     #[test]

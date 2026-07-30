@@ -1261,18 +1261,23 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let goal_tracking = data.performance_goal_tracking.clone();
     let change = value_f64(&summary, "change_dkk");
     let range = data.performance_range.clone();
+    let (confidence_label, confidence_tone, confidence_detail) =
+        performance_confidence_badge(&summary);
     rsx! {
         section { class: "section",
             div { class: "section-title-row",
                 h2 { "Performance" }
-                div { class: "range-picker",
-                    RangeLink { range: "1D", active: range == "1D" }
-                    RangeLink { range: "1W", active: range == "1W" }
-                    RangeLink { range: "1M", active: range == "1M" }
-                    RangeLink { range: "3M", active: range == "3M" }
-                    RangeLink { range: "YTD", active: range == "YTD" }
-                    RangeLink { range: "1Y", active: range == "1Y" }
-                    RangeLink { range: "ALL", active: range == "ALL" }
+                div { class: "inline-actions",
+                    span { class: "status {confidence_tone}", title: "{confidence_detail}", "{confidence_label}" }
+                    div { class: "range-picker",
+                        RangeLink { range: "1D", active: range == "1D" }
+                        RangeLink { range: "1W", active: range == "1W" }
+                        RangeLink { range: "1M", active: range == "1M" }
+                        RangeLink { range: "3M", active: range == "3M" }
+                        RangeLink { range: "YTD", active: range == "YTD" }
+                        RangeLink { range: "1Y", active: range == "1Y" }
+                        RangeLink { range: "ALL", active: range == "ALL" }
+                    }
                 }
             }
             div { class: "mini-grid",
@@ -1300,6 +1305,60 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
         }
+    }
+}
+
+fn performance_confidence_badge(summary: &JsonValue) -> (String, &'static str, String) {
+    let confidence = summary
+        .get("confidence")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let valid_points = value_i64(&confidence, "valid_points");
+    let source = text(&confidence, "latest_source").replace('_', " ");
+    let source = if source.is_empty() {
+        "an unspecified source".to_string()
+    } else {
+        source
+    };
+    let age = confidence
+        .get("age_minutes")
+        .and_then(JsonValue::as_i64)
+        .map(|minutes| format!(" Last recorded {minutes} minutes ago."))
+        .unwrap_or_default();
+    match text(&confidence, "status").as_str() {
+        "current" => (
+            "account value current".to_string(),
+            "good-status",
+            format!(
+                "A live account aggregate was read from {source} for this page. {valid_points} valid stored account-value point(s) support the selected range. This only describes account-value evidence, not every quote, benchmark, or broker order."
+            ),
+        ),
+        "partial" => (
+            "account history partial".to_string(),
+            "warn-status",
+            format!(
+                "A current account value is available from {source}, but only {valid_points} valid account-value point supports this selected range. Returns and drawdown remain incomplete. This is account-value evidence only."
+            ),
+        ),
+        "stale" => (
+            "account value stale".to_string(),
+            "bad-status",
+            format!(
+                "The latest account-value row is stored data from {source}, not a live aggregate.{age} Refresh the page or investigate the portfolio source before relying on this range."
+            ),
+        ),
+        "stored" => (
+            "stored account value".to_string(),
+            "warn-status",
+            format!(
+                "The latest account-value row is stored data from {source}, not a live aggregate.{age} This is read-only orientation data."
+            ),
+        ),
+        _ => (
+            "account value unavailable".to_string(),
+            "bad-status",
+            "The latest account aggregate is missing or unusable, so this range cannot make a current account-value claim. This status does not change any trading behavior.".to_string(),
+        ),
     }
 }
 

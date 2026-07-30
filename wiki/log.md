@@ -1551,3 +1551,8 @@ broker mutation was added.
 - Added a read-only since-reset card that uses the earliest persisted account-value snapshot from the currently active import batch. A missing or unusable same-batch row remains `pending_baseline`; the runtime does not reuse a pre-reset balance or invent a zero return.
 - Added a selected-range maximum drawdown card calculated from valid account-value snapshots only. It is labelled as display evidence and intentionally remains distinct from the trailing drawdown guardrail that can reduce or halt BUYs.
 - Neither metric enters Hermes, Decision Reports, Trading Manager selection, sizing, protective stops, or broker execution.
+## [2026-07-30] performance | Account-value confidence
+
+- Added a compact Performance confidence label that names whether the displayed account value is a live runtime aggregate, partial history, recent stored history, stale stored history, or unavailable.
+- The tooltip preserves the selected range's valid-point count and aggregate source. It deliberately scopes the label to account-value evidence: quote, benchmark, and broker-order freshness retain their own existing status indicators.
+- No provider calls, Hermes context, Decision Report input, Trading Manager gate, sizing rule, protective stop, or broker mutation changed.
