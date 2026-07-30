@@ -1539,3 +1539,9 @@ and Saxo proxy dates. Performance and End-of-Day now label aligned, prior, and
 stale closes so an older market close cannot look like an intraday comparison.
 No provider request, Hermes context change, decision gate, sizing rule, or
 broker mutation was added.
+
+## [2026-07-30] performance | Weekly and monthly target progress
+
+- Exposed the existing same-batch portfolio-value goal baselines on the Performance tab as weekly and monthly read-only target-progress cards.
+- Corrected missing history semantics at the payload boundary: a period without a valid baseline is now `pending_baseline` with null P/L and progress, rather than a misleading `0 DKK` and `0%` result.
+- This does not change the configured target, Hermes context, Decision Reports, Trading Manager gates, sizing, or broker execution. Daily, since-reset, and drawdown cards remain separate follow-up work because each needs an explicit baseline contract.

@@ -79,6 +79,7 @@ pub struct DashboardView {
     pub performance_history: Vec<JsonValue>,
     pub performance_summary: JsonValue,
     pub performance_benchmarks: JsonValue,
+    pub performance_goal_tracking: JsonValue,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
     pub market_status: JsonValue,

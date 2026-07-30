@@ -1258,6 +1258,7 @@ fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantine
 fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let summary = data.performance_summary.clone();
     let benchmarks = data.performance_benchmarks.clone();
+    let goal_tracking = data.performance_goal_tracking.clone();
     let change = value_f64(&summary, "change_dkk");
     let range = data.performance_range.clone();
     rsx! {
@@ -1280,6 +1281,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Daily P/L", value: format_dkk(value_f64(&summary, "daily_pnl_dkk"), &prefs), tone: if value_f64(&summary, "daily_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
                 MetricCard { label: "Snapshots", value: text(&summary, "points"), tone: "" }
             }
+            PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
@@ -1297,6 +1299,78 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
         }
+    }
+}
+
+#[component]
+fn PerformanceGoalProgressPanel(goal_tracking: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let periods = goal_tracking
+        .get("periods")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let basis = text(&goal_tracking, "basis");
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Target Progress" }
+                    p { class: "muted", "Portfolio-value change against the configured weekly and monthly goals. Read-only." }
+                }
+            }
+            div { class: "mini-grid",
+                GoalProgressCard {
+                    label: "Week to date",
+                    period: periods.get("week").cloned().unwrap_or(JsonValue::Null),
+                    prefs: prefs.clone(),
+                }
+                GoalProgressCard {
+                    label: "Month to date",
+                    period: periods.get("month").cloned().unwrap_or(JsonValue::Null),
+                    prefs: prefs.clone(),
+                }
+            }
+            if !basis.is_empty() {
+                p { class: "muted benchmark-caveat", "{basis}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn GoalProgressCard(label: String, period: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&period, "status");
+    let target = period.get("target_dkk").and_then(JsonValue::as_f64);
+    let pnl = period.get("pnl_dkk").and_then(JsonValue::as_f64);
+    let progress = period.get("progress_pct").and_then(JsonValue::as_f64);
+    let (value, subtitle, tone) = match (status.as_str(), pnl, progress, target) {
+        ("ready", Some(pnl), Some(progress), Some(target)) => {
+            let tone = if pnl > 0.0 {
+                "good-text"
+            } else if pnl < 0.0 {
+                "bad-text"
+            } else {
+                ""
+            };
+            (
+                format_signed_dkk(pnl, &prefs),
+                format!(
+                    "{} target · {} progress",
+                    format_dkk(target, &prefs),
+                    format_signed_pct(progress, &prefs)
+                ),
+                tone,
+            )
+        }
+        _ => (
+            "Awaiting baseline".to_string(),
+            target
+                .map(|target| format!("{} target", format_dkk(target, &prefs)))
+                .unwrap_or_else(|| "Target unavailable".to_string()),
+            "",
+        ),
+    };
+    rsx! {
+        SummaryMetricCard { label, value, subtitle, tone }
     }
 }
 

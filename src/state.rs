@@ -3682,6 +3682,14 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_goal_tracking = if active_view == "performance" {
+            overview
+                .get("goal_tracking")
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -3824,6 +3832,7 @@ impl AppState {
             performance_history,
             performance_summary,
             performance_benchmarks,
+            performance_goal_tracking,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -9103,25 +9112,13 @@ impl AppState {
             .portfolio_value_at(&month_start_utc, batch_id.as_deref())
             .await
             .unwrap_or(None);
-        let period_json = |baseline: Option<f64>, target: f64, period_start: &str| {
-            let pnl = baseline
-                .map(|baseline| total_value - baseline)
-                .unwrap_or(0.0);
-            json!({
-                "pnl_dkk": pnl,
-                "target_dkk": target,
-                "progress_pct": pct(pnl, target),
-                "baseline_value_dkk": baseline,
-                "period_start_utc": period_start,
-            })
-        };
         json!({
             "weekly_target_dkk": weekly_target,
             "monthly_target_dkk": monthly_target,
             "basis": "pnl_dkk is total portfolio value change since the period start, measured against the portfolio value history baseline.",
             "periods": {
-                "week": period_json(week_baseline, weekly_target, &week_start_utc),
-                "month": period_json(month_baseline, monthly_target, &month_start_utc)
+                "week": goal_period_value(week_baseline, total_value, weekly_target, &week_start_utc),
+                "month": goal_period_value(month_baseline, total_value, monthly_target, &month_start_utc)
             }
         })
     }
@@ -10688,6 +10685,35 @@ impl AppState {
     }
 }
 
+fn goal_period_value(
+    baseline: Option<f64>,
+    total_value: f64,
+    target: f64,
+    period_start: &str,
+) -> JsonValue {
+    let baseline = baseline.filter(|value| value.is_finite());
+    if let Some(baseline_value) = baseline {
+        let pnl = total_value - baseline_value;
+        return json!({
+            "status": "ready",
+            "pnl_dkk": pnl,
+            "target_dkk": target,
+            "progress_pct": pct(pnl, target),
+            "baseline_value_dkk": baseline_value,
+            "period_start_utc": period_start,
+        });
+    }
+
+    json!({
+        "status": "pending_baseline",
+        "pnl_dkk": JsonValue::Null,
+        "target_dkk": target,
+        "progress_pct": JsonValue::Null,
+        "baseline_value_dkk": JsonValue::Null,
+        "period_start_utc": period_start,
+    })
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12221,6 +12247,21 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_period_value_marks_missing_baseline_pending_instead_of_zero_progress() {
+        let missing = goal_period_value(None, 250_000.0, 880.0, "2026-07-27T00:00:00Z");
+        assert_eq!(missing["status"], json!("pending_baseline"));
+        assert!(missing["pnl_dkk"].is_null());
+        assert!(missing["progress_pct"].is_null());
+
+        let ready = goal_period_value(Some(249_000.0), 250_000.0, 880.0, "2026-07-27T00:00:00Z");
+        assert_eq!(ready["status"], json!("ready"));
+        assert_eq!(ready["pnl_dkk"], json!(1_000.0));
+        assert!(
+            (ready["progress_pct"].as_f64().unwrap_or_default() - (1_000.0 / 880.0)).abs() < 1e-12
+        );
+    }
 
     #[test]
     fn share_income_tax_estimate_applies_progressive_brackets_incrementally() {
