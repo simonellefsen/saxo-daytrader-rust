@@ -524,7 +524,7 @@ mod tests {
 
     fn test_config() -> serde_yaml::Value {
         serde_yaml::from_str(
-            "strategy:\n  performance_benchmarks:\n    enabled: true\n    timezone: Europe/Copenhagen\n    daily_time: '23:55'\n    references:\n      - key: us_large_cap\n        label: S&P 500 (SPY ETF proxy)\n        symbol: SPY:xnys\n",
+            "strategy:\n  performance_benchmarks:\n    enabled: true\n    timezone: Europe/Copenhagen\n    daily_time: '23:55'\n    references:\n      - key: us_large_cap\n        label: S&P 500 (SPY ETF proxy)\n        symbol: SPY:arcx\n",
         )
         .expect("test config parses")
     }
@@ -568,7 +568,7 @@ mod tests {
         ] {
             sqlx::query(&format!(
                 "INSERT INTO performance_benchmark_prices (reference_key, label, symbol, observed_at, close, run_id)
-                 VALUES ('us_large_cap', 'S&P 500 (SPY ETF proxy)', 'SPY:xnys', '{observed_at}', {close}, 'test')"
+                 VALUES ('us_large_cap', 'S&P 500 (SPY ETF proxy)', 'SPY:arcx', '{observed_at}', {close}, 'test')"
             ))
             .execute(&state.pool)
             .await

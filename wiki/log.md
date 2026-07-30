@@ -1508,3 +1508,4 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added the read-only Saxo-backed ETF-proxy performance benchmark capability and documented its account-value, price-return, FX, dividend, cash-flow, and SIM-data limitations in [docs/performance-benchmarks](/Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md).
 - Recorded the safety boundary and verification follow-up in [roadmap](roadmap.md). No benchmark data enters decision, Hermes, sizing, or broker-mutation paths.
+- Initial SIM backfill resolved `QQQ:xnas` and `EUNL:xetr` with 1,200 daily closes each. The S&P proxy was corrected from the NYSE suffix to `SPY:arcx`, and the shared Saxo resolver now recognizes NYSE Arca. The comparison remains partial until that corrected read-only backfill succeeds.

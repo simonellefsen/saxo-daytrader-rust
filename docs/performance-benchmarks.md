@@ -5,7 +5,7 @@ set of Saxo-resolved ETF proxies:
 
 | Reference | Proxy | Purpose |
 | --- | --- | --- |
-| S&P 500 | `SPY:xnys` | US large-cap reference |
+| S&P 500 | `SPY:arcx` | US large-cap reference |
 | Nasdaq-100 | `QQQ:xnas` | US technology/growth reference |
 | MSCI World | `EUNL:xetr` | Broad global-equity reference |
 

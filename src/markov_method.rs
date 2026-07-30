@@ -1422,6 +1422,7 @@ fn exchange_id_for_suffix(exchange: &str) -> &'static str {
     match exchange.to_lowercase().as_str() {
         "xnas" => "XNAS",
         "xnys" => "XNYS",
+        "arcx" => "ARCX",
         "xcse" => "XCSE",
         "xsto" => "XSTO",
         "xosl" => "XOSL",
@@ -1442,6 +1443,7 @@ fn exchange_aliases(exchange: &str) -> Vec<&'static str> {
     match exchange.to_lowercase().as_str() {
         "xnas" => vec!["XNAS", "NASDAQ"],
         "xnys" => vec!["XNYS", "NYSE"],
+        "arcx" => vec!["ARCX", "NYSE ARCA"],
         "xcse" => vec!["XCSE", "CSE", "COP"],
         "xsto" => vec!["XSTO", "STO", "STK"],
         "xosl" => vec!["XOSL", "OSL", "OSE"],
@@ -1862,6 +1864,21 @@ mod tests {
             &wrong_exchange,
             "CARL-B:xcse",
             &requested
+        ));
+    }
+
+    #[test]
+    fn supports_nyse_arca_instrument_resolution() {
+        let requested = symbol_parts("SPY:arcx");
+        let candidate = json!({
+            "Symbol": "SPY:arcx",
+            "ExchangeId": "ARCX",
+            "TradableAs": ["Etf"]
+        });
+
+        assert_eq!(exchange_id_for_suffix("arcx"), "ARCX");
+        assert!(candidate_matches_requested(
+            &candidate, "SPY:arcx", &requested
         ));
     }
 

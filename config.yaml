@@ -318,7 +318,7 @@ strategy:
     references:
       - key: us_large_cap
         label: S&P 500 (SPY ETF proxy)
-        symbol: SPY:xnys
+        symbol: SPY:arcx
       - key: us_technology
         label: Nasdaq-100 (QQQ ETF proxy)
         symbol: QQQ:xnas
