@@ -327,7 +327,11 @@ Performance should be explainable at portfolio, report, and position level.
 - Reconcile dashboard aggregate P/L with broker exposure rows and local portfolio value history, and show source freshness for each.
 - Add P/L attribution by symbol, currency, sector, and strategy role.
 - Add daily, weekly, monthly, and since-reset performance cards with target progress and drawdown.
-- Add benchmark comparison against relevant indices for active regions.
+- Add benchmark comparison against relevant indices for active regions. Landed
+  2026-07-30 with Saxo-SIM-validated S&P 500, Nasdaq-100, Dow Jones, MSCI
+  World, STOXX Europe 600, and FTSE 100 ETF proxies. Follow-up: preserve the
+  price-return/FX/cash comparability caveat, and only add another benchmark
+  after a named-index and Saxo-SIM validation check.
 - Add trade expectancy metrics once enough closed trades exist: win rate, average win/loss, payoff ratio, holding time, and slippage.
 - Add cost tracking: commissions, FX impact, spread assumptions, and slippage versus limit/market price.
 - Add "performance confidence" labels when market data is delayed, approximated, stale, or missing.

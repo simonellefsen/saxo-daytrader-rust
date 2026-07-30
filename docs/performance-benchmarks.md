@@ -9,6 +9,8 @@ set of Saxo-resolved ETF proxies:
 | Nasdaq-100 | `QQQ:xnas` | US technology/growth reference |
 | Dow Jones Industrial Average | `DIA:arcx` | US blue-chip reference |
 | MSCI World | `EUNL:xetr` | Broad global-equity reference |
+| STOXX Europe 600 | `EXSA:xetr` | Broad-Europe reference |
+| FTSE 100 | `ISF:xlon` | UK large-cap reference |
 
 The references are deliberately labelled as ETF proxies. They are not claims
 that the system owns, trades, or replicates the underlying index.
@@ -35,10 +37,11 @@ the latest available daily account change and `1W` for the week-to-date window;
 the panel always shows the aligned portfolio, proxy, and excess return for that
 selected period.
 
-`Euronext` and `LSE` are exchange venues, not single comparable indices. A
-future regional reference must name the underlying index and use a Saxo-SIM
-validated tracker; it must not use an arbitrary local listing as an index
-substitute.
+`Euronext` and `LSE` are exchange venues, not single comparable indices. The
+Europe and UK entries therefore name their underlying indices and use specific
+tracker listings rather than treating a venue as a benchmark. A future regional
+reference must follow the same rule and be Saxo-SIM validated before it is
+configured.
 
 ## Comparability Limits
 

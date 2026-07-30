@@ -1512,3 +1512,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The completed backfill exposed a PostgreSQL compatibility defect: `sqlx::AnyPool` returns the benchmark `REAL` close as `f32`, while the initial comparison reader requested only `f64`. The reader now uses the shared cross-database row adapter and can align the stored closes with portfolio timestamps without making a new market or broker call.
 - The Performance range picker is now explicitly the benchmark horizon selector: `1D` presents the latest daily comparison and `1W` presents the weekly comparison. The panel labels the selected window so operators do not mistake a month-to-date number for a daily figure.
 - Saxo SIM validated `DIA:arcx` as the Dow Jones Industrial Average ETF proxy and backfilled 1,200 daily closes; daily and weekly comparisons are ready across S&P 500, Nasdaq-100, Dow Jones, and MSCI World. Euronext and LSE still need separately named regional index trackers because they are exchange venues, not directly comparable index series.
+
+## [2026-07-30] performance | Named Europe and UK benchmark proxies
+
+- Added the named STOXX Europe 600 `EXSA:xetr` and FTSE 100 `ISF:xlon` tracker proxies to both shipped benchmark policies. They stay confined to the read-only Performance comparison and are not watchlist, Decision Report, Hermes, Trading Manager, sizing, or broker inputs.
+- Added a config-contract regression test that requires every configured reference to have a non-empty unique key, unique symbol, and a label that clearly discloses its proxy role. The first deployed refresh must resolve and backfill both through Saxo SIM before treating them as available in the dashboard.

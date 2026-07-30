@@ -1077,4 +1077,47 @@ mod tests {
             "local and Kubernetes performance benchmark policy must stay aligned"
         );
     }
+
+    #[test]
+    fn shipped_performance_benchmark_references_are_named_and_unique() {
+        let config = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let references = crate::config::yaml_at(
+            &config,
+            &["strategy", "performance_benchmarks", "references"],
+        )
+        .and_then(serde_yaml::Value::as_sequence)
+        .expect("benchmark references are configured");
+        let mut keys = std::collections::BTreeSet::new();
+        let mut symbols = std::collections::BTreeSet::new();
+        for reference in references {
+            let mapping = reference
+                .as_mapping()
+                .expect("benchmark reference is a mapping");
+            let field = |name: &str| {
+                mapping
+                    .get(serde_yaml::Value::String(name.to_string()))
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| panic!("benchmark reference has nonempty {name}"))
+            };
+            assert!(
+                keys.insert(field("key").to_string()),
+                "benchmark keys are unique"
+            );
+            assert!(
+                symbols.insert(field("symbol").to_ascii_uppercase()),
+                "benchmark symbols are unique"
+            );
+            assert!(
+                field("label").contains("proxy"),
+                "benchmark labels disclose proxy status"
+            );
+        }
+        assert!(keys.contains("europe_broad"));
+        assert!(keys.contains("uk_large_cap"));
+    }
 }

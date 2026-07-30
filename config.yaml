@@ -328,6 +328,12 @@ strategy:
       - key: global_equity
         label: MSCI World (EUNL ETF proxy)
         symbol: EUNL:xetr
+      - key: europe_broad
+        label: STOXX Europe 600 (EXSA ETF proxy)
+        symbol: EXSA:xetr
+      - key: uk_large_cap
+        label: FTSE 100 (ISF ETF proxy)
+        symbol: ISF:xlon
   enabled: true
   mode: swing
   max_candidates: 20
