@@ -79,6 +79,7 @@ const TRADE_THESIS_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const HOLDING_THESIS_REVIEW_LIMIT: i64 = 50;
 const DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
+const PERFORMANCE_EXPOSURE_ATTRIBUTION_LIMIT: usize = 20;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
 const MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS: usize = 20;
@@ -5038,6 +5039,14 @@ impl AppState {
         };
         let pnl_reconciliation =
             unrealised_pnl_reconciliation(aggregate, latest_history, &broker_exposure_snapshot);
+        let unrealised_pnl_attribution = broker_exposure_pnl_attribution(
+            &broker_exposures,
+            &broker_exposure_snapshot,
+            broker_exposure_snapshot
+                .get("fx_rate_to_dkk")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0),
+        );
         if broker_exposure_snapshot.is_null() {
             checks.insert(
                 "broker_exposure_aggregate".to_string(),
@@ -5283,6 +5292,7 @@ impl AppState {
             "acknowledged_issue_count": acknowledged_issue_count,
             "config_contract": config_contract,
             "pnl_reconciliation": pnl_reconciliation,
+            "unrealised_pnl_attribution": unrealised_pnl_attribution,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -10961,6 +10971,119 @@ fn unrealised_pnl_reconciliation(
     })
 }
 
+/// Read-only current-exposure attribution. Saxo reports `ProfitLossOnTrade`
+/// in the account currency, so the instrument currency here is a grouping
+/// label, not a claim that this isolates the portfolio's FX contribution.
+fn broker_exposure_pnl_attribution(
+    broker_exposures: &[JsonValue],
+    broker_exposure_snapshot: &JsonValue,
+    account_fx_rate_to_dkk: Option<f64>,
+) -> JsonValue {
+    let Some(account_fx_rate_to_dkk) = account_fx_rate_to_dkk else {
+        return json!({
+            "status": "unavailable",
+            "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
+            "rows": [],
+            "currencies": [],
+            "exposure_count": broker_exposures.len(),
+        });
+    };
+    if broker_exposures.is_empty() {
+        return json!({
+            "status": "unavailable",
+            "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
+            "rows": [],
+            "currencies": [],
+            "exposure_count": 0,
+        });
+    }
+
+    let account_currency = text_value(broker_exposure_snapshot, "account_currency")
+        .if_empty_then(|| Some("DKK".to_string()))
+        .unwrap_or_else(|| "DKK".to_string());
+    let mut rows = broker_exposures
+        .iter()
+        .filter_map(|row| {
+            let symbol = text_value(row, "symbol");
+            if symbol.is_empty() {
+                return None;
+            }
+            let instrument_currency = text_value(row, "currency")
+                .if_empty_then(|| Some("Unknown".to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let profit_loss_account_currency = row
+                .get("profit_loss_on_trade")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())?;
+            Some(json!({
+                "symbol": symbol,
+                "instrument_currency": instrument_currency,
+                "quantity": row.get("quantity").cloned().unwrap_or(JsonValue::Null),
+                "unrealised_pnl_dkk": profit_loss_account_currency * account_fx_rate_to_dkk,
+                "profit_loss_account_currency": profit_loss_account_currency,
+                "calculation_reliability": row.get("calculation_reliability").cloned().unwrap_or(JsonValue::Null),
+                "updated_at": row.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+            }))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        value_f64(right, "unrealised_pnl_dkk")
+            .abs()
+            .partial_cmp(&value_f64(left, "unrealised_pnl_dkk").abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| text_value(left, "symbol").cmp(&text_value(right, "symbol")))
+    });
+    let total_rows = rows.len();
+    let total_absolute_pnl_dkk = rows
+        .iter()
+        .map(|row| value_f64(row, "unrealised_pnl_dkk").abs())
+        .sum::<f64>();
+    let mut currency_totals = BTreeMap::<String, (usize, f64)>::new();
+    for row in &rows {
+        let currency = text_value(row, "instrument_currency");
+        let entry = currency_totals.entry(currency).or_insert((0, 0.0));
+        entry.0 += 1;
+        entry.1 += value_f64(row, "unrealised_pnl_dkk");
+    }
+    let mut currencies = currency_totals
+        .into_iter()
+        .map(|(currency, (symbol_count, unrealised_pnl_dkk))| {
+            let absolute_contribution_pct = (total_absolute_pnl_dkk > 0.0)
+                .then_some(unrealised_pnl_dkk.abs() / total_absolute_pnl_dkk * 100.0);
+            json!({
+                "instrument_currency": currency,
+                "symbol_count": symbol_count,
+                "unrealised_pnl_dkk": unrealised_pnl_dkk,
+                "absolute_contribution_pct": absolute_contribution_pct,
+            })
+        })
+        .collect::<Vec<_>>();
+    currencies.sort_by(|left, right| {
+        value_f64(right, "unrealised_pnl_dkk")
+            .abs()
+            .partial_cmp(&value_f64(left, "unrealised_pnl_dkk").abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                text_value(left, "instrument_currency")
+                    .cmp(&text_value(right, "instrument_currency"))
+            })
+    });
+    rows.truncate(PERFORMANCE_EXPOSURE_ATTRIBUTION_LIMIT);
+
+    json!({
+        "status": "available",
+        "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
+        "account_currency": account_currency,
+        "fx_rate_to_dkk": account_fx_rate_to_dkk,
+        "updated_at": broker_exposure_snapshot.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+        "exposure_count": total_rows,
+        "shown_row_count": rows.len(),
+        "total_unrealised_pnl_dkk": broker_exposure_snapshot.get("unrealised_pnl_dkk").cloned().unwrap_or(JsonValue::Null),
+        "rows": rows,
+        "currencies": currencies,
+    })
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12630,6 +12753,52 @@ mod tests {
             &json!({"unrealised_pnl_dkk": 1_000.0}),
         );
         assert_eq!(drift["broker_exposure"]["status"], json!("drift"));
+    }
+
+    #[test]
+    fn broker_exposure_pnl_attribution_groups_instrument_currency_without_claiming_fx_pnl() {
+        let attribution = broker_exposure_pnl_attribution(
+            &[
+                json!({
+                    "symbol": "USDWIN:xnas",
+                    "currency": "USD",
+                    "quantity": 2.0,
+                    "profit_loss_on_trade": 100.0,
+                    "calculation_reliability": "Estimated",
+                    "updated_at": "2026-07-30T10:00:00Z",
+                }),
+                json!({
+                    "symbol": "EURLOSS:xetr",
+                    "currency": "EUR",
+                    "quantity": 1.0,
+                    "profit_loss_on_trade": -50.0,
+                    "calculation_reliability": "Exact",
+                    "updated_at": "2026-07-30T10:00:00Z",
+                }),
+            ],
+            &json!({
+                "account_currency": "DKK",
+                "fx_rate_to_dkk": 1.0,
+                "unrealised_pnl_dkk": 50.0,
+                "updated_at": "2026-07-30T10:00:00Z",
+            }),
+            Some(1.0),
+        );
+        assert_eq!(attribution["status"], json!("available"));
+        assert_eq!(attribution["exposure_count"], json!(2));
+        assert_eq!(attribution["rows"][0]["symbol"], json!("USDWIN:xnas"));
+        assert_eq!(
+            attribution["currencies"][0]["instrument_currency"],
+            json!("USD")
+        );
+        assert_eq!(
+            attribution["currencies"][0]["absolute_contribution_pct"],
+            json!(66.66666666666666)
+        );
+        assert_eq!(
+            attribution["scope"],
+            json!("read_only_stored_saxo_exposure_unrealised_pnl")
+        );
     }
 
     #[test]

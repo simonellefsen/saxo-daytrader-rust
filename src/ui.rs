@@ -1296,6 +1296,14 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     .unwrap_or(JsonValue::Null),
                 prefs: prefs.clone(),
             }
+            PerformanceExposureAttributionPanel {
+                attribution: data
+                    .integrity
+                    .get("unrealised_pnl_attribution")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                prefs: prefs.clone(),
+            }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
@@ -1399,6 +1407,94 @@ fn PerformancePnlReconciliationPanel(
                 }
             }
             p { class: "muted benchmark-caveat", "The exposure amount is converted from the Saxo account currency using the recorded DKK FX rate. Differences can reflect snapshot timing, price calculation, FX, or local-book timing; investigate drift in Integrity before treating it as an accounting conclusion." }
+        }
+    }
+}
+
+#[component]
+fn PerformanceExposureAttributionPanel(
+    attribution: JsonValue,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let rows = attribution
+        .get("rows")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let currencies = attribution
+        .get("currencies")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let available = text(&attribution, "status") == "available";
+    let money = |row: &JsonValue, key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+            .map(|value| format_signed_dkk(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    let percent = |row: &JsonValue, key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+            .map(|value| format_signed_pct(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    let evidence = if available {
+        format!(
+            "{} stored exposure(s) · {} account FX {} · {}",
+            text(&attribution, "exposure_count"),
+            text(&attribution, "account_currency"),
+            text(&attribution, "fx_rate_to_dkk"),
+            format_timestamp(&text(&attribution, "updated_at"), &prefs),
+        )
+    } else {
+        "No stored Saxo instrument-exposure snapshot is available.".to_string()
+    };
+    let (status_label, status_tone) = if available {
+        ("stored snapshot", "good-status")
+    } else {
+        ("snapshot unavailable", "warn-status")
+    };
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Stored Exposure P/L Attribution" }
+                    p { class: "muted", "Largest current unrealised P/L contributors from the stored Saxo exposure snapshot. Read-only, not realised P/L or a trading signal." }
+                }
+                span { class: "status {status_tone}", "{status_label}" }
+            }
+            if !available {
+                p { class: "muted", "{evidence}" }
+            } else {
+                div { class: "mini-grid",
+                    for currency in currencies {
+                        div { class: "metric-card compact-metric",
+                            span { class: "metric-label", "{text(&currency, \"instrument_currency\")}" }
+                            strong { class: if value_f64(&currency, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{money(&currency, \"unrealised_pnl_dkk\")}" }
+                            span { class: "muted", "{text(&currency, \"symbol_count\")} symbol(s) · {percent(&currency, \"absolute_contribution_pct\")} of absolute P/L" }
+                        }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr { th { "Symbol" } th { "Instrument currency" } th { "Unrealised P/L" } th { "Reliability" } } }
+                        tbody {
+                            for row in rows {
+                                tr {
+                                    td { strong { "{text(&row, \"symbol\")}" } }
+                                    td { "{text(&row, \"instrument_currency\")}" }
+                                    td { class: if value_f64(&row, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{money(&row, \"unrealised_pnl_dkk\")}" }
+                                    td { "{text(&row, \"calculation_reliability\")}" }
+                                }
+                            }
+                        }
+                    }
+                }
+                p { class: "muted benchmark-caveat", "{evidence}. Instrument currency is a grouping label only: Saxo reports exposure P/L in the broker account currency, so this table does not isolate FX P/L. Showing the top {text(&attribution, \"shown_row_count\")} by absolute P/L; sector, strategy-role, realised P/L, costs, and tax attribution are not included." }
+            }
         }
     }
 }

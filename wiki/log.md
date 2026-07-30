@@ -1556,6 +1556,12 @@ broker mutation was added.
 - Added a compact Performance confidence label that names whether the displayed account value is a live runtime aggregate, partial history, recent stored history, stale stored history, or unavailable.
 - The tooltip preserves the selected range's valid-point count and aggregate source. It deliberately scopes the label to account-value evidence: quote, benchmark, and broker-order freshness retain their own existing status indicators.
 - No provider calls, Hermes context, Decision Report input, Trading Manager gate, sizing rule, protective stop, or broker mutation changed.
+## [2026-07-30] performance | Stored exposure P/L attribution
+
+- Added a bounded, read-only Performance projection of the current stored Saxo exposure snapshot: largest per-symbol unrealised contributors plus instrument-currency groups.
+- The source P/L is Saxo account-currency P/L converted using the stored account DKK FX basis. Instrument currency remains a display grouping, not an FX P/L decomposition.
+- The projection excludes realised P/L, costs, tax, sector, strategy role, Hermes, Decision Reports, Trading Manager, protective stops, and broker execution.
+
 ## [2026-07-30] performance | Unrealised P/L sources
 
 - Added a read-only Performance table that exposes the same dashboard-versus-Saxo exposure comparison already used by Overview integrity, even when the values remain inside the existing tolerance.
