@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-27
+updated: 2026-07-30
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-30] operations | Calendar-aware Quiver context
+
+- Replaced the fixed 19:00 Europe/Copenhagen Quiver run with the Saxo calendar's shared XNAS/XNYS opening plus 45 minutes. The US Decision Report remains at opening plus 75 minutes, so the scheduled Quiver cycle has an approximately 30-minute completion window before it is consumed.
+- Added compact Quiver freshness metadata for Decision Report and Hermes context: `fresh`, `partial`, `stale`, `missing`, `failed`, `not_due`, and `no_us_session`. Stored prior-day signals remain available as historical context but cannot be presented as current advisory evidence.
+- The change remains read-only and advisory. It creates no order, changes no Trading Manager gate, and performs no Saxo mutation.
 
 ## [2026-07-27] trading-quality | Cash deployment BUY-gate diagnostics
 

@@ -378,7 +378,11 @@ strategy:
   quiver:
     enabled: true
     timezone: Europe/Copenhagen
-    daily_time: "19:00"
+    # Follow the Saxo US exchange calendar so this completes before the
+    # US Open +1h15 Decision Report despite holidays and daylight saving.
+    us_open_followup:
+      minutes_after_open: 45
+      exchange_codes: [XNAS, XNYS]
     run_weekdays_only: true
     lookback_days: 120
     max_symbols: 60

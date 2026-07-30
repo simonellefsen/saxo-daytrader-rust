@@ -1744,12 +1744,19 @@ fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 #[component]
 fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let run = data.latest_quiver_run.clone();
+    let schedule = data
+        .run_schedules
+        .get("quiver")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     let config = run
         .get("config_json")
         .cloned()
         .unwrap_or_else(|| JsonValue::Null);
     let ok_count = value_i64(&run, "success_count");
     let error_count = value_i64(&run, "error_count");
+    let scheduled_for = text(&schedule, "scheduled_for");
+    let schedule_status = text(&schedule, "schedule_status");
     let total_pages =
         ((data.quiver_signal_total + data.quiver_page_size - 1) / data.quiver_page_size).max(1);
     let previous_page_href = format!("/?view=quiver&quiver_page={}", data.quiver_page - 1);
@@ -1769,7 +1776,7 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             if run.is_null() {
                 div { class: "event",
                     strong { "No Quiver run exists yet." }
-                    span { class: "muted", "The scheduler will create the first run after the configured daily time once QUIVERQUANT_API_KEY is available." }
+                    span { class: "muted", "The scheduler will create the first run at the configured US market-open follow-up once QUIVERQUANT_API_KEY is available." }
                 }
             } else {
                 div { class: "mini-grid",
@@ -1782,7 +1789,12 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 div { class: "event",
                     strong { "Configuration" }
-                    span { "Sources congress_trading · US symbols only · daily time {text(&config, \"daily_time\")} · max symbols {text(&config, \"max_symbols\")}" }
+                    span { "Sources congress_trading · US symbols only · US open +{text(&schedule, \"minutes_after_open\")}m · max symbols {text(&config, \"max_symbols\")}" }
+                    if !scheduled_for.is_empty() {
+                        span { class: "muted", " · {schedule_status} · today {format_timestamp(&scheduled_for, &prefs)}" }
+                    } else {
+                        span { class: "muted", " · {schedule_status}" }
+                    }
                 }
             }
             QuiverConflictPanel { conflicts: data.quiver_conflicts.clone(), prefs: prefs.clone() }
@@ -6860,8 +6872,11 @@ fn run_operation_health(
         let (tone, status) = match schedule_state {
             ScheduledRunState::Disabled => ("neutral", "disabled"),
             ScheduledRunState::Weekend { .. } => ("neutral", "idle (weekend)"),
-            ScheduledRunState::BeforeDue { .. } => ("neutral", "waiting"),
+            ScheduledRunState::BeforeDue { .. }
+            | ScheduledRunState::MarketOpenBeforeDue { .. }
+            | ScheduledRunState::MarketOpenNoSession { .. } => ("neutral", "waiting"),
             ScheduledRunState::Due { .. } | ScheduledRunState::Unknown => ("warn", "missing"),
+            ScheduledRunState::MarketOpenDue { .. } => ("warn", "missing"),
         };
         return OperationHealthItem {
             label: label.to_string(),
@@ -6915,6 +6930,15 @@ enum ScheduledRunState {
         expected_run_date: NaiveDate,
         due_time: NaiveTime,
     },
+    MarketOpenNoSession {
+        expected_run_date: NaiveDate,
+    },
+    MarketOpenBeforeDue {
+        expected_run_date: NaiveDate,
+    },
+    MarketOpenDue {
+        expected_run_date: NaiveDate,
+    },
     Unknown,
 }
 
@@ -6932,14 +6956,24 @@ fn scheduled_run_state(schedule: &JsonValue, now: DateTime<Utc>) -> ScheduledRun
     let timezone = text(schedule, "timezone")
         .parse::<Tz>()
         .unwrap_or(chrono_tz::Europe::Copenhagen);
+    let now_local = now.with_timezone(&timezone);
+    let local_date = now_local.date_naive();
+    if text(schedule, "schedule_kind") == "us_open_followup" {
+        let expected_run_date = text(schedule, "scheduled_run_date")
+            .parse::<NaiveDate>()
+            .unwrap_or(local_date);
+        return match text(schedule, "schedule_status").as_str() {
+            "waiting" => ScheduledRunState::MarketOpenBeforeDue { expected_run_date },
+            "due" => ScheduledRunState::MarketOpenDue { expected_run_date },
+            _ => ScheduledRunState::MarketOpenNoSession { expected_run_date },
+        };
+    }
     let due_time = NaiveTime::parse_from_str(&text(schedule, "daily_time"), "%H:%M")
         .unwrap_or_else(|_| NaiveTime::from_hms_opt(23, 30, 0).expect("valid default time"));
     let weekdays_only = schedule
         .get("run_weekdays_only")
         .and_then(JsonValue::as_bool)
         .unwrap_or(true);
-    let now_local = now.with_timezone(&timezone);
-    let local_date = now_local.date_naive();
     let expected_run_date =
         latest_scheduled_run_date(local_date, now_local.time(), due_time, weekdays_only);
     if weekdays_only && local_date.weekday().number_from_monday() > 5 {
@@ -7006,6 +7040,15 @@ fn scheduled_run_tone_and_status(
                 ("warn", "stale")
             }
         }
+        ScheduledRunState::MarketOpenNoSession { .. }
+        | ScheduledRunState::MarketOpenBeforeDue { .. } => ("neutral", "waiting"),
+        ScheduledRunState::MarketOpenDue { expected_run_date } => {
+            if parsed_run_date.is_some_and(|value| value >= expected_run_date) {
+                ("good", "fresh")
+            } else {
+                ("warn", "stale")
+            }
+        }
         ScheduledRunState::Unknown => {
             if parsed_run_date.is_some() {
                 ("warn", "schedule unknown")
@@ -7036,6 +7079,15 @@ fn scheduled_run_detail(state: ScheduledRunState) -> String {
             "A run is due after {} for {expected_run_date}.",
             due_time.format("%H:%M")
         ),
+        ScheduledRunState::MarketOpenNoSession { expected_run_date } => format!(
+            "No US session is scheduled for {expected_run_date}; Quiver waits for the Saxo exchange calendar."
+        ),
+        ScheduledRunState::MarketOpenBeforeDue { expected_run_date } => {
+            format!("Quiver is waiting for the US market-open +45m target on {expected_run_date}.")
+        }
+        ScheduledRunState::MarketOpenDue { expected_run_date } => {
+            format!("The US market-open +45m Quiver run is due for {expected_run_date}.")
+        }
         ScheduledRunState::Unknown => "No usable schedule configuration is available.".to_string(),
     }
 }
@@ -7050,8 +7102,17 @@ fn scheduled_run_missing_detail(label: &str, state: ScheduledRunState) -> String
             "No {label} run is due until {} local time.",
             due_time.format("%H:%M")
         ),
+        ScheduledRunState::MarketOpenNoSession { .. } => format!(
+            "No {label} run is expected without a US session in the Saxo exchange calendar."
+        ),
+        ScheduledRunState::MarketOpenBeforeDue { .. } => {
+            format!("No {label} run is due until the US market-open +45m target.")
+        }
         ScheduledRunState::Due { .. } | ScheduledRunState::Unknown => {
             format!("No {label} run has been recorded yet.")
+        }
+        ScheduledRunState::MarketOpenDue { .. } => {
+            format!("No {label} run has been recorded for the due US market-open +45m target.")
         }
     }
 }
@@ -9240,6 +9301,63 @@ mod tests {
                 "timezone": "Europe/Copenhagen",
                 "daily_time": "21:00",
                 "run_weekdays_only": true,
+            }),
+            now,
+        );
+
+        assert_eq!(item.status, "stale");
+        assert_eq!(item.tone, "warn");
+    }
+
+    #[test]
+    fn calendar_scheduled_quiver_waits_without_claiming_a_fixed_time() {
+        let now = DateTime::parse_from_rfc3339("2026-07-30T13:45:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let item = run_operation_health(
+            "Quiver",
+            &json!({
+                "run_date": "2026-07-29",
+                "status": "completed",
+                "success_count": 20,
+                "error_count": 0
+            }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "schedule_kind": "us_open_followup",
+                "schedule_status": "waiting",
+                "scheduled_run_date": "2026-07-30",
+                "minutes_after_open": 45
+            }),
+            now,
+        );
+
+        assert_eq!(item.status, "waiting");
+        assert_eq!(item.tone, "neutral");
+        assert!(item.detail.contains("US market-open +45m"));
+    }
+
+    #[test]
+    fn calendar_scheduled_quiver_is_stale_after_a_missed_target() {
+        let now = DateTime::parse_from_rfc3339("2026-07-30T15:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let item = run_operation_health(
+            "Quiver",
+            &json!({
+                "run_date": "2026-07-29",
+                "status": "completed",
+                "success_count": 20,
+                "error_count": 0
+            }),
+            &json!({
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "schedule_kind": "us_open_followup",
+                "schedule_status": "due",
+                "scheduled_run_date": "2026-07-30",
+                "minutes_after_open": 45
             }),
             now,
         );

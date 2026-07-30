@@ -17,7 +17,9 @@ strategy:
   quiver:
     enabled: true
     timezone: Europe/Copenhagen
-    daily_time: "19:00"
+    us_open_followup:
+      minutes_after_open: 45
+      exchange_codes: [XNAS, XNYS]
     run_weekdays_only: true
     lookback_days: 120
     max_symbols: 60
@@ -68,7 +70,7 @@ The stored rows include normalized top events and source status, not API keys or
 - Dashboard: `/?view=quiver`
 - API: `/api/quiver/signals`
 - Manual refresh: `POST /api/actions/quiver-signals`
-- Scheduler: runs once on each weekday after `strategy.quiver.daily_time` (19:00 Europe/Copenhagen by default)
+- Scheduler: runs at the Saxo exchange-calendar opening time for `XNAS`/`XNYS`, plus `strategy.quiver.us_open_followup.minutes_after_open` (45 minutes by default)
 - Decision prompt context: `quiver_signals`
 - Hermes context/MCP: `quiver_signals`, `get_quiver_signals`
 
@@ -76,11 +78,19 @@ The manual refresh endpoint returns a compact run summary with ranked signal
 rows. Use `GET /api/quiver/signals` for the full latest table and stored top
 event details.
 
-The scheduled run deliberately occurs before the local end-of-day journal. The
-Congress-trading source is date-based rather than an official-close market-data
-feed, so waiting for US market close does not improve the input. The earlier
-cadence lets the evening decision and Hermes reflection consume the latest
-completed advisory run without changing any broker behavior.
+The scheduled run is calendar-aware rather than a fixed local clock. It skips
+US holidays and closed sessions, waits until the computed opening follow-up,
+and remains date-idempotent. The US Decision Report runs at the same Saxo
+calendar opening plus 75 minutes, leaving about 30 minutes for Quiver to
+complete before the report consumes its context. Manual refresh remains
+available independently of the scheduled window.
+
+`quiver_signals.freshness` is included in both Decision Report and Hermes
+context. Its `fresh`, `partial`, `stale`, `missing`, `failed`, `not_due`, and
+`no_us_session` states prevent an older completed run from being presented as
+current evidence. `partial` means only listed successful assets have current
+Quiver evidence. This metadata is advisory only and cannot create a broker
+order or change a trading gate.
 
 ## Current Status
 

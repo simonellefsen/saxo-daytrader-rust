@@ -253,7 +253,19 @@ const CONTRACT: &[ContractEntry] = &[
     // scheduler behavior matches the deployed advisory-data collection cadence.
     advisory(&["strategy", "quiver", "enabled"], "Quiver cycle switch."),
     advisory(&["strategy", "quiver", "timezone"], "Quiver run cadence."),
-    advisory(&["strategy", "quiver", "daily_time"], "Quiver run cadence."),
+    advisory(
+        &[
+            "strategy",
+            "quiver",
+            "us_open_followup",
+            "minutes_after_open",
+        ],
+        "Quiver's Saxo-calendar-relative US open follow-up cadence.",
+    ),
+    advisory(
+        &["strategy", "quiver", "us_open_followup", "exchange_codes"],
+        "US exchanges that define Quiver's Saxo-calendar-relative schedule.",
+    ),
     advisory(
         &["strategy", "quiver", "run_weekdays_only"],
         "Quiver run cadence.",

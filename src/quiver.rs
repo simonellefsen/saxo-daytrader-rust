@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration as StdDuration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use chrono_tz::Tz;
 use reqwest::header;
 use serde_json::{Value as JsonValue, json};
@@ -16,7 +16,8 @@ use crate::{
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.quiverquant.com";
-const DEFAULT_DAILY_TIME: &str = "19:00";
+const DEFAULT_US_OPEN_FOLLOWUP_MINUTES: i64 = 45;
+const DEFAULT_US_EXCHANGE_CODES: &[&str] = &["XNAS", "XNYS"];
 const REQUEST_DELAY_MS: u64 = 350;
 const MAX_ATTEMPTS: usize = 3;
 const STRONG_BEARISH_CONFLICT_SIGNAL: f64 = -0.35;
@@ -25,8 +26,9 @@ const STRONG_BEARISH_CONFLICT_SIGNAL: f64 = -0.35;
 struct QuiverConfig {
     enabled: bool,
     timezone: Tz,
-    daily_time: NaiveTime,
     run_weekdays_only: bool,
+    minutes_after_us_open: i64,
+    exchange_codes: Vec<String>,
     base_url: String,
     api_key: Option<String>,
     max_symbols: usize,
@@ -85,7 +87,8 @@ pub async fn run_quiver_signal_cycle(state: &AppState) -> Result<JsonValue> {
         }));
     }
 
-    let now_local = Utc::now().with_timezone(&config.timezone);
+    let now = Utc::now();
+    let now_local = now.with_timezone(&config.timezone);
     let run_date = now_local.date_naive();
     if config.run_weekdays_only && run_date.weekday().number_from_monday() > 5 {
         return Ok(json!({
@@ -95,13 +98,28 @@ pub async fn run_quiver_signal_cycle(state: &AppState) -> Result<JsonValue> {
             "timezone": config.timezone.name()
         }));
     }
-    if now_local.time() < config.daily_time {
+    let target = current_us_open_followup_target(state, &config, now, run_date);
+    let Some(target) = target else {
+        return Ok(json!({
+            "status": "idle",
+            "reason": "no_us_session",
+            "run_date": run_date.to_string(),
+            "timezone": config.timezone.name(),
+            "schedule_kind": "us_open_followup",
+            "minutes_after_open": config.minutes_after_us_open,
+            "exchange_codes": config.exchange_codes,
+        }));
+    };
+    if now < target.target_at_utc {
         return Ok(json!({
             "status": "idle",
             "reason": "not_due",
             "run_date": run_date.to_string(),
-            "due_time": config.daily_time.format("%H:%M").to_string(),
-            "timezone": config.timezone.name()
+            "scheduled_for": target.target_at_utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "timezone": config.timezone.name(),
+            "schedule_kind": "us_open_followup",
+            "minutes_after_open": config.minutes_after_us_open,
+            "exchange_codes": target.exchange_codes,
         }));
     }
     if quiver_run_exists(state, run_date).await? {
@@ -690,6 +708,8 @@ pub async fn latest_quiver_run(state: &AppState) -> Result<JsonValue> {
 }
 
 pub async fn compact_quiver_context(state: &AppState, limit: i64) -> Result<JsonValue> {
+    let schedule = quiver_config_json_for_state(state);
+    let latest_run = latest_quiver_run(state).await.unwrap_or(JsonValue::Null);
     let signals = latest_quiver_signals(state, limit)
         .await?
         .into_iter()
@@ -712,9 +732,73 @@ pub async fn compact_quiver_context(state: &AppState, limit: i64) -> Result<Json
         })
         .collect::<Vec<_>>();
     Ok(json!({
-        "latest_run": latest_quiver_run(state).await.unwrap_or(JsonValue::Null),
+        "freshness": quiver_context_freshness(&latest_run, &schedule),
+        "latest_run": latest_run,
         "signals": signals
     }))
+}
+
+/// States whether the latest Quiver run can be interpreted as current for the
+/// calendar-derived US-open follow-up. It is descriptive context only: callers
+/// must still treat Quiver data as advisory rather than a trading gate.
+fn quiver_context_freshness(latest_run: &JsonValue, schedule: &JsonValue) -> JsonValue {
+    let schedule_status = text(schedule, "schedule_status");
+    let expected_run_date = text(schedule, "scheduled_run_date");
+    let scheduled_for = text(schedule, "scheduled_for");
+    let run_date = text(latest_run, "run_date");
+    let run_status = text(latest_run, "status");
+    let success_count = value_f64(latest_run, "success_count");
+    let error_count = value_f64(latest_run, "error_count");
+    let asset_count = value_f64(latest_run, "asset_count");
+
+    let (status, instruction) = match schedule_status.as_str() {
+        "no_us_session" => (
+            "no_us_session",
+            "No eligible US session is scheduled today. Any stored Quiver data is historical context only.",
+        ),
+        "waiting" => (
+            "not_due",
+            "Today's US-open Quiver cycle is not due yet. Any stored Quiver data is historical context only.",
+        ),
+        "due" if latest_run.is_null() || run_date != expected_run_date => (
+            if latest_run.is_null() {
+                "missing"
+            } else {
+                "stale"
+            },
+            "Today's Quiver cycle is due but no matching completed run is available. Do not treat Quiver signals as current.",
+        ),
+        "due" if run_status != "completed" || success_count <= 0.0 => (
+            "failed",
+            "Today's Quiver cycle did not produce usable signals. Do not treat Quiver signals as current.",
+        ),
+        "due" if error_count > 0.0 || success_count < asset_count => (
+            "partial",
+            "Today's Quiver cycle completed with partial coverage. Use only listed successful signals; omitted assets have no current Quiver evidence.",
+        ),
+        "due" => (
+            "fresh",
+            "Today's Quiver cycle completed with full recorded coverage. Signals remain corroborating advisory context only.",
+        ),
+        _ => (
+            "unknown",
+            "The Quiver schedule state is unavailable. Treat stored Quiver data as historical context only.",
+        ),
+    };
+
+    json!({
+        "status": status,
+        "schedule_status": schedule_status,
+        "expected_run_date": expected_run_date,
+        "latest_run_date": run_date,
+        "latest_run_status": run_status,
+        "scheduled_for": scheduled_for,
+        "asset_count": asset_count,
+        "success_count": success_count,
+        "error_count": error_count,
+        "instruction": instruction,
+        "safety": "advisory_freshness_only_no_gate_hermes_or_broker_mutation",
+    })
 }
 
 /// Surfaces strong negative Quiver signals against currently held symbols.
@@ -771,7 +855,41 @@ pub fn held_position_conflicts(positions: &[JsonValue], context: &JsonValue) -> 
 }
 
 pub fn quiver_config_json_for_state(state: &AppState) -> JsonValue {
-    quiver_config_json(&quiver_config(state))
+    let config = quiver_config(state);
+    let now = Utc::now();
+    let run_date = now.with_timezone(&config.timezone).date_naive();
+    let mut value = quiver_config_json(&config);
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(target) = current_us_open_followup_target(state, &config, now, run_date) {
+        object.insert(
+            "scheduled_for".to_string(),
+            JsonValue::from(
+                target
+                    .target_at_utc
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
+        );
+        object.insert(
+            "scheduled_run_date".to_string(),
+            JsonValue::from(run_date.to_string()),
+        );
+        object.insert(
+            "schedule_status".to_string(),
+            JsonValue::from(if now < target.target_at_utc {
+                "waiting"
+            } else {
+                "due"
+            }),
+        );
+    } else {
+        object.insert(
+            "schedule_status".to_string(),
+            JsonValue::from("no_us_session"),
+        );
+    }
+    value
 }
 
 fn quiver_config(state: &AppState) -> QuiverConfig {
@@ -779,10 +897,6 @@ fn quiver_config(state: &AppState) -> QuiverConfig {
         .or_else(|| yaml_string(&state.config, &["localization", "time_zone"]))
         .and_then(|value| value.parse::<Tz>().ok())
         .unwrap_or(chrono_tz::Europe::Copenhagen);
-    let daily_time = yaml_string(&state.config, &["strategy", "quiver", "daily_time"])
-        .as_deref()
-        .and_then(parse_hh_mm)
-        .unwrap_or_else(|| parse_hh_mm(DEFAULT_DAILY_TIME).expect("default Quiver time is valid"));
     let api_key = yaml_string(&state.config, &["quiver", "api_key"])
         .or_else(|| std::env::var("QUIVERQUANT_API_KEY").ok())
         .map(|value| value.trim().to_string())
@@ -790,9 +904,20 @@ fn quiver_config(state: &AppState) -> QuiverConfig {
     QuiverConfig {
         enabled: yaml_bool(&state.config, &["strategy", "quiver", "enabled"]).unwrap_or(true),
         timezone,
-        daily_time,
         run_weekdays_only: yaml_bool(&state.config, &["strategy", "quiver", "run_weekdays_only"])
             .unwrap_or(true),
+        minutes_after_us_open: yaml_i64(
+            &state.config,
+            &[
+                "strategy",
+                "quiver",
+                "us_open_followup",
+                "minutes_after_open",
+            ],
+        )
+        .unwrap_or(DEFAULT_US_OPEN_FOLLOWUP_MINUTES)
+        .max(0),
+        exchange_codes: quiver_exchange_codes(state),
         base_url: yaml_string(&state.config, &["quiver", "base_url"])
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
         api_key,
@@ -809,7 +934,9 @@ fn quiver_config_json(config: &QuiverConfig) -> JsonValue {
     json!({
         "enabled": config.enabled,
         "timezone": config.timezone.name(),
-        "daily_time": config.daily_time.format("%H:%M").to_string(),
+        "schedule_kind": "us_open_followup",
+        "minutes_after_open": config.minutes_after_us_open,
+        "exchange_codes": config.exchange_codes,
         "run_weekdays_only": config.run_weekdays_only,
         "base_url": config.base_url,
         "api_key_configured": config.api_key.as_ref().is_some_and(|value| !value.is_empty()),
@@ -817,6 +944,51 @@ fn quiver_config_json(config: &QuiverConfig) -> JsonValue {
         "lookback_days": config.lookback_days,
         "sources": ["congress_trading"]
     })
+}
+
+fn quiver_exchange_codes(state: &AppState) -> Vec<String> {
+    crate::config::yaml_at(
+        &state.config,
+        &["strategy", "quiver", "us_open_followup", "exchange_codes"],
+    )
+    .and_then(|value| value.as_sequence())
+    .map(|values| {
+        values
+            .iter()
+            .filter_map(|value| value.as_str())
+            .map(|code| code.trim().to_uppercase())
+            .filter(|code| !code.is_empty())
+            .collect::<Vec<_>>()
+    })
+    .filter(|codes| !codes.is_empty())
+    .unwrap_or_else(|| {
+        DEFAULT_US_EXCHANGE_CODES
+            .iter()
+            .map(|code| (*code).to_string())
+            .collect()
+    })
+}
+
+fn current_us_open_followup_target(
+    state: &AppState,
+    config: &QuiverConfig,
+    now: chrono::DateTime<Utc>,
+    run_date: NaiveDate,
+) -> Option<crate::xai_decision::MarketOpenFollowupTarget> {
+    crate::xai_decision::market_open_followup_targets(
+        state,
+        &config.exchange_codes,
+        config.minutes_after_us_open,
+    )
+    .into_iter()
+    .filter(|target| {
+        target
+            .target_at_utc
+            .with_timezone(&config.timezone)
+            .date_naive()
+            == run_date
+    })
+    .min_by_key(|target| (target.target_at_utc < now, target.target_at_utc))
 }
 
 pub fn create_schema_sql() -> Vec<&'static str> {
@@ -862,10 +1034,6 @@ pub fn create_schema_sql() -> Vec<&'static str> {
         "CREATE INDEX IF NOT EXISTS idx_quiver_asset_signals_run_signal
          ON quiver_asset_signals(run_id, signal DESC, confidence DESC)",
     ]
-}
-
-fn parse_hh_mm(value: &str) -> Option<NaiveTime> {
-    NaiveTime::parse_from_str(value, "%H:%M").ok()
 }
 
 fn transaction_direction(value: &str) -> f64 {
@@ -1034,5 +1202,62 @@ mod tests {
         assert_eq!(conflicts["status"], "conflicts_detected");
         assert_eq!(conflicts["conflicts"].as_array().unwrap().len(), 1);
         assert_eq!(conflicts["conflicts"][0]["symbol"], "NVDA:XNAS");
+    }
+
+    #[test]
+    fn marks_matching_completed_quiver_run_as_fresh() {
+        let freshness = quiver_context_freshness(
+            &json!({
+                "run_date": "2026-07-30",
+                "status": "completed",
+                "asset_count": 60,
+                "success_count": 60,
+                "error_count": 0,
+            }),
+            &json!({
+                "schedule_status": "due",
+                "scheduled_run_date": "2026-07-30",
+                "scheduled_for": "2026-07-30T14:15:00Z",
+            }),
+        );
+        assert_eq!(freshness["status"], "fresh");
+    }
+
+    #[test]
+    fn does_not_treat_yesterday_quiver_run_as_current_after_due_time() {
+        let freshness = quiver_context_freshness(
+            &json!({
+                "run_date": "2026-07-29",
+                "status": "completed",
+                "asset_count": 60,
+                "success_count": 60,
+                "error_count": 0,
+            }),
+            &json!({
+                "schedule_status": "due",
+                "scheduled_run_date": "2026-07-30",
+                "scheduled_for": "2026-07-30T14:15:00Z",
+            }),
+        );
+        assert_eq!(freshness["status"], "stale");
+    }
+
+    #[test]
+    fn marks_partial_quiver_coverage_explicitly() {
+        let freshness = quiver_context_freshness(
+            &json!({
+                "run_date": "2026-07-30",
+                "status": "completed",
+                "asset_count": 60,
+                "success_count": 53,
+                "error_count": 7,
+            }),
+            &json!({
+                "schedule_status": "due",
+                "scheduled_run_date": "2026-07-30",
+                "scheduled_for": "2026-07-30T14:15:00Z",
+            }),
+        );
+        assert_eq!(freshness["status"], "partial");
     }
 }
