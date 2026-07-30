@@ -3747,6 +3747,7 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .first()
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let benchmark_readthrough = end_of_day_benchmark_readthrough(&latest);
     rsx! {
         section { class: "layout",
             div {
@@ -3767,6 +3768,10 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         div { class: "event prewrap",
                             strong { "Summary" }
                             span { "{text(&latest, \"summary\")}" }
+                        }
+                        EndOfDayBenchmarkPanel {
+                            benchmarks: benchmark_readthrough,
+                            prefs: prefs.clone(),
                         }
                         div { class: "grid-2",
                             div { class: "event prewrap",
@@ -3801,6 +3806,72 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
         }
     }
+}
+
+#[component]
+fn EndOfDayBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&benchmarks, "status").replace('_', " ");
+    let status_label = if status.is_empty() {
+        "not available".to_string()
+    } else {
+        status
+    };
+    let references = benchmarks
+        .get("references")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let caveat = text(&benchmarks, "caveat");
+    rsx! {
+        div { class: "event benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    strong { "Benchmark Comparison" }
+                    p { class: "muted", "Read-only daily comparison retained in the end-of-day journal and exposed to Hermes as advisory context." }
+                }
+                span { class: "status", "{status_label}" }
+            }
+            if references.is_empty() {
+                p { class: "muted", "No aligned benchmark history was available for this journal date." }
+            } else {
+                div { class: "table-wrap",
+                    table {
+                        thead {
+                            tr {
+                                th { "Benchmark" }
+                                th { "Portfolio" }
+                                th { "Benchmark" }
+                                th { "Excess" }
+                                th { "Coverage" }
+                            }
+                        }
+                        tbody {
+                            for reference in references {
+                                PerformanceBenchmarkRow { reference, prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            if !caveat.is_empty() {
+                p { class: "muted benchmark-caveat", "{caveat}" }
+            }
+        }
+    }
+}
+
+fn end_of_day_benchmark_readthrough(journal: &JsonValue) -> JsonValue {
+    let diary = journal
+        .get("diary_json")
+        .and_then(|value| match value {
+            JsonValue::String(raw) => serde_json::from_str::<JsonValue>(raw).ok(),
+            value => Some(value.clone()),
+        })
+        .unwrap_or(JsonValue::Null);
+    diary
+        .pointer("/diary/benchmark_readthrough")
+        .cloned()
+        .unwrap_or(JsonValue::Null)
 }
 
 #[component]
@@ -8485,6 +8556,31 @@ mod tests {
         assert!(APP_SCRIPT.contains("is-dismissed"));
         assert!(APP_SCRIPT.contains("window.history.replaceState"));
         assert!(APP_SCRIPT.contains("window.scrollTo({ top: scrollY })"));
+    }
+
+    #[test]
+    fn end_of_day_benchmark_readthrough_reads_only_the_diary_snapshot() {
+        let journal = json!({
+            "diary_json": serde_json::to_string(&json!({
+                "diary": {
+                    "benchmark_readthrough": {
+                        "status": "ready",
+                        "scope": "read_only_end_of_day_context_only",
+                    }
+                },
+                "unrelated": {"status": "ignored"}
+            })).expect("journal JSON serializes")
+        });
+
+        let readthrough = end_of_day_benchmark_readthrough(&journal);
+        assert_eq!(
+            readthrough.get("status").and_then(JsonValue::as_str),
+            Some("ready")
+        );
+        assert_eq!(
+            readthrough.get("scope").and_then(JsonValue::as_str),
+            Some("read_only_end_of_day_context_only")
+        );
     }
 
     #[test]

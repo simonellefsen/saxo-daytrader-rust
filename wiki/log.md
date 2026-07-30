@@ -1527,3 +1527,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Corrected the benchmark schedule from 23:55 to 22:15 Europe/Copenhagen. The daily journal is due at 22:30, so the prior ordering could have produced a formally valid comparison using only the preceding trading day's proxy close.
 - The scheduler already runs the benchmark step before the journal step. A config-contract test now asserts that the configured benchmark time stays earlier than the daily journal time in local configuration; the shipped-config parity test keeps the Kubernetes policy identical. This remains a read-only data-timing fix, not a trading-policy change.
+
+## [2026-07-30] performance | End-of-day benchmark visibility
+
+- Added a compact End-of-Day benchmark table sourced exclusively from the persisted daily journal snapshot. It renders proxy coverage, account return, proxy return, and excess return with the same caveat Hermes receives, instead of requiring operators to inspect raw diary JSON.
+- The view does not refresh Saxo data, derive a new signal, alter Hermes advice, or affect Decision Reports, Trading Manager gates, sizing, protective stops, or broker execution.

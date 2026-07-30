@@ -68,6 +68,11 @@ evidence, so it can reflect on relative performance with the same caveat shown
 in the Performance view. Missing portfolio or proxy history remains explicit;
 it is not converted to a zero return or a qualitative conclusion.
 
+The End-of-Day tab renders this stored snapshot as a compact benchmark table,
+including the actual proxy coverage dates, portfolio return, proxy return, and
+excess return. It is the same persisted journal payload that Hermes receives,
+not a fresh quote request or a recalculation while the page loads.
+
 ## Safety Boundary
 
 Benchmark refreshes perform only Saxo reference/chart GET requests. They do not
