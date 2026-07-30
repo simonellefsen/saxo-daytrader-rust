@@ -1282,6 +1282,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Snapshots", value: text(&summary, "points"), tone: "" }
             }
             PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
+            PerformanceContextPanel { summary: summary.clone(), goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
@@ -1297,6 +1298,83 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn PerformanceContextPanel(
+    summary: JsonValue,
+    goal_tracking: JsonValue,
+    range: String,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let since_reset = goal_tracking
+        .get("periods")
+        .and_then(|periods| periods.get("since_reset"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let since_reset_status = text(&since_reset, "status");
+    let since_reset_pnl = since_reset.get("pnl_dkk").and_then(JsonValue::as_f64);
+    let since_reset_return = since_reset.get("return_pct").and_then(JsonValue::as_f64);
+    let since_reset_at = format_timestamp(&text(&since_reset, "baseline_recorded_at"), &prefs);
+    let (since_reset_value, since_reset_subtitle, since_reset_tone) = match (
+        since_reset_status.as_str(),
+        since_reset_pnl,
+        since_reset_return,
+    ) {
+        ("ready", Some(pnl), Some(return_pct)) => {
+            let tone = if pnl > 0.0 {
+                "good-text"
+            } else if pnl < 0.0 {
+                "bad-text"
+            } else {
+                ""
+            };
+            (
+                format_signed_dkk(pnl, &prefs),
+                format!(
+                    "{} return · baseline {}",
+                    format_optional_percentage_points(Some(return_pct), &prefs),
+                    since_reset_at
+                ),
+                tone,
+            )
+        }
+        _ => (
+            "Awaiting baseline".to_string(),
+            "No comparable snapshot in the active import batch.".to_string(),
+            "",
+        ),
+    };
+    let range_drawdown = summary
+        .get("range_max_drawdown_pct")
+        .and_then(JsonValue::as_f64);
+    let (drawdown_value, drawdown_subtitle, drawdown_tone) = match range_drawdown {
+        Some(value) if value.is_finite() => (
+            format_optional_percentage_points(Some(value), &prefs),
+            "Worst running peak-to-trough account-value loss in this selected range. Read-only; it is not a trading gate.".to_string(),
+            if value < 0.0 { "bad-text" } else { "" },
+        ),
+        _ => (
+            "Awaiting history".to_string(),
+            "Requires at least two valid account-value snapshots in the selected range."
+                .to_string(),
+            "",
+        ),
+    };
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Portfolio Context" }
+                    p { class: "muted", "Comparable account-value history for the active import batch and selected range." }
+                }
+            }
+            div { class: "mini-grid",
+                SummaryMetricCard { label: "Since reset", value: since_reset_value, subtitle: since_reset_subtitle, tone: since_reset_tone }
+                SummaryMetricCard { label: "Max drawdown ({range})", value: drawdown_value, subtitle: drawdown_subtitle, tone: drawdown_tone }
             }
         }
     }

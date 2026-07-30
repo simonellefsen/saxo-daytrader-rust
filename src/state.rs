@@ -4008,6 +4008,7 @@ impl AppState {
         let latest_positions = latest
             .map(|row| value_i64(row, "position_count"))
             .unwrap_or(0);
+        let (range_return_pct, range_max_drawdown_pct) = performance_range_metrics(history);
         json!({
             "points": history.len(),
             "first_recorded_at": first.and_then(|row| row.get("recorded_at")).cloned().unwrap_or(JsonValue::Null),
@@ -4016,7 +4017,9 @@ impl AppState {
             "latest_total_market_value_dkk": latest_total,
             "change_dkk": latest_total - first_total,
             "daily_pnl_dkk": latest_daily,
-            "position_count": latest_positions
+            "position_count": latest_positions,
+            "range_return_pct": range_return_pct,
+            "range_max_drawdown_pct": range_max_drawdown_pct,
         })
     }
 
@@ -9112,13 +9115,18 @@ impl AppState {
             .portfolio_value_at(&month_start_utc, batch_id.as_deref())
             .await
             .unwrap_or(None);
+        let since_reset_baseline = self
+            .portfolio_value_since_reset(batch_id.as_deref())
+            .await
+            .unwrap_or(None);
         json!({
             "weekly_target_dkk": weekly_target,
             "monthly_target_dkk": monthly_target,
             "basis": "pnl_dkk is total portfolio value change since the period start, measured against the portfolio value history baseline.",
             "periods": {
                 "week": goal_period_value(week_baseline, total_value, weekly_target, &week_start_utc),
-                "month": goal_period_value(month_baseline, total_value, monthly_target, &month_start_utc)
+                "month": goal_period_value(month_baseline, total_value, monthly_target, &month_start_utc),
+                "since_reset": since_reset_performance_value(since_reset_baseline, total_value)
             }
         })
     }
@@ -9155,6 +9163,24 @@ impl AppState {
             ))
             .await?;
         Ok(after.map(|row| value_f64(&row, "total_market_value_dkk")))
+    }
+
+    /// The earliest persisted account-value snapshot in the active import
+    /// batch. A missing row is intentionally not substituted with zero or a
+    /// value from an earlier reset because neither is a comparable baseline.
+    async fn portfolio_value_since_reset(
+        &self,
+        batch_id: Option<&str>,
+    ) -> Result<Option<JsonValue>> {
+        let Some(batch_id) = batch_id else {
+            return Ok(None);
+        };
+        self.first_json(&format!(
+            "SELECT recorded_at, total_market_value_dkk FROM portfolio_value_history \
+             WHERE batch_id = '{}' ORDER BY recorded_at ASC, id ASC LIMIT 1",
+            sql_escape(batch_id)
+        ))
+        .await
     }
 
     pub fn cash_buffer_value(&self) -> JsonValue {
@@ -10714,6 +10740,72 @@ fn goal_period_value(
     })
 }
 
+fn since_reset_performance_value(baseline: Option<JsonValue>, total_value: f64) -> JsonValue {
+    let baseline_at = baseline
+        .as_ref()
+        .and_then(|row| row.get("recorded_at"))
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let baseline_value = baseline
+        .as_ref()
+        .and_then(|row| row.get("total_market_value_dkk"))
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    if let (Some(baseline_at), Some(baseline_value)) = (baseline_at, baseline_value)
+        && total_value.is_finite()
+        && total_value > 0.0
+    {
+        let pnl = total_value - baseline_value;
+        return json!({
+            "status": "ready",
+            "pnl_dkk": pnl,
+            "return_pct": pct(pnl, baseline_value) * 100.0,
+            "baseline_value_dkk": baseline_value,
+            "baseline_recorded_at": baseline_at,
+        });
+    }
+
+    json!({
+        "status": "pending_baseline",
+        "pnl_dkk": JsonValue::Null,
+        "return_pct": JsonValue::Null,
+        "baseline_value_dkk": JsonValue::Null,
+        "baseline_recorded_at": JsonValue::Null,
+    })
+}
+
+fn performance_range_metrics(history: &[JsonValue]) -> (Option<f64>, Option<f64>) {
+    let values = history
+        .iter()
+        .filter_map(|row| {
+            row.get("total_market_value_dkk")
+                .and_then(JsonValue::as_f64)
+        })
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .collect::<Vec<_>>();
+    let Some(start_value) = values.first().copied() else {
+        return (None, None);
+    };
+    let Some(end_value) = values.last().copied() else {
+        return (None, None);
+    };
+    if values.len() < 2 {
+        return (None, None);
+    }
+
+    let mut peak = start_value;
+    let mut max_drawdown_pct = 0.0_f64;
+    for value in values {
+        peak = peak.max(value);
+        max_drawdown_pct = max_drawdown_pct.min((value / peak - 1.0) * 100.0);
+    }
+    (
+        Some((end_value / start_value - 1.0) * 100.0),
+        Some(max_drawdown_pct),
+    )
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12261,6 +12353,43 @@ mod tests {
         assert!(
             (ready["progress_pct"].as_f64().unwrap_or_default() - (1_000.0 / 880.0)).abs() < 1e-12
         );
+    }
+
+    #[test]
+    fn since_reset_performance_requires_an_active_batch_baseline() {
+        let missing = since_reset_performance_value(None, 250_000.0);
+        assert_eq!(missing["status"], json!("pending_baseline"));
+        assert!(missing["pnl_dkk"].is_null());
+        assert!(missing["return_pct"].is_null());
+
+        let ready = since_reset_performance_value(
+            Some(json!({
+                "recorded_at": "2026-07-01T08:00:00Z",
+                "total_market_value_dkk": 240_000.0,
+            })),
+            250_000.0,
+        );
+        assert_eq!(ready["status"], json!("ready"));
+        assert_eq!(ready["pnl_dkk"], json!(10_000.0));
+        assert!((ready["return_pct"].as_f64().unwrap_or_default() - 4.166_666_666_7).abs() < 1e-8);
+    }
+
+    #[test]
+    fn performance_range_metrics_requires_history_and_measures_peak_to_trough_loss() {
+        assert_eq!(performance_range_metrics(&[]), (None, None));
+        assert_eq!(
+            performance_range_metrics(&[json!({"total_market_value_dkk": 100.0})]),
+            (None, None)
+        );
+
+        let (return_pct, drawdown_pct) = performance_range_metrics(&[
+            json!({"total_market_value_dkk": 100.0}),
+            json!({"total_market_value_dkk": 120.0}),
+            json!({"total_market_value_dkk": 90.0}),
+            json!({"total_market_value_dkk": 110.0}),
+        ]);
+        assert!((return_pct.unwrap_or_default() - 10.0).abs() < 1e-9);
+        assert!((drawdown_pct.unwrap_or_default() + 25.0).abs() < 1e-9);
     }
 
     #[test]

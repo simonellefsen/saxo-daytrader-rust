@@ -1545,3 +1545,9 @@ broker mutation was added.
 - Exposed the existing same-batch portfolio-value goal baselines on the Performance tab as weekly and monthly read-only target-progress cards.
 - Corrected missing history semantics at the payload boundary: a period without a valid baseline is now `pending_baseline` with null P/L and progress, rather than a misleading `0 DKK` and `0%` result.
 - This does not change the configured target, Hermes context, Decision Reports, Trading Manager gates, sizing, or broker execution. Daily, since-reset, and drawdown cards remain separate follow-up work because each needs an explicit baseline contract.
+
+## [2026-07-30] performance | Since-reset and range-drawdown context
+
+- Added a read-only since-reset card that uses the earliest persisted account-value snapshot from the currently active import batch. A missing or unusable same-batch row remains `pending_baseline`; the runtime does not reuse a pre-reset balance or invent a zero return.
+- Added a selected-range maximum drawdown card calculated from valid account-value snapshots only. It is labelled as display evidence and intentionally remains distinct from the trailing drawdown guardrail that can reduce or halt BUYs.
+- Neither metric enters Hermes, Decision Reports, Trading Manager selection, sizing, protective stops, or broker execution.
