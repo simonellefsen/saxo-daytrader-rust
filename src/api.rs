@@ -177,6 +177,10 @@ fn app_routes() -> Router<Arc<AppState>> {
             post(action_run_daily_indicators),
         )
         .route(
+            "/api/actions/performance-benchmarks",
+            post(action_run_performance_benchmarks),
+        )
+        .route(
             "/api/actions/quiver-signals",
             post(action_run_quiver_signals),
         )
@@ -1989,6 +1993,23 @@ async fn action_run_daily_indicators(State(state): State<Arc<AppState>>) -> Resp
         Err(err) => {
             error!("manual daily indicators run failed: {err:#}");
             json_result(Err(err))
+        }
+    }
+}
+
+async fn action_run_performance_benchmarks(State(state): State<Arc<AppState>>) -> Response {
+    match crate::performance_benchmarks::run_performance_benchmarks_now(&state).await {
+        Ok(summary) => {
+            info!(?summary, "performance benchmark refresh completed");
+            (StatusCode::OK, Json(summary)).into_response()
+        }
+        Err(err) => {
+            warn!("performance benchmark refresh failed: {err:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "detail": err.to_string()})),
+            )
+                .into_response()
         }
     }
 }

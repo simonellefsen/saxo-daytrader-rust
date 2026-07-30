@@ -1257,6 +1257,7 @@ fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantine
 #[component]
 fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let summary = data.performance_summary.clone();
+    let benchmarks = data.performance_benchmarks.clone();
     let change = value_f64(&summary, "change_dkk");
     let range = data.performance_range.clone();
     rsx! {
@@ -1279,6 +1280,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Daily P/L", value: format_dkk(value_f64(&summary, "daily_pnl_dkk"), &prefs), tone: if value_f64(&summary, "daily_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
                 MetricCard { label: "Snapshots", value: text(&summary, "points"), tone: "" }
             }
+            PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
                 span { class: "legend-item", span { class: "legend-dot cash-dot" } "Cash balance" }
@@ -1293,6 +1295,96 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn PerformanceBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&benchmarks, "status").replace('_', " ");
+    let references = benchmarks
+        .get("references")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let caveat = text(&benchmarks, "caveat");
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Benchmark Comparison" }
+                    p { class: "muted", "Read-only account-value comparison against Saxo-resolved ETF proxies." }
+                }
+                span { class: "status", "{status}" }
+            }
+            if references.is_empty() {
+                p { class: "muted", "Benchmark history is being prepared. The comparison appears after a successful read-only Saxo close refresh and an overlapping portfolio baseline." }
+            } else {
+                div { class: "table-wrap",
+                    table {
+                        thead {
+                            tr {
+                                th { "Benchmark" }
+                                th { "Portfolio" }
+                                th { "Benchmark" }
+                                th { "Excess" }
+                                th { "Coverage" }
+                            }
+                        }
+                        tbody {
+                            for reference in references {
+                                PerformanceBenchmarkRow { reference, prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            p { class: "muted benchmark-caveat", "{caveat}" }
+        }
+    }
+}
+
+#[component]
+fn PerformanceBenchmarkRow(reference: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&reference, "status").replace('_', " ");
+    let portfolio_return = reference
+        .get("portfolio_return_pct")
+        .and_then(JsonValue::as_f64);
+    let benchmark_return = reference
+        .get("benchmark_return_pct")
+        .and_then(JsonValue::as_f64);
+    let excess_return = reference
+        .get("excess_return_pct")
+        .and_then(JsonValue::as_f64);
+    let label = text(&reference, "label");
+    let symbol = text(&reference, "symbol");
+    let coverage = match (
+        text(&reference, "baseline_at"),
+        text(&reference, "latest_at"),
+    ) {
+        (baseline, latest) if !baseline.is_empty() && !latest.is_empty() => {
+            format!("{} to {}", short_date(&baseline), short_date(&latest))
+        }
+        _ => "Awaiting history".to_string(),
+    };
+    let percent = |value: Option<f64>| {
+        value
+            .map(|value| format_signed_pct(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    rsx! {
+        tr {
+            td {
+                strong { "{label}" }
+                span { class: "muted block", "{symbol}" }
+            }
+            td { "{percent(portfolio_return)}" }
+            td { "{percent(benchmark_return)}" }
+            td { class: excess_return.map(|value| if value >= 0.0 { "good-text" } else { "bad-text" }).unwrap_or("muted"), "{percent(excess_return)}" }
+            td {
+                span { class: "status", "{status}" }
+                span { class: "muted block", "{coverage}" }
             }
         }
     }
@@ -7833,6 +7925,10 @@ fn format_signed_dkk(value: f64, prefs: &LocalizationPrefs) -> String {
 fn format_signed_pct(value: f64, prefs: &LocalizationPrefs) -> String {
     let sign = if value > 0.0 { "+" } else { "" };
     format!("{sign}{}", format_pct(value, prefs))
+}
+
+fn short_date(value: &str) -> String {
+    value.chars().take(10).collect()
 }
 
 fn position_cost_price_local(row: &JsonValue) -> f64 {

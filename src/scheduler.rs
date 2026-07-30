@@ -15,6 +15,7 @@ use crate::{
     editorial_research::run_editorial_research_cycle,
     markov_method::run_markov_method_cycle,
     notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
+    performance_benchmarks::run_performance_benchmark_cycle,
     protective_stops::run_automatic_protective_stop_sweep,
     quiver::run_quiver_signal_cycle,
     saxo_order::{backfill_saxo_ens_activities, run_saxo_execution_queue, sync_saxo_broker_orders},
@@ -238,6 +239,14 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     .await;
     record_step_duration(&mut step_durations, "daily_indicators", step_started);
     let step_started = Instant::now();
+    let performance_benchmarks = bounded_enrichment_step(
+        "performance_benchmarks",
+        enrichment_step_timeout("PERFORMANCE_BENCHMARKS", 75),
+        run_performance_benchmark_cycle(state),
+    )
+    .await;
+    record_step_duration(&mut step_durations, "performance_benchmarks", step_started);
+    let step_started = Instant::now();
     let execution_queue = match run_saxo_execution_queue(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -364,6 +373,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "quiver_signals": quiver_signals,
         "editorial_research": editorial_research,
         "daily_indicators": daily_indicators,
+        "performance_benchmarks": performance_benchmarks,
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "portfolio_value_snapshot": portfolio_value_snapshot,

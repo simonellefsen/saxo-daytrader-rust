@@ -13,6 +13,7 @@ mod markov_method;
 mod mcp;
 mod models;
 mod notifications;
+mod performance_benchmarks;
 mod portfolio_reset;
 mod price_monitor;
 mod protective_stops;

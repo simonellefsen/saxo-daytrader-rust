@@ -312,6 +312,26 @@ scheduler:
   history_retention_days: 30
 
 strategy:
+  # Read-only comparison of the account value series with Saxo-resolved ETF
+  # proxies. These are price returns, not index total returns: no dividends,
+  # FX-normalization, or cash-flow adjustment is claimed. They are deliberately
+  # outside Decision Reports, Hermes, Trading Manager, and broker execution.
+  performance_benchmarks:
+    enabled: true
+    timezone: Europe/Copenhagen
+    daily_time: "23:55"
+    run_weekdays_only: true
+    sample_count: 1260
+    references:
+      - key: us_large_cap
+        label: S&P 500 (SPY ETF proxy)
+        symbol: SPY:xnys
+      - key: us_technology
+        label: Nasdaq-100 (QQQ ETF proxy)
+        symbol: QQQ:xnas
+      - key: global_equity
+        label: MSCI World (EUNL ETF proxy)
+        symbol: EUNL:xetr
   enabled: true
   mode: swing
   selection_interval_minutes: 15

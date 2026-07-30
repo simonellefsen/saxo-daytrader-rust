@@ -336,6 +336,11 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "swing", "daily_indicators", "timezone"],
         "Indicator run cadence.",
     ),
+    // ---- strategy.performance_benchmarks ----
+    advisory_subtree(
+        &["strategy", "performance_benchmarks"],
+        "Read-only Saxo-backed benchmark price-return comparison. It cannot affect decisions, Hermes, sizing, or broker behavior.",
+    ),
     // ---- strategy.swing.markov_gate ----
     enforced(
         &["strategy", "swing", "markov_gate", "enabled"],
@@ -1048,6 +1053,28 @@ mod tests {
             crate::config::yaml_at(&local, &path),
             crate::config::yaml_at(&kubernetes, &path),
             "local and Kubernetes daily-indicator policy must stay aligned"
+        );
+    }
+
+    #[test]
+    fn shipped_configs_share_performance_benchmark_policy() {
+        let local = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let kubernetes = parse(
+            &std::fs::read_to_string(format!(
+                "{}/deploy/k8s/base/config.k8s.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("Kubernetes config is readable"),
+        );
+        let path = ["strategy", "performance_benchmarks"];
+
+        assert_eq!(
+            crate::config::yaml_at(&local, &path),
+            crate::config::yaml_at(&kubernetes, &path),
+            "local and Kubernetes performance benchmark policy must stay aligned"
         );
     }
 }

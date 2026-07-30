@@ -1504,3 +1504,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Corrected held Watchlist rows that showed `0.0%` when Saxo's broker exposure supplied an approximated zero while the fresh price-monitor snapshot had a non-zero move from `LastClose` to the current infoprice. The monitored quote's `change_pct` now takes precedence, including a verified flat zero; broker exposure remains the fallback only when a quote snapshot is absent.
 - This is display and read-model correctness only. It does not change quotes, decision logic, Hermes context, order sizing, or broker behavior.
+## [2026-07-30] performance | Saxo-backed benchmark comparison
+
+- Added the read-only Saxo-backed ETF-proxy performance benchmark capability and documented its account-value, price-return, FX, dividend, cash-flow, and SIM-data limitations in [docs/performance-benchmarks](/Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md).
+- Recorded the safety boundary and verification follow-up in [roadmap](roadmap.md). No benchmark data enters decision, Hermes, sizing, or broker-mutation paths.

@@ -3672,6 +3672,16 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_benchmarks = if active_view == "performance" {
+            crate::performance_benchmarks::performance_benchmark_payload(self, &performance_history)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard performance benchmark comparison degraded: {err:#}");
+                    json!({"status": "unavailable", "references": []})
+                })
+        } else {
+            JsonValue::Null
+        };
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -3809,9 +3819,11 @@ impl AppState {
                 "markov": crate::markov_method::markov_config_json_for_state(self),
                 "quiver": crate::quiver::quiver_config_json_for_state(self),
                 "indicators": crate::daily_indicators::indicator_config_json_for_state(self),
+                "performance_benchmarks": crate::performance_benchmarks::benchmark_config_json_for_state(self),
             }),
             performance_history,
             performance_summary,
+            performance_benchmarks,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -3967,6 +3979,7 @@ impl AppState {
             "range_key": range_key,
             "history": history,
             "summary": self.performance_summary(&history),
+            "benchmarks": crate::performance_benchmarks::performance_benchmark_payload(self, &history).await?,
             "goal_tracking": self.goal_tracking(total).await
         }))
     }
@@ -10257,6 +10270,12 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating daily indicator runtime tables")?;
+        }
+        for sql in crate::performance_benchmarks::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating performance benchmark runtime tables")?;
         }
         for column in [
             "nearest_support DOUBLE PRECISION",
