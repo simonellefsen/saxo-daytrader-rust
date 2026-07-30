@@ -1515,5 +1515,5 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 ## [2026-07-30] performance | Named Europe and UK benchmark proxies
 
-- Added the named STOXX Europe 600 `EXSA:xetr` and FTSE 100 `ISF:xlon` tracker proxies to both shipped benchmark policies. They stay confined to the read-only Performance comparison and are not watchlist, Decision Report, Hermes, Trading Manager, sizing, or broker inputs.
-- Added a config-contract regression test that requires every configured reference to have a non-empty unique key, unique symbol, and a label that clearly discloses its proxy role. The first deployed refresh must resolve and backfill both through Saxo SIM before treating them as available in the dashboard.
+- Added named broad-Europe and UK tracker candidates to the read-only comparison path. SIM accepted the FTSE 100 `ISF:xlon` and backfilled 1,200 daily closes. It rejected the initially selected STOXX Europe 600 `EXSA:xetr` as non-tradable, so the Europe candidate is corrected to the older Xetra-listed MSCI Europe `EUNK:xetr` before being declared available. These references remain outside Watchlists, Decision Reports, Hermes, Trading Manager, sizing, and broker inputs.
+- Added a config-contract regression test that requires every configured reference to have a non-empty unique key, unique symbol, and a label that clearly discloses its proxy role. The first deployed refresh must resolve and backfill the corrected Europe tracker through Saxo SIM before treating it as available in the dashboard.

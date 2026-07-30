@@ -9,7 +9,7 @@ set of Saxo-resolved ETF proxies:
 | Nasdaq-100 | `QQQ:xnas` | US technology/growth reference |
 | Dow Jones Industrial Average | `DIA:arcx` | US blue-chip reference |
 | MSCI World | `EUNL:xetr` | Broad global-equity reference |
-| STOXX Europe 600 | `EXSA:xetr` | Broad-Europe reference |
+| MSCI Europe | `EUNK:xetr` | Broad-Europe reference |
 | FTSE 100 | `ISF:xlon` | UK large-cap reference |
 
 The references are deliberately labelled as ETF proxies. They are not claims
