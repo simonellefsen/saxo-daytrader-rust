@@ -333,6 +333,7 @@ Strategy changes should be evidence-driven and reversible.
 
 Performance should be explainable at portfolio, report, and position level.
 
+- [x] Add a read-only reconciled SELL-outcome panel from local ledger rows: show realised P/L, win/loss/breakeven counts, win rate, payoff ratio, commission, tax, and an explicit collecting/preliminary sample label. Partial sales are rows rather than synthetic round trips; defer holding-time and realised-slippage metrics until lot-to-sale and broker quote-at-submission evidence are stored.
 - Reconcile dashboard aggregate P/L with broker exposure rows and local portfolio value history, and show source freshness for each.
 - Add P/L attribution by symbol, currency, sector, and strategy role.
 - Add daily, weekly, monthly, and since-reset performance cards with target progress and drawdown.

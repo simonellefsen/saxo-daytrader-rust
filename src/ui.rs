@@ -1304,6 +1304,14 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     .unwrap_or(JsonValue::Null),
                 prefs: prefs.clone(),
             }
+            PerformanceRealisedSellOutcomesPanel {
+                outcomes: data
+                    .integrity
+                    .get("realised_sell_outcomes")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                prefs: prefs.clone(),
+            }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
@@ -1494,6 +1502,82 @@ fn PerformanceExposureAttributionPanel(
                     }
                 }
                 p { class: "muted benchmark-caveat", "{evidence}. Instrument currency is a grouping label only: Saxo reports exposure P/L in the broker account currency, so this table does not isolate FX P/L. Showing the top {text(&attribution, \"shown_row_count\")} by absolute P/L; sector, strategy-role, realised P/L, costs, and tax attribution are not included." }
+            }
+        }
+    }
+}
+
+#[component]
+fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let rows = outcomes
+        .get("recent_rows")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let available = text(&outcomes, "status") != "unavailable";
+    let status = text(&outcomes, "status");
+    let (status_label, status_tone) = match status.as_str() {
+        "preliminary" => ("preliminary sample", "warn-status"),
+        "collecting" => ("collecting evidence", "warn-status"),
+        _ => ("no reconciled sales", "warn-status"),
+    };
+    let money = |key: &str| {
+        outcomes
+            .get(key)
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+            .map(|value| format_signed_dkk(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    let ratio = outcomes
+        .get("payoff_ratio")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite())
+        .map(|value| crate::localization::format_number(value, 2, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let win_rate = outcomes
+        .get("win_rate")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite())
+        .map(|value| format_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Reconciled SELL Outcomes" }
+                    p { class: "muted", "Historical local-accounting evidence for closed sale rows. It is read-only and does not imply a strategy recommendation." }
+                }
+                span { class: "status {status_tone}", "{status_label}" }
+            }
+            if !available {
+                p { class: "muted", "No reconciled SELL ledger rows with recorded cost basis are available yet." }
+            } else {
+                div { class: "mini-grid",
+                    MetricCard { label: "Win rate", value: win_rate, tone: "" }
+                    MetricCard { label: "Payoff ratio", value: ratio, tone: "" }
+                    MetricCard { label: "Realised P/L", value: money("total_realised_gain_dkk"), tone: if value_f64(&outcomes, "total_realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
+                    MetricCard { label: "Closed-sale rows", value: format!("{} / {}", text(&outcomes, "closed_sale_count"), text(&outcomes, "sample_requirement")), tone: "" }
+                    MetricCard { label: "Commission", value: outcomes.get("total_commission_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
+                    MetricCard { label: "Tax booked", value: outcomes.get("total_tax_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr { th { "Closed" } th { "Symbol" } th { "Outcome" } th { "Commission" } th { "Cost basis" } } }
+                        tbody {
+                            for row in rows {
+                                tr {
+                                    td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+                                    td { strong { "{text(&row, \"symbol\")}" } }
+                                    td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row.get(\"realised_gain_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_signed_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                    td { "{row.get(\"commission_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_signed_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                    td { "{row.get(\"cost_basis_sold_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                }
+                            }
+                        }
+                    }
+                }
+                p { class: "muted benchmark-caveat", "{text(&outcomes, \"closed_sale_count\")} closed sale row(s), including partial sales, are counted independently; {text(&outcomes, \"breakeven_count\")} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {text(&outcomes, \"sample_requirement\")} rows. Holding time is unavailable because the ledger does not retain a durable FIFO lot-to-sale link; realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
             }
         }
     }

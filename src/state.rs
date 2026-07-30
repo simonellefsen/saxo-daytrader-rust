@@ -80,6 +80,9 @@ const TRADE_THESIS_OUTCOME_MIN_COMPLETE_OBSERVATIONS: usize = 20;
 const HOLDING_THESIS_REVIEW_LIMIT: i64 = 50;
 const DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const PERFORMANCE_EXPOSURE_ATTRIBUTION_LIMIT: usize = 20;
+const PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT: i64 = 250;
+const PERFORMANCE_REALISED_SELL_OUTCOME_RECENT_LIMIT: usize = 12;
+const PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE: usize = 20;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
 const MISSED_TRADE_SHADOW_MIN_COMPLETE_OBSERVATIONS: usize = 20;
@@ -5047,6 +5050,21 @@ impl AppState {
                 .and_then(JsonValue::as_f64)
                 .filter(|value| value.is_finite() && *value > 0.0),
         );
+        let realised_sell_rows = self
+            .select_json(&format!(
+                "SELECT id, created_at, symbol, instrument_name, quantity, currency, \\
+                        realised_gain_dkk, commission_dkk, tax_dkk, cost_basis_sold_dkk, mode, status \\
+                 FROM trade_ledger \\
+                 WHERE UPPER(side) = 'SELL' \\
+                   AND status IN ('executed', 'approved') \\
+                   AND COALESCE(cost_basis_sold_dkk, 0) > 0 \\
+                 ORDER BY created_at DESC, id DESC \\
+                 LIMIT {}",
+                PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT
+            ))
+            .await
+            .unwrap_or_default();
+        let realised_sell_outcomes = realised_sell_outcome_evidence(&realised_sell_rows);
         if broker_exposure_snapshot.is_null() {
             checks.insert(
                 "broker_exposure_aggregate".to_string(),
@@ -5293,6 +5311,7 @@ impl AppState {
             "config_contract": config_contract,
             "pnl_reconciliation": pnl_reconciliation,
             "unrealised_pnl_attribution": unrealised_pnl_attribution,
+            "realised_sell_outcomes": realised_sell_outcomes,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -11084,6 +11103,115 @@ fn broker_exposure_pnl_attribution(
     })
 }
 
+/// Read-only outcome accounting for closed SELL ledger rows. A partial sale is
+/// one realised row, not a complete round-trip trade. The local ledger does
+/// not retain a durable lot-to-sale link or broker quote-at-submission record,
+/// so this deliberately excludes holding time and realised slippage.
+fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
+    let mut realised_rows = rows
+        .iter()
+        .filter_map(|row| {
+            let realised_gain_dkk = row
+                .get("realised_gain_dkk")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())?;
+            let cost_basis_sold_dkk = row
+                .get("cost_basis_sold_dkk")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)?;
+            Some(json!({
+                "created_at": row.get("created_at").cloned().unwrap_or(JsonValue::Null),
+                "symbol": text_value(row, "symbol"),
+                "instrument_name": row.get("instrument_name").cloned().unwrap_or(JsonValue::Null),
+                "quantity": row.get("quantity").cloned().unwrap_or(JsonValue::Null),
+                "currency": row.get("currency").cloned().unwrap_or(JsonValue::Null),
+                "realised_gain_dkk": realised_gain_dkk,
+                "commission_dkk": value_f64(row, "commission_dkk"),
+                "tax_dkk": value_f64(row, "tax_dkk"),
+                "cost_basis_sold_dkk": cost_basis_sold_dkk,
+                "mode": row.get("mode").cloned().unwrap_or(JsonValue::Null),
+                "status": row.get("status").cloned().unwrap_or(JsonValue::Null),
+            }))
+        })
+        .collect::<Vec<_>>();
+    if realised_rows.is_empty() {
+        return json!({
+            "status": "unavailable",
+            "scope": "read_only_reconciled_sell_ledger_outcomes",
+            "counting_unit": "closed sale ledger row",
+            "sample_requirement": PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE,
+            "closed_sale_count": 0,
+            "recent_rows": [],
+            "holding_time_status": "unavailable_no_lot_sale_linkage",
+            "slippage_status": "unavailable_no_quote_at_submission",
+        });
+    }
+
+    let mut win_count = 0usize;
+    let mut loss_count = 0usize;
+    let mut breakeven_count = 0usize;
+    let mut total_realised_gain_dkk = 0.0;
+    let mut total_commission_dkk = 0.0;
+    let mut total_tax_dkk = 0.0;
+    let mut total_cost_basis_sold_dkk = 0.0;
+    let mut total_win_dkk = 0.0;
+    let mut total_loss_dkk = 0.0;
+    for row in &realised_rows {
+        let realised_gain_dkk = value_f64(row, "realised_gain_dkk");
+        total_realised_gain_dkk += realised_gain_dkk;
+        total_commission_dkk += value_f64(row, "commission_dkk");
+        total_tax_dkk += value_f64(row, "tax_dkk");
+        total_cost_basis_sold_dkk += value_f64(row, "cost_basis_sold_dkk");
+        if realised_gain_dkk > 1e-9 {
+            win_count += 1;
+            total_win_dkk += realised_gain_dkk;
+        } else if realised_gain_dkk < -1e-9 {
+            loss_count += 1;
+            total_loss_dkk += realised_gain_dkk;
+        } else {
+            breakeven_count += 1;
+        }
+    }
+    let decisive_sale_count = win_count + loss_count;
+    let average_win_dkk = average_or_null(total_win_dkk, win_count);
+    let average_loss_dkk = average_or_null(total_loss_dkk, loss_count);
+    let payoff_ratio = match (average_win_dkk.as_f64(), average_loss_dkk.as_f64()) {
+        (Some(average_win), Some(average_loss)) if average_loss < -1e-9 => {
+            json!(average_win / average_loss.abs())
+        }
+        _ => JsonValue::Null,
+    };
+    let status = if realised_rows.len() < PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE {
+        "collecting"
+    } else {
+        "preliminary"
+    };
+    realised_rows.truncate(PERFORMANCE_REALISED_SELL_OUTCOME_RECENT_LIMIT);
+    json!({
+        "status": status,
+        "scope": "read_only_reconciled_sell_ledger_outcomes",
+        "counting_unit": "closed sale ledger row",
+        "sample_requirement": PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE,
+        "scan_limit": PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT,
+        "closed_sale_count": win_count + loss_count + breakeven_count,
+        "decisive_sale_count": decisive_sale_count,
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "breakeven_count": breakeven_count,
+        "win_rate": fraction_or_null(win_count, decisive_sale_count),
+        "average_win_dkk": average_win_dkk,
+        "average_loss_dkk": average_loss_dkk,
+        "payoff_ratio": payoff_ratio,
+        "total_realised_gain_dkk": total_realised_gain_dkk,
+        "total_commission_dkk": total_commission_dkk,
+        "total_tax_dkk": total_tax_dkk,
+        "total_cost_basis_sold_dkk": total_cost_basis_sold_dkk,
+        "recent_rows": realised_rows,
+        "holding_time_status": "unavailable_no_lot_sale_linkage",
+        "slippage_status": "unavailable_no_quote_at_submission",
+    })
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12798,6 +12926,73 @@ mod tests {
         assert_eq!(
             attribution["scope"],
             json!("read_only_stored_saxo_exposure_unrealised_pnl")
+        );
+    }
+
+    #[test]
+    fn realised_sell_outcomes_keep_partial_sales_and_sample_limits_explicit() {
+        let outcomes = realised_sell_outcome_evidence(&[
+            json!({
+                "created_at": "2026-07-30T10:00:00Z",
+                "symbol": "WIN1:xnas",
+                "quantity": 1.0,
+                "currency": "USD",
+                "realised_gain_dkk": 1_000.0,
+                "commission_dkk": 4.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 3_000.0,
+                "status": "executed",
+            }),
+            json!({
+                "created_at": "2026-07-29T10:00:00Z",
+                "symbol": "WIN2:xnas",
+                "quantity": 2.0,
+                "currency": "USD",
+                "realised_gain_dkk": 500.0,
+                "commission_dkk": 3.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 2_000.0,
+                "status": "executed",
+            }),
+            json!({
+                "created_at": "2026-07-28T10:00:00Z",
+                "symbol": "LOSS:xnas",
+                "quantity": 1.0,
+                "currency": "USD",
+                "realised_gain_dkk": -300.0,
+                "commission_dkk": 2.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 1_500.0,
+                "status": "approved",
+            }),
+            json!({
+                "created_at": "2026-07-27T10:00:00Z",
+                "symbol": "FLAT:xnas",
+                "quantity": 1.0,
+                "currency": "USD",
+                "realised_gain_dkk": 0.0,
+                "commission_dkk": 1.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 900.0,
+                "status": "executed",
+            }),
+        ]);
+
+        assert_eq!(json_text(&outcomes, "status"), "collecting");
+        assert_eq!(value_i64(&outcomes, "closed_sale_count"), 4);
+        assert_eq!(value_i64(&outcomes, "decisive_sale_count"), 3);
+        assert_eq!(value_i64(&outcomes, "win_count"), 2);
+        assert_eq!(value_i64(&outcomes, "loss_count"), 1);
+        assert_eq!(value_i64(&outcomes, "breakeven_count"), 1);
+        assert!((value_f64(&outcomes, "win_rate") - (2.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(value_f64(&outcomes, "average_win_dkk"), 750.0);
+        assert_eq!(value_f64(&outcomes, "average_loss_dkk"), -300.0);
+        assert_eq!(value_f64(&outcomes, "payoff_ratio"), 2.5);
+        assert_eq!(value_f64(&outcomes, "total_realised_gain_dkk"), 1_200.0);
+        assert_eq!(value_i64(&outcomes, "sample_requirement"), 20);
+        assert_eq!(
+            json_text(&outcomes, "holding_time_status"),
+            "unavailable_no_lot_sale_linkage"
         );
     }
 

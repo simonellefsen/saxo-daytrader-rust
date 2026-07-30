@@ -10,6 +10,12 @@ updated: 2026-07-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-30] performance | Reconciled SELL outcome evidence
+
+- Added a read-only Performance panel from local `trade_ledger` SELL rows with a recorded cost basis. It reports realised P/L, win/loss/breakeven counts, win rate, average win/loss, payoff ratio, commission, tax, and recent closed-sale rows.
+- Partial sales are intentionally counted as individual ledger outcomes rather than being presented as complete round-trip trades. The panel is `collecting` until it reaches 20 rows and then remains explicitly `preliminary`; it is accounting evidence rather than a backtest or trading signal.
+- Holding time and realised slippage stay unavailable: the ledger does not yet retain a durable FIFO lot-to-sale association or a broker quote-at-submission observation. This panel does not feed Hermes, Decision Reports, Trading Manager, sizing, stops, or execution.
+
 ## [2026-07-30] operations | Calendar-aware Quiver context
 
 - Replaced the fixed 19:00 Europe/Copenhagen Quiver run with the Saxo calendar's shared XNAS/XNYS opening plus 45 minutes. The US Decision Report remains at opening plus 75 minutes, so the scheduled Quiver cycle has an approximately 30-minute completion window before it is consumed.
