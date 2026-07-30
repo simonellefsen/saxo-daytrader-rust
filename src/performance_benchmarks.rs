@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use serde_json::{Value as JsonValue, json};
-use sqlx::Row;
 use tracing::{info, warn};
 
 use crate::{
@@ -500,9 +499,18 @@ async fn close_at_or_before(
         sql_escape(boundary),
     );
     let row = sqlx::query(&sql).fetch_optional(&state.pool).await?;
-    Ok(row.map(|row| ClosePoint {
-        observed_at: row.try_get("observed_at").unwrap_or_default(),
-        close: row.try_get("close").unwrap_or(0.0),
+    Ok(row.map(|row| {
+        let value = row_to_json(&row);
+        ClosePoint {
+            observed_at: value
+                .get("observed_at")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            // PostgreSQL REAL is decoded as f32 by sqlx::AnyPool, while
+            // SQLite returns f64. The shared row adapter handles both.
+            close: value_f64(&value, "close"),
+        }
     }))
 }
 
