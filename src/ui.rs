@@ -1313,6 +1313,11 @@ fn PerformanceBenchmarkPanel(
         .cloned()
         .unwrap_or_default();
     let caveat = text(&benchmarks, "caveat");
+    let (freshness_label, freshness_tone, freshness_detail) = benchmark_freshness_badge(
+        &text(&benchmarks, "freshness"),
+        value_i64(&benchmarks, "ready_count"),
+        value_i64(&benchmarks, "reference_count"),
+    );
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -1320,7 +1325,10 @@ fn PerformanceBenchmarkPanel(
                     h3 { "Benchmark Comparison ({range})" }
                     p { class: "muted", "Select 1D or 1W above for daily or week-to-date comparison. Read-only account-value comparison against Saxo-resolved ETF proxies." }
                 }
-                span { class: "status", "{status}" }
+                div { class: "status-stack",
+                    span { class: "status", "{status}" }
+                    span { class: "status {freshness_tone}", title: "{freshness_detail}", "{freshness_label}" }
+                }
             }
             if references.is_empty() {
                 p { class: "muted", "Benchmark history is being prepared. The comparison appears after a successful read-only Saxo close refresh and an overlapping portfolio baseline." }
@@ -1372,6 +1380,11 @@ fn PerformanceBenchmarkRow(reference: JsonValue, prefs: LocalizationPrefs) -> El
         }
         _ => "Awaiting history".to_string(),
     };
+    let (freshness_label, freshness_tone, freshness_detail) = benchmark_freshness_badge(
+        &text(&reference, "freshness"),
+        if portfolio_return.is_some() { 1 } else { 0 },
+        1,
+    );
     let percent = |value: Option<f64>| {
         value
             .map(|value| format_signed_pct(value, &prefs))
@@ -1388,9 +1401,54 @@ fn PerformanceBenchmarkRow(reference: JsonValue, prefs: LocalizationPrefs) -> El
             td { class: excess_return.map(|value| if value >= 0.0 { "good-text" } else { "bad-text" }).unwrap_or("muted"), "{percent(excess_return)}" }
             td {
                 span { class: "status", "{status}" }
+                span { class: "status {freshness_tone}", title: "{freshness_detail}", "{freshness_label}" }
                 span { class: "muted block", "{coverage}" }
             }
         }
+    }
+}
+
+fn benchmark_freshness_badge(
+    freshness: &str,
+    ready_count: i64,
+    reference_count: i64,
+) -> (&'static str, &'static str, &'static str) {
+    match freshness {
+        "aligned_close" => (
+            "aligned close",
+            "good-status",
+            "The stored proxy closes use the same calendar date as the account boundaries.",
+        ),
+        "prior_close" => (
+            "prior close",
+            "warn-status",
+            "At least one stored proxy close is one calendar day older than its account boundary. This is expected before today's market close, but it is not an intraday comparison.",
+        ),
+        "stale_close" => (
+            "stale close",
+            "bad-status",
+            "At least one stored proxy close is two or more calendar days older than its account boundary. Treat the relative return as stale until the next successful refresh.",
+        ),
+        "unknown_alignment" => (
+            "alignment unknown",
+            "warn-status",
+            "Stored timestamps could not be compared. The displayed return remains read-only orientation data.",
+        ),
+        _ if ready_count == 0 => (
+            "awaiting history",
+            "warn-status",
+            "No proxy row has overlapping stored history for the selected account range.",
+        ),
+        _ if ready_count < reference_count => (
+            "partial coverage",
+            "warn-status",
+            "Only some configured proxy references have overlapping stored history for the selected account range.",
+        ),
+        _ => (
+            "coverage unknown",
+            "warn-status",
+            "The comparison has stored data, but its freshness metadata is unavailable.",
+        ),
     }
 }
 
@@ -8581,6 +8639,20 @@ mod tests {
             readthrough.get("scope").and_then(JsonValue::as_str),
             Some("read_only_end_of_day_context_only")
         );
+    }
+
+    #[test]
+    fn benchmark_freshness_badges_explain_proxy_close_age() {
+        let aligned = benchmark_freshness_badge("aligned_close", 6, 6);
+        assert_eq!(aligned.0, "aligned close");
+        assert_eq!(aligned.1, "good-status");
+
+        let prior = benchmark_freshness_badge("prior_close", 6, 6);
+        assert_eq!(prior.0, "prior close");
+        assert_eq!(prior.1, "warn-status");
+
+        let waiting = benchmark_freshness_badge("awaiting_history", 0, 6);
+        assert_eq!(waiting.0, "awaiting history");
     }
 
     #[test]

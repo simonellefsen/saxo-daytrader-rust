@@ -1532,3 +1532,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added a compact End-of-Day benchmark table sourced exclusively from the persisted daily journal snapshot. It renders proxy coverage, account return, proxy return, and excess return with the same caveat Hermes receives, instead of requiring operators to inspect raw diary JSON.
 - The view does not refresh Saxo data, derive a new signal, alter Hermes advice, or affect Decision Reports, Trading Manager gates, sizing, protective stops, or broker execution.
+## [2026-07-30] performance | Benchmark timestamp alignment
+
+Added read-only benchmark freshness metadata derived from the persisted account
+and Saxo proxy dates. Performance and End-of-Day now label aligned, prior, and
+stale closes so an older market close cannot look like an intraday comparison.
+No provider request, Hermes context change, decision gate, sizing rule, or
+broker mutation was added.

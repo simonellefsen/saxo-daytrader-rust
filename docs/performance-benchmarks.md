@@ -34,6 +34,14 @@ For the selected Performance range, the UI uses:
 The table displays the actual benchmark dates used. A missing or non-overlapping
 series remains `pending_history`; it is never rendered as a zero return.
 
+Each row also labels its timestamp alignment from the stored account and proxy
+boundaries: `aligned close` means both use the same calendar date, `prior close`
+means at least one proxy close is one calendar day behind the account boundary,
+and `stale close` means the gap is two or more days. This makes an intraday
+portfolio snapshot versus yesterday's market close visible rather than implying
+that the proxy return is current. The label is read-only evidence, not a
+trading-confidence score or a Decision Report input.
+
 The Performance range picker controls the comparison horizon. Select `1D` for
 the latest available daily account change and `1W` for the week-to-date window;
 the panel always shows the aligned portfolio, proxy, and excess return for that

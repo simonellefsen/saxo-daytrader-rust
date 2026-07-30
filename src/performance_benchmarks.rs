@@ -6,7 +6,7 @@
 //! currency price returns. The UI must keep those limits visible.
 
 use anyhow::{Context, Result};
-use chrono::{Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use serde_json::{Value as JsonValue, json};
 use tracing::{info, warn};
@@ -410,6 +410,9 @@ pub async fn performance_benchmark_payload(
     let portfolio_return_pct = return_pct(start_value, end_value);
     let mut references = Vec::new();
     let mut ready_count = 0usize;
+    let mut aligned_count = 0usize;
+    let mut prior_close_count = 0usize;
+    let mut stale_close_count = 0usize;
     for reference in &config.references {
         let start = close_at_or_before(state, &reference.key, start_at).await?;
         let end = close_at_or_before(state, &reference.key, end_at).await?;
@@ -417,6 +420,14 @@ pub async fn performance_benchmark_payload(
             (Some(start), Some(end)) if start.close > 0.0 && end.close > 0.0 => {
                 ready_count += 1;
                 let benchmark_return_pct = return_pct(start.close, end.close);
+                let freshness =
+                    comparison_freshness(start_at, &start.observed_at, end_at, &end.observed_at);
+                match freshness {
+                    "aligned_close" => aligned_count += 1,
+                    "prior_close" => prior_close_count += 1,
+                    "stale_close" => stale_close_count += 1,
+                    _ => {}
+                }
                 json!({
                     "key": reference.key,
                     "label": reference.label,
@@ -429,6 +440,7 @@ pub async fn performance_benchmark_payload(
                     "latest_close": end.close,
                     "baseline_at": start.observed_at,
                     "latest_at": end.observed_at,
+                    "freshness": freshness,
                 })
             }
             _ => json!({
@@ -450,6 +462,15 @@ pub async fn performance_benchmark_payload(
     } else {
         "pending_history"
     };
+    let freshness = if ready_count == 0 {
+        "awaiting_history"
+    } else if stale_close_count > 0 {
+        "stale_close"
+    } else if prior_close_count > 0 {
+        "prior_close"
+    } else {
+        "aligned_close"
+    };
     Ok(json!({
         "status": status,
         "latest_run": run,
@@ -458,6 +479,10 @@ pub async fn performance_benchmark_payload(
         "portfolio_return_pct": portfolio_return_pct,
         "ready_count": ready_count,
         "reference_count": config.references.len(),
+        "aligned_count": aligned_count,
+        "prior_close_count": prior_close_count,
+        "stale_close_count": stale_close_count,
+        "freshness": freshness,
         "references": references,
         "caveat": caveat(),
     }))
@@ -491,6 +516,37 @@ fn return_pct(start: f64, end: f64) -> f64 {
     } else {
         ((end / start) - 1.0) * 100.0
     }
+}
+
+/// Classifies timestamp alignment without inferring intraday proxy performance.
+/// A proxy close fetched at or before an account boundary is valid for a
+/// price-return calculation, but the comparison is not current when that close
+/// belongs to a prior calendar day. This is display/evidence metadata only.
+fn comparison_freshness(
+    portfolio_baseline_at: &str,
+    benchmark_baseline_at: &str,
+    portfolio_latest_at: &str,
+    benchmark_latest_at: &str,
+) -> &'static str {
+    let baseline_lag = calendar_lag_days(portfolio_baseline_at, benchmark_baseline_at);
+    let latest_lag = calendar_lag_days(portfolio_latest_at, benchmark_latest_at);
+    let max_lag = match (baseline_lag, latest_lag) {
+        (Some(baseline), Some(latest)) => baseline.max(latest),
+        _ => return "unknown_alignment",
+    };
+    if max_lag <= 0 {
+        "aligned_close"
+    } else if max_lag == 1 {
+        "prior_close"
+    } else {
+        "stale_close"
+    }
+}
+
+fn calendar_lag_days(portfolio_at: &str, benchmark_at: &str) -> Option<i64> {
+    let portfolio = DateTime::parse_from_rfc3339(portfolio_at).ok()?;
+    let benchmark = DateTime::parse_from_rfc3339(benchmark_at).ok()?;
+    Some((portfolio.date_naive() - benchmark.date_naive()).num_days())
 }
 
 fn caveat() -> &'static str {
@@ -588,6 +644,37 @@ mod tests {
         assert_eq!(return_pct(0.0, 90.0), 0.0);
     }
 
+    #[test]
+    fn comparison_freshness_marks_prior_and_stale_proxy_closes() {
+        assert_eq!(
+            comparison_freshness(
+                "2026-07-10T20:30:00Z",
+                "2026-07-10T00:00:00Z",
+                "2026-07-11T20:30:00Z",
+                "2026-07-11T00:00:00Z",
+            ),
+            "aligned_close"
+        );
+        assert_eq!(
+            comparison_freshness(
+                "2026-07-10T20:30:00Z",
+                "2026-07-09T00:00:00Z",
+                "2026-07-11T20:30:00Z",
+                "2026-07-10T00:00:00Z",
+            ),
+            "prior_close"
+        );
+        assert_eq!(
+            comparison_freshness(
+                "2026-07-10T20:30:00Z",
+                "2026-07-08T00:00:00Z",
+                "2026-07-11T20:30:00Z",
+                "2026-07-09T00:00:00Z",
+            ),
+            "stale_close"
+        );
+    }
+
     #[tokio::test]
     async fn comparison_uses_the_latest_close_at_or_before_each_portfolio_boundary() {
         let state = test_state().await;
@@ -630,6 +717,14 @@ mod tests {
             .expect("excess return");
         assert!((benchmark_return - 9.090_909_090_9).abs() < 1e-8);
         assert!((excess_return - 0.909_090_909_1).abs() < 1e-8);
+        assert_eq!(
+            reference.get("freshness").and_then(JsonValue::as_str),
+            Some("prior_close")
+        );
+        assert_eq!(
+            payload.get("freshness").and_then(JsonValue::as_str),
+            Some("prior_close")
+        );
     }
 
     #[tokio::test]

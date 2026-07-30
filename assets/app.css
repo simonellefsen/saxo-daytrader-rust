@@ -699,6 +699,13 @@ tr:last-child td {
   font-weight: 700;
 }
 
+.status-stack {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .good-status {
   color: var(--good);
   background: #e8f7ee;
