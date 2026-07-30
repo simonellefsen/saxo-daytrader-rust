@@ -5007,11 +5007,8 @@ impl AppState {
             )
             .await
             .unwrap_or_default();
-        if broker_exposures.is_empty() {
-            checks.insert(
-                "broker_exposure_aggregate".to_string(),
-                json!("skipped_no_snapshot"),
-            );
+        let broker_exposure_snapshot = if broker_exposures.is_empty() {
+            JsonValue::Null
         } else {
             let broker_account_currency = self
                 .first_json(
@@ -5027,10 +5024,30 @@ impl AppState {
             let broker_account_fx =
                 crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_account_currency)
                     .await;
-            let exposure_unrealised_pnl_dkk = broker_exposures
-                .iter()
-                .map(|row| value_f64(row, "profit_loss_on_trade") * broker_account_fx)
-                .sum::<f64>();
+            json!({
+                "status": "available",
+                "unrealised_pnl_dkk": broker_exposures
+                    .iter()
+                    .map(|row| value_f64(row, "profit_loss_on_trade") * broker_account_fx)
+                    .sum::<f64>(),
+                "account_currency": broker_account_currency,
+                "fx_rate_to_dkk": broker_account_fx,
+                "exposure_count": broker_exposures.len(),
+                "updated_at": latest_snapshot_timestamp(&broker_exposures, "updated_at"),
+            })
+        };
+        let pnl_reconciliation =
+            unrealised_pnl_reconciliation(aggregate, latest_history, &broker_exposure_snapshot);
+        if broker_exposure_snapshot.is_null() {
+            checks.insert(
+                "broker_exposure_aggregate".to_string(),
+                json!("skipped_no_snapshot"),
+            );
+        } else {
+            let broker_account_currency = text_value(&broker_exposure_snapshot, "account_currency");
+            let broker_account_fx = value_f64(&broker_exposure_snapshot, "fx_rate_to_dkk");
+            let exposure_unrealised_pnl_dkk =
+                value_f64(&broker_exposure_snapshot, "unrealised_pnl_dkk");
             let aggregate_unrealised_pnl_dkk = value_f64(aggregate, "total_unrealised_pnl_dkk");
             if money_mismatch_exceeds_tolerance(
                 aggregate_unrealised_pnl_dkk,
@@ -5265,6 +5282,7 @@ impl AppState {
                 .unwrap_or_else(|| json!([])),
             "acknowledged_issue_count": acknowledged_issue_count,
             "config_contract": config_contract,
+            "pnl_reconciliation": pnl_reconciliation,
             "checks": checks,
             "checked_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         }))
@@ -10866,6 +10884,83 @@ fn performance_confidence(history: &[JsonValue], now: DateTime<Utc>) -> JsonValu
     })
 }
 
+fn latest_snapshot_timestamp(rows: &[JsonValue], field: &str) -> Option<String> {
+    rows.iter()
+        .filter_map(|row| row.get(field).and_then(JsonValue::as_str))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .max_by_key(|value| {
+            DateTime::parse_from_rfc3339(value)
+                .map(|timestamp| timestamp.timestamp())
+                .unwrap_or(i64::MIN)
+        })
+}
+
+/// Read-only source comparison for Performance. A broker exposure snapshot is
+/// not asserted to be a realtime quote, so the UI renders its own timestamp
+/// and FX conversion basis instead of calling it current.
+fn unrealised_pnl_reconciliation(
+    aggregate: &JsonValue,
+    latest_history: &JsonValue,
+    broker_exposure_snapshot: &JsonValue,
+) -> JsonValue {
+    let dashboard_pnl = aggregate
+        .get("total_unrealised_pnl_dkk")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite());
+    let history_pnl = latest_history
+        .get("total_unrealised_pnl_dkk")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite());
+    let broker_pnl = broker_exposure_snapshot
+        .get("unrealised_pnl_dkk")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite());
+    let broker_difference_dkk = dashboard_pnl
+        .zip(broker_pnl)
+        .map(|(dashboard, broker)| dashboard - broker);
+    let broker_status = match (dashboard_pnl, broker_pnl) {
+        (Some(dashboard), Some(broker))
+            if money_mismatch_exceeds_tolerance(
+                dashboard,
+                broker,
+                INTEGRITY_BROKER_EXPOSURE_ABS_TOLERANCE_DKK,
+                INTEGRITY_BROKER_EXPOSURE_REL_TOLERANCE,
+            ) =>
+        {
+            "drift"
+        }
+        (Some(_), Some(_)) => "aligned",
+        _ => "unavailable",
+    };
+    json!({
+        "scope": "read_only_unrealised_pnl_sources",
+        "dashboard": {
+            "status": if dashboard_pnl.is_some() { "available" } else { "unavailable" },
+            "unrealised_pnl_dkk": dashboard_pnl,
+            "source": text_value(aggregate, "source"),
+            "snapshot_type": "runtime_current",
+        },
+        "latest_history": {
+            "status": if history_pnl.is_some() { "available" } else { "unavailable" },
+            "unrealised_pnl_dkk": history_pnl,
+            "source": text_value(latest_history, "source"),
+            "snapshot_type": text_value(latest_history, "snapshot_type"),
+            "recorded_at": latest_history.get("recorded_at").cloned().unwrap_or(JsonValue::Null),
+            "difference_from_dashboard_dkk": dashboard_pnl.zip(history_pnl).map(|(dashboard, history)| dashboard - history),
+        },
+        "broker_exposure": {
+            "status": broker_status,
+            "unrealised_pnl_dkk": broker_pnl,
+            "difference_from_dashboard_dkk": broker_difference_dkk,
+            "account_currency": broker_exposure_snapshot.get("account_currency").cloned().unwrap_or(JsonValue::Null),
+            "fx_rate_to_dkk": broker_exposure_snapshot.get("fx_rate_to_dkk").cloned().unwrap_or(JsonValue::Null),
+            "exposure_count": broker_exposure_snapshot.get("exposure_count").cloned().unwrap_or(JsonValue::Null),
+            "updated_at": broker_exposure_snapshot.get("updated_at").cloned().unwrap_or(JsonValue::Null),
+        },
+    })
+}
+
 /// Short recognizable preview of an API key: first 6 + last 4 characters
 /// for long keys, fully redacted for short ones.
 fn mask_api_key(key: &str) -> String {
@@ -12489,6 +12584,52 @@ mod tests {
             now,
         );
         assert_eq!(unavailable["status"], json!("unavailable"));
+    }
+
+    #[test]
+    fn unrealised_pnl_reconciliation_keeps_sources_and_tolerance_explicit() {
+        let reconciliation = unrealised_pnl_reconciliation(
+            &json!({
+                "total_unrealised_pnl_dkk": 1_000.0,
+                "source": "saxo_broker_snapshot",
+            }),
+            &json!({
+                "total_unrealised_pnl_dkk": 900.0,
+                "source": "daily_close",
+                "snapshot_type": "daily_close",
+                "recorded_at": "2026-07-29T22:30:00Z",
+            }),
+            &json!({
+                "unrealised_pnl_dkk": 1_150.0,
+                "account_currency": "EUR",
+                "fx_rate_to_dkk": 7.46,
+                "exposure_count": 3,
+                "updated_at": "2026-07-30T10:00:00Z",
+            }),
+        );
+        assert_eq!(
+            reconciliation["dashboard"]["source"],
+            json!("saxo_broker_snapshot")
+        );
+        assert_eq!(
+            reconciliation["latest_history"]["recorded_at"],
+            json!("2026-07-29T22:30:00Z")
+        );
+        assert_eq!(
+            reconciliation["broker_exposure"]["status"],
+            json!("aligned")
+        );
+        assert_eq!(
+            reconciliation["broker_exposure"]["difference_from_dashboard_dkk"],
+            json!(-150.0)
+        );
+
+        let drift = unrealised_pnl_reconciliation(
+            &json!({"total_unrealised_pnl_dkk": 4_000.0}),
+            &json!({}),
+            &json!({"unrealised_pnl_dkk": 1_000.0}),
+        );
+        assert_eq!(drift["broker_exposure"]["status"], json!("drift"));
     }
 
     #[test]

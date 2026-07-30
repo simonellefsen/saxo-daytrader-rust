@@ -1288,6 +1288,14 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
             PerformanceContextPanel { summary: summary.clone(), goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
+            PerformancePnlReconciliationPanel {
+                reconciliation: data
+                    .integrity
+                    .get("pnl_reconciliation")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                prefs: prefs.clone(),
+            }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
@@ -1304,6 +1312,93 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn PerformancePnlReconciliationPanel(
+    reconciliation: JsonValue,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let dashboard = reconciliation
+        .get("dashboard")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let history = reconciliation
+        .get("latest_history")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let broker = reconciliation
+        .get("broker_exposure")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let money = |row: &JsonValue, key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+            .map(|value| format_signed_dkk(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    let source = |row: &JsonValue| {
+        let source = text(row, "source").replace('_', " ");
+        if source.is_empty() {
+            "source unavailable".to_string()
+        } else {
+            source
+        }
+    };
+    let broker_status = text(&broker, "status");
+    let (broker_label, broker_tone) = match broker_status.as_str() {
+        "aligned" => ("within tolerance", "good-status"),
+        "drift" => ("drift detected", "warn-status"),
+        _ => ("snapshot unavailable", "warn-status"),
+    };
+    let broker_detail = match broker_status.as_str() {
+        "aligned" | "drift" => format!(
+            "{} exposure(s) · {} account FX {} · {}",
+            text(&broker, "exposure_count"),
+            text(&broker, "account_currency"),
+            text(&broker, "fx_rate_to_dkk"),
+            format_timestamp(&text(&broker, "updated_at"), &prefs),
+        ),
+        _ => "No stored Saxo instrument-exposure snapshot is available.".to_string(),
+    };
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Unrealised P/L Sources" }
+                    p { class: "muted", "Read-only comparison of the dashboard aggregate, the latest stored account snapshot, and stored Saxo exposures. It does not treat a stored broker snapshot as a real-time quote." }
+                }
+                span { class: "status {broker_tone}", "{broker_label}" }
+            }
+            div { class: "table-wrap",
+                table {
+                    thead { tr { th { "Source" } th { "Unrealised P/L" } th { "Difference" } th { "Evidence" } } }
+                    tbody {
+                        tr {
+                            td { strong { "Dashboard aggregate" } }
+                            td { "{money(&dashboard, \"unrealised_pnl_dkk\")}" }
+                            td { "n/a" }
+                            td { "{source(&dashboard)} · live aggregate for this response" }
+                        }
+                        tr {
+                            td { strong { "Latest account snapshot" } }
+                            td { "{money(&history, \"unrealised_pnl_dkk\")}" }
+                            td { "{money(&history, \"difference_from_dashboard_dkk\")}" }
+                            td { "{source(&history)} · {format_timestamp(&text(&history, \"recorded_at\"), &prefs)}" }
+                        }
+                        tr {
+                            td { strong { "Saxo exposure aggregate" } }
+                            td { "{money(&broker, \"unrealised_pnl_dkk\")}" }
+                            td { class: if broker_status == "drift" { "bad-text" } else { "" }, "{money(&broker, \"difference_from_dashboard_dkk\")}" }
+                            td { "{broker_detail}" }
+                        }
+                    }
+                }
+            }
+            p { class: "muted benchmark-caveat", "The exposure amount is converted from the Saxo account currency using the recorded DKK FX rate. Differences can reflect snapshot timing, price calculation, FX, or local-book timing; investigate drift in Integrity before treating it as an accounting conclusion." }
         }
     }
 }
