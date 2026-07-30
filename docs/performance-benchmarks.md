@@ -17,10 +17,12 @@ that the system owns, trades, or replicates the underlying index.
 
 ## Method
 
-The scheduler runs a read-only Saxo chart refresh after the daily-indicator
-cycle. It resolves every configured instrument through Saxo reference data,
-fetches daily closes, and stores the returned historical close series in
-`performance_benchmark_prices`.
+The scheduler runs a read-only Saxo chart refresh after the regular US close
+and before the 22:30 Copenhagen end-of-day journal. It resolves every
+configured instrument through Saxo reference data, fetches daily closes, and
+stores the returned historical close series in `performance_benchmark_prices`.
+The schedule is guarded so it cannot move after the journal without failing
+the config-contract test.
 
 For the selected Performance range, the UI uses:
 

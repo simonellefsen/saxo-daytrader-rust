@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-07-30: Moved the read-only benchmark refresh to 22:15 Europe/Copenhagen, after the regular US close and before the 22:30 daily journal. A configuration regression test now requires that ordering, preventing the EOD/Hermes comparison from silently using only the preceding trading day's proxy close. It remains advisory and has no trading or broker effect.
 - 2026-07-30: Added a bounded read-only benchmark readthrough to the daily strategy journal. It uses the last stored portfolio value before the local day and the latest value within the day, aligns the same Saxo ETF-proxy closes used by Performance, and retains the full comparability caveat. Hermes can see it only through its existing end-of-day evidence; it does not enter Decision Reports, Trading Manager gates, sizing, protective stops, or broker execution.
 - 2026-07-30: Added a daily/weekly Performance comparison through the existing range picker and introduced the read-only `DIA:arcx` Dow Jones Industrial Average proxy alongside SPY, QQQ, and EUNL. Follow-up: validate named broad-Europe and UK index proxies in Saxo SIM before adding them. “Euronext” and “LSE” are venues rather than a single index, so each future reference must identify its underlying benchmark and use a tracked, resolvable instrument.
 

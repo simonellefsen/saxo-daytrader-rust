@@ -1120,4 +1120,29 @@ mod tests {
         assert!(keys.contains("europe_broad"));
         assert!(keys.contains("uk_large_cap"));
     }
+
+    #[test]
+    fn benchmark_refresh_precedes_the_daily_end_of_day_journal() {
+        let config = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let benchmark_time = crate::config::yaml_at(
+            &config,
+            &["strategy", "performance_benchmarks", "daily_time"],
+        )
+        .and_then(YamlValue::as_str)
+        .expect("benchmark daily time is configured");
+        let journal_time =
+            crate::config::yaml_at(&config, &["strategy", "swing", "journal", "daily_time"])
+                .and_then(YamlValue::as_str)
+                .expect("journal daily time is configured");
+
+        let parse_time = |value: &str| chrono::NaiveTime::parse_from_str(value, "%H:%M");
+        assert!(
+            parse_time(benchmark_time).expect("benchmark time is valid")
+                < parse_time(journal_time).expect("journal time is valid"),
+            "benchmark refresh must complete before the end-of-day journal"
+        );
+    }
 }

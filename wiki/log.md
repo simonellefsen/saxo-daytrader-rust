@@ -1522,3 +1522,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - The Rust daily strategy journal now records the aligned day-boundary comparison used by the Performance view, including its explicit native-currency price-return and DKK account-value caveat. Missing account or benchmark history remains `pending_*`; it is never turned into a zero return or inferred conclusion.
 - Hermes sees this only through its existing end-of-day journal evidence and the payload carries the `read_only_end_of_day_context_only` scope. It remains excluded from Decision Report prompts, Trading Manager gates, sizing, protective stops, and broker execution.
+
+## [2026-07-30] performance | Benchmark refresh precedes EOD journal
+
+- Corrected the benchmark schedule from 23:55 to 22:15 Europe/Copenhagen. The daily journal is due at 22:30, so the prior ordering could have produced a formally valid comparison using only the preceding trading day's proxy close.
+- The scheduler already runs the benchmark step before the journal step. A config-contract test now asserts that the configured benchmark time stays earlier than the daily journal time in local configuration; the shipped-config parity test keeps the Kubernetes policy identical. This remains a read-only data-timing fix, not a trading-policy change.

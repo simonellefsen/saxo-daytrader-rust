@@ -308,11 +308,14 @@ strategy:
   # Read-only comparison of the account value series with Saxo-resolved ETF
   # proxies. These are price returns, not index total returns: no dividends,
   # FX-normalization, or cash-flow adjustment is claimed. They are deliberately
-  # outside Decision Reports, Hermes, Trading Manager, and broker execution.
+  # outside Decision Reports, Trading Manager, and broker execution. The daily
+  # end-of-day journal can expose them to Hermes as read-only context only.
   performance_benchmarks:
     enabled: true
     timezone: Europe/Copenhagen
-    daily_time: "23:55"
+    # Runs after the regular US close and before the 22:30 EOD journal, so the
+    # journal compares the completed day instead of yesterday's proxy close.
+    daily_time: "22:15"
     run_weekdays_only: true
     sample_count: 1260
     references:
