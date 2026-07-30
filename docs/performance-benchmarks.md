@@ -57,11 +57,22 @@ The UI therefore carries the caveat with every benchmark result. A future
 account-performance endpoint or FX-normalized total-return model should replace
 this presentation only after it has an audited baseline and coverage checks.
 
+## End-Of-Day Readthrough
+
+Each daily strategy journal records the same aligned comparison between the
+last portfolio snapshot before the local trading day and its latest snapshot
+within that day. Hermes may see this journal through its existing end-of-day
+evidence, so it can reflect on relative performance with the same caveat shown
+in the Performance view. Missing portfolio or proxy history remains explicit;
+it is not converted to a zero return or a qualitative conclusion.
+
 ## Safety Boundary
 
 Benchmark refreshes perform only Saxo reference/chart GET requests. They do not
 enter the watchlist or Markov universe and are excluded from Decision Reports,
-Hermes, Trading Manager, sizing, protective-stop logic, and broker execution.
+Trading Manager, sizing, protective-stop logic, and broker execution. The daily
+journal readthrough is the only Hermes-visible path, and is labelled
+`read_only_end_of_day_context_only`; it is advisory context, never a gate.
 
 The manual refresh endpoint is `POST /api/actions/performance-benchmarks` for
 an operator wanting to establish the read-only history before the nightly run.

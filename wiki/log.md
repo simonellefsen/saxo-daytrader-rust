@@ -1517,3 +1517,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 
 - Added named broad-Europe and UK tracker candidates to the read-only comparison path. SIM accepted the FTSE 100 `ISF:xlon` and backfilled 1,200 daily closes. It rejected the initially selected STOXX Europe 600 `EXSA:xetr` as non-tradable, so the Europe candidate is corrected to the older Xetra-listed MSCI Europe `EUNK:xetr` before being declared available. These references remain outside Watchlists, Decision Reports, Hermes, Trading Manager, sizing, and broker inputs.
 - Added a config-contract regression test that requires every configured reference to have a non-empty unique key, unique symbol, and a label that clearly discloses its proxy role. The first deployed refresh must resolve and backfill the corrected Europe tracker through Saxo SIM before treating it as available in the dashboard.
+
+## [2026-07-30] performance | End-of-day benchmark readthrough
+
+- The Rust daily strategy journal now records the aligned day-boundary comparison used by the Performance view, including its explicit native-currency price-return and DKK account-value caveat. Missing account or benchmark history remains `pending_*`; it is never turned into a zero return or inferred conclusion.
+- Hermes sees this only through its existing end-of-day journal evidence and the payload carries the `read_only_end_of_day_context_only` scope. It remains excluded from Decision Report prompts, Trading Manager gates, sizing, protective stops, and broker execution.

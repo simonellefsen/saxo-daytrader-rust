@@ -463,6 +463,28 @@ pub async fn performance_benchmark_payload(
     }))
 }
 
+/// Builds the same comparison used by the Performance view for a bounded
+/// end-of-day account interval. The result remains read-only context: callers
+/// must not use it to alter candidate selection, sizing, or broker actions.
+pub async fn performance_benchmark_readthrough(
+    state: &AppState,
+    baseline: Option<&JsonValue>,
+    latest: Option<&JsonValue>,
+) -> Result<JsonValue> {
+    let history = match (baseline, latest) {
+        (Some(baseline), Some(latest)) => vec![baseline.clone(), latest.clone()],
+        _ => Vec::new(),
+    };
+    let mut payload = performance_benchmark_payload(state, &history).await?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "scope".to_string(),
+            JsonValue::String("read_only_end_of_day_context_only".to_string()),
+        );
+    }
+    Ok(payload)
+}
+
 fn return_pct(start: f64, end: f64) -> f64 {
     if start <= 0.0 || !start.is_finite() || !end.is_finite() {
         0.0
@@ -608,5 +630,43 @@ mod tests {
             .expect("excess return");
         assert!((benchmark_return - 9.090_909_090_9).abs() < 1e-8);
         assert!((excess_return - 0.909_090_909_1).abs() < 1e-8);
+    }
+
+    #[tokio::test]
+    async fn end_of_day_readthrough_is_scoped_read_only() {
+        let state = test_state().await;
+        for (observed_at, close) in [
+            ("2026-07-01T00:00:00Z", 100.0),
+            ("2026-07-02T00:00:00Z", 105.0),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO performance_benchmark_prices (reference_key, label, symbol, observed_at, close, run_id)
+                 VALUES ('us_large_cap', 'S&P 500 (SPY ETF proxy)', 'SPY:arcx', '{observed_at}', {close}, 'test')"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("insert benchmark close");
+        }
+        let baseline = json!({
+            "recorded_at": "2026-07-01T12:00:00Z",
+            "total_market_value_dkk": 200_000.0,
+        });
+        let latest = json!({
+            "recorded_at": "2026-07-02T12:00:00Z",
+            "total_market_value_dkk": 210_000.0,
+        });
+
+        let payload = performance_benchmark_readthrough(&state, Some(&baseline), Some(&latest))
+            .await
+            .expect("build end-of-day readthrough");
+
+        assert_eq!(
+            payload.get("scope").and_then(JsonValue::as_str),
+            Some("read_only_end_of_day_context_only")
+        );
+        assert_eq!(
+            payload.get("status").and_then(JsonValue::as_str),
+            Some("ready")
+        );
     }
 }
