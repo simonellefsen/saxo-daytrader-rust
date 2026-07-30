@@ -1280,7 +1280,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Daily P/L", value: format_dkk(value_f64(&summary, "daily_pnl_dkk"), &prefs), tone: if value_f64(&summary, "daily_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
                 MetricCard { label: "Snapshots", value: text(&summary, "points"), tone: "" }
             }
-            PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone() }
+            PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
             div { class: "legend-row",
                 span { class: "legend-item", span { class: "legend-dot portfolio-dot" } "Portfolio value" }
                 span { class: "legend-item", span { class: "legend-dot cash-dot" } "Cash balance" }
@@ -1301,7 +1301,11 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn PerformanceBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn PerformanceBenchmarkPanel(
+    benchmarks: JsonValue,
+    prefs: LocalizationPrefs,
+    range: String,
+) -> Element {
     let status = text(&benchmarks, "status").replace('_', " ");
     let references = benchmarks
         .get("references")
@@ -1313,8 +1317,8 @@ fn PerformanceBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) ->
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
                 div {
-                    h3 { "Benchmark Comparison" }
-                    p { class: "muted", "Read-only account-value comparison against Saxo-resolved ETF proxies." }
+                    h3 { "Benchmark Comparison ({range})" }
+                    p { class: "muted", "Select 1D or 1W above for daily or week-to-date comparison. Read-only account-value comparison against Saxo-resolved ETF proxies." }
                 }
                 span { class: "status", "{status}" }
             }

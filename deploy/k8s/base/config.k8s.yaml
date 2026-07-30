@@ -329,6 +329,9 @@ strategy:
       - key: us_technology
         label: Nasdaq-100 (QQQ ETF proxy)
         symbol: QQQ:xnas
+      - key: us_blue_chip
+        label: Dow Jones Industrial Average (DIA ETF proxy)
+        symbol: DIA:arcx
       - key: global_equity
         label: MSCI World (EUNL ETF proxy)
         symbol: EUNL:xetr

@@ -7,6 +7,7 @@ set of Saxo-resolved ETF proxies:
 | --- | --- | --- |
 | S&P 500 | `SPY:arcx` | US large-cap reference |
 | Nasdaq-100 | `QQQ:xnas` | US technology/growth reference |
+| Dow Jones Industrial Average | `DIA:arcx` | US blue-chip reference |
 | MSCI World | `EUNL:xetr` | Broad global-equity reference |
 
 The references are deliberately labelled as ETF proxies. They are not claims
@@ -28,6 +29,16 @@ For the selected Performance range, the UI uses:
 
 The table displays the actual benchmark dates used. A missing or non-overlapping
 series remains `pending_history`; it is never rendered as a zero return.
+
+The Performance range picker controls the comparison horizon. Select `1D` for
+the latest available daily account change and `1W` for the week-to-date window;
+the panel always shows the aligned portfolio, proxy, and excess return for that
+selected period.
+
+`Euronext` and `LSE` are exchange venues, not single comparable indices. A
+future regional reference must name the underlying index and use a Saxo-SIM
+validated tracker; it must not use an arbitrary local listing as an index
+substitute.
 
 ## Comparability Limits
 
