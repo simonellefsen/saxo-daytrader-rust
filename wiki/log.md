@@ -1600,3 +1600,9 @@ broker mutation was added.
 - Moved the deterministic one-variable baseline/overlay audit, proposal-quality rubric, duplicate-family vocabulary, and baseline-evidence calculations into `src/hermes_state.rs`.
 - `AppState` still performs every database query and owns experiment/baseline lifecycle operations; the new module transforms only persisted snapshots into existing dashboard/API payloads.
 - The evidence pack remains read-only and explicitly non-causal. Provider calls, Decision Reports, Trading Manager gates, protective stops, and Saxo execution are unchanged.
+
+## [2026-07-31] architecture | Performance read-model extraction
+
+- Moved pure account-value summary, selected-range return/drawdown, and confidence projections from `src/state.rs` into `src/performance_state.rs`.
+- `AppState` still owns account-history/current aggregate reads, benchmark and goal-tracking queries; the extracted helpers cannot make provider calls or mutate trading state.
+- Performance remains display-only evidence. Hermes, Decision Reports, Trading Manager gates, sizing, protective stops, and Saxo execution are unchanged.

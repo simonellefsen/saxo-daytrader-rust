@@ -37,7 +37,11 @@ use crate::{
         DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
         HermesReflectionRequest,
     },
+    performance_state::performance_summary_from_history,
 };
+
+#[cfg(test)]
+use crate::performance_state::{performance_confidence, performance_range_metrics};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -2976,7 +2980,7 @@ impl AppState {
                 None => Vec::new(),
             };
         let performance_summary = if active_view == "performance" {
-            self.performance_summary(&performance_history)
+            performance_summary_from_history(&performance_history, Utc::now())
         } else {
             JsonValue::Null
         };
@@ -3295,41 +3299,10 @@ impl AppState {
         Ok(json!({
             "range_key": range_key,
             "history": history,
-            "summary": self.performance_summary(&history),
+            "summary": performance_summary_from_history(&history, Utc::now()),
             "benchmarks": crate::performance_benchmarks::performance_benchmark_payload(self, &history).await?,
             "goal_tracking": self.goal_tracking(total).await
         }))
-    }
-
-    pub fn performance_summary(&self, history: &[JsonValue]) -> JsonValue {
-        let first = history.first();
-        let latest = history.last();
-        let first_total = first
-            .map(|row| value_f64(row, "total_market_value_dkk"))
-            .unwrap_or(0.0);
-        let latest_total = latest
-            .map(|row| value_f64(row, "total_market_value_dkk"))
-            .unwrap_or(0.0);
-        let latest_daily = latest
-            .map(|row| value_f64(row, "total_daily_pnl_dkk"))
-            .unwrap_or(0.0);
-        let latest_positions = latest
-            .map(|row| value_i64(row, "position_count"))
-            .unwrap_or(0);
-        let (range_return_pct, range_max_drawdown_pct) = performance_range_metrics(history);
-        json!({
-            "points": history.len(),
-            "first_recorded_at": first.and_then(|row| row.get("recorded_at")).cloned().unwrap_or(JsonValue::Null),
-            "latest_recorded_at": latest.and_then(|row| row.get("recorded_at")).cloned().unwrap_or(JsonValue::Null),
-            "first_total_market_value_dkk": first_total,
-            "latest_total_market_value_dkk": latest_total,
-            "change_dkk": latest_total - first_total,
-            "daily_pnl_dkk": latest_daily,
-            "position_count": latest_positions,
-            "range_return_pct": range_return_pct,
-            "range_max_drawdown_pct": range_max_drawdown_pct,
-            "confidence": performance_confidence(history, Utc::now()),
-        })
     }
 
     pub async fn market_status_payload(&self) -> Result<JsonValue> {
@@ -10160,94 +10133,6 @@ fn since_reset_performance_value(baseline: Option<JsonValue>, total_value: f64) 
         "return_pct": JsonValue::Null,
         "baseline_value_dkk": JsonValue::Null,
         "baseline_recorded_at": JsonValue::Null,
-    })
-}
-
-fn performance_range_metrics(history: &[JsonValue]) -> (Option<f64>, Option<f64>) {
-    let values = history
-        .iter()
-        .filter_map(|row| {
-            row.get("total_market_value_dkk")
-                .and_then(JsonValue::as_f64)
-        })
-        .filter(|value| value.is_finite() && *value > 0.0)
-        .collect::<Vec<_>>();
-    let Some(start_value) = values.first().copied() else {
-        return (None, None);
-    };
-    let Some(end_value) = values.last().copied() else {
-        return (None, None);
-    };
-    if values.len() < 2 {
-        return (None, None);
-    }
-
-    let mut peak = start_value;
-    let mut max_drawdown_pct = 0.0_f64;
-    for value in values {
-        peak = peak.max(value);
-        max_drawdown_pct = max_drawdown_pct.min((value / peak - 1.0) * 100.0);
-    }
-    (
-        Some((end_value / start_value - 1.0) * 100.0),
-        Some(max_drawdown_pct),
-    )
-}
-
-/// Describes the evidence behind the account-value display without making any
-/// claim about individual quote, benchmark, or broker-order freshness.
-fn performance_confidence(history: &[JsonValue], now: DateTime<Utc>) -> JsonValue {
-    let latest = history.last();
-    let valid_points = history
-        .iter()
-        .filter(|row| {
-            row.get("total_market_value_dkk")
-                .and_then(JsonValue::as_f64)
-                .is_some_and(|value| value.is_finite() && value > 0.0)
-        })
-        .count();
-    let latest_value_valid = latest
-        .and_then(|row| row.get("total_market_value_dkk"))
-        .and_then(JsonValue::as_f64)
-        .is_some_and(|value| value.is_finite() && value > 0.0);
-    let latest_recorded_at = latest
-        .and_then(|row| row.get("recorded_at"))
-        .and_then(JsonValue::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let latest_snapshot_type = latest
-        .map(|row| text_value(row, "snapshot_type"))
-        .filter(|value| !value.is_empty());
-    let latest_source = latest
-        .map(|row| text_value(row, "source"))
-        .filter(|value| !value.is_empty());
-    let age_minutes = latest_recorded_at
-        .as_deref()
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| {
-            now.signed_duration_since(value.with_timezone(&Utc))
-                .num_minutes()
-                .max(0)
-        });
-    let status = if !latest_value_valid {
-        "unavailable"
-    } else if valid_points < 2 {
-        "partial"
-    } else if latest_snapshot_type.as_deref() == Some("runtime_current") {
-        "current"
-    } else if age_minutes.is_none_or(|minutes| minutes > 90) {
-        "stale"
-    } else {
-        "stored"
-    };
-    json!({
-        "status": status,
-        "valid_points": valid_points,
-        "latest_recorded_at": latest_recorded_at,
-        "latest_snapshot_type": latest_snapshot_type,
-        "latest_source": latest_source,
-        "age_minutes": age_minutes,
-        "scope": "account_value_only",
     })
 }
 
