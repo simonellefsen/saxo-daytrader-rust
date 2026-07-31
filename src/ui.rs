@@ -1514,6 +1514,16 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
         .and_then(JsonValue::as_array)
         .cloned()
         .unwrap_or_default();
+    let symbol_attribution = outcomes
+        .get("symbol_attribution")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let currency_attribution = outcomes
+        .get("currency_attribution")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
     let available = text(&outcomes, "status") != "unavailable";
     let status = text(&outcomes, "status");
     let (status_label, status_tone) = match status.as_str() {
@@ -1541,6 +1551,32 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
         .filter(|value| value.is_finite())
         .map(|value| format_pct(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
+    let currency_summary = currency_attribution
+        .iter()
+        .map(|row| {
+            let realised_gain_dkk = row
+                .get("realised_gain_dkk")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite())
+                .map(|value| format_signed_dkk(value, &prefs))
+                .unwrap_or_else(|| "n/a".to_string());
+            format!("{} {realised_gain_dkk}", text(row, "instrument_currency"))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let row_money = |row: &JsonValue, key: &str, signed: bool| {
+        row.get(key)
+            .and_then(JsonValue::as_f64)
+            .filter(|value| value.is_finite())
+            .map(|value| {
+                if signed {
+                    format_signed_dkk(value, &prefs)
+                } else {
+                    format_dkk(value, &prefs)
+                }
+            })
+            .unwrap_or_else(|| "n/a".to_string())
+    };
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -1561,6 +1597,26 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
                     MetricCard { label: "Commission", value: outcomes.get("total_commission_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
                     MetricCard { label: "Tax booked", value: outcomes.get("total_tax_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
                 }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr { th { "Symbol" } th { "Instrument currency" } th { "Closed-sale rows" } th { "Realised P/L" } th { "Commission" } } }
+                        tbody {
+                            for row in symbol_attribution {
+                                tr {
+                                    td { strong { "{text(&row, \"symbol\")}" } }
+                                    td { "{text(&row, \"instrument_currency\")}" }
+                                    td { "{text(&row, \"closed_sale_count\")}" }
+                                    td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row_money(&row, \"realised_gain_dkk\", true)}" }
+                                    td { "{row_money(&row, \"commission_dkk\", false)}" }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !currency_summary.is_empty() {
+                    p { class: "muted", "Instrument-currency grouping: {currency_summary}" }
+                }
+                p { class: "muted", "Showing the top {text(&outcomes, \"shown_symbol_attribution_count\")} of {text(&outcomes, \"attributed_symbol_count\")} symbol(s) by absolute realised P/L." }
                 div { class: "table-wrap",
                     table {
                         thead { tr { th { "Closed" } th { "Symbol" } th { "Outcome" } th { "Commission" } th { "Cost basis" } } }

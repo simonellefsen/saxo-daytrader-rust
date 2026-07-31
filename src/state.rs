@@ -82,6 +82,7 @@ const DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT: i64 = 50;
 const PERFORMANCE_EXPOSURE_ATTRIBUTION_LIMIT: usize = 20;
 const PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT: i64 = 250;
 const PERFORMANCE_REALISED_SELL_OUTCOME_RECENT_LIMIT: usize = 12;
+const PERFORMANCE_REALISED_SELL_OUTCOME_ATTRIBUTION_LIMIT: usize = 12;
 const PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE: usize = 20;
 const MISSED_TRADE_SHADOW_LIMIT: i64 = 50;
 const MISSED_TRADE_SHADOW_EVIDENCE_LIMIT: i64 = 200;
@@ -11156,12 +11157,33 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
     let mut total_cost_basis_sold_dkk = 0.0;
     let mut total_win_dkk = 0.0;
     let mut total_loss_dkk = 0.0;
+    let mut symbol_totals = BTreeMap::<String, (String, usize, f64, f64, f64)>::new();
+    let mut currency_totals = BTreeMap::<String, (usize, f64, f64, f64)>::new();
     for row in &realised_rows {
         let realised_gain_dkk = value_f64(row, "realised_gain_dkk");
+        let symbol = text_value(row, "symbol");
+        let currency = text_value(row, "currency")
+            .if_empty_then(|| Some("Unknown".to_string()))
+            .unwrap_or_else(|| "Unknown".to_string());
         total_realised_gain_dkk += realised_gain_dkk;
         total_commission_dkk += value_f64(row, "commission_dkk");
         total_tax_dkk += value_f64(row, "tax_dkk");
         total_cost_basis_sold_dkk += value_f64(row, "cost_basis_sold_dkk");
+        let symbol_total =
+            symbol_totals
+                .entry(symbol)
+                .or_insert((currency.clone(), 0, 0.0, 0.0, 0.0));
+        symbol_total.1 += 1;
+        symbol_total.2 += realised_gain_dkk;
+        symbol_total.3 += value_f64(row, "commission_dkk");
+        symbol_total.4 += value_f64(row, "tax_dkk");
+        let currency_total = currency_totals
+            .entry(currency)
+            .or_insert((0, 0.0, 0.0, 0.0));
+        currency_total.0 += 1;
+        currency_total.1 += realised_gain_dkk;
+        currency_total.2 += value_f64(row, "commission_dkk");
+        currency_total.3 += value_f64(row, "tax_dkk");
         if realised_gain_dkk > 1e-9 {
             win_count += 1;
             total_win_dkk += realised_gain_dkk;
@@ -11186,6 +11208,66 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
     } else {
         "preliminary"
     };
+    let mut symbol_attribution = symbol_totals
+        .into_iter()
+        .map(
+            |(
+                symbol,
+                (
+                    instrument_currency,
+                    closed_sale_count,
+                    realised_gain_dkk,
+                    commission_dkk,
+                    tax_dkk,
+                ),
+            )| {
+                json!({
+                    "symbol": symbol,
+                    "instrument_currency": instrument_currency,
+                    "closed_sale_count": closed_sale_count,
+                    "realised_gain_dkk": realised_gain_dkk,
+                    "commission_dkk": commission_dkk,
+                    "tax_dkk": tax_dkk,
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    symbol_attribution.sort_by(|left, right| {
+        value_f64(right, "realised_gain_dkk")
+            .abs()
+            .partial_cmp(&value_f64(left, "realised_gain_dkk").abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| text_value(left, "symbol").cmp(&text_value(right, "symbol")))
+    });
+    let attributed_symbol_count = symbol_attribution.len();
+    symbol_attribution.truncate(PERFORMANCE_REALISED_SELL_OUTCOME_ATTRIBUTION_LIMIT);
+    let mut currency_attribution = currency_totals
+        .into_iter()
+        .map(
+            |(
+                instrument_currency,
+                (closed_sale_count, realised_gain_dkk, commission_dkk, tax_dkk),
+            )| {
+                json!({
+                    "instrument_currency": instrument_currency,
+                    "closed_sale_count": closed_sale_count,
+                    "realised_gain_dkk": realised_gain_dkk,
+                    "commission_dkk": commission_dkk,
+                    "tax_dkk": tax_dkk,
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    currency_attribution.sort_by(|left, right| {
+        value_f64(right, "realised_gain_dkk")
+            .abs()
+            .partial_cmp(&value_f64(left, "realised_gain_dkk").abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                text_value(left, "instrument_currency")
+                    .cmp(&text_value(right, "instrument_currency"))
+            })
+    });
     realised_rows.truncate(PERFORMANCE_REALISED_SELL_OUTCOME_RECENT_LIMIT);
     json!({
         "status": status,
@@ -11206,6 +11288,10 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
         "total_commission_dkk": total_commission_dkk,
         "total_tax_dkk": total_tax_dkk,
         "total_cost_basis_sold_dkk": total_cost_basis_sold_dkk,
+        "attributed_symbol_count": attributed_symbol_count,
+        "shown_symbol_attribution_count": symbol_attribution.len(),
+        "symbol_attribution": symbol_attribution,
+        "currency_attribution": currency_attribution,
         "recent_rows": realised_rows,
         "holding_time_status": "unavailable_no_lot_sale_linkage",
         "slippage_status": "unavailable_no_quote_at_submission",
@@ -12989,6 +13075,15 @@ mod tests {
         assert_eq!(value_f64(&outcomes, "average_loss_dkk"), -300.0);
         assert_eq!(value_f64(&outcomes, "payoff_ratio"), 2.5);
         assert_eq!(value_f64(&outcomes, "total_realised_gain_dkk"), 1_200.0);
+        assert_eq!(value_i64(&outcomes, "attributed_symbol_count"), 4);
+        assert_eq!(
+            outcomes["symbol_attribution"][0]["symbol"],
+            json!("WIN1:xnas")
+        );
+        assert_eq!(
+            outcomes["currency_attribution"][0]["instrument_currency"],
+            json!("USD")
+        );
         assert_eq!(value_i64(&outcomes, "sample_requirement"), 20);
         assert_eq!(
             json_text(&outcomes, "holding_time_status"),

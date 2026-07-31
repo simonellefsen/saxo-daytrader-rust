@@ -10,6 +10,11 @@ updated: 2026-07-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-31] performance | Realised outcome attribution
+
+- Extended the read-only reconciled SELL-outcome view with bounded realised P/L attribution by symbol and instrument currency. Rows are ranked by absolute realised DKK P/L, while partial sales remain independently counted local ledger outcomes.
+- Instrument currency is a grouping label only. Realised P/L is recorded in DKK and this view does not isolate FX impact, infer a sector, or attribute a result to a strategy role, Hermes, or a Decision Report.
+
 ## [2026-07-30] performance | Reconciled SELL outcome evidence
 
 - Added a read-only Performance panel from local `trade_ledger` SELL rows with a recorded cost basis. It reports realised P/L, win/loss/breakeven counts, win rate, average win/loss, payoff ratio, commission, tax, and recent closed-sale rows.
