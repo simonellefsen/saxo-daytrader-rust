@@ -5053,13 +5053,25 @@ impl AppState {
         );
         let realised_sell_rows = self
             .select_json(&format!(
-                "SELECT id, created_at, symbol, instrument_name, quantity, currency, \\
-                        realised_gain_dkk, commission_dkk, tax_dkk, cost_basis_sold_dkk, mode, status \\
-                 FROM trade_ledger \\
-                 WHERE UPPER(side) = 'SELL' \\
-                   AND status IN ('executed', 'approved') \\
-                   AND COALESCE(cost_basis_sold_dkk, 0) > 0 \\
-                 ORDER BY created_at DESC, id DESC \\
+                "SELECT l.id, l.created_at, l.symbol, l.instrument_name, l.quantity, l.currency, \\
+                        l.realised_gain_dkk, l.commission_dkk, l.tax_dkk, l.cost_basis_sold_dkk, l.mode, l.status, \\
+                        fill_link.execution_order_id, fill_link.linked_order_count, \\
+                        eo.strategy_type AS exit_strategy_type, eo.strategy_role AS exit_strategy_role \\
+                 FROM trade_ledger l \\
+                 LEFT JOIN ( \\
+                    SELECT ledger_id, \\
+                           CASE WHEN COUNT(DISTINCT execution_order_id) = 1 \\
+                                THEN MIN(execution_order_id) END AS execution_order_id, \\
+                           COUNT(DISTINCT execution_order_id) AS linked_order_count \\
+                    FROM execution_fills \\
+                    WHERE ledger_id IS NOT NULL \\
+                    GROUP BY ledger_id \\
+                 ) fill_link ON fill_link.ledger_id = l.id \\
+                 LEFT JOIN execution_orders eo ON eo.id = fill_link.execution_order_id \\
+                 WHERE UPPER(l.side) = 'SELL' \\
+                   AND l.status IN ('executed', 'approved') \\
+                   AND COALESCE(l.cost_basis_sold_dkk, 0) > 0 \\
+                 ORDER BY l.created_at DESC, l.id DESC \\
                  LIMIT {}",
                 PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT
             ))
@@ -11132,6 +11144,10 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
                 "cost_basis_sold_dkk": cost_basis_sold_dkk,
                 "mode": row.get("mode").cloned().unwrap_or(JsonValue::Null),
                 "status": row.get("status").cloned().unwrap_or(JsonValue::Null),
+                "execution_order_id": row.get("execution_order_id").cloned().unwrap_or(JsonValue::Null),
+                "linked_order_count": row.get("linked_order_count").cloned().unwrap_or(JsonValue::Null),
+                "exit_strategy_type": row.get("exit_strategy_type").cloned().unwrap_or(JsonValue::Null),
+                "exit_strategy_role": row.get("exit_strategy_role").cloned().unwrap_or(JsonValue::Null),
             }))
         })
         .collect::<Vec<_>>();
@@ -11159,6 +11175,10 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
     let mut total_loss_dkk = 0.0;
     let mut symbol_totals = BTreeMap::<String, (String, usize, f64, f64, f64)>::new();
     let mut currency_totals = BTreeMap::<String, (usize, f64, f64, f64)>::new();
+    let mut exit_route_totals = BTreeMap::<String, (String, usize, f64, f64, f64)>::new();
+    let mut linked_exit_route_count = 0usize;
+    let mut unlinked_ledger_count = 0usize;
+    let mut ambiguous_exit_link_count = 0usize;
     for row in &realised_rows {
         let realised_gain_dkk = value_f64(row, "realised_gain_dkk");
         let symbol = text_value(row, "symbol");
@@ -11184,6 +11204,46 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
         currency_total.1 += realised_gain_dkk;
         currency_total.2 += value_f64(row, "commission_dkk");
         currency_total.3 += value_f64(row, "tax_dkk");
+        let linked_order_count = value_i64(row, "linked_order_count");
+        let (exit_link_status, exit_route) = if linked_order_count > 1 {
+            ambiguous_exit_link_count += 1;
+            (
+                "ambiguous_reconciled_link".to_string(),
+                "ambiguous reconciled link".to_string(),
+            )
+        } else if linked_order_count == 1 && value_i64(row, "execution_order_id") > 0 {
+            linked_exit_route_count += 1;
+            let strategy_type = text_value(row, "exit_strategy_type");
+            let strategy_role = text_value(row, "exit_strategy_role");
+            let strategy_type = if strategy_type.is_empty() {
+                "unspecified type".to_string()
+            } else {
+                strategy_type
+            };
+            let strategy_role = if strategy_role.is_empty() {
+                "unspecified role".to_string()
+            } else {
+                strategy_role
+            };
+            (
+                "linked_execution_order".to_string(),
+                format!("{strategy_type} / {strategy_role}"),
+            )
+        } else {
+            unlinked_ledger_count += 1;
+            (
+                "unlinked_local_ledger".to_string(),
+                "unlinked local ledger".to_string(),
+            )
+        };
+        let exit_route_total =
+            exit_route_totals
+                .entry(exit_route)
+                .or_insert((exit_link_status, 0, 0.0, 0.0, 0.0));
+        exit_route_total.1 += 1;
+        exit_route_total.2 += realised_gain_dkk;
+        exit_route_total.3 += value_f64(row, "commission_dkk");
+        exit_route_total.4 += value_f64(row, "tax_dkk");
         if realised_gain_dkk > 1e-9 {
             win_count += 1;
             total_win_dkk += realised_gain_dkk;
@@ -11268,6 +11328,31 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
                     .cmp(&text_value(right, "instrument_currency"))
             })
     });
+    let mut exit_route_attribution = exit_route_totals
+        .into_iter()
+        .map(
+            |(
+                exit_route,
+                (link_status, closed_sale_count, realised_gain_dkk, commission_dkk, tax_dkk),
+            )| {
+                json!({
+                    "exit_route": exit_route,
+                    "link_status": link_status,
+                    "closed_sale_count": closed_sale_count,
+                    "realised_gain_dkk": realised_gain_dkk,
+                    "commission_dkk": commission_dkk,
+                    "tax_dkk": tax_dkk,
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    exit_route_attribution.sort_by(|left, right| {
+        value_f64(right, "realised_gain_dkk")
+            .abs()
+            .partial_cmp(&value_f64(left, "realised_gain_dkk").abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| text_value(left, "exit_route").cmp(&text_value(right, "exit_route")))
+    });
     realised_rows.truncate(PERFORMANCE_REALISED_SELL_OUTCOME_RECENT_LIMIT);
     json!({
         "status": status,
@@ -11292,6 +11377,10 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
         "shown_symbol_attribution_count": symbol_attribution.len(),
         "symbol_attribution": symbol_attribution,
         "currency_attribution": currency_attribution,
+        "linked_exit_route_count": linked_exit_route_count,
+        "unlinked_ledger_count": unlinked_ledger_count,
+        "ambiguous_exit_link_count": ambiguous_exit_link_count,
+        "exit_route_attribution": exit_route_attribution,
         "recent_rows": realised_rows,
         "holding_time_status": "unavailable_no_lot_sale_linkage",
         "slippage_status": "unavailable_no_quote_at_submission",
@@ -13028,6 +13117,10 @@ mod tests {
                 "tax_dkk": 0.0,
                 "cost_basis_sold_dkk": 3_000.0,
                 "status": "executed",
+                "execution_order_id": 101,
+                "linked_order_count": 1,
+                "exit_strategy_type": "swing",
+                "exit_strategy_role": "risk_reduction",
             }),
             json!({
                 "created_at": "2026-07-29T10:00:00Z",
@@ -13039,6 +13132,10 @@ mod tests {
                 "tax_dkk": 0.0,
                 "cost_basis_sold_dkk": 2_000.0,
                 "status": "executed",
+                "execution_order_id": 102,
+                "linked_order_count": 1,
+                "exit_strategy_type": "swing",
+                "exit_strategy_role": "take_profit",
             }),
             json!({
                 "created_at": "2026-07-28T10:00:00Z",
@@ -13050,6 +13147,7 @@ mod tests {
                 "tax_dkk": 0.0,
                 "cost_basis_sold_dkk": 1_500.0,
                 "status": "approved",
+                "linked_order_count": 2,
             }),
             json!({
                 "created_at": "2026-07-27T10:00:00Z",
@@ -13083,6 +13181,17 @@ mod tests {
         assert_eq!(
             outcomes["currency_attribution"][0]["instrument_currency"],
             json!("USD")
+        );
+        assert_eq!(value_i64(&outcomes, "linked_exit_route_count"), 2);
+        assert_eq!(value_i64(&outcomes, "unlinked_ledger_count"), 1);
+        assert_eq!(value_i64(&outcomes, "ambiguous_exit_link_count"), 1);
+        assert_eq!(
+            outcomes["exit_route_attribution"][0]["exit_route"],
+            json!("swing / risk_reduction")
+        );
+        assert_eq!(
+            outcomes["exit_route_attribution"][2]["link_status"],
+            json!("ambiguous_reconciled_link")
         );
         assert_eq!(value_i64(&outcomes, "sample_requirement"), 20);
         assert_eq!(

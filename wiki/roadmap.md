@@ -335,7 +335,12 @@ Performance should be explainable at portfolio, report, and position level.
 
 - [x] Add a read-only reconciled SELL-outcome panel from local ledger rows: show realised P/L, win/loss/breakeven counts, win rate, payoff ratio, commission, tax, and an explicit collecting/preliminary sample label. It also attributes realised outcomes by symbol and instrument currency without claiming FX attribution. Partial sales are rows rather than synthetic round trips; defer holding-time and realised-slippage metrics until lot-to-sale and broker quote-at-submission evidence are stored.
 - Reconcile dashboard aggregate P/L with broker exposure rows and local portfolio value history, and show source freshness for each.
-- Add P/L attribution by symbol, currency, sector, and strategy role.
+- Add P/L attribution by symbol, currency, sector, and strategy role. Symbol and
+  instrument-currency attribution plus recorded SELL exit-route provenance
+  landed 2026-07-31. Exit routes describe only the linked SELL order and keep
+  unlinked or ambiguous ledger rows explicit; they are not entry-strategy
+  attribution. Sector attribution remains deferred until a durable source and
+  exposure semantics exist.
 - Add daily, weekly, monthly, and since-reset performance cards with target progress and drawdown.
 - Add benchmark comparison against relevant indices for active regions. Landed
   2026-07-30 with Saxo-SIM-validated S&P 500, Nasdaq-100, Dow Jones, MSCI

@@ -1524,6 +1524,11 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
         .and_then(JsonValue::as_array)
         .cloned()
         .unwrap_or_default();
+    let exit_route_attribution = outcomes
+        .get("exit_route_attribution")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
     let available = text(&outcomes, "status") != "unavailable";
     let status = text(&outcomes, "status");
     let (status_label, status_tone) = match status.as_str() {
@@ -1617,6 +1622,25 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
                     p { class: "muted", "Instrument-currency grouping: {currency_summary}" }
                 }
                 p { class: "muted", "Showing the top {text(&outcomes, \"shown_symbol_attribution_count\")} of {text(&outcomes, \"attributed_symbol_count\")} symbol(s) by absolute realised P/L." }
+                if !exit_route_attribution.is_empty() {
+                    div { class: "table-wrap",
+                        table {
+                            thead { tr { th { "Recorded SELL route" } th { "Link" } th { "Closed-sale rows" } th { "Realised P/L" } th { "Commission" } } }
+                            tbody {
+                                for row in exit_route_attribution {
+                                    tr {
+                                        td { strong { "{text(&row, \"exit_route\")}" } }
+                                        td { "{text(&row, \"link_status\").replace('_', \" \")}" }
+                                        td { "{text(&row, \"closed_sale_count\")}" }
+                                        td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row_money(&row, \"realised_gain_dkk\", true)}" }
+                                        td { "{row_money(&row, \"commission_dkk\", false)}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    p { class: "muted", "SELL-route provenance: {text(&outcomes, \"linked_exit_route_count\")} linked to one recorded execution order, {text(&outcomes, \"unlinked_ledger_count\")} unlinked local ledger row(s), and {text(&outcomes, \"ambiguous_exit_link_count\")} ambiguous link(s). A route describes the recorded exit only; it is not entry-strategy attribution." }
+                }
                 div { class: "table-wrap",
                     table {
                         thead { tr { th { "Closed" } th { "Symbol" } th { "Outcome" } th { "Commission" } th { "Cost basis" } } }
