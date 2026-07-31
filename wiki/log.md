@@ -1594,3 +1594,9 @@ broker mutation was added.
 - Moved deterministic Hermes reflection lessons and expiring learning-memory projections from `src/state.rs` into `src/hermes_state.rs`.
 - The extraction preserves bounded inputs, redaction, duplicate handling, cadence/status/TTL semantics, and existing dashboard/API output. It exposes no runtime writes.
 - Database reads, advice and experiment transitions, provider calls, Trading Manager gates, protective stops, and Saxo execution remain in their existing modules and are unchanged.
+
+## [2026-07-31] architecture | Hermes evidence read-model extraction
+
+- Moved the deterministic one-variable baseline/overlay audit, proposal-quality rubric, duplicate-family vocabulary, and baseline-evidence calculations into `src/hermes_state.rs`.
+- `AppState` still performs every database query and owns experiment/baseline lifecycle operations; the new module transforms only persisted snapshots into existing dashboard/API payloads.
+- The evidence pack remains read-only and explicitly non-causal. Provider calls, Decision Reports, Trading Manager gates, protective stops, and Saxo execution are unchanged.
