@@ -10,6 +10,11 @@ updated: 2026-07-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-31] architecture | Scheduler dashboard pagination extraction
+
+- Moved the deterministic Execution-tab Scheduler-history page clamp and offset from `src/state.rs` to `src/scheduler_state.rs`, retaining the existing 12-row page size and focused unit coverage.
+- This is a persisted read-model boundary only. Scheduler cadence, jobs, history retention, notifications, Trading Manager, protective stops, and Saxo behavior are unchanged.
+
 ## [2026-07-31] architecture | Execution dashboard pagination extraction
 
 - Moved the deterministic Execution dashboard page clamp, offsets, and existing overview/shared row limits from `src/state.rs` to `src/execution_state.rs`, with focused unit coverage.

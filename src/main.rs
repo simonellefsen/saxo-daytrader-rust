@@ -30,6 +30,7 @@ mod saxo_order;
 mod saxo_portfolio;
 mod saxo_rate_limit;
 mod scheduler;
+mod scheduler_state;
 mod state;
 mod strategy_journal;
 mod trading_manager;

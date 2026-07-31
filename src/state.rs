@@ -41,6 +41,7 @@ use crate::{
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
+    scheduler_state::{SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page},
 };
 
 #[cfg(test)]
@@ -2405,16 +2406,6 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
-const SCHEDULER_CYCLES_PAGE_SIZE: i64 = 12;
-
-fn dashboard_scheduler_cycle_window(requested_page: i64, total_cycles: i64) -> (i64, i64) {
-    let total_pages = ((total_cycles.max(0) + SCHEDULER_CYCLES_PAGE_SIZE - 1)
-        / SCHEDULER_CYCLES_PAGE_SIZE)
-        .max(1);
-    let page = requested_page.max(1).min(total_pages);
-    (page, (page - 1) * SCHEDULER_CYCLES_PAGE_SIZE)
-}
-
 fn scheduler_history_policy_values(
     configured_max_rows: Option<i64>,
     configured_retention_days: Option<i64>,
@@ -2727,10 +2718,10 @@ impl AppState {
         } else {
             0
         };
-        let (scheduler_page, scheduler_cycles_offset) =
-            dashboard_scheduler_cycle_window(requested_scheduler_page, scheduler_cycle_total);
+        let scheduler_cycle_page =
+            scheduler_cycle_page(requested_scheduler_page, scheduler_cycle_total);
         let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
-            self.scheduler_cycles_page(SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycles_offset)
+            self.scheduler_cycles_page(SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page.offset)
                 .await
                 .unwrap_or_else(|err| {
                     warn!("dashboard scheduler cycles degraded: {err:#}");
@@ -3064,7 +3055,7 @@ impl AppState {
             quiver_page: quiver_signal_page.page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
-            scheduler_page,
+            scheduler_page: scheduler_cycle_page.page,
             scheduler_page_size: SCHEDULER_CYCLES_PAGE_SIZE,
             scheduler_cycle_total,
             positions,
@@ -15861,19 +15852,6 @@ analysis_windows:
             assert!(!dashboard_loads_tab_exclusive_data("overview", tab));
             assert!(!dashboard_loads_tab_exclusive_data("performance", tab));
         }
-    }
-
-    #[test]
-    fn dashboard_scheduler_cycle_window_clamps_page_and_calculates_offset() {
-        assert_eq!(
-            dashboard_scheduler_cycle_window(2, 25),
-            (2, SCHEDULER_CYCLES_PAGE_SIZE)
-        );
-        assert_eq!(
-            dashboard_scheduler_cycle_window(9, 13),
-            (2, SCHEDULER_CYCLES_PAGE_SIZE)
-        );
-        assert_eq!(dashboard_scheduler_cycle_window(0, 0), (1, 0));
     }
 
     #[test]
