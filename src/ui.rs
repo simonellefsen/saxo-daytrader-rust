@@ -1,9 +1,10 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use dioxus::prelude::*;
-use serde_json::{Map, Value as JsonValue};
+use serde_json::Value as JsonValue;
 
 use crate::{
+    debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
     localization::{
         LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
         format_timestamp,
@@ -78,6 +79,83 @@ const APP_SCRIPT: &str = r#"
     window.setTimeout(poll, 4000);
     window.setInterval(poll, 10000);
   };
+  const bindPromptDebugPayloads = () => {
+    const copyText = async (button, value) => {
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+        } else {
+          const fallback = document.createElement("textarea");
+          fallback.value = value;
+          fallback.setAttribute("readonly", "");
+          fallback.style.position = "fixed";
+          fallback.style.opacity = "0";
+          document.body.appendChild(fallback);
+          fallback.select();
+          document.execCommand("copy");
+          fallback.remove();
+        }
+        const label = button.textContent;
+        button.textContent = "Copied";
+        window.setTimeout(() => { button.textContent = label; }, 1500);
+      } catch (_) {
+        button.textContent = "Copy failed";
+      }
+    };
+    document.querySelectorAll("details[data-decision-debug]").forEach((details) => {
+      if (details.dataset.bound === "true") return;
+      details.dataset.bound = "true";
+      const output = details.querySelector("[data-decision-debug-output]");
+      const reportId = details.dataset.reportId;
+      if (!output || !reportId) return;
+      const load = async () => {
+        if (details.dataset.loadState === "loading" || details.dataset.loadState === "loaded") return;
+        details.dataset.loadState = "loading";
+        output.textContent = "Loading sanitized payloads...";
+        try {
+          const base = appBasePath();
+          const response = await fetch(`${base}/api/decision/reports/${encodeURIComponent(reportId)}/debug`, {
+            headers: { "Accept": "application/json" }
+          });
+          if (!response.ok) throw new Error("debug payload unavailable");
+          const payload = await response.json();
+          const bodies = payload.payloads || {};
+          output.replaceChildren();
+          [
+            ["System Prompt", bodies.prompt],
+            ["User Prompt / Payload", bodies.request],
+            ["Provider Response", bodies.provider_response],
+            ["Normalized Report", bodies.normalized_report]
+          ].forEach(([label, body]) => {
+            const section = document.createElement("section");
+            section.className = "prompt-debug-item";
+            const heading = document.createElement("div");
+            heading.className = "prompt-debug-heading";
+            const title = document.createElement("strong");
+            title.textContent = label;
+            const copy = document.createElement("button");
+            copy.type = "button";
+            copy.className = "small-button";
+            copy.textContent = "Copy";
+            const text = typeof body === "string" ? body : "No payload available.";
+            copy.addEventListener("click", () => { void copyText(copy, text); });
+            heading.append(title, copy);
+            const pre = document.createElement("pre");
+            pre.textContent = text;
+            section.append(heading, pre);
+            output.appendChild(section);
+          });
+          details.dataset.loadState = "loaded";
+        } catch (_) {
+          details.dataset.loadState = "failed";
+          output.textContent = "Sanitized debug payloads are unavailable. Close and reopen to retry.";
+        }
+      };
+      details.addEventListener("toggle", () => {
+        if (details.open) void load();
+      });
+    });
+  };
   const loadTradingViewModal = (modal) => {
     if (!modal) return;
     const frame = modal.querySelector("iframe[data-tradingview-src]");
@@ -136,6 +214,7 @@ const APP_SCRIPT: &str = r#"
     bindPerformanceCharts();
     bindDecisionReportForms();
     bindDecisionReportPendingRefresh();
+    bindPromptDebugPayloads();
     bindTradingViewModals();
     bindModalCloseLinks();
   };
@@ -3849,10 +3928,10 @@ fn decision_report_debug_payload(
     normalized_report: &JsonValue,
 ) -> DecisionReportDebugPayload {
     DecisionReportDebugPayload {
-        prompt: compact_debug_text(&text(report, "prompt_text"), 4_000),
-        request: compact_json_redacted(report.get("request_json"), 4_000),
-        response: compact_json_redacted(report.get("response_json"), 4_000),
-        normalized: compact_json_redacted(Some(normalized_report), 4_000),
+        prompt: compact_debug_text(&text(report, "prompt_text"), DEBUG_PAYLOAD_MAX_CHARS),
+        request: compact_json_redacted(report.get("request_json"), DEBUG_PAYLOAD_MAX_CHARS),
+        response: compact_json_redacted(report.get("response_json"), DEBUG_PAYLOAD_MAX_CHARS),
+        normalized: compact_json_redacted(Some(normalized_report), DEBUG_PAYLOAD_MAX_CHARS),
     }
 }
 
@@ -3968,6 +4047,7 @@ fn DecisionReportRow(row: JsonValue, prefs: LocalizationPrefs, selected_id: i64)
 #[component]
 fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let latest = data.latest_decision.clone();
+    let report_id = latest.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -3986,20 +4066,21 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "prompt-card",
                 h3 { "Decision Report" }
-                p { class: "muted", "Prompt used to generate the latest market and portfolio Decision Report." }
-                div { class: "grid-2 prompt-grid",
-                    div { class: "event prewrap code-panel",
-                        strong { "System Prompt" }
-                        span { "{fallback_text(&latest, \"prompt_text\", \"No stored prompt text is available for this report.\")}" }
+                p { class: "muted", "Stored prompt, request, response, and normalized report payloads load only when expanded. They are redacted and capped on the server before they reach this browser." }
+                if report_id > 0 {
+                    details {
+                        class: "debug-payload-details prompt-debug-details",
+                        "data-decision-debug": "true",
+                        "data-report-id": "{report_id}",
+                        summary { "Load sanitized Decision Report debug payloads" }
+                        div {
+                            class: "prompt-debug-loader muted",
+                            "data-decision-debug-output": "true",
+                            "Expand to load the latest stored payloads for this report."
+                        }
                     }
-                    div { class: "event prewrap",
-                        strong { "User Prompt / Payload" }
-                        span { "{compact_json(latest.get(\"request_json\"))}" }
-                    }
-                }
-                div { class: "event prewrap",
-                    strong { "Structured Output Schema" }
-                    span { "{compact_json(latest.get(\"report_json\"))}" }
+                } else {
+                    div { class: "event muted", "No Decision Report is available yet." }
                 }
             }
             div { class: "prompt-card",
@@ -8906,100 +8987,6 @@ fn compact_json(value: Option<&JsonValue>) -> String {
     }
 }
 
-fn compact_json_redacted(value: Option<&JsonValue>, max_len: usize) -> String {
-    let Some(value) = value else {
-        return "No payload available.".to_string();
-    };
-    let redacted = redact_debug_json(value);
-    let rendered = serde_json::to_string_pretty(&redacted).unwrap_or_else(|_| redacted.to_string());
-    compact_debug_text(&rendered, max_len)
-}
-
-fn compact_debug_text(value: &str, max_len: usize) -> String {
-    let redacted = redact_debug_text(value);
-    if redacted.len() > max_len {
-        format!("{}...", &redacted[..max_len])
-    } else if redacted.trim().is_empty() {
-        "No payload available.".to_string()
-    } else {
-        redacted
-    }
-}
-
-fn redact_debug_json(value: &JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Object(object) => JsonValue::Object(
-            object
-                .iter()
-                .map(|(key, value)| {
-                    if is_sensitive_debug_key(key) {
-                        (key.clone(), JsonValue::String("[redacted]".to_string()))
-                    } else {
-                        (key.clone(), redact_debug_json(value))
-                    }
-                })
-                .collect::<Map<String, JsonValue>>(),
-        ),
-        JsonValue::Array(values) => {
-            JsonValue::Array(values.iter().map(redact_debug_json).collect())
-        }
-        JsonValue::String(value) => JsonValue::String(redact_debug_text(value)),
-        _ => value.clone(),
-    }
-}
-
-fn is_sensitive_debug_key(key: &str) -> bool {
-    let lower = key.to_lowercase();
-    [
-        "api_key",
-        "authorization",
-        "bearer",
-        "token",
-        "refresh",
-        "secret",
-        "password",
-        "accountkey",
-        "account_key",
-        "clientkey",
-        "client_key",
-        "database_url",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-fn redact_debug_text(value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(|word| {
-            let trimmed = word.trim_matches(|ch: char| {
-                matches!(
-                    ch,
-                    '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}'
-                )
-            });
-            if looks_like_secret_token(trimmed) {
-                word.replace(trimmed, "[redacted]")
-            } else {
-                word.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn looks_like_secret_token(value: &str) -> bool {
-    if value.starts_with("sk-") || value.starts_with("Bearer") {
-        return true;
-    }
-    value.len() >= 32
-        && value.chars().any(char::is_alphabetic)
-        && value.chars().any(char::is_numeric)
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
-}
-
 fn short_json(value: Option<&JsonValue>) -> String {
     let Some(value) = value else {
         return "n/a".to_string();
@@ -9160,6 +9147,14 @@ mod tests {
         assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
         assert!(APP_SCRIPT.contains("frame.dataset.tradingviewLoaded"));
         assert!(APP_SCRIPT.contains("loadTargetTradingViewModal"));
+    }
+
+    #[test]
+    fn prompt_debug_payloads_load_on_demand_with_the_shared_base_path() {
+        assert!(APP_SCRIPT.contains("bindPromptDebugPayloads"));
+        assert!(APP_SCRIPT.contains("/api/decision/reports/${encodeURIComponent(reportId)}/debug"));
+        assert!(APP_SCRIPT.contains("details.addEventListener(\"toggle\""));
+        assert!(APP_SCRIPT.contains("pre.textContent = text"));
     }
 
     #[test]

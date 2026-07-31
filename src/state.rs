@@ -22,6 +22,7 @@ use crate::{
     auth,
     config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
+    debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
     localization::LocalizationPrefs,
     models::{
         DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
@@ -3379,8 +3380,9 @@ impl AppState {
                 warn!("dashboard decision reports degraded: {err:#}");
                 Vec::new()
             });
-        let needs_report_detail = matches!(active_view.as_str(), "decisions" | "prompts");
-        let selected_decision = if needs_report_detail {
+        let needs_selected_report = matches!(active_view.as_str(), "decisions" | "prompts");
+        let needs_report_detail = active_view == "decisions";
+        let selected_decision = if needs_selected_report {
             let report_id = selected_report_id.or_else(|| {
                 reports
                     .first()
@@ -3398,11 +3400,21 @@ impl AppState {
                             reports.insert(0, summary);
                         }
                     }
-                    self.decision_report_item(report_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .unwrap_or(JsonValue::Null)
+                    if needs_report_detail {
+                        self.decision_report_item(report_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or(JsonValue::Null)
+                    } else {
+                        reports
+                            .iter()
+                            .find(|row| {
+                                row.get("id").and_then(JsonValue::as_i64) == Some(report_id)
+                            })
+                            .cloned()
+                            .unwrap_or(JsonValue::Null)
+                    }
                 }
                 None => JsonValue::Null,
             }
@@ -6659,6 +6671,28 @@ impl AppState {
             report_id.max(0)
         );
         self.first_json(&sql).await
+    }
+
+    fn sanitized_decision_report_debug_payload(report: &JsonValue) -> JsonValue {
+        let normalized_report = report.get("report_json").unwrap_or(&JsonValue::Null);
+        json!({
+            "report_id": value_i64(report, "id"),
+            "created_at": json_text(report, "created_at"),
+            "status": json_text(report, "status"),
+            "payloads": {
+                "prompt": compact_debug_text(&json_text(report, "prompt_text"), DEBUG_PAYLOAD_MAX_CHARS),
+                "request": compact_json_redacted(report.get("request_json"), DEBUG_PAYLOAD_MAX_CHARS),
+                "provider_response": compact_json_redacted(report.get("response_json"), DEBUG_PAYLOAD_MAX_CHARS),
+                "normalized_report": compact_json_redacted(Some(normalized_report), DEBUG_PAYLOAD_MAX_CHARS),
+            },
+        })
+    }
+
+    pub async fn decision_report_debug_payload(&self, report_id: i64) -> Result<Option<JsonValue>> {
+        let Some(report) = self.decision_report_item(report_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::sanitized_decision_report_debug_payload(&report)))
     }
 
     async fn attach_decision_candidate_waterfall(&self, mut report: JsonValue) -> JsonValue {
@@ -16664,6 +16698,45 @@ analysis_windows:
                 "detail projection must retain {column}"
             );
         }
+    }
+
+    #[test]
+    fn decision_report_debug_payload_is_bounded_and_sanitized_before_api_delivery() {
+        let report = json!({
+            "id": 42,
+            "created_at": "2026-07-31T10:00:00Z",
+            "status": "completed",
+            "prompt_text": "Do not expose sk-live-123456789012345678901234567890",
+            "request_json": {"Authorization": "Bearer abcdef1234567890abcdef1234567890abcd"},
+            "response_json": {"refresh_token": "refresh-123456789012345678901234567890"},
+            "report_json": {"suggested_trades": []},
+        });
+
+        let payload = AppState::sanitized_decision_report_debug_payload(&report);
+        assert_eq!(
+            payload.get("report_id").and_then(JsonValue::as_i64),
+            Some(42)
+        );
+        assert!(
+            payload["payloads"]["prompt"]
+                .as_str()
+                .is_some_and(|value| value.contains("[redacted]"))
+        );
+        assert!(
+            payload["payloads"]["request"]
+                .as_str()
+                .is_some_and(|value| value.contains("\"Authorization\": \"[redacted]\""))
+        );
+        assert!(
+            payload["payloads"]["provider_response"]
+                .as_str()
+                .is_some_and(|value| value.contains("\"refresh_token\": \"[redacted]\""))
+        );
+        assert!(
+            payload["payloads"]["normalized_report"]
+                .as_str()
+                .is_some_and(|value| value.contains("suggested_trades"))
+        );
     }
 
     #[test]

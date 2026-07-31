@@ -5,6 +5,7 @@ mod config;
 mod config_contract;
 mod daily_indicators;
 mod db;
+mod debug_redaction;
 mod drawdown_guard;
 mod editorial_research;
 mod fx;

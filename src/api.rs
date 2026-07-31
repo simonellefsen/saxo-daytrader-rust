@@ -124,6 +124,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/prompts", get(prompts))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
+        .route(
+            "/api/decision/reports/{report_id}/debug",
+            get(decision_report_debug),
+        )
         .route("/api/decision/gate-replay", get(decision_gate_replay))
         .route("/api/decision/schema", get(decision_schema))
         .route("/api/strategy-journal", get(strategy_journal))
@@ -1720,6 +1724,21 @@ async fn decision_reports(
             .await
             .map(|items| json!({"items": items})),
     )
+}
+
+async fn decision_report_debug(
+    State(state): State<Arc<AppState>>,
+    Path(report_id): Path<i64>,
+) -> Response {
+    match state.decision_report_debug_payload(report_id).await {
+        Ok(Some(payload)) => Json(payload).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"status": "not_found", "detail": "Decision Report was not found."})),
+        )
+            .into_response(),
+        Err(err) => json_result(Err(err)),
+    }
 }
 
 async fn decision_gate_replay(

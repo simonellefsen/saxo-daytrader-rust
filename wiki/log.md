@@ -8,12 +8,17 @@ updated: 2026-07-30
 
 # Wiki Log
 
+Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-31] ui | On-demand sanitized Decision Report debug payloads
+
+- Changed AI Prompts from server-rendering the full stored Decision Report prompt, request, provider response, and normalized report to loading those values only after an operator expands the debug section.
+- The new read-only endpoint redacts secret-like fields and token-shaped strings server-side, caps each of the four payloads at 4,000 characters, and the UI inserts returned content as text with local copy controls. It has no provider, Hermes, manager, configuration, stop, or broker-execution effect.
+
 ## [2026-07-31] performance | Recorded SELL-route provenance
 
 - Extended the read-only reconciled SELL-outcome panel with a bounded attribution by the recorded exit order's strategy type and role, joined through reconciled fills. The display explicitly counts single-order links, unlinked local ledger rows, and ambiguous multi-order links.
 - This is exit provenance, not attribution to the original BUY strategy or a causal measure of a strategy's performance. It does not feed Hermes, Decision Reports, Trading Manager, sizing, stops, or broker execution. Sector attribution remains deferred until a durable source exists.
-
-Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
 ## [2026-07-31] performance | Realised outcome attribution
 
