@@ -1612,3 +1612,8 @@ broker mutation was added.
 - Moved deterministic Markov dashboard pagination from `src/state.rs` into `src/markov_state.rs`, with the existing bounds preserved and covered in the new module.
 - Moved the persisted latest-signal summary query used by read-only execution attribution into `src/markov_method.rs`, where the Markov run and signal tables are already read.
 - Markov calculation, scheduler cadence, advisory context, Trading Manager gates, and Saxo execution are unchanged.
+
+## [2026-07-31] architecture | Quiver read-model extraction
+
+- Moved deterministic Quiver dashboard pagination from `src/state.rs` into `src/quiver_state.rs`, preserving the existing page size, bounds, and offset calculation with module coverage.
+- The Quiver provider, persisted signal queries, subscription behavior, scheduler cadence, and downstream advisory/trading paths remain unchanged.

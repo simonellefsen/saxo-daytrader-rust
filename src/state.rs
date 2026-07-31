@@ -39,6 +39,7 @@ use crate::{
         HermesReflectionRequest,
     },
     performance_state::performance_summary_from_history,
+    quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
 };
 
 #[cfg(test)]
@@ -2406,7 +2407,6 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
 const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
 const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
 const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
-const QUIVER_SIGNALS_PAGE_SIZE: i64 = 40;
 const SCHEDULER_CYCLES_PAGE_SIZE: i64 = 12;
 
 fn dashboard_execution_order_window(
@@ -2429,13 +2429,6 @@ fn dashboard_execution_order_window(
     let page = requested_page.max(1).min(total_pages);
     let offset = (page - 1) * EXECUTION_ORDERS_PAGE_SIZE;
     (page, EXECUTION_ORDERS_PAGE_SIZE, offset)
-}
-
-fn dashboard_quiver_signal_window(requested_page: i64, total_signals: i64) -> (i64, i64) {
-    let total_pages =
-        ((total_signals.max(0) + QUIVER_SIGNALS_PAGE_SIZE - 1) / QUIVER_SIGNALS_PAGE_SIZE).max(1);
-    let page = requested_page.max(1).min(total_pages);
-    (page, (page - 1) * QUIVER_SIGNALS_PAGE_SIZE)
 }
 
 fn dashboard_scheduler_cycle_window(requested_page: i64, total_cycles: i64) -> (i64, i64) {
@@ -2922,10 +2915,9 @@ impl AppState {
         } else {
             0
         };
-        let (quiver_page, quiver_signals_offset) =
-            dashboard_quiver_signal_window(requested_quiver_page, quiver_signal_total);
+        let quiver_signal_page = quiver_signal_page(requested_quiver_page, quiver_signal_total);
         let quiver_signals = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
-            self.quiver_signals_page(QUIVER_SIGNALS_PAGE_SIZE, quiver_signals_offset)
+            self.quiver_signals_page(QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page.offset)
                 .await
                 .unwrap_or_else(|err| {
                     warn!("dashboard Quiver signals degraded: {err:#}");
@@ -3091,7 +3083,7 @@ impl AppState {
             markov_page: markov_signal_page.page,
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
             markov_signal_total,
-            quiver_page,
+            quiver_page: quiver_signal_page.page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
             scheduler_page,
@@ -15911,19 +15903,6 @@ analysis_windows:
             dashboard_execution_order_window("markov", 5, 500),
             (1, SHARED_EXECUTION_ORDERS_LIMIT, 0)
         );
-    }
-
-    #[test]
-    fn dashboard_quiver_signal_window_clamps_page_and_calculates_offset() {
-        assert_eq!(
-            dashboard_quiver_signal_window(2, 81),
-            (2, QUIVER_SIGNALS_PAGE_SIZE)
-        );
-        assert_eq!(
-            dashboard_quiver_signal_window(9, 41),
-            (2, QUIVER_SIGNALS_PAGE_SIZE)
-        );
-        assert_eq!(dashboard_quiver_signal_window(0, 0), (1, 0));
     }
 
     #[test]

@@ -22,6 +22,7 @@ mod portfolio_reset;
 mod price_monitor;
 mod protective_stops;
 mod quiver;
+mod quiver_state;
 mod saxo_error;
 mod saxo_http;
 mod saxo_order;
