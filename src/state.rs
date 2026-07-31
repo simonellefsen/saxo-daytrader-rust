@@ -23,6 +23,7 @@ use crate::{
     config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
+    execution_state::execution_order_window,
     hermes_state::{
         HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES, LEARNING_MEMORY_LIMIT,
         LEARNING_MEMORY_REFLECTION_LIMIT, LESSONS_PENDING_REVIEW_LIMIT,
@@ -2404,32 +2405,7 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
-const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
-const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
-const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
 const SCHEDULER_CYCLES_PAGE_SIZE: i64 = 12;
-
-fn dashboard_execution_order_window(
-    active_view: &str,
-    requested_page: i64,
-    total_orders: i64,
-) -> (i64, i64, i64) {
-    if active_view != "execution" {
-        let limit = if active_view == "overview" {
-            OVERVIEW_EXECUTION_ORDERS_LIMIT
-        } else {
-            SHARED_EXECUTION_ORDERS_LIMIT
-        };
-        return (1, limit, 0);
-    }
-
-    let total_pages = ((total_orders.max(0) + EXECUTION_ORDERS_PAGE_SIZE - 1)
-        / EXECUTION_ORDERS_PAGE_SIZE)
-        .max(1);
-    let page = requested_page.max(1).min(total_pages);
-    let offset = (page - 1) * EXECUTION_ORDERS_PAGE_SIZE;
-    (page, EXECUTION_ORDERS_PAGE_SIZE, offset)
-}
 
 fn dashboard_scheduler_cycle_window(requested_page: i64, total_cycles: i64) -> (i64, i64) {
     let total_pages = ((total_cycles.max(0) + SCHEDULER_CYCLES_PAGE_SIZE - 1)
@@ -2560,14 +2536,16 @@ impl AppState {
         } else {
             0
         };
-        let (execution_page, execution_page_size, execution_orders_offset) =
-            dashboard_execution_order_window(
-                &active_view,
-                requested_execution_page,
-                execution_order_total,
-            );
+        let execution_order_window = execution_order_window(
+            &active_view,
+            requested_execution_page,
+            execution_order_total,
+        );
         let orders = self
-            .execution_orders_page(execution_page_size, execution_orders_offset)
+            .execution_orders_page(
+                execution_order_window.page_size,
+                execution_order_window.offset,
+            )
             .await
             .unwrap_or_else(|err| {
                 warn!("dashboard execution queue degraded: {err:#}");
@@ -3077,8 +3055,8 @@ impl AppState {
             active_view,
             performance_range,
             selected_report_id,
-            execution_page,
-            execution_page_size,
+            execution_page: execution_order_window.page,
+            execution_page_size: execution_order_window.page_size,
             execution_order_total,
             markov_page: markov_signal_page.page,
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
@@ -15883,26 +15861,6 @@ analysis_windows:
             assert!(!dashboard_loads_tab_exclusive_data("overview", tab));
             assert!(!dashboard_loads_tab_exclusive_data("performance", tab));
         }
-    }
-
-    #[test]
-    fn dashboard_execution_order_window_pages_execution_and_bounds_other_tabs() {
-        assert_eq!(
-            dashboard_execution_order_window("execution", 2, 56),
-            (2, EXECUTION_ORDERS_PAGE_SIZE, 25)
-        );
-        assert_eq!(
-            dashboard_execution_order_window("execution", 99, 26),
-            (2, EXECUTION_ORDERS_PAGE_SIZE, 25)
-        );
-        assert_eq!(
-            dashboard_execution_order_window("overview", 5, 500),
-            (1, OVERVIEW_EXECUTION_ORDERS_LIMIT, 0)
-        );
-        assert_eq!(
-            dashboard_execution_order_window("markov", 5, 500),
-            (1, SHARED_EXECUTION_ORDERS_LIMIT, 0)
-        );
     }
 
     #[test]

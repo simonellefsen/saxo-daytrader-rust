@@ -10,6 +10,11 @@ updated: 2026-07-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-07-31] architecture | Execution dashboard pagination extraction
+
+- Moved the deterministic Execution dashboard page clamp, offsets, and existing overview/shared row limits from `src/state.rs` to `src/execution_state.rs`, with focused unit coverage.
+- This remains a local read-model boundary only. It does not change SQL ordering, broker synchronization, fills, order states, Trading Manager decisions, protective stops, or Saxo mutation behavior.
+
 ## [2026-07-31] ui | On-demand sanitized Decision Report debug payloads
 
 - Changed AI Prompts from server-rendering the full stored Decision Report prompt, request, provider response, and normalized report to loading those values only after an operator expands the debug section.

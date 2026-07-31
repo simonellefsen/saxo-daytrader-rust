@@ -8,6 +8,7 @@ mod db;
 mod debug_redaction;
 mod drawdown_guard;
 mod editorial_research;
+mod execution_state;
 mod fx;
 mod hermes_state;
 mod localization;
