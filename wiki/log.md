@@ -1588,3 +1588,9 @@ broker mutation was added.
 - Added a read-only Performance table that exposes the same dashboard-versus-Saxo exposure comparison already used by Overview integrity, even when the values remain inside the existing tolerance.
 - The table keeps response-time aggregate, stored history, and stored Saxo exposure timestamps distinct. Saxo exposure P/L is shown only after conversion from the recorded broker account currency with the recorded DKK FX rate.
 - It remains diagnostic context, not an accounting assertion or a trading input. Hermes, Decision Reports, Trading Manager, sizing, stops, and broker execution are unchanged.
+
+## [2026-07-31] architecture | First Hermes read-model extraction
+
+- Moved deterministic Hermes reflection lessons and expiring learning-memory projections from `src/state.rs` into `src/hermes_state.rs`.
+- The extraction preserves bounded inputs, redaction, duplicate handling, cadence/status/TTL semantics, and existing dashboard/API output. It exposes no runtime writes.
+- Database reads, advice and experiment transitions, provider calls, Trading Manager gates, protective stops, and Saxo execution remain in their existing modules and are unchanged.

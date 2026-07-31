@@ -9,6 +9,7 @@ mod debug_redaction;
 mod drawdown_guard;
 mod editorial_research;
 mod fx;
+mod hermes_state;
 mod localization;
 mod markov_method;
 mod mcp;

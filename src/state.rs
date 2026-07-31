@@ -23,6 +23,11 @@ use crate::{
     config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
+    hermes_state::{
+        LEARNING_MEMORY_LIMIT, LEARNING_MEMORY_REFLECTION_LIMIT, LESSONS_PENDING_REVIEW_LIMIT,
+        LESSONS_PENDING_REVIEW_REFLECTION_LIMIT, learning_memory_from_reflections,
+        lessons_pending_review_from_reflections, safe_display_text,
+    },
     localization::LocalizationPrefs,
     models::{
         DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
@@ -61,14 +66,6 @@ const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &[
     "strategy.capital.cash_buffer",
     "strategy.swing.cash_buffer_pct",
 ];
-const HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT: i64 = 50;
-const HERMES_LESSONS_PENDING_REVIEW_LIMIT: usize = 30;
-const HERMES_LESSON_TEXT_MAX_CHARS: usize = 500;
-const HERMES_LEARNING_MEMORY_REFLECTION_LIMIT: i64 = 80;
-const HERMES_LEARNING_MEMORY_LIMIT: usize = 30;
-const HERMES_LEARNING_MEMORY_EMERGING_TTL_DAYS: i64 = 7;
-const HERMES_LEARNING_MEMORY_STABLE_TTL_DAYS: i64 = 21;
-const HERMES_LEARNING_MEMORY_STABLE_MIN_REFLECTIONS: usize = 2;
 const GATE_REPLAY_DEFAULT_RUN_LIMIT: i64 = 40;
 const GATE_REPLAY_MAX_CHANGE_ROWS: usize = 30;
 const GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL: f64 = 0.25;
@@ -182,15 +179,6 @@ struct SaxoExchangeCalendarCache {
 }
 
 #[derive(Clone, Debug)]
-struct HermesLearningMemoryEntry {
-    lesson: String,
-    first_seen: DateTime<Utc>,
-    last_seen: DateTime<Utc>,
-    reflection_ids: HashSet<String>,
-    cadences: HashSet<String>,
-}
-
-#[derive(Clone, Debug)]
 struct SaxoExchangeCalendar {
     exchange_id: String,
     name: Option<String>,
@@ -257,168 +245,6 @@ fn sql_f64(value: f64) -> String {
     }
 }
 
-/// Convert reflection `proposed_actions` into a bounded, display-safe operator
-/// queue. The rows are deliberately derived rather than persisted as a second
-/// workflow: an item is advisory context, not an approved experiment or task.
-fn hermes_lessons_pending_review_from_reflections(
-    reflections: &[JsonValue],
-    limit: usize,
-) -> Vec<JsonValue> {
-    let mut lessons = Vec::new();
-    let mut seen = HashSet::new();
-
-    for reflection in reflections {
-        let reflection_id = reflection
-            .get("id")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("")
-            .trim();
-        if reflection_id.is_empty() {
-            continue;
-        }
-        let Some(actions) = reflection.get("proposed_actions_json") else {
-            continue;
-        };
-        for (action_index, action) in hermes_proposed_action_entries(actions)
-            .into_iter()
-            .enumerate()
-        {
-            let Some(lesson) = hermes_proposed_action_text(action) else {
-                continue;
-            };
-            let normalized = lesson.to_lowercase();
-            if !seen.insert(normalized) {
-                continue;
-            }
-            lessons.push(json!({
-                "id": format!("{reflection_id}:{action_index}"),
-                "reflection_id": reflection_id,
-                "created_at": reflection.get("created_at").cloned().unwrap_or(JsonValue::Null),
-                "period_start": reflection.get("period_start").cloned().unwrap_or(JsonValue::Null),
-                "period_end": reflection.get("period_end").cloned().unwrap_or(JsonValue::Null),
-                "goal_version": reflection.get("goal_version").cloned().unwrap_or(JsonValue::Null),
-                "lesson": lesson,
-                "reflection_summary": reflection.get("summary").cloned().unwrap_or(JsonValue::Null),
-                "source_session_id": reflection.get("source_session_id").cloned().unwrap_or(JsonValue::Null),
-            }));
-            if lessons.len() >= limit.max(1) {
-                return lessons;
-            }
-        }
-    }
-    lessons
-}
-
-/// Compress repeated safe reflection actions into an expiring, read-only
-/// learning-memory view. Repetition across separate reflections makes a
-/// lesson stable; one-off actions remain emerging and all observations expire
-/// deterministically. This is advisory context only, not an experiment or
-/// strategy/configuration mutation path.
-fn hermes_learning_memory_from_reflections(
-    reflections: &[JsonValue],
-    now: DateTime<Utc>,
-    limit: usize,
-) -> Vec<JsonValue> {
-    let mut entries = HashMap::<String, HermesLearningMemoryEntry>::new();
-    for reflection in reflections {
-        let reflection_id = json_text(reflection, "id");
-        if reflection_id.is_empty() {
-            continue;
-        }
-        let created_at = json_text(reflection, "created_at");
-        let Some(created_at) = DateTime::parse_from_rfc3339(&created_at)
-            .ok()
-            .map(|value| value.with_timezone(&Utc))
-        else {
-            continue;
-        };
-        let cadence = hermes_reflection_cadence(reflection);
-        let Some(actions) = reflection.get("proposed_actions_json") else {
-            continue;
-        };
-        let mut actions_seen_in_reflection = HashSet::new();
-        for action in hermes_proposed_action_entries(actions) {
-            let Some(lesson) = hermes_proposed_action_text(action) else {
-                continue;
-            };
-            let normalized = lesson.to_ascii_lowercase();
-            if !actions_seen_in_reflection.insert(normalized.clone()) {
-                continue;
-            }
-            let entry = entries
-                .entry(normalized)
-                .or_insert_with(|| HermesLearningMemoryEntry {
-                    lesson: lesson.clone(),
-                    first_seen: created_at,
-                    last_seen: created_at,
-                    reflection_ids: HashSet::new(),
-                    cadences: HashSet::new(),
-                });
-            entry.first_seen = entry.first_seen.min(created_at);
-            entry.last_seen = entry.last_seen.max(created_at);
-            entry.reflection_ids.insert(reflection_id.clone());
-            entry.cadences.insert(cadence.clone());
-        }
-    }
-
-    let mut memory = entries
-        .into_iter()
-        .map(|(normalized_lesson, entry)| {
-            let observation_count = entry.reflection_ids.len();
-            let stable = observation_count >= HERMES_LEARNING_MEMORY_STABLE_MIN_REFLECTIONS;
-            let ttl_days = if stable {
-                HERMES_LEARNING_MEMORY_STABLE_TTL_DAYS
-            } else {
-                HERMES_LEARNING_MEMORY_EMERGING_TTL_DAYS
-            };
-            let expires_at = entry.last_seen + Duration::days(ttl_days);
-            let status = if now >= expires_at {
-                "stale"
-            } else if stable {
-                "stable"
-            } else {
-                "emerging"
-            };
-            let mut cadences = entry.cadences.into_iter().collect::<Vec<_>>();
-            cadences.sort();
-            json!({
-                "id": format!("lesson-memory:{}:{normalized_lesson}", entry.first_seen.timestamp_micros()),
-                "lesson": entry.lesson,
-                "status": status,
-                "observation_count": observation_count,
-                "first_seen": entry.first_seen.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                "last_seen": entry.last_seen.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                "expires_at": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                "cadences": cadences,
-                "safety": "derived_reflection_context_not_a_trading_instruction",
-            })
-        })
-        .collect::<Vec<_>>();
-    memory.sort_by(|left, right| {
-        let rank = |row: &JsonValue| match json_text(row, "status").as_str() {
-            "stable" => 0,
-            "emerging" => 1,
-            _ => 2,
-        };
-        rank(left)
-            .cmp(&rank(right))
-            .then_with(|| json_text(right, "last_seen").cmp(&json_text(left, "last_seen")))
-    });
-    memory.truncate(limit.max(1));
-    memory
-}
-
-fn hermes_reflection_cadence(reflection: &JsonValue) -> String {
-    let session = json_text(reflection, "source_session_id").to_ascii_lowercase();
-    if session.contains("weekly") {
-        "weekly".to_string()
-    } else if session.contains("daily") {
-        "daily".to_string()
-    } else {
-        "other".to_string()
-    }
-}
-
 /// Produce a small, display-safe view of the one-variable state. Baselines
 /// remain audit records and overlays remain runtime candidates; neither row
 /// asserts that a persistent config rewrite or live activation occurred.
@@ -438,7 +264,7 @@ fn hermes_one_variable_audit_from_snapshot(
             "variable": json_text(config, "changed_variable_path"),
             "baseline_value": config.get("old_value").cloned().unwrap_or(JsonValue::Null),
             "candidate_value": config.get("new_value").cloned().unwrap_or(JsonValue::Null),
-            "reason": hermes_safe_display_text(&json_text(config, "hypothesis"), 220),
+            "reason": safe_display_text(&json_text(config, "hypothesis"), 220),
             "scope": "baseline audit record only; no live activation",
             "last_manager_state": "not an overlay",
         }));
@@ -462,7 +288,7 @@ fn hermes_one_variable_audit_from_snapshot(
             "variable": json_text(candidate, "changed_variable_path"),
             "baseline_value": candidate.get("old_value").cloned().unwrap_or(JsonValue::Null),
             "candidate_value": candidate.get("new_value").cloned().unwrap_or(JsonValue::Null),
-            "reason": hermes_safe_display_text(&json_text(candidate, "hypothesis"), 220),
+            "reason": safe_display_text(&json_text(candidate, "hypothesis"), 220),
             "scope": json_text(candidate, "scope"),
             "last_manager_state": if observed_last_run {
                 "observed in latest manager run"
@@ -883,81 +709,6 @@ fn hermes_portfolio_evidence_metrics(rows: &[JsonValue]) -> JsonValue {
     })
 }
 
-fn hermes_proposed_action_entries(value: &JsonValue) -> Vec<&JsonValue> {
-    match value {
-        JsonValue::Array(entries) => entries.iter().collect(),
-        JsonValue::Object(object) => object
-            .get("actions")
-            .and_then(JsonValue::as_array)
-            .map(|entries| entries.iter().collect())
-            .unwrap_or_else(|| vec![value]),
-        JsonValue::String(_) => vec![value],
-        _ => Vec::new(),
-    }
-}
-
-fn hermes_proposed_action_text(value: &JsonValue) -> Option<String> {
-    let text = match value {
-        JsonValue::String(text) => Some(text.as_str()),
-        JsonValue::Object(object) => [
-            "action",
-            "recommendation",
-            "proposal",
-            "summary",
-            "title",
-            "detail",
-        ]
-        .iter()
-        .find_map(|field| object.get(*field).and_then(JsonValue::as_str)),
-        _ => None,
-    };
-    let text = text?;
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-    if hermes_lesson_text_looks_sensitive(&normalized) {
-        return Some("[redacted potentially sensitive reflection action]".to_string());
-    }
-    Some(hermes_safe_display_text(
-        &normalized,
-        HERMES_LESSON_TEXT_MAX_CHARS,
-    ))
-}
-
-fn hermes_safe_display_text(value: &str, max_chars: usize) -> String {
-    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return String::new();
-    }
-    if hermes_lesson_text_looks_sensitive(&normalized) {
-        return "[redacted potentially sensitive Hermes text]".to_string();
-    }
-    if normalized.chars().count() <= max_chars {
-        return normalized;
-    }
-    let mut truncated: String = normalized.chars().take(max_chars).collect();
-    truncated.push_str("...");
-    truncated
-}
-
-fn hermes_lesson_text_looks_sensitive(value: &str) -> bool {
-    let normalized = value.to_ascii_lowercase();
-    [
-        "refresh_token",
-        "access_token",
-        "client_secret",
-        "authorization:",
-        "bearer ",
-        "api_key=",
-        "openrouter_api_key",
-        "accountkey=",
-        "clientkey=",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-}
-
 fn hermes_counterfactual_shadow_quantity(
     effect: &str,
     requested_quantity: f64,
@@ -1029,7 +780,7 @@ fn missed_trade_shadow_gate_is_eligible(gate_code: &str) -> bool {
     )
 }
 
-fn json_text(value: &JsonValue, key: &str) -> String {
+pub(crate) fn json_text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
         Some(JsonValue::Number(number)) => number.to_string(),
@@ -3490,7 +3241,7 @@ impl AppState {
         };
         let hermes_lessons_pending_review =
             if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-                self.hermes_lessons_pending_review(HERMES_LESSONS_PENDING_REVIEW_LIMIT as i64)
+                self.hermes_lessons_pending_review(LESSONS_PENDING_REVIEW_LIMIT as i64)
                     .await
                     .unwrap_or_else(|err| {
                         warn!("dashboard Hermes lessons pending review degraded: {err:#}");
@@ -3500,7 +3251,7 @@ impl AppState {
                 Vec::new()
             };
         let hermes_learning_memory = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.hermes_learning_memory(HERMES_LEARNING_MEMORY_LIMIT as i64)
+            self.hermes_learning_memory(LEARNING_MEMORY_LIMIT as i64)
                 .await
                 .unwrap_or_else(|err| {
                     warn!("dashboard Hermes learning memory degraded: {err:#}");
@@ -8152,12 +7903,12 @@ impl AppState {
              FROM hermes_reflections
              ORDER BY created_at DESC, id DESC
              LIMIT {}",
-            HERMES_LESSONS_PENDING_REVIEW_REFLECTION_LIMIT
+            LESSONS_PENDING_REVIEW_REFLECTION_LIMIT
         );
         let reflections = self.select_json(&sql).await.unwrap_or_default();
-        Ok(hermes_lessons_pending_review_from_reflections(
+        Ok(lessons_pending_review_from_reflections(
             &reflections,
-            clamp_limit(limit, 1, HERMES_LESSONS_PENDING_REVIEW_LIMIT as i64) as usize,
+            clamp_limit(limit, 1, LESSONS_PENDING_REVIEW_LIMIT as i64) as usize,
         ))
     }
 
@@ -8167,13 +7918,13 @@ impl AppState {
              FROM hermes_reflections
              ORDER BY created_at DESC, id DESC
              LIMIT {}",
-            HERMES_LEARNING_MEMORY_REFLECTION_LIMIT
+            LEARNING_MEMORY_REFLECTION_LIMIT
         );
         let reflections = self.select_json(&sql).await.unwrap_or_default();
-        Ok(hermes_learning_memory_from_reflections(
+        Ok(learning_memory_from_reflections(
             &reflections,
             Utc::now(),
-            clamp_limit(limit, 1, HERMES_LEARNING_MEMORY_LIMIT as i64) as usize,
+            clamp_limit(limit, 1, LEARNING_MEMORY_LIMIT as i64) as usize,
         ))
     }
 
@@ -13389,7 +13140,7 @@ mod tests {
             }),
         ];
 
-        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 30);
+        let lessons = lessons_pending_review_from_reflections(&reflections, 30);
 
         assert_eq!(lessons.len(), 2);
         assert_eq!(
@@ -13415,7 +13166,7 @@ mod tests {
             "proposed_actions_json": ["", "First review", "Second review"]
         })];
 
-        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 1);
+        let lessons = lessons_pending_review_from_reflections(&reflections, 1);
 
         assert_eq!(lessons.len(), 1);
         assert_eq!(lessons[0]["lesson"], json!("First review"));
@@ -13428,7 +13179,7 @@ mod tests {
             "proposed_actions_json": ["Investigate refresh_token=do-not-display"]
         })];
 
-        let lessons = hermes_lessons_pending_review_from_reflections(&reflections, 30);
+        let lessons = lessons_pending_review_from_reflections(&reflections, 30);
 
         assert_eq!(lessons.len(), 1);
         assert_eq!(
@@ -13724,7 +13475,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
             .expect("valid current time")
             .with_timezone(&Utc);
-        let memory = hermes_learning_memory_from_reflections(
+        let memory = learning_memory_from_reflections(
             &[
                 json!({
                     "id": "reflection-1",
@@ -13768,7 +13519,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
             .expect("valid current time")
             .with_timezone(&Utc);
-        let memory = hermes_learning_memory_from_reflections(
+        let memory = learning_memory_from_reflections(
             &[json!({
                 "id": "reflection-sensitive",
                 "created_at": "2026-07-22T12:00:00Z",
@@ -13792,7 +13543,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
             .expect("valid current time")
             .with_timezone(&Utc);
-        let memory = hermes_learning_memory_from_reflections(
+        let memory = learning_memory_from_reflections(
             &[json!({
                 "id": "reflection-duplicate-actions",
                 "created_at": "2026-07-22T12:00:00Z",
