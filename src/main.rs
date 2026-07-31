@@ -12,6 +12,7 @@ mod fx;
 mod hermes_state;
 mod localization;
 mod markov_method;
+mod markov_state;
 mod mcp;
 mod models;
 mod notifications;

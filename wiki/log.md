@@ -1606,3 +1606,9 @@ broker mutation was added.
 - Moved pure account-value summary, selected-range return/drawdown, and confidence projections from `src/state.rs` into `src/performance_state.rs`.
 - `AppState` still owns account-history/current aggregate reads, benchmark and goal-tracking queries; the extracted helpers cannot make provider calls or mutate trading state.
 - Performance remains display-only evidence. Hermes, Decision Reports, Trading Manager gates, sizing, protective stops, and Saxo execution are unchanged.
+
+## [2026-07-31] architecture | Markov read-model extraction
+
+- Moved deterministic Markov dashboard pagination from `src/state.rs` into `src/markov_state.rs`, with the existing bounds preserved and covered in the new module.
+- Moved the persisted latest-signal summary query used by read-only execution attribution into `src/markov_method.rs`, where the Markov run and signal tables are already read.
+- Markov calculation, scheduler cadence, advisory context, Trading Manager gates, and Saxo execution are unchanged.

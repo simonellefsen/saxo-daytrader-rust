@@ -33,6 +33,7 @@ use crate::{
         normalize_hermes_experiment_variable_path,
     },
     localization::LocalizationPrefs,
+    markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
         HermesReflectionRequest,
@@ -2405,7 +2406,6 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
 const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
 const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
 const SHARED_EXECUTION_ORDERS_LIMIT: i64 = 20;
-const MARKOV_SIGNALS_PAGE_SIZE: i64 = 40;
 const QUIVER_SIGNALS_PAGE_SIZE: i64 = 40;
 const SCHEDULER_CYCLES_PAGE_SIZE: i64 = 12;
 
@@ -2429,13 +2429,6 @@ fn dashboard_execution_order_window(
     let page = requested_page.max(1).min(total_pages);
     let offset = (page - 1) * EXECUTION_ORDERS_PAGE_SIZE;
     (page, EXECUTION_ORDERS_PAGE_SIZE, offset)
-}
-
-fn dashboard_markov_signal_window(requested_page: i64, total_signals: i64) -> (i64, i64) {
-    let total_pages =
-        ((total_signals.max(0) + MARKOV_SIGNALS_PAGE_SIZE - 1) / MARKOV_SIGNALS_PAGE_SIZE).max(1);
-    let page = requested_page.max(1).min(total_pages);
-    (page, (page - 1) * MARKOV_SIGNALS_PAGE_SIZE)
 }
 
 fn dashboard_quiver_signal_window(requested_page: i64, total_signals: i64) -> (i64, i64) {
@@ -2906,10 +2899,9 @@ impl AppState {
         } else {
             0
         };
-        let (markov_page, markov_signals_offset) =
-            dashboard_markov_signal_window(requested_markov_page, markov_signal_total);
+        let markov_signal_page = markov_signal_page(requested_markov_page, markov_signal_total);
         let markov_signals = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
-            self.markov_signals_page(MARKOV_SIGNALS_PAGE_SIZE, markov_signals_offset)
+            self.markov_signals_page(MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page.offset)
                 .await
                 .unwrap_or_else(|err| {
                     warn!("dashboard Markov signals degraded: {err:#}");
@@ -3096,7 +3088,7 @@ impl AppState {
             execution_page,
             execution_page_size,
             execution_order_total,
-            markov_page,
+            markov_page: markov_signal_page.page,
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
             markov_signal_total,
             quiver_page,
@@ -5467,7 +5459,7 @@ impl AppState {
         );
         let markov = if markov.is_null() {
             compact_attribution_markov(
-                &self.latest_markov_signal_summary(&symbol).await?,
+                &crate::markov_method::latest_markov_signal_summary(self, &symbol).await?,
                 "latest_fallback",
             )
         } else {
@@ -5867,21 +5859,6 @@ impl AppState {
              FROM daily_indicator_signals
              WHERE symbol = '{}' AND run_id = (
                 SELECT id FROM daily_indicator_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
-             )
-             LIMIT 1",
-            sql_escape(symbol)
-        );
-        Ok(self.first_json(&sql).await?.unwrap_or(JsonValue::Null))
-    }
-
-    async fn latest_markov_signal_summary(&self, symbol: &str) -> Result<JsonValue> {
-        let sql = format!(
-            "SELECT run_date, status, current_state, current_close, rolling_return,
-                    bull_prob, sideways_prob, bear_prob, signed_signal, direction, conviction,
-                    error_text
-             FROM markov_asset_signals
-             WHERE symbol = '{}' AND run_id = (
-                SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
              )
              LIMIT 1",
             sql_escape(symbol)
@@ -15934,19 +15911,6 @@ analysis_windows:
             dashboard_execution_order_window("markov", 5, 500),
             (1, SHARED_EXECUTION_ORDERS_LIMIT, 0)
         );
-    }
-
-    #[test]
-    fn dashboard_markov_signal_window_clamps_page_and_calculates_offset() {
-        assert_eq!(
-            dashboard_markov_signal_window(2, 81),
-            (2, MARKOV_SIGNALS_PAGE_SIZE)
-        );
-        assert_eq!(
-            dashboard_markov_signal_window(9, 41),
-            (2, MARKOV_SIGNALS_PAGE_SIZE)
-        );
-        assert_eq!(dashboard_markov_signal_window(0, 0), (1, 0));
     }
 
     #[test]

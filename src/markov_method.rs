@@ -1178,6 +1178,25 @@ pub async fn latest_markov_signal_count(state: &AppState) -> Result<i64> {
         .unwrap_or(0))
 }
 
+/// Returns the latest persisted signal for one asset. This is read-only
+/// attribution context; it does not refresh a signal, call Saxo, or influence
+/// Markov scheduling and trading decisions.
+pub async fn latest_markov_signal_summary(state: &AppState, symbol: &str) -> Result<JsonValue> {
+    let sql = format!(
+        "SELECT run_date, status, current_state, current_close, rolling_return,
+                bull_prob, sideways_prob, bear_prob, signed_signal, direction, conviction,
+                error_text
+         FROM markov_asset_signals
+         WHERE symbol = '{}' AND run_id = (
+            SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
+         )
+         LIMIT 1",
+        sql_escape(symbol)
+    );
+    let row = sqlx::query(&sql).fetch_optional(&state.pool).await?;
+    Ok(row.as_ref().map(row_to_json).unwrap_or(JsonValue::Null))
+}
+
 pub async fn latest_markov_run(state: &AppState) -> Result<JsonValue> {
     let row = sqlx::query(
         "SELECT id, created_at, run_date, status, asset_count, success_count, error_count, config_json, summary_json
