@@ -1632,6 +1632,12 @@ broker mutation was added.
 - `AppState` still performs every database query and owns experiment/baseline lifecycle operations; the new module transforms only persisted snapshots into existing dashboard/API payloads.
 - The evidence pack remains read-only and explicitly non-causal. Provider calls, Decision Reports, Trading Manager gates, protective stops, and Saxo execution are unchanged.
 
+## [2026-08-01] architecture | Typed SSO session response
+
+- Replaced the public `/auth/session` and `/api/auth/session` compatibility-JSON wrapper with the existing typed `SsoSession` contract.
+- Focused coverage verifies the anonymous response and the only authenticated fields derived from trusted ngrok-injected headers.
+- The change exposes no Saxo session state or credentials and does not alter ngrok authentication, provider calls, Hermes, Trading Manager gates, protective stops, or Saxo execution.
+
 ## [2026-07-31] architecture | Performance read-model extraction
 
 - Moved pure account-value summary, selected-range return/drawdown, and confidence projections from `src/state.rs` into `src/performance_state.rs`.

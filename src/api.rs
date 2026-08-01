@@ -292,8 +292,8 @@ async fn overview(State(state): State<Arc<AppState>>) -> Response {
     json_result(state.overview_payload().await)
 }
 
-async fn auth_session(headers: HeaderMap) -> Json<JsonValue> {
-    Json(json!(SsoSession::from_headers(&headers)))
+async fn auth_session(headers: HeaderMap) -> Json<SsoSession> {
+    Json(SsoSession::from_headers(&headers))
 }
 
 async fn localization(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<JsonValue> {
@@ -2419,6 +2419,39 @@ mod tests {
         let serialized = serde_json::to_value(&health).expect("runtime health serializes");
         assert_eq!(serialized["status"], "ok");
         assert_eq!(serialized["runtime"], "rust-dioxus");
+    }
+
+    #[tokio::test]
+    async fn auth_session_serializes_only_the_header_derived_sso_contract() {
+        let anonymous = auth_session(HeaderMap::new()).await.0;
+        assert!(!anonymous.authenticated);
+        assert!(anonymous.user.is_none());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-daytrader-user-email",
+            axum::http::HeaderValue::from_static("operator@example.com"),
+        );
+        headers.insert(
+            "x-daytrader-user-name",
+            axum::http::HeaderValue::from_static("Trading Operator"),
+        );
+
+        let session = auth_session(headers).await.0;
+        assert!(session.authenticated);
+        assert_eq!(
+            session.user.as_ref().map(|user| user.email.as_str()),
+            Some("operator@example.com")
+        );
+        assert_eq!(
+            session.user.as_ref().map(|user| user.name.as_str()),
+            Some("Trading Operator")
+        );
+
+        let serialized = serde_json::to_value(&session).expect("SSO session serializes");
+        assert_eq!(serialized["authenticated"], true);
+        assert_eq!(serialized["user"]["email"], "operator@example.com");
+        assert_eq!(serialized["user"]["name"], "Trading Operator");
     }
 
     #[test]
