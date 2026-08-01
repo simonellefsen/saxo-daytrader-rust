@@ -90,7 +90,10 @@ Current `saxo-rust` capabilities:
 - Scheduled OpenRouter decision report submission in `src/xai_decision.rs`. The active scheduler targets two daily market-pulse reports when the relevant markets are open: Nordic/EU open +1h15 and US open +1h15.
 - Strategy journal generation in `src/strategy_journal.rs`, including daily end-of-day reports after the configured local journal time.
 - Markov method advisory regime signals in `src/markov_method.rs`.
+- Daily technical indicators in `src/daily_indicators.rs`, including Support Risk: nearest support, downside to support, downside after a break, break-risk label, and confidence derived from persisted chart history.
 - QuiverQuant alternative-data advisory signals in `src/quiver.rs`.
+- Read-only Saxo-backed performance benchmark comparison in `src/performance_benchmarks.rs`; it provides context for end-of-day and reflection evaluation but is not a strategy input or trading gate.
+- Broker-hosted protective-stop maintenance in `src/protective_stops.rs`; it is execution safety infrastructure, not a Hermes tool or an instruction for Hermes to create, move, or cancel stops.
 - Trading Manager queue creation in `src/trading_manager.rs`.
 - Saxo order precheck and placement path in `src/saxo_order.rs`.
 - Local execution audit tables: `execution_orders`, `execution_order_events`, and `execution_fills`.
@@ -209,6 +212,26 @@ The internal MCP adapter is implemented by the same Rust binary in `--mcp-http` 
 - `create_decision_advice`
 
 The MCP adapter has no Saxo tools, no Kubernetes tools, no secret reads, and no live-order tools.
+
+## Execution Boundary
+
+Hermes, the Decision Report provider, Markov, Quiver, and Support Risk are inputs to an auditable decision process; none is permitted to translate its own output into a Saxo mutation. Prompt-level injection handling is a useful first layer, but the actual boundary is independently enforced by the Rust runtime and Saxo.
+
+```mermaid
+flowchart LR
+  A["Provider or Hermes advice"] --> V["Strict report parsing\nand scope filtering"]
+  V --> M["Trading Manager\ndeterministic gates"]
+  M -->|"approved queue row"| E["Saxo executor\nrevalidation"]
+  E --> P["Saxo precheck"]
+  P -->|"accepted"| S["Saxo placement"]
+```
+
+1. **Response validation:** malformed or non-JSON provider output is retained as an errored report, not an order. A normalized report is scope-filtered before the manager sees it.
+2. **Trading Manager gates:** only fresh eligible reports are considered. The manager re-checks order shape, exchange status, cash buffer, circuit breakers, exclusions/quarantine, technical and Markov evidence, ATR risk, concentration, position caps, costs, and minimum trade value from local/broker-aware data.
+3. **Execution queue gates:** only approved rows may reach the executor, which must be configured for Saxo execution. It claims a row once, validates session, market, whole-share quantity, sellable holdings, Saxo instrument/UIC, and permitted tick price before a request is built.
+4. **Broker enforcement:** Saxo `/trade/v2/orders/precheck` is required before placement. A broker rejection or ambiguous network outcome is recorded for reconciliation; it is not blindly retried.
+
+In `conservative` advisory mode Hermes can only `allow`, `reduce`, `stand_down`, or `review` a candidate that already exists. It cannot create a candidate, enlarge quantity, approve a broker order, access a Saxo session, or invoke Saxo mutation endpoints.
 
 ## Dashboard Review Tab
 

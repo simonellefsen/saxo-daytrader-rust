@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-07-31] architecture | Current system and execution-boundary synthesis
+
+- Added a current-state architecture concept that connects Markov, Support Risk, Quiver, Decision Reports, Hermes, performance benchmarks, Trading Manager, protective-stop maintenance, the execution queue, and Saxo broker validation.
+- Documented the four enforced boundaries between an advisory provider/Hermes output and a Saxo order: response validation, deterministic Trading Manager gating, execution-queue revalidation, and Saxo precheck/placement authority.
+- The README now carries the same concise architecture map and security posture; the Hermes capability document now explicitly describes Support Risk, benchmarks, protective stops, and the non-bypassable execution boundary. These are documentation changes only.
 
 ## [2026-07-31] architecture | Scheduler dashboard pagination extraction
 

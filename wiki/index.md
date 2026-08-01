@@ -3,7 +3,7 @@ type: wiki-index
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Daytrader Knowledge Wiki
@@ -17,6 +17,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [roadmap](roadmap.md) - Potential improvements across reliability, Hermes, strategy, execution, UX, and architecture.
 - [urgent-todo](urgent-todo.md) - Short ranked list of verified exposures that should not wait for roadmap sequencing.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
+- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current Rust runtime, advisory inputs, deterministic execution boundary, broker authority, and ownership model.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, expiring read-only memory, audits, baseline evidence, and strategy experiments connect to the wiki.
 - [QuiverQuant advisory signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md) - Rust alternative-data signal implementation for decision reports and Hermes.
 - [Performance benchmark comparison](/Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md) - Read-only Saxo-backed ETF-proxy comparison and its limits.
@@ -31,6 +32,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 - [roadmap](roadmap.md) - Forward-looking improvement map for product, operations, strategy, AI, and refactoring work.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - Persistent, compounding project knowledge layer maintained by agents.
+- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current advisory data flow, execution boundary, protective-stop scope, and service ownership.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - Safe loop for Hermes reflections, experiments, and strategy learning.
 
 ## Runbooks

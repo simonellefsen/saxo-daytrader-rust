@@ -16,7 +16,48 @@ The previous Python/FastAPI and Next.js implementation is still present as legac
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image. The `daytrader-frontend` Service is a routing alias for the API pods (the shared ngrok gateway targets it); the legacy Next.js `frontend/` directory itself was removed 2026-07-04 — the Dioxus SSR dashboard is the committed UI.
 - Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
 - The Markov method runs as a daily advisory regime skill for portfolio/watchlist assets and is exposed through the dashboard, API, Hermes context, and AI decision prompt context without mutating orders. See [docs/markov-method.md](docs/markov-method.md).
+- Daily indicators derive technical confluence, ATR, and support-risk context from Saxo chart history. The support view identifies a nearby historical support zone, downside to that zone, potential downside after a break, break risk, and evidence confidence. It is advisory context, not an automatic trading gate.
+- QuiverQuant Congress-trading signals run for the US universe 45 minutes after the calendar-aware US open. They are available to the dashboard, Hermes, and the later US Decision Report as corroborating or risk-reducing context only. See [docs/quiver-signals.md](docs/quiver-signals.md).
+- Read-only benchmark comparison stores Saxo-backed proxy price series and reports portfolio excess return in the End-of-Day view; it is deliberately excluded from strategy, sizing, and execution. See [docs/performance-benchmarks.md](docs/performance-benchmarks.md).
+- The scheduler maintains broker-hosted protective stops for covered holdings under a constrained ATR policy. Stops are separate from discretionary decision-report orders, are revalidated through Saxo, and cannot protect against every gap or unavailable-market scenario.
 - Project knowledge is organized through an LLM-maintained wiki under [wiki/](/Users/lindau/codex/rust_daytrader/wiki), with workflow details in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md).
+
+## Current Architecture And Execution Boundary
+
+The system deliberately separates **observation and advice** from **broker mutation**. Markov, daily indicators and Support Risk, Quiver, benchmarks, the AI Decision Report, and Hermes all enrich operator and Trading Manager context. None has a direct Saxo order tool.
+
+```mermaid
+flowchart LR
+  subgraph Advisory["Read-only analysis and advice"]
+    M["Saxo chart and quote data"] --> I["Daily indicators\nSupport Risk"]
+    M --> K["Markov regime skill"]
+    Q["QuiverQuant\nCongress signals"]
+    I --> R["AI Decision Report"]
+    K --> R
+    Q --> R
+    R --> H["Hermes advisory\nconservative mode"]
+  end
+
+  R --> T["Trading Manager\ndeterministic policy gates"]
+  H --> T
+  T -->|"approved queue rows only"| E["Saxo executor\nlocal validation"]
+  E --> P["Saxo order precheck"]
+  P -->|"accepted"| B["Saxo order placement"]
+  S["Scheduler protective-stop sweep"] --> E
+```
+
+### What Enforces The Execution Boundary
+
+An LLM or Hermes response is an advisory report, not a broker instruction. Before any request can reach Saxo, independent server-side controls must approve it:
+
+1. **Response validation:** malformed or non-JSON provider output becomes an errored report, not an order. The normalized report is scope-filtered before it can be considered by the manager.
+2. **Trading Manager gates:** only fresh eligible reports are considered. Deterministic checks enforce order shape, market status, cash buffer, loss/drawdown circuit breakers, exclusions and quarantine, technical and Markov evidence, ATR-based risk sizing, concentration, position limits, commissions, and minimum trade value. Model-provided prices and indicators are not treated as authoritative.
+3. **Execution queue gates:** execution must be explicitly enabled for the Saxo adapter and environment. The executor consumes only approved queue rows, prevents duplicate submission, validates the Saxo session, market tradability, whole-share quantity, sellable holdings, Saxo instrument/UIC, and broker tick size.
+4. **Broker enforcement:** Saxo `/trade/v2/orders/precheck` must succeed before placement. Saxo remains the final authority on account, instrument, market, price, buying power, and order rules. Ambiguous outcomes are reconciled rather than blindly retried.
+
+Prompt-injection resistance in provider instructions is useful, but it is not the primary safety boundary. The hard boundary is the deterministic Rust manager/executor path plus Saxo validation. In conservative mode Hermes may block, reduce, or require review; it cannot add a trade, increase a quantity, approve an order, or call a Saxo mutation endpoint.
+
+For the full current-state map and boundaries, see [wiki/concepts/current-system-architecture.md](wiki/concepts/current-system-architecture.md).
 
 ## Legacy Phase 42 Surface
 
@@ -119,7 +160,7 @@ The Rust app reads `DAYTRADER_CONFIG` when set and otherwise uses `config.yaml`.
 - Dashboard tabs are server-rendered at `/?view=performance`, `/?view=market`, `/?view=watchlists`, and `/?view=decisions`.
 - The Rust scheduler proactively checks the Saxo session every scheduler interval and refreshes the token when it is inside the safety margin.
 
-The mutation endpoints for decision generation, queue processing, broker sync, and live order management are deliberately disabled in Rust until those trading-critical paths are fully ported.
+Rust owns the active Decision Report, Trading Manager queue, Saxo precheck, placement, broker-status sync, and reconciled-fill paths. Each mutation remains configuration-gated and auditable; broker-management behavior that does not yet have matching Rust audit/status coverage remains fail-closed rather than being enabled by the dashboard.
 
 ## Docker Desktop Kubernetes
 
@@ -127,7 +168,7 @@ The repository includes a local Docker Desktop Kubernetes deployment with app re
 
 - `daytrader-api`: Rust Axum/Dioxus app on port `8000`.
 - `daytrader-frontend`: Kubernetes Service pointing at `daytrader-api` for the ngrok public endpoint.
-- `daytrader-scheduler`: Rust scheduler placeholder using the same config and database-backed session state.
+- `daytrader-scheduler`: singleton Rust scheduler using the same config and database-backed Saxo session state; it runs session maintenance, calendar-aware reports, advisory enrichment, manager/execution cycles, protective-stop maintenance, and EOD journal work.
 
 The API and scheduler use the existing `saxo/daytrader-postgres` CloudNativePG cluster as the live database via `DATABASE_URL`. Saxo OAuth state is persisted in the `saxo_sessions` table in Postgres; pods use `/tmp/daytrader/saxo_session.json` only as an ephemeral helper file while reading or refreshing the token. The table contains Saxo tokens, so database access should be treated as credential access.
 
