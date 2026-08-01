@@ -23,12 +23,13 @@ use crate::{
         DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
         HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
         HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, StrategyJournalPayload, ViewParams,
+        LocalizationSettingsRequest, MarketWatchlistsPayload, MarkovSignalsPayload,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, PortfolioPositionsPayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1705,11 +1706,30 @@ async fn market_status(State(state): State<Arc<AppState>>) -> Response {
     json_result(state.market_status_payload().await)
 }
 
-async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
-    Json(state.watchlists_payload().await.unwrap_or_else(|err| {
-        warn!("watchlist payload degraded: {err:#}");
-        json!({"generated_at": Utc::now().to_rfc3339(), "categories": []})
-    }))
+async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<MarketWatchlistsPayload> {
+    Json(
+        state
+            .watchlists_payload()
+            .await
+            .and_then(market_watchlists_payload)
+            .unwrap_or_else(|err| {
+                warn!("watchlist payload degraded: {err:#}");
+                market_watchlists_degraded_payload(Utc::now().to_rfc3339())
+            }),
+    )
+}
+
+fn market_watchlists_payload(value: JsonValue) -> Result<MarketWatchlistsPayload> {
+    serde_json::from_value(value).map_err(Into::into)
+}
+
+fn market_watchlists_degraded_payload(generated_at: String) -> MarketWatchlistsPayload {
+    MarketWatchlistsPayload {
+        generated_at,
+        cache_ttl_seconds: 300,
+        universe: json!({}),
+        categories: Vec::new(),
+    }
 }
 
 async fn prompts(State(state): State<Arc<AppState>>) -> Json<AiPromptsPayload> {
@@ -2770,6 +2790,46 @@ mod tests {
             serde_json::to_value(payload).expect("Hermes experiments payload serializes");
         assert_eq!(serialized["items"][0]["id"], "experiment-2026-08-01");
         assert_eq!(serialized["items"][0]["status"], "pending_review");
+    }
+
+    #[test]
+    fn market_watchlists_response_keeps_the_typed_outer_contract() {
+        let payload = market_watchlists_payload(json!({
+            "generated_at": "2026-08-01T18:00:00Z",
+            "cache_ttl_seconds": 300,
+            "universe": {"source": "configured_analysis_universe"},
+            "categories": [{
+                "key": "nordic",
+                "label": "Nordics",
+                "items": [{"symbol": "NOVO-B:xcse"}]
+            }],
+        }))
+        .expect("watchlists compatibility payload has the public contract");
+
+        let serialized =
+            serde_json::to_value(payload).expect("market watchlists payload serializes");
+        assert_eq!(serialized["cache_ttl_seconds"], 300);
+        assert_eq!(
+            serialized["universe"]["source"],
+            "configured_analysis_universe"
+        );
+        assert_eq!(
+            serialized["categories"][0]["items"][0]["symbol"],
+            "NOVO-B:xcse"
+        );
+    }
+
+    #[test]
+    fn market_watchlists_degraded_payload_keeps_the_empty_category_contract() {
+        let payload = market_watchlists_degraded_payload("2026-08-01T18:00:00Z".to_string());
+
+        assert_eq!(payload.cache_ttl_seconds, 300);
+        assert!(payload.categories.is_empty());
+
+        let serialized =
+            serde_json::to_value(payload).expect("degraded market watchlists payload serializes");
+        assert_eq!(serialized["generated_at"], "2026-08-01T18:00:00Z");
+        assert_eq!(serialized["categories"], json!([]));
     }
 
     #[test]

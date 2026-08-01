@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed market-watchlists API envelope
+
+- Replaced `/api/market/watchlists` compatibility JSON with typed `MarketWatchlistsPayload` fields for generation time, cache TTL, universe metadata, and categories.
+- Kept quote and decision-derived category rows dynamic while preserving the existing degraded empty-category response.
+- Added normal and degraded serialization regressions; quote collection, candidate membership, Decision Reports, Hermes, Trading Manager, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed Hermes experiments API envelope
 
 - Replaced the protected `/api/hermes/experiments` compatibility-JSON envelope with typed `HermesExperimentsPayload`.

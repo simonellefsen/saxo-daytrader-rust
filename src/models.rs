@@ -255,6 +255,20 @@ pub struct HermesExperimentsPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded market-watchlists envelope.
+///
+/// Universe metadata and category rows remain compatibility JSON while the
+/// read model is converted incrementally. This makes cache timing and the
+/// stable top-level watchlist contract explicit without changing quote
+/// collection, candidate membership, or Decision Report context.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistsPayload {
+    pub generated_at: String,
+    pub cache_ttl_seconds: i64,
+    pub universe: JsonValue,
+    pub categories: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON
