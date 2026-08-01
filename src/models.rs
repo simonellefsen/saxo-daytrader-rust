@@ -159,6 +159,17 @@ pub struct AiPromptItem {
     pub description: String,
 }
 
+/// Small latest-report lookup contract for polling clients.
+///
+/// Decision Report rows remain compatibility JSON because they originate in
+/// the persisted provider/report pipeline. This type fixes the public envelope
+/// without changing report generation or Trading Manager behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionLatestPayload {
+    pub report: Option<JsonValue>,
+    pub next_report: Option<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,

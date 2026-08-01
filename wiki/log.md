@@ -1675,3 +1675,8 @@ broker mutation was added.
 - Replaced the public `/api/prompts` compatibility-JSON envelope with typed `AiPromptsPayload` and `AiPromptItem` contracts.
 - Kept provider-shaped latest Decision Report/Trading Manager content as optional compatibility JSON inside the bounded operator-facing envelope.
 - Added a serialization regression; no prompt-building, provider, Hermes, manager, stop, or Saxo-execution behavior changed.
+## 2026-08-01 - Typed Latest Decision Report API Envelope
+
+- Replaced the public `/api/decision/latest` compatibility-JSON envelope with typed `DecisionLatestPayload`.
+- Kept persisted Decision Report content dynamic inside the bounded polling envelope.
+- Added a serialization regression; report generation, providers, Hermes, manager gates, stops, and Saxo execution are unchanged.

@@ -19,8 +19,8 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DrawdownGuardOverrideRequest, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        CashBufferSettings, DecisionLatestPayload, DrawdownGuardOverrideRequest,
+        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesReflectionRequest,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
         PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
@@ -1720,7 +1720,7 @@ fn ai_prompts_payload(
     }
 }
 
-async fn decision_latest(State(state): State<Arc<AppState>>) -> Response {
+async fn decision_latest(State(state): State<Arc<AppState>>) -> Json<DecisionLatestPayload> {
     let report = state
         .decision_report_items(1)
         .await
@@ -1730,7 +1730,14 @@ async fn decision_latest(State(state): State<Arc<AppState>>) -> Response {
         })
         .into_iter()
         .next();
-    Json(json!({"report": report, "next_report": null})).into_response()
+    Json(decision_latest_payload(report))
+}
+
+fn decision_latest_payload(report: Option<JsonValue>) -> DecisionLatestPayload {
+    DecisionLatestPayload {
+        report,
+        next_report: None,
+    }
 }
 
 async fn decision_reports(
@@ -2533,6 +2540,24 @@ mod tests {
         assert_eq!(serialized["items"][0]["status"], "not_ported");
         assert_eq!(serialized["latest_decision_report"]["id"], 42);
         assert!(serialized["latest_trading_manager_run"].is_null());
+    }
+
+    #[test]
+    fn decision_latest_response_keeps_the_typed_polling_envelope() {
+        let payload = decision_latest_payload(Some(json!({"id": 42, "status": "completed"})));
+
+        assert_eq!(
+            payload
+                .report
+                .as_ref()
+                .and_then(|report| report["id"].as_i64()),
+            Some(42)
+        );
+        assert!(payload.next_report.is_none());
+
+        let serialized = serde_json::to_value(payload).expect("latest decision payload serializes");
+        assert_eq!(serialized["report"]["status"], "completed");
+        assert!(serialized["next_report"].is_null());
     }
 
     #[test]
