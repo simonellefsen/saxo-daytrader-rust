@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed portfolio trades response
+
+- Replaced the public `/api/portfolio/trades` compatibility-JSON envelope with typed `PortfolioTradesPayload`.
+- Kept individual persisted trade rows dynamic inside the bounded list envelope while the portfolio trade read-model port remains staged.
+- Added a serialization regression; the trade ledger, Saxo portfolio reads, providers, Hermes, manager gates, stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed portfolio positions response
 
 - Replaced the public `/api/portfolio/positions` compatibility-JSON envelope with typed `PortfolioPositionsPayload`.

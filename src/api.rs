@@ -24,9 +24,9 @@ use crate::{
         HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
         LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, RuntimeHealth,
-        SaxoCallbackParams, ViewParams,
+        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1643,8 +1643,13 @@ async fn portfolio_trades(
         state
             .portfolio_trades_items(limit)
             .await
-            .map(|items| json!({"items": items})),
+            .map(portfolio_trades_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
+}
+
+fn portfolio_trades_payload(items: Vec<JsonValue>) -> PortfolioTradesPayload {
+    PortfolioTradesPayload { items }
 }
 
 async fn performance(
@@ -2599,6 +2604,21 @@ mod tests {
             serde_json::to_value(payload).expect("portfolio positions payload serializes");
         assert_eq!(serialized["total"], 2);
         assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
+    }
+
+    #[test]
+    fn portfolio_trades_response_keeps_the_typed_list_envelope() {
+        let payload = portfolio_trades_payload(vec![
+            json!({"symbol": "TSLA:xnas", "side": "BUY"}),
+            json!({"symbol": "NOVO-B:xcse", "side": "SELL"}),
+        ]);
+
+        assert_eq!(payload.items.len(), 2);
+
+        let serialized =
+            serde_json::to_value(payload).expect("portfolio trades payload serializes");
+        assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
+        assert_eq!(serialized["items"][1]["side"], "SELL");
     }
 
     #[test]

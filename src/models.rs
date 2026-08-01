@@ -190,6 +190,16 @@ pub struct PortfolioPositionsPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded portfolio trade-list envelope.
+///
+/// Individual trade rows remain compatibility JSON while the persisted
+/// portfolio trade read model is converted incrementally. This makes the
+/// public list boundary explicit without changing trade-ledger behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PortfolioTradesPayload {
+    pub items: Vec<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
