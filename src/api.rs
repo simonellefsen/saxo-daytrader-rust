@@ -28,7 +28,7 @@ use crate::{
         PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
         ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        StrategyJournalPayload, ViewParams,
+        SchedulerPayload, StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1796,6 +1796,10 @@ fn execution_payload(
     }
 }
 
+fn scheduler_payload(status: JsonValue, cycles: Vec<JsonValue>) -> SchedulerPayload {
+    SchedulerPayload { status, cycles }
+}
+
 async fn decision_report_debug(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<i64>,
@@ -1870,7 +1874,7 @@ async fn scheduler(
         warn!("scheduler cycles lookup failed: {err:#}");
         Vec::new()
     });
-    Json(json!({"status": status, "cycles": cycles})).into_response()
+    Json(scheduler_payload(status, cycles)).into_response()
 }
 
 async fn hermes_capabilities(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -2707,6 +2711,21 @@ mod tests {
         assert_eq!(serialized["orders"][0]["status"], "broker_working");
         assert_eq!(serialized["fills"][0]["symbol"], "TSLA:xnas");
         assert_eq!(serialized["events"][0]["event_type"], "precheck_completed");
+    }
+
+    #[test]
+    fn scheduler_response_keeps_the_typed_status_and_cycle_envelope() {
+        let payload = scheduler_payload(
+            json!({"last_cycle_status": "ok", "next_due_at": "2026-08-01T17:15:00Z"}),
+            vec![json!({"id": 9, "status": "ok"})],
+        );
+
+        assert_eq!(payload.status["last_cycle_status"], "ok");
+        assert_eq!(payload.cycles.len(), 1);
+
+        let serialized = serde_json::to_value(payload).expect("scheduler payload serializes");
+        assert_eq!(serialized["status"]["next_due_at"], "2026-08-01T17:15:00Z");
+        assert_eq!(serialized["cycles"][0]["status"], "ok");
     }
 
     #[test]

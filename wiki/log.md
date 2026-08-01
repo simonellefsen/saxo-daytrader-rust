@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed Scheduler API envelope
+
+- Replaced the public `/api/scheduler` compatibility-JSON envelope with typed `SchedulerPayload`.
+- Kept the scheduler status snapshot and persisted cycle rows as compatibility JSON inside the explicit read-only envelope, preserving the existing `null` and empty-list degraded-read fallbacks.
+- Added a serialization regression; scheduler cadence/jobs, Trading Manager, Hermes, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed portfolio trades response
 
 - Replaced the public `/api/portfolio/trades` compatibility-JSON envelope with typed `PortfolioTradesPayload`.

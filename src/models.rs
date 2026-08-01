@@ -223,6 +223,17 @@ pub struct ExecutionPayload {
     pub events: Vec<JsonValue>,
 }
 
+/// Bounded scheduler-status envelope.
+///
+/// The scheduler status snapshot and persisted cycle rows remain compatibility
+/// JSON while the scheduler read model is converted incrementally. This makes
+/// the public read-only boundary explicit without changing scheduler behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SchedulerPayload {
+    pub status: JsonValue,
+    pub cycles: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON
