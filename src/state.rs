@@ -36,8 +36,8 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        DashboardView, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest,
+        DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -5875,22 +5875,34 @@ impl AppState {
         self.first_json(&sql).await
     }
 
-    fn sanitized_decision_report_debug_payload(report: &JsonValue) -> JsonValue {
+    fn sanitized_decision_report_debug_payload(report: &JsonValue) -> DecisionReportDebugPayload {
         let normalized_report = report.get("report_json").unwrap_or(&JsonValue::Null);
-        json!({
-            "report_id": value_i64(report, "id"),
-            "created_at": json_text(report, "created_at"),
-            "status": json_text(report, "status"),
-            "payloads": {
-                "prompt": compact_debug_text(&json_text(report, "prompt_text"), DEBUG_PAYLOAD_MAX_CHARS),
-                "request": compact_json_redacted(report.get("request_json"), DEBUG_PAYLOAD_MAX_CHARS),
-                "provider_response": compact_json_redacted(report.get("response_json"), DEBUG_PAYLOAD_MAX_CHARS),
-                "normalized_report": compact_json_redacted(Some(normalized_report), DEBUG_PAYLOAD_MAX_CHARS),
+        DecisionReportDebugPayload {
+            report_id: value_i64(report, "id"),
+            created_at: json_text(report, "created_at"),
+            status: json_text(report, "status"),
+            payloads: DecisionReportDebugPayloads {
+                prompt: compact_debug_text(
+                    &json_text(report, "prompt_text"),
+                    DEBUG_PAYLOAD_MAX_CHARS,
+                ),
+                request: compact_json_redacted(report.get("request_json"), DEBUG_PAYLOAD_MAX_CHARS),
+                provider_response: compact_json_redacted(
+                    report.get("response_json"),
+                    DEBUG_PAYLOAD_MAX_CHARS,
+                ),
+                normalized_report: compact_json_redacted(
+                    Some(normalized_report),
+                    DEBUG_PAYLOAD_MAX_CHARS,
+                ),
             },
-        })
+        }
     }
 
-    pub async fn decision_report_debug_payload(&self, report_id: i64) -> Result<Option<JsonValue>> {
+    pub async fn decision_report_debug_payload(
+        &self,
+        report_id: i64,
+    ) -> Result<Option<DecisionReportDebugPayload>> {
         let Some(report) = self.decision_report_item(report_id).await? else {
             return Ok(None);
         };
@@ -15796,27 +15808,31 @@ analysis_windows:
         });
 
         let payload = AppState::sanitized_decision_report_debug_payload(&report);
-        assert_eq!(
-            payload.get("report_id").and_then(JsonValue::as_i64),
-            Some(42)
+        assert_eq!(payload.report_id, 42);
+        assert!(payload.payloads.prompt.contains("[redacted]"));
+        assert!(
+            payload
+                .payloads
+                .request
+                .contains("\"Authorization\": \"[redacted]\"")
         );
         assert!(
-            payload["payloads"]["prompt"]
-                .as_str()
-                .is_some_and(|value| value.contains("[redacted]"))
+            payload
+                .payloads
+                .provider_response
+                .contains("\"refresh_token\": \"[redacted]\"")
         );
         assert!(
-            payload["payloads"]["request"]
-                .as_str()
-                .is_some_and(|value| value.contains("\"Authorization\": \"[redacted]\""))
+            payload
+                .payloads
+                .normalized_report
+                .contains("suggested_trades")
         );
+
+        let serialized = serde_json::to_value(&payload).expect("typed debug payload serializes");
+        assert_eq!(serialized["report_id"], 42);
         assert!(
-            payload["payloads"]["provider_response"]
-                .as_str()
-                .is_some_and(|value| value.contains("\"refresh_token\": \"[redacted]\""))
-        );
-        assert!(
-            payload["payloads"]["normalized_report"]
+            serialized["payloads"]["normalized_report"]
                 .as_str()
                 .is_some_and(|value| value.contains("suggested_trades"))
         );

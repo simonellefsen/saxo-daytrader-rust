@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-01: Replaced the Decision Report debug endpoint's outer compatibility-JSON response with typed Rust models in `src/models.rs`. The endpoint still returns the same compact `report_id`, metadata, and four redacted/capped diagnostic strings; persisted provider-shaped JSON remains deliberately internal. The focused regression now verifies the typed boundary retains secret redaction and bounded inspection. This is diagnostics-only: it does not change provider calls, Hermes, Trading Manager gates, protective stops, or Saxo execution. Follow-up: replace the next small, independently tested response boundary rather than widening this endpoint's payload.
 - 2026-07-31: Completed the seventh M4 read-model extraction. Execution-tab Scheduler history pagination now lives in `src/scheduler_state.rs`, preserving the existing 12-row page size, page clamp, and offset for persisted `scheduler_cycle_history` reads. `AppState` retains query orchestration and payload fields. Scheduler cadence, jobs, retention, notifications, Trading Manager, protective stops, and Saxo execution are unchanged. Follow-up: begin replacing one small compatibility-JSON boundary with a typed model, or extract a similarly pure helper only where it has an existing focused regression test.
 - 2026-07-31: Completed the sixth M4 read-model extraction. Execution dashboard pagination and its overview/shared row limits now live in `src/execution_state.rs`, preserving the page clamp, offsets, and page sizes for existing local execution-order reads. `AppState` retains query orchestration and payload fields. Broker synchronization, fill reconciliation, status transitions, Trading Manager behavior, protective stops, and Saxo execution are unchanged. Follow-up: extract a bounded Scheduler projection or begin replacing a small compatibility-JSON boundary with a typed model.
 - 2026-07-31: Completed the fifth M4 read-model extraction. Quiver dashboard page bounds now live in `src/quiver_state.rs`, preserving the existing page size, page clamp, and offset while leaving persisted Quiver reads in `src/quiver.rs`. `AppState` retains orchestration and existing payload fields. Quiver collection, subscription handling, scheduler cadence, Hermes context, Decision Reports, Trading Manager gates, and Saxo execution are unchanged. Follow-up: extract a bounded Execution or Scheduler read-model projection with existing API-payload tests preserved.

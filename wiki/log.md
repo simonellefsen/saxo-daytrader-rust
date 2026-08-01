@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-01] architecture | Typed Decision Report debug response
+
+- Replaced the debug endpoint's outer `serde_json::Value` compatibility response with typed, serializable models for the report metadata and its four bounded diagnostic payloads.
+- The stored provider-shaped report remains internal, and the existing 4,000-character caps plus server-side secret redaction remain enforced and regression-tested. This changes no provider, Hermes, Trading Manager, protective-stop, or Saxo-execution behavior.
 
 ## [2026-07-31] architecture | Current system and execution-boundary synthesis
 

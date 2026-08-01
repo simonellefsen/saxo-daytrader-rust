@@ -90,6 +90,28 @@ pub struct DashboardView {
     pub decision_gate_replay: JsonValue,
 }
 
+/// Bounded and redacted diagnostic payload for a Decision Report.
+///
+/// The persisted report still contains compatibility JSON because it captures
+/// provider payloads. This response intentionally exposes only compact,
+/// already-redacted strings so the debug endpoint cannot become a credential
+/// or unbounded-payload transport path.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionReportDebugPayload {
+    pub report_id: i64,
+    pub created_at: String,
+    pub status: String,
+    pub payloads: DecisionReportDebugPayloads,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionReportDebugPayloads {
+    pub prompt: String,
+    pub request: String,
+    pub provider_response: String,
+    pub normalized_report: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
