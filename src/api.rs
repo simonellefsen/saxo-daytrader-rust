@@ -25,11 +25,12 @@ use crate::{
         HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
         LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
         MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, StrategyJournalPayload, ViewParams,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1661,7 +1662,17 @@ async fn performance(
 ) -> Response {
     let range_key = params.range_key.unwrap_or_else(|| "1D".to_string());
     info!(range_key = %range_key, "loading performance payload");
-    json_result(state.performance_payload(&range_key).await)
+    json_result(
+        state
+            .performance_payload(&range_key)
+            .await
+            .and_then(performance_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
+    )
+}
+
+fn performance_payload(value: JsonValue) -> Result<PerformancePayload> {
+    serde_json::from_value(value).map_err(Into::into)
 }
 
 async fn markov_signals(
@@ -2857,6 +2868,25 @@ mod tests {
         assert_eq!(serialized["summary"]["active_markets"], json!(["US"]));
         assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
         assert_eq!(serialized["price_monitor"]["status"], "fresh");
+    }
+
+    #[test]
+    fn performance_response_keeps_the_typed_outer_contract() {
+        let payload = performance_payload(json!({
+            "range_key": "1D",
+            "history": [{"recorded_at": "2026-08-01T18:00:00Z", "total_market_value_dkk": 300000.0}],
+            "summary": {"total_return_pct": 1.5},
+            "benchmarks": {"status": "available"},
+            "goal_tracking": {"status": "on_track"},
+        }))
+        .expect("performance compatibility payload has the public contract");
+
+        let serialized = serde_json::to_value(payload).expect("performance payload serializes");
+        assert_eq!(serialized["range_key"], "1D");
+        assert_eq!(serialized["history"][0]["total_market_value_dkk"], 300000.0);
+        assert_eq!(serialized["summary"]["total_return_pct"], 1.5);
+        assert_eq!(serialized["benchmarks"]["status"], "available");
+        assert_eq!(serialized["goal_tracking"]["status"], "on_track");
     }
 
     #[test]

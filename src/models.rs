@@ -283,6 +283,21 @@ pub struct MarketStatusPayload {
     pub price_monitor: JsonValue,
 }
 
+/// Bounded performance envelope.
+///
+/// History rows, benchmark data, and goal-tracking details remain compatibility
+/// JSON while the performance read model is converted incrementally. This makes
+/// the stable public response boundary explicit without changing performance
+/// collection or any decision and execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformancePayload {
+    pub range_key: String,
+    pub history: Vec<JsonValue>,
+    pub summary: JsonValue,
+    pub benchmarks: JsonValue,
+    pub goal_tracking: JsonValue,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON

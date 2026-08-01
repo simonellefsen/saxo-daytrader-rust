@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed performance API envelope
+
+- Replaced `/api/performance` compatibility JSON with typed `PerformancePayload` fields for range selection, history, summary, benchmarks, and goal tracking.
+- Kept nested history, benchmark, and goal-tracking read-model details dynamic while preserving existing state/query behavior.
+- Added a serialization regression; performance collection, benchmark retrieval, Decision Reports, Hermes, Trading Manager, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed market-status API envelope
 
 - Replaced `/api/market/status` compatibility JSON with typed `MarketStatusPayload` fields for exchange rows, summary, scheduler, and price-monitor state.
