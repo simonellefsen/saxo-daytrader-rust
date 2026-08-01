@@ -26,7 +26,8 @@ use crate::{
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
         PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
+        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
+        ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1687,13 +1688,16 @@ async fn quiver_signals(
     let limit = params.limit.unwrap_or(100);
     json_result(
         async {
-            Ok::<JsonValue, anyhow::Error>(json!({
-                "latest_run": state.latest_quiver_run().await.unwrap_or(JsonValue::Null),
-                "items": state.quiver_signals(limit).await?
-            }))
+            let latest_run = state.latest_quiver_run().await.unwrap_or(JsonValue::Null);
+            let items = state.quiver_signals(limit).await?;
+            serde_json::to_value(quiver_signals_payload(latest_run, items)).map_err(Into::into)
         }
         .await,
     )
+}
+
+fn quiver_signals_payload(latest_run: JsonValue, items: Vec<JsonValue>) -> QuiverSignalsPayload {
+    QuiverSignalsPayload { latest_run, items }
 }
 
 async fn market_status(State(state): State<Arc<AppState>>) -> Response {
@@ -2637,6 +2641,21 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("Markov signals payload serializes");
         assert_eq!(serialized["latest_run"]["status"], "completed");
         assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
+    }
+
+    #[test]
+    fn quiver_signals_response_keeps_the_typed_run_and_list_envelope() {
+        let payload = quiver_signals_payload(
+            json!({"id": 23, "status": "completed"}),
+            vec![json!({"symbol": "TSLA:xnas", "signal": "buy"})],
+        );
+
+        assert_eq!(payload.latest_run["id"], 23);
+        assert_eq!(payload.items.len(), 1);
+
+        let serialized = serde_json::to_value(payload).expect("Quiver signals payload serializes");
+        assert_eq!(serialized["latest_run"]["status"], "completed");
+        assert_eq!(serialized["items"][0]["signal"], "buy");
     }
 
     #[test]

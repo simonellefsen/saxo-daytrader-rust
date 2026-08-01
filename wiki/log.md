@@ -1703,3 +1703,9 @@ broker mutation was added.
 - Replaced the public `/api/markov/signals` compatibility-JSON envelope with typed `MarkovSignalsPayload`.
 - Kept the latest persisted run summary and individual signal rows as compatibility JSON inside the explicit read-only envelope.
 - Added a serialization regression; Markov calculation, scheduler timing, Decision Reports, Hermes, manager gates, stops, and Saxo execution are unchanged.
+
+## 2026-08-01 - Typed Quiver Signals API Envelope
+
+- Replaced the public `/api/quiver/signals` compatibility-JSON envelope with typed `QuiverSignalsPayload`.
+- Kept the latest persisted run summary and individual signal rows as compatibility JSON inside the explicit read-only envelope.
+- Added a serialization regression; Quiver collection, scheduler timing, Decision Reports, Hermes, manager gates, stops, and Saxo execution are unchanged.

@@ -212,6 +212,18 @@ pub struct MarkovSignalsPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded Quiver signal-list envelope.
+///
+/// The latest-run summary and individual signal rows remain compatibility JSON
+/// while the persisted Quiver read model is converted incrementally. Keeping
+/// the outer response typed preserves the established public API boundary
+/// without changing collection or downstream advisory behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct QuiverSignalsPayload {
+    pub latest_run: JsonValue,
+    pub items: Vec<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
