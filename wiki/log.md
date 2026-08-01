@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed Decision Gate Replay API envelope
+
+- Replaced `/api/decision/gate-replay` compatibility JSON with typed `DecisionGateReplayPayload` fields for availability, run count, scenarios, safety, interpretation, and support-risk evidence.
+- Kept nested historical target-gate and support-risk analysis details dynamic while preserving existing state/query behavior.
+- Added a serialization regression; replay calculation, evidence collection, Decision Reports, Hermes, Trading Manager, configuration, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed performance API envelope
 
 - Replaced `/api/performance` compatibility JSON with typed `PerformancePayload` fields for range selection, history, summary, benchmarks, and goal tracking.

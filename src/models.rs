@@ -298,6 +298,22 @@ pub struct PerformancePayload {
     pub goal_tracking: JsonValue,
 }
 
+/// Bounded Decision Gate Replay envelope.
+///
+/// Scenario and support-risk evidence details remain compatibility JSON while
+/// the historical-analysis read model is converted incrementally. This makes
+/// the stable public replay boundary explicit without changing report
+/// generation, configuration, or any decision and execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DecisionGateReplayPayload {
+    pub status: String,
+    pub run_count: usize,
+    pub scenarios: Vec<JsonValue>,
+    pub safety: String,
+    pub interpretation: String,
+    pub support_risk_evidence: JsonValue,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON

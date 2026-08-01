@@ -19,11 +19,11 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DecisionLatestPayload, DecisionReportListPayload,
-        DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
-        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        CashBufferSettings, DecisionGateReplayPayload, DecisionLatestPayload,
+        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
+        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesExperimentsPayload,
+        HermesReflectionRequest, HermesReflectionsPayload, InstrumentQuarantineOverrideRequest,
+        LimitParams, LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
         MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
         PortfolioPositionsPayload, PortfolioTradesPayload,
@@ -1869,7 +1869,17 @@ async fn decision_gate_replay(
     Query(params): Query<LimitParams>,
 ) -> Response {
     let limit = params.limit.unwrap_or(40);
-    json_result(state.decision_gate_replay(limit).await)
+    json_result(
+        state
+            .decision_gate_replay(limit)
+            .await
+            .and_then(decision_gate_replay_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
+    )
+}
+
+fn decision_gate_replay_payload(value: JsonValue) -> Result<DecisionGateReplayPayload> {
+    serde_json::from_value(value).map_err(Into::into)
 }
 
 async fn decision_schema() -> Response {
@@ -2887,6 +2897,29 @@ mod tests {
         assert_eq!(serialized["summary"]["total_return_pct"], 1.5);
         assert_eq!(serialized["benchmarks"]["status"], "available");
         assert_eq!(serialized["goal_tracking"]["status"], "on_track");
+    }
+
+    #[test]
+    fn decision_gate_replay_response_keeps_the_typed_outer_contract() {
+        let payload = decision_gate_replay_payload(json!({
+            "status": "available",
+            "run_count": 3,
+            "scenarios": [{"variable_path": "strategy.swing.markov_gate.min_signed_signal"}],
+            "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
+            "interpretation": "A target-gate clear is not an approval.",
+            "support_risk_evidence": {"status": "collecting"},
+        }))
+        .expect("decision gate replay compatibility payload has the public contract");
+
+        let serialized =
+            serde_json::to_value(payload).expect("decision gate replay payload serializes");
+        assert_eq!(serialized["status"], "available");
+        assert_eq!(serialized["run_count"], 3);
+        assert_eq!(
+            serialized["scenarios"][0]["variable_path"],
+            "strategy.swing.markov_gate.min_signed_signal"
+        );
+        assert_eq!(serialized["support_risk_evidence"]["status"], "collecting");
     }
 
     #[test]
