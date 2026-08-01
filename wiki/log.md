@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed market-status API envelope
+
+- Replaced `/api/market/status` compatibility JSON with typed `MarketStatusPayload` fields for exchange rows, summary, scheduler, and price-monitor state.
+- Kept nested market, scheduler, and monitor read-model details dynamic while preserving existing state/query behavior.
+- Added a serialization regression; exchange-calendar refreshes, market-window calculation, quote monitoring, Decision Reports, Hermes, Trading Manager, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed market-watchlists API envelope
 
 - Replaced `/api/market/watchlists` compatibility JSON with typed `MarketWatchlistsPayload` fields for generation time, cache TTL, universe metadata, and categories.

@@ -269,6 +269,20 @@ pub struct MarketWatchlistsPayload {
     pub categories: Vec<JsonValue>,
 }
 
+/// Bounded market-status envelope.
+///
+/// Exchange rows plus scheduler and price-monitor details remain compatibility
+/// JSON while the read model is converted incrementally. This keeps the public
+/// observability boundary explicit without changing market-calendar refreshes
+/// or any decision and execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketStatusPayload {
+    pub items: Vec<JsonValue>,
+    pub summary: JsonValue,
+    pub scheduler: JsonValue,
+    pub price_monitor: JsonValue,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON

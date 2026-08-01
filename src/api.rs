@@ -23,13 +23,13 @@ use crate::{
         DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
         HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
         HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PortfolioPositionsPayload, PortfolioTradesPayload,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
-        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        StrategyJournalPayload, ViewParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
+        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
+        SchedulerPayload, StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1703,7 +1703,17 @@ fn quiver_signals_payload(latest_run: JsonValue, items: Vec<JsonValue>) -> Quive
 }
 
 async fn market_status(State(state): State<Arc<AppState>>) -> Response {
-    json_result(state.market_status_payload().await)
+    json_result(
+        state
+            .market_status_payload()
+            .await
+            .and_then(market_status_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
+    )
+}
+
+fn market_status_payload(value: JsonValue) -> Result<MarketStatusPayload> {
+    serde_json::from_value(value).map_err(Into::into)
 }
 
 async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<MarketWatchlistsPayload> {
@@ -2830,6 +2840,23 @@ mod tests {
             serde_json::to_value(payload).expect("degraded market watchlists payload serializes");
         assert_eq!(serialized["generated_at"], "2026-08-01T18:00:00Z");
         assert_eq!(serialized["categories"], json!([]));
+    }
+
+    #[test]
+    fn market_status_response_keeps_the_typed_outer_contract() {
+        let payload = market_status_payload(json!({
+            "items": [{"market": "US", "open_analysis_window_active": true}],
+            "summary": {"analysis_window_active": true, "active_markets": ["US"]},
+            "scheduler": {"last_cycle_status": "ok"},
+            "price_monitor": {"status": "fresh"},
+        }))
+        .expect("market status compatibility payload has the public contract");
+
+        let serialized = serde_json::to_value(payload).expect("market status payload serializes");
+        assert_eq!(serialized["items"][0]["market"], "US");
+        assert_eq!(serialized["summary"]["active_markets"], json!(["US"]));
+        assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
+        assert_eq!(serialized["price_monitor"]["status"], "fresh");
     }
 
     #[test]
