@@ -112,6 +112,25 @@ pub struct DecisionReportDebugPayloads {
     pub normalized_report: String,
 }
 
+/// Public health contract for the strict Decision Report response schema.
+///
+/// Schema construction remains dynamic because OpenRouter expects JSON Schema,
+/// but callers receive a small typed summary instead of the construction tree.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionReportSchemaHealth {
+    pub status: String,
+    pub schema_name: String,
+    pub strict: bool,
+    pub issue_count: usize,
+    pub issues: Vec<DecisionReportSchemaIssue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionReportSchemaIssue {
+    pub path: String,
+    pub message: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,

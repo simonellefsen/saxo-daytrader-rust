@@ -11,6 +11,7 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
+    models::{DecisionReportSchemaHealth, DecisionReportSchemaIssue},
     state::AppState,
 };
 
@@ -1188,7 +1189,7 @@ fn decision_report_response_format(provider: &str) -> JsonValue {
     })
 }
 
-pub fn decision_report_schema_health() -> JsonValue {
+pub fn decision_report_schema_health() -> DecisionReportSchemaHealth {
     let response_format = decision_report_response_format("openrouter");
     let schema = response_format
         .get("json_schema")
@@ -1196,24 +1197,28 @@ pub fn decision_report_schema_health() -> JsonValue {
         .cloned()
         .unwrap_or(JsonValue::Null);
     let issues = validate_openrouter_strict_schema(&schema);
-    json!({
-        "status": if issues.is_empty() { "ok" } else { "error" },
-        "schema_name": response_format
+    DecisionReportSchemaHealth {
+        status: if issues.is_empty() { "ok" } else { "error" }.to_string(),
+        schema_name: response_format
             .get("json_schema")
             .and_then(|json_schema| json_schema.get("name"))
             .and_then(JsonValue::as_str)
-            .unwrap_or("unknown"),
-        "strict": response_format
+            .unwrap_or("unknown")
+            .to_string(),
+        strict: response_format
             .get("json_schema")
             .and_then(|json_schema| json_schema.get("strict"))
             .and_then(JsonValue::as_bool)
             .unwrap_or(false),
-        "issue_count": issues.len(),
-        "issues": issues
+        issue_count: issues.len(),
+        issues: issues
             .iter()
-            .map(|issue| json!({"path": issue.path, "message": issue.message}))
-            .collect::<Vec<_>>()
-    })
+            .map(|issue| DecisionReportSchemaIssue {
+                path: issue.path.clone(),
+                message: issue.message.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn openrouter_strict_schema(mut schema: JsonValue) -> JsonValue {
@@ -2370,10 +2375,15 @@ mod tests {
     #[test]
     fn decision_report_schema_health_is_ok() {
         let health = decision_report_schema_health();
-        assert_eq!(health["status"], "ok");
-        assert_eq!(health["schema_name"], "daytrader_decision_report");
-        assert_eq!(health["strict"], true);
-        assert_eq!(health["issue_count"], 0);
+        assert_eq!(health.status, "ok");
+        assert_eq!(health.schema_name, "daytrader_decision_report");
+        assert!(health.strict);
+        assert_eq!(health.issue_count, 0);
+        assert!(health.issues.is_empty());
+
+        let serialized = serde_json::to_value(&health).expect("schema health serializes");
+        assert_eq!(serialized["status"], "ok");
+        assert_eq!(serialized["issue_count"], 0);
     }
 
     #[test]

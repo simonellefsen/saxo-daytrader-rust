@@ -10,6 +10,11 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed Decision Report schema-health response
+
+- Replaced the public schema-health `serde_json::Value` response with typed health and issue models. OpenRouter schema construction and strict-schema validation remain dynamic only inside the provider integration.
+- The endpoint's serialized contract is regression-tested. This is diagnostics-only and does not alter provider calls, Hermes, Trading Manager gating, protective stops, or Saxo execution.
+
 ## [2026-08-01] architecture | Typed Decision Report debug response
 
 - Replaced the debug endpoint's outer `serde_json::Value` compatibility response with typed, serializable models for the report metadata and its four bounded diagnostic payloads.
