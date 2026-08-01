@@ -200,6 +200,18 @@ pub struct PortfolioTradesPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded Markov signal-list envelope.
+///
+/// The latest-run summary and individual signal rows remain compatibility JSON
+/// while the persisted Markov read model is converted incrementally. Keeping
+/// the outer response typed preserves the established public API boundary
+/// without changing regime calculation or downstream advisory behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct MarkovSignalsPayload {
+    pub latest_run: JsonValue,
+    pub items: Vec<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
