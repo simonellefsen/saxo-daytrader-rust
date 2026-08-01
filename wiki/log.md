@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed portfolio positions response
+
+- Replaced the public `/api/portfolio/positions` compatibility-JSON envelope with typed `PortfolioPositionsPayload`.
+- Kept individual position rows dynamic inside the bounded count/list envelope while the portfolio read-model port remains staged.
+- Added a serialization regression; Saxo portfolio reads, providers, Hermes, manager gates, stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed runtime-health response
 
 - Replaced the health endpoint's `serde_json::Value` response with a typed liveness/build-identity model while preserving its three public fields and serialized contract.

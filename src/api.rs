@@ -23,7 +23,7 @@ use crate::{
         DrawdownGuardOverrideRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
         HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
         LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, RuntimeHealth,
         SaxoCallbackParams, ViewParams,
@@ -1595,8 +1595,16 @@ async fn portfolio_positions(
         state
             .position_items(limit)
             .await
-            .map(|items| json!({"total": items.len(), "items": items})),
+            .map(portfolio_positions_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
+}
+
+fn portfolio_positions_payload(items: Vec<JsonValue>) -> PortfolioPositionsPayload {
+    PortfolioPositionsPayload {
+        total: items.len(),
+        items,
+    }
 }
 
 async fn asset_ladder_history(
@@ -2575,6 +2583,22 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("Decision Report list serializes");
         assert_eq!(serialized["items"][0]["id"], 42);
         assert_eq!(serialized["items"][1]["id"], 43);
+    }
+
+    #[test]
+    fn portfolio_positions_response_keeps_the_typed_counted_list_envelope() {
+        let payload = portfolio_positions_payload(vec![
+            json!({"symbol": "TSLA:xnas"}),
+            json!({"symbol": "NOVO-B:xcse"}),
+        ]);
+
+        assert_eq!(payload.total, 2);
+        assert_eq!(payload.items.len(), 2);
+
+        let serialized =
+            serde_json::to_value(payload).expect("portfolio positions payload serializes");
+        assert_eq!(serialized["total"], 2);
+        assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
     }
 
     #[test]

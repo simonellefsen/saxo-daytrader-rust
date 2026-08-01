@@ -179,6 +179,17 @@ pub struct DecisionReportListPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded portfolio position-list envelope.
+///
+/// Individual position rows remain compatibility JSON while the portfolio
+/// read model is converted incrementally. This type fixes the public
+/// count/list contract without changing Saxo or execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PortfolioPositionsPayload {
+    pub total: usize,
+    pub items: Vec<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
