@@ -2,7 +2,7 @@ use axum::http::HeaderMap;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 
 use crate::config::{yaml_i64, yaml_string};
@@ -112,10 +112,6 @@ impl LocalizationPrefs {
                 self.measurement_system = measurement_system.trim().to_string();
             }
         }
-    }
-
-    pub fn to_json(&self) -> JsonValue {
-        json!(self)
     }
 }
 

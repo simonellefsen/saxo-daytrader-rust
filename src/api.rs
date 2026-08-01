@@ -297,7 +297,10 @@ async fn auth_session(headers: HeaderMap) -> Json<SsoSession> {
     Json(SsoSession::from_headers(&headers))
 }
 
-async fn localization(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Json<JsonValue> {
+async fn localization(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<LocalizationPrefs> {
     let sso_session = json!(SsoSession::from_headers(&headers));
     let prefs = state
         .localization_for_user(
@@ -305,7 +308,7 @@ async fn localization(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
             &sso_session,
         )
         .await;
-    Json(prefs.to_json())
+    Json(prefs)
 }
 
 async fn cash_buffer_settings(State(state): State<Arc<AppState>>) -> Json<CashBufferSettings> {
@@ -2480,6 +2483,26 @@ mod tests {
         assert_eq!(serialized["min_cash_buffer_pct"], 0.04);
         assert_eq!(serialized["config_default_min_cash_buffer_pct"], 0.02);
         assert_eq!(serialized["source"], "request_preview");
+    }
+
+    #[test]
+    fn localization_response_serializes_the_resolved_public_preferences() {
+        let prefs = LocalizationPrefs {
+            locale: "en-DK".to_string(),
+            time_zone: "Europe/Copenhagen".to_string(),
+            hour_cycle: crate::localization::HourCycle::H24,
+            week_start: crate::localization::WeekStart::Monday,
+            group_separator: ",".to_string(),
+            decimal_separator: ".".to_string(),
+            measurement_system: "metric".to_string(),
+        };
+
+        let serialized = serde_json::to_value(prefs).expect("localization preferences serialize");
+        assert_eq!(serialized["locale"], "en-DK");
+        assert_eq!(serialized["time_zone"], "Europe/Copenhagen");
+        assert_eq!(serialized["hour_cycle"], "h24");
+        assert_eq!(serialized["week_start"], "monday");
+        assert_eq!(serialized["measurement_system"], "metric");
     }
 
     #[test]

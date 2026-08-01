@@ -1660,3 +1660,8 @@ broker mutation was added.
 
 - Moved deterministic Quiver dashboard pagination from `src/state.rs` into `src/quiver_state.rs`, preserving the existing page size, bounds, and offset calculation with module coverage.
 - The Quiver provider, persisted signal queries, subscription behavior, scheduler cadence, and downstream advisory/trading paths remain unchanged.
+## [2026-08-01] architecture | Typed localization response
+
+- Replaced `GET /api/localization`'s compatibility JSON with the existing typed `LocalizationPrefs` response contract.
+- Header/config defaults and authenticated per-operator stored preferences retain the same locale, time zone, hour-cycle, week-start, separator, and measurement-system behavior.
+- Added a serialization regression; this does not alter settings persistence, dashboard formatting, Saxo sessions, provider access, Hermes, Trading Manager gates, protective stops, or Saxo execution.
