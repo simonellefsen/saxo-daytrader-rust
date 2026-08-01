@@ -19,13 +19,14 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DecisionLatestPayload, DrawdownGuardOverrideRequest,
-        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesReflectionRequest,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
+        CashBufferSettings, DecisionLatestPayload, DecisionReportListPayload,
+        DrawdownGuardOverrideRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
+        HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, RuntimeHealth,
+        SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1749,8 +1750,13 @@ async fn decision_reports(
         state
             .decision_report_items(limit)
             .await
-            .map(|items| json!({"items": items})),
+            .map(decision_report_list_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
+}
+
+fn decision_report_list_payload(items: Vec<JsonValue>) -> DecisionReportListPayload {
+    DecisionReportListPayload { items }
 }
 
 async fn decision_report_debug(
@@ -2558,6 +2564,17 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("latest decision payload serializes");
         assert_eq!(serialized["report"]["status"], "completed");
         assert!(serialized["next_report"].is_null());
+    }
+
+    #[test]
+    fn decision_report_list_response_keeps_the_typed_list_envelope() {
+        let payload = decision_report_list_payload(vec![json!({"id": 42}), json!({"id": 43})]);
+
+        assert_eq!(payload.items.len(), 2);
+
+        let serialized = serde_json::to_value(payload).expect("Decision Report list serializes");
+        assert_eq!(serialized["items"][0]["id"], 42);
+        assert_eq!(serialized["items"][1]["id"], 43);
     }
 
     #[test]

@@ -1680,3 +1680,8 @@ broker mutation was added.
 - Replaced the public `/api/decision/latest` compatibility-JSON envelope with typed `DecisionLatestPayload`.
 - Kept persisted Decision Report content dynamic inside the bounded polling envelope.
 - Added a serialization regression; report generation, providers, Hermes, manager gates, stops, and Saxo execution are unchanged.
+## 2026-08-01 - Typed Decision Report List API Envelope
+
+- Replaced the public `/api/decision/reports` compatibility-JSON envelope with typed `DecisionReportListPayload`.
+- Kept persisted report rows dynamic inside the bounded list envelope while report-pipeline porting remains staged.
+- Added a serialization regression; report generation, providers, Hermes, manager gates, stops, and Saxo execution are unchanged.

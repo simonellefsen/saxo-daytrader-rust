@@ -170,6 +170,15 @@ pub struct DecisionLatestPayload {
     pub next_report: Option<JsonValue>,
 }
 
+/// Bounded Decision Report list envelope.
+///
+/// The list itself is stable, but each persisted report remains compatibility
+/// JSON while the provider/report pipeline is ported incrementally.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DecisionReportListPayload {
+    pub items: Vec<JsonValue>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
