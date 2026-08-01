@@ -139,6 +139,26 @@ pub struct RuntimeHealth {
     pub git_sha: String,
 }
 
+/// Compact operator-facing summary of the currently available AI prompt
+/// surfaces. Provider-shaped report data remains compatibility JSON because it
+/// is persisted from the report pipeline; this envelope fixes the public API
+/// contract without exposing a new provider or execution path.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiPromptsPayload {
+    pub generated_at: String,
+    pub items: Vec<AiPromptItem>,
+    pub latest_decision_report: Option<JsonValue>,
+    pub latest_trading_manager_run: Option<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiPromptItem {
+    pub kind: String,
+    pub title: String,
+    pub status: String,
+    pub description: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,

@@ -18,14 +18,14 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, CashBufferSettings,
-        DrawdownGuardOverrideRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
-        HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, RuntimeHealth,
-        SaxoCallbackParams, ViewParams,
+        AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
+        CashBufferSettings, DrawdownGuardOverrideRequest, HermesExperimentRequest,
+        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1690,7 +1690,7 @@ async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<JsonValue
     }))
 }
 
-async fn prompts(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
+async fn prompts(State(state): State<Arc<AppState>>) -> Json<AiPromptsPayload> {
     let latest = state
         .decision_report_items(1)
         .await
@@ -1700,12 +1700,24 @@ async fn prompts(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
         })
         .into_iter()
         .next();
-    Json(json!({
-        "generated_at": Utc::now().to_rfc3339(),
-        "items": [{"kind": "rust_runtime", "title": "Rust Runtime", "status": "not_ported", "description": "Prompt builders still need a Rust implementation."}],
-        "latest_decision_report": latest,
-        "latest_trading_manager_run": null
-    }))
+    Json(ai_prompts_payload(Utc::now().to_rfc3339(), latest))
+}
+
+fn ai_prompts_payload(
+    generated_at: String,
+    latest_decision_report: Option<JsonValue>,
+) -> AiPromptsPayload {
+    AiPromptsPayload {
+        generated_at,
+        items: vec![AiPromptItem {
+            kind: "rust_runtime".to_string(),
+            title: "Rust Runtime".to_string(),
+            status: "not_ported".to_string(),
+            description: "Prompt builders still need a Rust implementation.".to_string(),
+        }],
+        latest_decision_report,
+        latest_trading_manager_run: None,
+    }
 }
 
 async fn decision_latest(State(state): State<Arc<AppState>>) -> Response {
@@ -2503,6 +2515,24 @@ mod tests {
         assert_eq!(serialized["hour_cycle"], "h24");
         assert_eq!(serialized["week_start"], "monday");
         assert_eq!(serialized["measurement_system"], "metric");
+    }
+
+    #[test]
+    fn ai_prompts_response_keeps_the_typed_operator_envelope() {
+        let payload = ai_prompts_payload(
+            "2026-08-01T09:15:00Z".to_string(),
+            Some(json!({"id": 42, "status": "completed"})),
+        );
+
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].kind, "rust_runtime");
+        assert_eq!(payload.latest_trading_manager_run, None);
+
+        let serialized = serde_json::to_value(payload).expect("AI prompts payload serializes");
+        assert_eq!(serialized["generated_at"], "2026-08-01T09:15:00Z");
+        assert_eq!(serialized["items"][0]["status"], "not_ported");
+        assert_eq!(serialized["latest_decision_report"]["id"], 42);
+        assert!(serialized["latest_trading_manager_run"].is_null());
     }
 
     #[test]
