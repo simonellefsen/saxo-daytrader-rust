@@ -1715,3 +1715,9 @@ broker mutation was added.
 - Replaced the public `/api/strategy-journal` compatibility-JSON envelope with typed `StrategyJournalPayload`.
 - Kept individual persisted strategy-journal rows as compatibility JSON inside the explicit read-only list envelope.
 - Added a serialization regression; journal collection, Hermes reflections and proposals, Decision Reports, manager gates, stops, and Saxo execution are unchanged.
+
+## 2026-08-01 - Typed Execution API Envelope
+
+- Replaced the public `/api/execution` compatibility-JSON envelope with typed `ExecutionPayload`.
+- Kept persisted execution order, fill, and event rows as compatibility JSON inside the explicit read-only envelope, including its existing per-list degraded-read behavior.
+- Added a serialization regression; broker synchronization, queue processing, Trading Manager, Hermes, protective stops, and Saxo execution are unchanged.

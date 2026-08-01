@@ -210,6 +210,19 @@ pub struct StrategyJournalPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded Execution-tab envelope.
+///
+/// Persisted order, fill, and event rows remain compatibility JSON while the
+/// execution read model is ported incrementally. This makes the public
+/// read-only boundary explicit without changing broker synchronization or
+/// execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ExecutionPayload {
+    pub orders: Vec<JsonValue>,
+    pub fills: Vec<JsonValue>,
+    pub events: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON

@@ -20,9 +20,10 @@ use crate::{
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
         CashBufferSettings, DecisionLatestPayload, DecisionReportListPayload,
-        DrawdownGuardOverrideRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
-        HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
+        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
         PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
@@ -1783,6 +1784,18 @@ fn strategy_journal_payload(items: Vec<JsonValue>) -> StrategyJournalPayload {
     StrategyJournalPayload { items }
 }
 
+fn execution_payload(
+    orders: Vec<JsonValue>,
+    fills: Vec<JsonValue>,
+    events: Vec<JsonValue>,
+) -> ExecutionPayload {
+    ExecutionPayload {
+        orders,
+        fills,
+        events,
+    }
+}
+
 async fn decision_report_debug(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<i64>,
@@ -1841,7 +1854,7 @@ async fn execution(
         warn!("execution events degraded: {err:#}");
         Vec::new()
     });
-    Json(json!({"orders": orders, "fills": fills, "events": events})).into_response()
+    Json(execution_payload(orders, fills, events)).into_response()
 }
 
 async fn scheduler(
@@ -2676,6 +2689,24 @@ mod tests {
             serde_json::to_value(payload).expect("strategy journal payload serializes");
         assert_eq!(serialized["items"][0]["event"], "reflection");
         assert_eq!(serialized["items"][1]["event"], "outcome");
+    }
+
+    #[test]
+    fn execution_response_keeps_the_typed_read_only_envelope() {
+        let payload = execution_payload(
+            vec![json!({"id": 42, "status": "broker_working"})],
+            vec![json!({"id": 7, "symbol": "TSLA:xnas"})],
+            vec![json!({"event_type": "precheck_completed"})],
+        );
+
+        assert_eq!(payload.orders.len(), 1);
+        assert_eq!(payload.fills.len(), 1);
+        assert_eq!(payload.events.len(), 1);
+
+        let serialized = serde_json::to_value(payload).expect("execution payload serializes");
+        assert_eq!(serialized["orders"][0]["status"], "broker_working");
+        assert_eq!(serialized["fills"][0]["symbol"], "TSLA:xnas");
+        assert_eq!(serialized["events"][0]["event_type"], "precheck_completed");
     }
 
     #[test]
