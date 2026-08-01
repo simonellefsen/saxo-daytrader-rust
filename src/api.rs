@@ -24,7 +24,7 @@ use crate::{
         MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
         PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, SaxoCallbackParams, ViewParams,
+        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -276,16 +276,16 @@ async fn favicon_ico() -> Redirect {
     Redirect::permanent("/favicon.svg")
 }
 
-async fn health() -> Json<JsonValue> {
+async fn health() -> Json<RuntimeHealth> {
     Json(health_payload())
 }
 
-fn health_payload() -> JsonValue {
-    json!({
-        "status": "ok",
-        "runtime": "rust-dioxus",
-        "git_sha": crate::build_info::git_sha(),
-    })
+fn health_payload() -> RuntimeHealth {
+    RuntimeHealth {
+        status: "ok".to_string(),
+        runtime: "rust-dioxus".to_string(),
+        git_sha: crate::build_info::git_sha().to_string(),
+    }
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Response {
@@ -2412,15 +2412,13 @@ mod tests {
     fn health_payload_identifies_the_runtime_and_build() {
         let health = health_payload();
 
-        assert_eq!(health.get("status").and_then(JsonValue::as_str), Some("ok"));
-        assert_eq!(
-            health.get("runtime").and_then(JsonValue::as_str),
-            Some("rust-dioxus")
-        );
-        assert_eq!(
-            health.get("git_sha").and_then(JsonValue::as_str),
-            Some(crate::build_info::git_sha())
-        );
+        assert_eq!(health.status, "ok");
+        assert_eq!(health.runtime, "rust-dioxus");
+        assert_eq!(health.git_sha, crate::build_info::git_sha());
+
+        let serialized = serde_json::to_value(&health).expect("runtime health serializes");
+        assert_eq!(serialized["status"], "ok");
+        assert_eq!(serialized["runtime"], "rust-dioxus");
     }
 
     #[test]

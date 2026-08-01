@@ -131,6 +131,14 @@ pub struct DecisionReportSchemaIssue {
     pub message: String,
 }
 
+/// Minimal public runtime liveness and build-identity contract.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RuntimeHealth {
+    pub status: String,
+    pub runtime: String,
+    pub git_sha: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,

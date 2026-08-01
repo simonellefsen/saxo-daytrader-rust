@@ -10,6 +10,11 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed runtime-health response
+
+- Replaced the health endpoint's `serde_json::Value` response with a typed liveness/build-identity model while preserving its three public fields and serialized contract.
+- This endpoint has no application-state, provider, Hermes, Trading Manager, protective-stop, or Saxo-execution effect.
+
 ## [2026-08-01] architecture | Typed Decision Report schema-health response
 
 - Replaced the public schema-health `serde_json::Value` response with typed health and issue models. OpenRouter schema construction and strict-schema validation remain dynamic only inside the provider integration.
