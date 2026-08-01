@@ -1665,3 +1665,8 @@ broker mutation was added.
 - Replaced `GET /api/localization`'s compatibility JSON with the existing typed `LocalizationPrefs` response contract.
 - Header/config defaults and authenticated per-operator stored preferences retain the same locale, time zone, hour-cycle, week-start, separator, and measurement-system behavior.
 - Added a serialization regression; this does not alter settings persistence, dashboard formatting, Saxo sessions, provider access, Hermes, Trading Manager gates, protective stops, or Saxo execution.
+## [2026-08-01] architecture | Typed Saxo authentication status
+
+- Replaced `GET /api/saxo/auth/status`'s compatibility JSON with the typed, sanitized `SaxoAuthStatus` response contract.
+- It preserves the existing connection, environment, expiry, re-authentication, status, session-path, and optional-error fields while OAuth tokens, client keys, and account keys are excluded by construction.
+- The dashboard and extended Session API retain their compatibility JSON adapters. Saxo OAuth, refresh leases, durable-session persistence, and every decision or execution behavior are unchanged.

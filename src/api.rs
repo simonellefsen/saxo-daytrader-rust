@@ -1422,8 +1422,8 @@ async fn update_ai_api_key(
     }
 }
 
-async fn saxo_auth_status(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
-    Json(state.saxo_auth_status_value().await)
+async fn saxo_auth_status(State(state): State<Arc<AppState>>) -> Json<auth::SaxoAuthStatus> {
+    Json(state.saxo_auth_status().await)
 }
 
 async fn saxo_auth_start(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {

@@ -8985,11 +8985,16 @@ impl AppState {
             .to_string())
     }
 
-    pub async fn saxo_auth_status_value(&self) -> JsonValue {
+    pub async fn saxo_auth_status(&self) -> auth::SaxoAuthStatus {
         if let Err(err) = self.ensure_saxo_session_json("auth_status").await {
             warn!("Saxo leased session refresh before auth status skipped: {err:#}");
         }
         auth::auth_status(&self.config, &self.config_path, false).await
+    }
+
+    pub async fn saxo_auth_status_value(&self) -> JsonValue {
+        serde_json::to_value(self.saxo_auth_status().await)
+            .expect("Saxo auth status must serialize")
     }
 
     pub async fn saxo_session_value(&self) -> JsonValue {
@@ -9063,7 +9068,9 @@ impl AppState {
         if let Err(err) = self.ensure_saxo_session_json("user_logout_keepalive").await {
             warn!("Saxo leased session refresh during user logout no-op skipped: {err:#}");
         }
-        let mut status = auth::auth_status(&self.config, &self.config_path, false).await;
+        let mut status =
+            serde_json::to_value(auth::auth_status(&self.config, &self.config_path, false).await)
+                .expect("Saxo auth status must serialize");
         if let Some(obj) = status.as_object_mut() {
             obj.insert("logout_scope".to_string(), json!("user"));
             obj.insert(

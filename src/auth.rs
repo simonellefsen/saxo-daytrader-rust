@@ -34,6 +34,30 @@ pub struct SsoUser {
     pub name: String,
 }
 
+/// Sanitized service-level Saxo session health for operator-facing APIs.
+///
+/// This deliberately carries lifecycle metadata and no OAuth credentials,
+/// client keys, account keys, or token material.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SaxoAuthStatus {
+    pub connected: bool,
+    pub environment: String,
+    pub configured_environment: String,
+    pub token_valid: bool,
+    pub refresh_token_valid: bool,
+    pub expires_at: Option<String>,
+    pub expires_in_minutes: Option<i64>,
+    pub refresh_expires_at: Option<String>,
+    pub refresh_expires_in_minutes: Option<i64>,
+    pub last_refreshed_at: Option<String>,
+    pub refreshing: bool,
+    pub needs_reauth: bool,
+    pub status: String,
+    pub status_text: String,
+    pub session_path: String,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct OAuthState {
     state: String,
@@ -223,7 +247,7 @@ pub async fn auth_status(
     config: &YamlValue,
     config_path: &PathBuf,
     auto_refresh: bool,
-) -> JsonValue {
+) -> SaxoAuthStatus {
     let path = session_path(config, config_path);
     if auto_refresh {
         if let Err(err) = ensure_access_token(config, config_path).await {
@@ -243,7 +267,7 @@ pub async fn session_api(config: &YamlValue, config_path: &PathBuf) -> JsonValue
     let path = session_path(config, config_path);
     match load_session(&path) {
         Ok(session) => {
-            let mut status = session_status(config, &path, &session);
+            let mut status = status_value(session_status(config, &path, &session));
             if let Some(obj) = status.as_object_mut() {
                 obj.insert("auth_mode".to_string(), json!(session.auth_mode));
                 obj.insert(
@@ -265,13 +289,13 @@ pub async fn session_api(config: &YamlValue, config_path: &PathBuf) -> JsonValue
             }
             status
         }
-        Err(err) => base_status(config, &path, Some(err.to_string())),
+        Err(err) => status_value(base_status(config, &path, Some(err.to_string()))),
     }
 }
 
 pub async fn refresh_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
     ensure_access_token(config, config_path).await?;
-    Ok(auth_status(config, config_path, false).await)
+    Ok(status_value(auth_status(config, config_path, false).await))
 }
 
 pub fn logout_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
@@ -279,7 +303,7 @@ pub fn logout_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonV
     if path.exists() {
         fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
     }
-    Ok(base_status(config, &path, None))
+    Ok(status_value(base_status(config, &path, None)))
 }
 
 pub fn export_session_json(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
@@ -570,7 +594,11 @@ fn compact_http_error_body(body: &str) -> String {
     result
 }
 
-fn session_status(config: &YamlValue, path: &PathBuf, session: &SaxoSessionCache) -> JsonValue {
+fn session_status(
+    config: &YamlValue,
+    path: &PathBuf,
+    session: &SaxoSessionCache,
+) -> SaxoAuthStatus {
     let access_expires_at = parse_iso(session.access_token_expires_at.as_deref());
     let refresh_expires_at = parse_iso(session.refresh_token_expires_at.as_deref());
     let expires_in_minutes = minutes_until(access_expires_at);
@@ -600,45 +628,54 @@ fn session_status(config: &YamlValue, path: &PathBuf, session: &SaxoSessionCache
         )
     };
 
-    json!({
-        "connected": connected,
-        "environment": session.environment,
-        "configured_environment": saxo_environment(config),
-        "token_valid": token_valid,
-        "refresh_token_valid": refresh_token_valid,
-        "expires_at": access_expires_at.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-        "expires_in_minutes": expires_in_minutes,
-        "refresh_expires_at": refresh_expires_at.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-        "refresh_expires_in_minutes": refresh_expires_in_minutes,
-        "last_refreshed_at": session.last_refreshed_at,
-        "refreshing": false,
-        "needs_reauth": needs_reauth,
-        "status": status,
-        "status_text": status_text,
-        "session_path": path.display().to_string(),
-        "error": if needs_reauth { session.refresh_error.clone() } else { None },
-    })
+    SaxoAuthStatus {
+        connected,
+        environment: session.environment.clone(),
+        configured_environment: saxo_environment(config),
+        token_valid,
+        refresh_token_valid,
+        expires_at: access_expires_at
+            .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        expires_in_minutes,
+        refresh_expires_at: refresh_expires_at
+            .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        refresh_expires_in_minutes,
+        last_refreshed_at: session.last_refreshed_at.clone(),
+        refreshing: false,
+        needs_reauth,
+        status: status.to_string(),
+        status_text: status_text.to_string(),
+        session_path: path.display().to_string(),
+        error: needs_reauth
+            .then(|| session.refresh_error.clone())
+            .flatten(),
+    }
 }
 
-fn base_status(config: &YamlValue, path: &PathBuf, error: Option<String>) -> JsonValue {
-    json!({
-        "connected": false,
-        "environment": saxo_environment(config),
-        "configured_environment": saxo_environment(config),
-        "token_valid": false,
-        "refresh_token_valid": false,
-        "expires_at": null,
-        "expires_in_minutes": null,
-        "refresh_expires_at": null,
-        "refresh_expires_in_minutes": null,
-        "last_refreshed_at": null,
-        "refreshing": false,
-        "needs_reauth": true,
-        "status": "missing_session",
-        "status_text": "Saxo session file is missing.",
-        "session_path": path.display().to_string(),
-        "error": error,
-    })
+fn base_status(config: &YamlValue, path: &PathBuf, error: Option<String>) -> SaxoAuthStatus {
+    let environment = saxo_environment(config);
+    SaxoAuthStatus {
+        connected: false,
+        environment: environment.clone(),
+        configured_environment: environment,
+        token_valid: false,
+        refresh_token_valid: false,
+        expires_at: None,
+        expires_in_minutes: None,
+        refresh_expires_at: None,
+        refresh_expires_in_minutes: None,
+        last_refreshed_at: None,
+        refreshing: false,
+        needs_reauth: true,
+        status: "missing_session".to_string(),
+        status_text: "Saxo session file is missing.".to_string(),
+        session_path: path.display().to_string(),
+        error,
+    }
+}
+
+fn status_value(status: SaxoAuthStatus) -> JsonValue {
+    serde_json::to_value(status).expect("Saxo auth status must serialize")
 }
 
 fn access_token_valid(session: &SaxoSessionCache) -> bool {
@@ -988,5 +1025,29 @@ app:
             public_base_url(&config, &headers),
             "https://example.ngrok-free.dev/saxo-daytrader"
         );
+    }
+
+    #[test]
+    fn missing_session_status_serializes_only_the_sanitized_operator_contract() {
+        let path = PathBuf::from("/tmp/daytrader/saxo_session.json");
+        let status = base_status(
+            &YamlValue::Null,
+            &path,
+            Some("session unavailable".to_string()),
+        );
+
+        assert!(!status.connected);
+        assert_eq!(status.environment, "sim");
+        assert!(status.needs_reauth);
+        assert_eq!(status.status, "missing_session");
+
+        let serialized = serde_json::to_value(status).expect("Saxo auth status serializes");
+        assert_eq!(serialized["connected"], false);
+        assert_eq!(serialized["environment"], "sim");
+        assert_eq!(serialized["status"], "missing_session");
+        assert_eq!(serialized["error"], "session unavailable");
+        assert!(serialized.get("access_token").is_none());
+        assert!(serialized.get("refresh_token").is_none());
+        assert!(serialized.get("account_key").is_none());
     }
 }
