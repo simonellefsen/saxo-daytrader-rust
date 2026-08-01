@@ -21,9 +21,9 @@ use crate::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
         CashBufferSettings, DecisionLatestPayload, DecisionReportListPayload,
         DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesReflectionRequest, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
+        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
         PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
@@ -1804,6 +1804,10 @@ fn hermes_reflections_payload(items: Vec<JsonValue>) -> HermesReflectionsPayload
     HermesReflectionsPayload { items }
 }
 
+fn hermes_experiments_payload(items: Vec<JsonValue>) -> HermesExperimentsPayload {
+    HermesExperimentsPayload { items }
+}
+
 async fn decision_report_debug(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<i64>,
@@ -1955,7 +1959,8 @@ async fn hermes_experiments(
         state
             .hermes_experiments(limit)
             .await
-            .map(|items| json!({"items": items})),
+            .map(hermes_experiments_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
@@ -2749,6 +2754,22 @@ mod tests {
             serialized["items"][0]["summary"],
             "No one-variable experiment proposed."
         );
+    }
+
+    #[test]
+    fn hermes_experiments_response_keeps_the_typed_list_envelope() {
+        let payload = hermes_experiments_payload(vec![json!({
+            "id": "experiment-2026-08-01",
+            "status": "pending_review",
+            "changed_variable_path": "strategy.swing.technical_gate"
+        })]);
+
+        assert_eq!(payload.items.len(), 1);
+
+        let serialized =
+            serde_json::to_value(payload).expect("Hermes experiments payload serializes");
+        assert_eq!(serialized["items"][0]["id"], "experiment-2026-08-01");
+        assert_eq!(serialized["items"][0]["status"], "pending_review");
     }
 
     #[test]

@@ -244,6 +244,17 @@ pub struct HermesReflectionsPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded Hermes experiment-list envelope.
+///
+/// Individual persisted experiment rows remain compatibility JSON while the
+/// Hermes read model is converted incrementally. This keeps the protected
+/// advisory read boundary explicit without changing proposal lifecycle or
+/// activation behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesExperimentsPayload {
+    pub items: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON
