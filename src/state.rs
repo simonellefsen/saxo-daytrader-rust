@@ -36,7 +36,7 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
     },
     performance_state::performance_summary_from_history,
@@ -8494,7 +8494,7 @@ impl AppState {
         .await
     }
 
-    pub fn cash_buffer_value(&self) -> JsonValue {
+    pub fn cash_buffer_settings(&self) -> CashBufferSettings {
         let min_cash_buffer_pct = yaml_f64(
             &self.config,
             &["strategy", "capital", "min_cash_buffer_pct"],
@@ -8507,14 +8507,19 @@ impl AppState {
             &["strategy", "capital", "reinvestment_pressure_threshold_pct"],
         )
         .unwrap_or(0.05);
-        json!({
-            "min_cash_buffer_pct": min_cash_buffer_pct,
-            "max_deployment_pct": max_deployment_pct,
-            "reinvestment_pressure_threshold_pct": reinvestment_pressure_threshold_pct,
-            "source": "config",
-            "updated_at": null,
-            "config_default_min_cash_buffer_pct": min_cash_buffer_pct
-        })
+        CashBufferSettings {
+            min_cash_buffer_pct,
+            max_deployment_pct,
+            reinvestment_pressure_threshold_pct,
+            source: "config".to_string(),
+            updated_at: None,
+            config_default_min_cash_buffer_pct: min_cash_buffer_pct,
+        }
+    }
+
+    pub fn cash_buffer_value(&self) -> JsonValue {
+        serde_json::to_value(self.cash_buffer_settings())
+            .expect("cash buffer settings must serialize")
     }
 
     fn default_ai_settings_value(&self) -> JsonValue {

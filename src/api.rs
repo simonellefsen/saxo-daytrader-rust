@@ -18,13 +18,14 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, DrawdownGuardOverrideRequest,
-        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesReflectionRequest,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, RuntimeHealth, SaxoCallbackParams, ViewParams,
+        AiApiKeyRequest, AiSettingsRequest, CashBufferRequest, CashBufferSettings,
+        DrawdownGuardOverrideRequest, HermesExperimentRequest, HermesExperimentTransitionRequest,
+        HermesReflectionRequest, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest, RuntimeHealth,
+        SaxoCallbackParams, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -307,23 +308,27 @@ async fn localization(State(state): State<Arc<AppState>>, headers: HeaderMap) ->
     Json(prefs.to_json())
 }
 
-async fn cash_buffer_settings(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
-    Json(state.cash_buffer_value())
+async fn cash_buffer_settings(State(state): State<Arc<AppState>>) -> Json<CashBufferSettings> {
+    Json(state.cash_buffer_settings())
 }
 
 async fn update_cash_buffer(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CashBufferRequest>,
-) -> Json<JsonValue> {
-    let mut value = state.cash_buffer_value();
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "min_cash_buffer_pct".to_string(),
-            JsonValue::from(request.min_cash_buffer_pct),
-        );
-        obj.insert("source".to_string(), JsonValue::from("request_preview"));
-    }
-    Json(value)
+) -> Json<CashBufferSettings> {
+    Json(cash_buffer_preview(
+        state.cash_buffer_settings(),
+        request.min_cash_buffer_pct,
+    ))
+}
+
+fn cash_buffer_preview(
+    mut settings: CashBufferSettings,
+    min_cash_buffer_pct: f64,
+) -> CashBufferSettings {
+    settings.min_cash_buffer_pct = min_cash_buffer_pct;
+    settings.source = "request_preview".to_string();
+    settings
 }
 
 async fn update_monthly_loss_breaker_override(
@@ -2452,6 +2457,29 @@ mod tests {
         assert_eq!(serialized["authenticated"], true);
         assert_eq!(serialized["user"]["email"], "operator@example.com");
         assert_eq!(serialized["user"]["name"], "Trading Operator");
+    }
+
+    #[test]
+    fn cash_buffer_preview_preserves_the_enforced_baseline_contract() {
+        let settings = CashBufferSettings {
+            min_cash_buffer_pct: 0.02,
+            max_deployment_pct: 0.95,
+            reinvestment_pressure_threshold_pct: 0.05,
+            source: "config".to_string(),
+            updated_at: None,
+            config_default_min_cash_buffer_pct: 0.02,
+        };
+
+        let preview = cash_buffer_preview(settings, 0.04);
+        assert_eq!(preview.min_cash_buffer_pct, 0.04);
+        assert_eq!(preview.config_default_min_cash_buffer_pct, 0.02);
+        assert_eq!(preview.source, "request_preview");
+        assert!(preview.updated_at.is_none());
+
+        let serialized = serde_json::to_value(preview).expect("cash buffer preview serializes");
+        assert_eq!(serialized["min_cash_buffer_pct"], 0.04);
+        assert_eq!(serialized["config_default_min_cash_buffer_pct"], 0.02);
+        assert_eq!(serialized["source"], "request_preview");
     }
 
     #[test]

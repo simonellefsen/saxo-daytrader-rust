@@ -211,6 +211,22 @@ pub struct CashBufferRequest {
     pub min_cash_buffer_pct: f64,
 }
 
+/// Public read-only capital-reserve settings contract.
+///
+/// A request to the settings endpoint can preview a different reserve, but it
+/// never persists or activates that request. `config_default_min_cash_buffer_pct`
+/// stays pinned to the deployed configuration so callers can distinguish the
+/// preview from the enforced baseline.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CashBufferSettings {
+    pub min_cash_buffer_pct: f64,
+    pub max_deployment_pct: f64,
+    pub reinvestment_pressure_threshold_pct: f64,
+    pub source: String,
+    pub updated_at: Option<String>,
+    pub config_default_min_cash_buffer_pct: f64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MonthlyLossBreakerOverrideRequest {
     pub action: String,

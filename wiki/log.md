@@ -1638,6 +1638,12 @@ broker mutation was added.
 - Focused coverage verifies the anonymous response and the only authenticated fields derived from trusted ngrok-injected headers.
 - The change exposes no Saxo session state or credentials and does not alter ngrok authentication, provider calls, Hermes, Trading Manager gates, protective stops, or Saxo execution.
 
+## [2026-08-01] architecture | Typed cash-buffer settings response
+
+- Replaced the public cash-buffer settings compatibility-JSON wrapper with a typed model that preserves the deployed reserve, deployment ceiling, reinvestment threshold, source, null update time, and configuration baseline.
+- The request endpoint remains a preview only. Its regression pins the requested reserve as distinct from the active configuration baseline.
+- This does not persist a setting, activate an experiment, change capital policy, or alter provider calls, Hermes, Trading Manager gates, protective stops, or Saxo execution.
+
 ## [2026-07-31] architecture | Performance read-model extraction
 
 - Moved pure account-value summary, selected-range return/drawdown, and confidence projections from `src/state.rs` into `src/performance_state.rs`.
