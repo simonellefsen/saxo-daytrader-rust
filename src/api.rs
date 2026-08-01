@@ -21,7 +21,7 @@ use crate::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
         CashBufferSettings, DecisionLatestPayload, DecisionReportListPayload,
         DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesReflectionRequest,
+        HermesExperimentTransitionRequest, HermesReflectionRequest, HermesReflectionsPayload,
         InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
         MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PortfolioPositionsPayload,
@@ -1800,6 +1800,10 @@ fn scheduler_payload(status: JsonValue, cycles: Vec<JsonValue>) -> SchedulerPayl
     SchedulerPayload { status, cycles }
 }
 
+fn hermes_reflections_payload(items: Vec<JsonValue>) -> HermesReflectionsPayload {
+    HermesReflectionsPayload { items }
+}
+
 async fn decision_report_debug(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<i64>,
@@ -1909,7 +1913,8 @@ async fn hermes_reflections(
         state
             .hermes_reflections(limit)
             .await
-            .map(|items| json!({"items": items})),
+            .map(hermes_reflections_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
@@ -2726,6 +2731,24 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("scheduler payload serializes");
         assert_eq!(serialized["status"]["next_due_at"], "2026-08-01T17:15:00Z");
         assert_eq!(serialized["cycles"][0]["status"], "ok");
+    }
+
+    #[test]
+    fn hermes_reflections_response_keeps_the_typed_list_envelope() {
+        let payload = hermes_reflections_payload(vec![json!({
+            "id": "daily-reflection-2026-08-01",
+            "summary": "No one-variable experiment proposed."
+        })]);
+
+        assert_eq!(payload.items.len(), 1);
+
+        let serialized =
+            serde_json::to_value(payload).expect("Hermes reflections payload serializes");
+        assert_eq!(serialized["items"][0]["id"], "daily-reflection-2026-08-01");
+        assert_eq!(
+            serialized["items"][0]["summary"],
+            "No one-variable experiment proposed."
+        );
     }
 
     #[test]

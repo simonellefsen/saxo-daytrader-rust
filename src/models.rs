@@ -234,6 +234,16 @@ pub struct SchedulerPayload {
     pub cycles: Vec<JsonValue>,
 }
 
+/// Bounded Hermes reflection-list envelope.
+///
+/// Individual persisted reflections remain compatibility JSON while the Hermes
+/// read model is converted incrementally. This makes the protected advisory
+/// read boundary explicit without changing reflection or proposal behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesReflectionsPayload {
+    pub items: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON

@@ -10,6 +10,12 @@ updated: 2026-08-01
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-01] architecture | Typed Hermes reflections API envelope
+
+- Replaced the protected `/api/hermes/reflections` compatibility-JSON envelope with typed `HermesReflectionsPayload`.
+- Kept individual persisted reflection rows dynamic inside the explicit advisory read-only envelope, with the existing Hermes API-key boundary intact.
+- Added a serialization regression; reflection creation, experiment proposals, Trading Manager, protective stops, and Saxo execution are unchanged.
+
 ## [2026-08-01] architecture | Typed Scheduler API envelope
 
 - Replaced the public `/api/scheduler` compatibility-JSON envelope with typed `SchedulerPayload`.
