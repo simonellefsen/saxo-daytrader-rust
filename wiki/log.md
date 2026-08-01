@@ -1709,3 +1709,9 @@ broker mutation was added.
 - Replaced the public `/api/quiver/signals` compatibility-JSON envelope with typed `QuiverSignalsPayload`.
 - Kept the latest persisted run summary and individual signal rows as compatibility JSON inside the explicit read-only envelope.
 - Added a serialization regression; Quiver collection, scheduler timing, Decision Reports, Hermes, manager gates, stops, and Saxo execution are unchanged.
+
+## 2026-08-01 - Typed Strategy Journal API Envelope
+
+- Replaced the public `/api/strategy-journal` compatibility-JSON envelope with typed `StrategyJournalPayload`.
+- Kept individual persisted strategy-journal rows as compatibility JSON inside the explicit read-only list envelope.
+- Added a serialization regression; journal collection, Hermes reflections and proposals, Decision Reports, manager gates, stops, and Saxo execution are unchanged.

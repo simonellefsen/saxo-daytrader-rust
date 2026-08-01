@@ -27,7 +27,7 @@ use crate::{
         PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
         ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
         ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        ViewParams,
+        StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1779,6 +1779,10 @@ fn decision_report_list_payload(items: Vec<JsonValue>) -> DecisionReportListPayl
     DecisionReportListPayload { items }
 }
 
+fn strategy_journal_payload(items: Vec<JsonValue>) -> StrategyJournalPayload {
+    StrategyJournalPayload { items }
+}
+
 async fn decision_report_debug(
     State(state): State<Arc<AppState>>,
     Path(report_id): Path<i64>,
@@ -1815,7 +1819,8 @@ async fn strategy_journal(
         state
             .strategy_journal_items(limit)
             .await
-            .map(|items| json!({"items": items})),
+            .map(strategy_journal_payload)
+            .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
@@ -2656,6 +2661,21 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("Quiver signals payload serializes");
         assert_eq!(serialized["latest_run"]["status"], "completed");
         assert_eq!(serialized["items"][0]["signal"], "buy");
+    }
+
+    #[test]
+    fn strategy_journal_response_keeps_the_typed_list_envelope() {
+        let payload = strategy_journal_payload(vec![
+            json!({"created_at": "2026-08-01T10:15:00Z", "event": "reflection"}),
+            json!({"created_at": "2026-08-01T16:15:00Z", "event": "outcome"}),
+        ]);
+
+        assert_eq!(payload.items.len(), 2);
+
+        let serialized =
+            serde_json::to_value(payload).expect("strategy journal payload serializes");
+        assert_eq!(serialized["items"][0]["event"], "reflection");
+        assert_eq!(serialized["items"][1]["event"], "outcome");
     }
 
     #[test]

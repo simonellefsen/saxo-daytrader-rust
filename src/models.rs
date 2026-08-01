@@ -200,6 +200,16 @@ pub struct PortfolioTradesPayload {
     pub items: Vec<JsonValue>,
 }
 
+/// Bounded strategy-journal list envelope.
+///
+/// Individual journal rows remain compatibility JSON while the persisted
+/// strategy-learning read model is converted incrementally. This makes the
+/// public list boundary explicit without changing Hermes or execution behavior.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StrategyJournalPayload {
+    pub items: Vec<JsonValue>,
+}
+
 /// Bounded Markov signal-list envelope.
 ///
 /// The latest-run summary and individual signal rows remain compatibility JSON
