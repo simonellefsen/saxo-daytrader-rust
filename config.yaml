@@ -35,7 +35,7 @@ market_data:
     # infer membership from archived sentiment or old price rows.
     universe_symbols:
       - aapl:xnas
-      - abb:xsto
+      - abb:xome
       - abi:xbru
       - abnb:xnas
       - adbe:xnas
@@ -44,8 +44,8 @@ market_data:
       - adyen:xams
       - air:xpar
       - ajg:xnys
-      - akrbp:xosl
-      - alfa:xsto
+      - akerbp:xosl
+      - alfa:xome
       - alk-b:xcse
       - almb:xcse
       - alv:xetr
@@ -59,8 +59,8 @@ market_data:
       - arm:xnas
       - asml:xams
       - asml:xnas
-      - assa-b:xsto
-      - atco-a:xsto
+      - assa-b:xome
+      - atco-a:xome
       - auto:xosl
       - avgo:xnas
       - azn:xlon
@@ -72,7 +72,7 @@ market_data:
       - bkng:xnas
       - bmw:xetr
       - bnp:xpar
-      - bol:xsto
+      - bol:xome
       - brk-b:xnys
       - cap:xpar
       - carl-b:xcse
@@ -86,7 +86,7 @@ market_data:
       - crm:xnys
       - csco:xnas
       - danske:xcse
-      - db1:xetr
+      - db1gn:xetr
       - ddog:xnas
       - de:xnys
       - demant:xcse
@@ -97,13 +97,13 @@ market_data:
       - dsv:xcse
       - dte:xetr
       - elisa:xhel
-      - elux-b:xsto
+      - elux-b:xome
       - enel:xmil
       - engi:xpar
       - eni:xmil
       - eqnr:xosl
-      - eric-b:xsto
-      - essity-b:xsto
+      - eric-b:xome
+      - essity-b:xome
       - figr:xnas
       - fls:xcse
       - fortum:xhel
@@ -115,15 +115,15 @@ market_data:
       - gs:xnys
       - gsk:xlon
       - hd:xnys
-      - hexa-b:xsto
-      - hm-b:xsto
+      - hexa-b:xome
+      - hm-b:xome
       - hon:xnys
       - hsba:xlon
       - ibm:xnys
       - ifx:xetr
       - intc:xnas
       - intu:xnas
-      - inve-b:xsto
+      - inve-b:xome
       - isp:xmil
       - isrg:xnas
       - iss:xcse
@@ -151,7 +151,7 @@ market_data:
       - msft:xnas
       - mstr:xnas
       - mu:xnas
-      - nda-se:xsto
+      - nda-se:xome
       - neste:xhel
       - netc:xcse
       - neu:xwar
@@ -165,7 +165,7 @@ market_data:
       - nokia:xhel
       - now:xnys
       - nvda:xnas
-      - nzym-b:xcse
+      - nsis-b:xcse
       - or:xpar
       - orcl:xnys
       - ork:xosl
@@ -191,26 +191,26 @@ market_data:
       - salm:xosl
       - sampo:xhel
       - san:xpar
-      - sand:xsto
-      - sap:xetr
+      - sand:xome
+      - sapg:xetr
       - sbux:xnas
-      - sca-b:xsto
-      - schp:xcse
-      - seb-a:xsto
-      - shb-a:xsto
+      - sca-b:xome
+      - scho:xcse
+      - seb-a:xome
+      - shb-a:xome
       - shell:xlon
-      - shop:xnys
+      - shop_new:xnas
       - sie:xetr
-      - skf-b:xsto
+      - skf-b:xome
       - snow:xnys
       - spot:xnys
       - sterv:xhel
       - stg:xcse
       - stlam:xmil
       - su:xpar
-      - swed-a:xsto
+      - swed-a:xome
       - tel:xosl
-      - telia:xsto
+      - telia:xome
       - tmo:xnys
       - tom:xosl
       - tryg:xcse
@@ -224,10 +224,10 @@ market_data:
       - unh:xnys
       - upm:xhel
       - v:xnys
-      - volv-b:xsto
+      - volv-b:xome
       - vow3:xetr
       - vws:xcse
-      - wmt:xnys
+      - wmt:xnas
       - wrt1v:xhel
       - xom:xnys
       - yar:xosl

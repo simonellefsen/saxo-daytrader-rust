@@ -1386,21 +1386,37 @@ fn requested_symbol(parts: &SymbolParts) -> String {
     }
 }
 
+/// Expand a share-class base into the spellings Saxo actually uses.
+///
+/// Saxo is not internally consistent about Nordic share classes: some are
+/// suffixed with a bare lowercase letter (`ERICb`, `ASSAb`, `VOLVb`) and others
+/// with an underscore (`ESSITY_B`, `SWED_A`, `NDA_SE`). Both were verified
+/// against SIM on 2026-08-02. Emitting both spellings costs one extra lookup
+/// attempt on a miss and avoids pinning either convention into configuration,
+/// where it would have to be maintained per symbol.
+///
+/// The separator is also accepted in either form, so a base already written as
+/// `ESSITY_B` expands to `ESSITYb` and vice versa.
 fn base_lookup_variants(base: &str) -> Vec<String> {
     let mut variants = Vec::new();
-    push_unique_string(&mut variants, base.trim().to_uppercase());
-    let Some((prefix, share_class)) = base.trim().split_once('-') else {
+    let trimmed = base.trim();
+    push_unique_string(&mut variants, trimmed.to_uppercase());
+    let Some((prefix, share_class)) = trimmed.split_once('-').or_else(|| trimmed.split_once('_'))
+    else {
         return variants;
     };
+    let prefix = prefix.trim();
     let share_class = share_class.trim();
-    if prefix.trim().is_empty() || share_class.len() != 1 || !share_class.is_ascii() {
+    if prefix.is_empty() || share_class.is_empty() || !share_class.is_ascii() {
         return variants;
     }
-    let mut chars = share_class.chars();
-    let class = chars.next().unwrap().to_ascii_lowercase();
+    if share_class.len() == 1 {
+        let class = share_class.chars().next().unwrap().to_ascii_lowercase();
+        push_unique_string(&mut variants, format!("{}{}", prefix.to_uppercase(), class));
+    }
     push_unique_string(
         &mut variants,
-        format!("{}{}", prefix.trim().to_uppercase(), class),
+        format!("{}_{}", prefix.to_uppercase(), share_class.to_uppercase()),
     );
     variants
 }
@@ -1437,23 +1453,36 @@ fn push_lookup_attempt(
     }
 }
 
+/// Saxo's `ExchangeId` is a proprietary code, **not** the ISO MIC.
+///
+/// This mapping previously returned the MIC for every entry, which meant the
+/// exchange-scoped fallback in `lookup_instrument` could never match anything —
+/// `ExchangeId=XSTO` returns an empty result set where `SSE` returns Stockholm.
+/// All fifteen entries were wrong, so the fallback had never resolved a single
+/// instrument; the symbols that do resolve succeed on the earlier keyword
+/// attempt and never reach here. Values below were read from `/ref/v1/exchanges`
+/// against SIM on 2026-08-02 (see `wiki/urgent-todo.md` U11).
+///
+/// Note Stockholm's MIC in Saxo's own reference data is `XOME`, not `XSTO`, and
+/// the canonical symbol suffix follows it (`ERICb:xome`). Both spellings map
+/// here so a stray `xsto` from older data still resolves.
 fn exchange_id_for_suffix(exchange: &str) -> &'static str {
     match exchange.to_lowercase().as_str() {
-        "xnas" => "XNAS",
-        "xnys" => "XNYS",
-        "arcx" => "ARCX",
-        "xcse" => "XCSE",
-        "xsto" => "XSTO",
-        "xosl" => "XOSL",
-        "xhel" => "XHEL",
-        "xlon" => "XLON",
-        "xetr" => "XETR",
-        "xfra" => "XFRA",
-        "xmil" => "XMIL",
-        "xpar" => "XPAR",
-        "xams" => "XAMS",
-        "xbru" => "XBRU",
-        "xlse" => "XLIS",
+        "xnas" => "NASDAQ",
+        "xnys" => "NYSE",
+        "arcx" => "NYSE_ARCA",
+        "xcse" => "CSE",
+        "xome" | "xsto" => "SSE",
+        "xosl" => "OSE",
+        "xhel" => "HSE",
+        "xlon" => "LSE_SETS",
+        "xetr" => "FSE",
+        "xfra" => "FFT",
+        "xmil" => "MIL",
+        "xpar" => "PAR",
+        "xams" => "AMS",
+        "xbru" => "BRU",
+        "xlse" | "xlis" => "LISB",
         _ => "",
     }
 }
@@ -1861,7 +1890,11 @@ mod tests {
         let requested = symbol_parts("CARL-B:xcse");
         assert_eq!(
             symbol_lookup_variants(&requested),
-            vec!["CARL-B:xcse".to_string(), "CARLb:xcse".to_string()]
+            vec![
+                "CARL-B:xcse".to_string(),
+                "CARLb:xcse".to_string(),
+                "CARL_B:xcse".to_string()
+            ]
         );
         let compact = json!({
             "Symbol": "CARLb:xcse",
@@ -1895,9 +1928,98 @@ mod tests {
             "TradableAs": ["Etf"]
         });
 
-        assert_eq!(exchange_id_for_suffix("arcx"), "ARCX");
+        assert_eq!(exchange_id_for_suffix("arcx"), "NYSE_ARCA");
         assert!(candidate_matches_requested(
             &candidate, "SPY:arcx", &requested
+        ));
+    }
+
+    /// The exchange-scoped fallback in `lookup_instrument` passes this value to
+    /// Saxo as `ExchangeId`. Saxo uses proprietary codes, not ISO MICs, so
+    /// returning the MIC made the fallback silently match nothing — verified
+    /// live: `ExchangeId=XSTO` returns an empty set, `SSE` returns Stockholm.
+    /// Values pinned from `/ref/v1/exchanges` on 2026-08-02.
+    #[test]
+    fn exchange_ids_are_saxo_codes_rather_than_iso_mics() {
+        for (suffix, expected) in [
+            ("xnas", "NASDAQ"),
+            ("xnys", "NYSE"),
+            ("xcse", "CSE"),
+            ("xome", "SSE"),
+            ("xetr", "FSE"),
+            ("xosl", "OSE"),
+            ("xhel", "HSE"),
+            ("xlon", "LSE_SETS"),
+        ] {
+            let actual = exchange_id_for_suffix(suffix);
+            assert_eq!(actual, expected, "wrong ExchangeId for {suffix}");
+            assert_ne!(
+                actual.to_lowercase(),
+                suffix,
+                "{suffix} still returns its own MIC, which Saxo never matches"
+            );
+        }
+        assert_eq!(
+            exchange_id_for_suffix("xsto"),
+            "SSE",
+            "legacy xsto spelling must still resolve"
+        );
+        assert_eq!(exchange_id_for_suffix("unknown"), "");
+    }
+
+    /// Saxo spells Nordic share classes two different ways and we cannot tell
+    /// which from the symbol alone, so both must be attempted. `ERICb:xome` and
+    /// `ESSITY_B:xome` are both real, both live, and differ only in convention.
+    #[test]
+    fn share_class_variants_cover_both_saxo_spellings() {
+        assert_eq!(
+            base_lookup_variants("ERIC-B"),
+            vec![
+                "ERIC-B".to_string(),
+                "ERICb".to_string(),
+                "ERIC_B".to_string()
+            ]
+        );
+        assert_eq!(
+            base_lookup_variants("ESSITY_B"),
+            vec!["ESSITY_B".to_string(), "ESSITYb".to_string()]
+        );
+        // Two-letter classes have no bare-letter form; only the underscore.
+        assert_eq!(
+            base_lookup_variants("NDA-SE"),
+            vec!["NDA-SE".to_string(), "NDA_SE".to_string()]
+        );
+        // A plain symbol must not sprout variants.
+        assert_eq!(base_lookup_variants("TELIA"), vec!["TELIA".to_string()]);
+    }
+
+    /// Guards the config correction: these symbols were unresolvable for weeks
+    /// because the universe carried Stockholm as `:xsto`, which Saxo does not
+    /// use. A candidate returned by Saxo must match the corrected form.
+    #[test]
+    fn stockholm_symbols_resolve_under_the_xome_suffix() {
+        let requested = symbol_parts("ERIC-B:xome");
+        let candidate = json!({
+            "Symbol": "ERICb:xome",
+            "ExchangeId": "SSE",
+            "TradableAs": ["Stock"]
+        });
+        assert!(candidate_matches_requested(
+            &candidate,
+            "ERIC-B:xome",
+            &requested
+        ));
+
+        let underscored = symbol_parts("ESSITY-B:xome");
+        let underscored_candidate = json!({
+            "Symbol": "ESSITY_B:xome",
+            "ExchangeId": "SSE",
+            "TradableAs": ["Stock"]
+        });
+        assert!(candidate_matches_requested(
+            &underscored_candidate,
+            "ESSITY-B:xome",
+            &underscored
         ));
     }
 

@@ -10,6 +10,15 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-02] strategy | Restore 27 unresolvable universe symbols (U11)
+
+- Corrected every symbol the Markov and daily-indicator sweeps have been unable to resolve: 20 Stockholm names moved from the `:xsto` suffix to Saxo's `:xome`, five tickers corrected (`SAP`→`SAPG`, `DB1`→`DB1Gn`, `SCHP`→`SCHO`, `SHOP`→`SHOP_NEW:xnas`, `AKRBP`→`AKERBP`), `WMT` moved to Nasdaq, and `NZYM-B` replaced by its merger successor `NSIS-B` (Novozymes into Novonesis). Each replacement was verified individually against live SIM `/ref/v1/instruments`.
+- `SPCX:xnas` was deliberately left as-is. It is a documented pending entry — SpaceX listed on Live 2026-06-12, Saxo SIM reference data has not synced — carrying an ISIN and activating automatically. It is the one member of the failing set that is not a defect.
+- `exchange_id_for_suffix` returned ISO MICs where Saxo's `ExchangeId` is a proprietary code, so the exchange-scoped fallback in `lookup_instrument` had never matched anything in any of its fifteen cases; verified live that `ExchangeId=XSTO` returns an empty set where `SSE` returns Stockholm. Replaced with real codes and pinned by a test that also asserts no entry returns its own MIC.
+- `base_lookup_variants` now emits both Saxo share-class spellings, the bare-letter (`ERICb`) and underscored (`ESSITY_B`) forms, since Saxo uses both and the symbol alone does not indicate which. Keeping this in code rather than configuration avoids per-symbol maintenance.
+- No negative-cache purge was required: every corrected symbol is a new string, so none inherits a cached failure and all are looked up fresh on the next sweep.
+- 517 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+
 ## [2026-08-02] review | Live production, Saxo API, and SQL review
 
 - Reviewed a month of live production data, the live Saxo SIM API, and the Saxo OpenAPI reference docs. Filed seven new items (U9-U15) in `wiki/urgent-todo.md` with backing reference sections, plus roadmap entries for the non-urgent findings.
