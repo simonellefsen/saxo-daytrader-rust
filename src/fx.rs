@@ -448,6 +448,85 @@ async fn upsert_fx_rate(
     Ok(())
 }
 
+/// How a realised DKK gain splits between instrument price and currency.
+///
+/// The two components sum to the realised gain exactly; see
+/// [`split_realised_gain`] for the derivation.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct RealisedGainSplit {
+    /// Gain from the instrument's own price move, valued at the sale rate.
+    pub(crate) price_gain_dkk: f64,
+    /// Gain from the currency moving between purchase and sale.
+    pub(crate) fx_gain_dkk: f64,
+    /// Gain in the instrument's own currency. This is `net - cost` in local
+    /// terms, **not** the DKK gain divided by a rate.
+    pub(crate) realised_gain_local: f64,
+}
+
+/// Split a realised DKK gain into its price and currency components.
+///
+/// With `c` the local cost basis, `n` the local net proceeds, `r0` the rate at
+/// purchase and `r1` the rate at sale:
+///
+/// ```text
+/// price = (n - c) * r1        currency held constant at the sale rate
+/// fx    = c * (r1 - r0)       the cost basis revalued across the move
+/// price + fx = n*r1 - c*r0 = realised_gain_dkk
+/// ```
+///
+/// so the decomposition is exact rather than an approximation, and the caller
+/// can assert the identity. Attributing the price move at `r1` (rather than
+/// `r0`) is the convention that leaves no cross-term stranded.
+///
+/// This replaces a `fx_gain_dkk` column that was written as a hardcoded `0`
+/// literal while `price_gain_dkk` received the whole realised gain, so every
+/// sale reported 100% price and 0% currency regardless of what the currency
+/// did. See `wiki/urgent-todo.md` U10.
+///
+/// **Fails to today's behaviour, not to nonsense.** Without a usable cost rate
+/// — a missing or zero local cost basis, a non-finite input — there is no basis
+/// on which to attribute anything to currency, so the whole gain is reported as
+/// price and `fx_gain_dkk` is zero. That is exactly what the column said
+/// before, so a degraded row is indistinguishable from the old behaviour rather
+/// than being confidently wrong.
+pub(crate) fn split_realised_gain(
+    realised_gain_dkk: f64,
+    cost_basis_sold_dkk: f64,
+    cost_basis_sold_local: f64,
+    sale_rate_to_dkk: f64,
+) -> RealisedGainSplit {
+    let degraded = RealisedGainSplit {
+        price_gain_dkk: realised_gain_dkk,
+        fx_gain_dkk: 0.0,
+        realised_gain_local: 0.0,
+    };
+    if !realised_gain_dkk.is_finite()
+        || !cost_basis_sold_dkk.is_finite()
+        || !cost_basis_sold_local.is_finite()
+        || !sale_rate_to_dkk.is_finite()
+        || sale_rate_to_dkk.abs() <= f64::EPSILON
+        || cost_basis_sold_local.abs() <= f64::EPSILON
+    {
+        return degraded;
+    }
+    let cost_rate = cost_basis_sold_dkk / cost_basis_sold_local;
+    if !cost_rate.is_finite() {
+        return degraded;
+    }
+    let net_amount_dkk = realised_gain_dkk + cost_basis_sold_dkk;
+    let realised_gain_local = net_amount_dkk / sale_rate_to_dkk - cost_basis_sold_local;
+    let price_gain_dkk = realised_gain_local * sale_rate_to_dkk;
+    let fx_gain_dkk = cost_basis_sold_local * (sale_rate_to_dkk - cost_rate);
+    if !price_gain_dkk.is_finite() || !fx_gain_dkk.is_finite() {
+        return degraded;
+    }
+    RealisedGainSplit {
+        price_gain_dkk,
+        fx_gain_dkk,
+        realised_gain_local,
+    }
+}
+
 fn normalize_currency(currency: &str) -> String {
     currency.trim().to_uppercase()
 }
@@ -502,6 +581,107 @@ fn attr_value(tag: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of the decomposition: the parts must reconstruct the
+    /// total, or the split is a second opinion rather than an attribution.
+    fn assert_split_is_exact(realised: f64, cost_dkk: f64, cost_local: f64, rate: f64) {
+        let split = split_realised_gain(realised, cost_dkk, cost_local, rate);
+        let recombined = split.price_gain_dkk + split.fx_gain_dkk;
+        assert!(
+            (recombined - realised).abs() < 1e-6,
+            "price {} + fx {} = {} but realised is {}",
+            split.price_gain_dkk,
+            split.fx_gain_dkk,
+            recombined,
+            realised
+        );
+    }
+
+    /// Reproduces the live JNJ sale of 2026-07-30, which the ledger recorded as
+    /// −543 DKK entirely of price and zero of currency. USD/DKK moved 6.5705 →
+    /// 6.4986 between purchase and sale, so a real part of that loss was the
+    /// dollar rather than the stock.
+    #[test]
+    fn a_currency_move_is_attributed_to_currency_rather_than_price() {
+        let cost_local = 1_089.75_f64;
+        let cost_dkk = cost_local * 6.5705;
+        let sale_rate = 6.4986;
+        let realised = -543.0;
+
+        let split = split_realised_gain(realised, cost_dkk, cost_local, sale_rate);
+
+        assert!(
+            split.fx_gain_dkk < 0.0,
+            "a falling dollar must show as a currency loss, got {}",
+            split.fx_gain_dkk
+        );
+        assert!(
+            (split.fx_gain_dkk - cost_local * (sale_rate - 6.5705)).abs() < 1e-6,
+            "currency component must be the cost basis revalued across the move"
+        );
+        assert_split_is_exact(realised, cost_dkk, cost_local, sale_rate);
+    }
+
+    /// A DKK instrument has no currency exposure, so the entire gain is price.
+    /// This is the case the old hardcoded zero happened to get right.
+    #[test]
+    fn a_home_currency_sale_has_no_currency_component() {
+        let split = split_realised_gain(-1_489.0, 10_042.0, 10_042.0, 1.0);
+        assert_eq!(split.fx_gain_dkk, 0.0);
+        assert!((split.price_gain_dkk - -1_489.0).abs() < 1e-9);
+        assert_split_is_exact(-1_489.0, 10_042.0, 10_042.0, 1.0);
+    }
+
+    /// A flat instrument in a moving currency is pure FX — the case that is
+    /// invisible while the column is a literal zero.
+    #[test]
+    fn a_flat_instrument_in_a_moving_currency_is_all_currency() {
+        let cost_local = 1_000.0;
+        let cost_rate = 7.0;
+        let sale_rate = 6.5;
+        // Sold for exactly what it cost in local terms.
+        let realised = cost_local * sale_rate - cost_local * cost_rate;
+
+        let split = split_realised_gain(realised, cost_local * cost_rate, cost_local, sale_rate);
+
+        assert!(
+            split.price_gain_dkk.abs() < 1e-6,
+            "flat price must contribute nothing, got {}",
+            split.price_gain_dkk
+        );
+        assert!((split.fx_gain_dkk - -500.0).abs() < 1e-6);
+        assert!(split.realised_gain_local.abs() < 1e-6);
+    }
+
+    /// Without a local cost basis there is nothing to attribute currency
+    /// against, so the function must degrade to the previous behaviour rather
+    /// than inventing a component.
+    #[test]
+    fn a_missing_cost_basis_degrades_to_price_only_instead_of_guessing() {
+        for (cost_dkk, cost_local, rate) in [
+            (0.0, 0.0, 6.5),
+            (100.0, 0.0, 6.5),
+            (100.0, 15.0, 0.0),
+            (f64::NAN, 15.0, 6.5),
+            (100.0, f64::INFINITY, 6.5),
+        ] {
+            let split = split_realised_gain(-250.0, cost_dkk, cost_local, rate);
+            assert_eq!(
+                split.fx_gain_dkk, 0.0,
+                "degraded rows must not claim a currency component"
+            );
+            assert_eq!(split.price_gain_dkk, -250.0);
+        }
+    }
+
+    /// A gain and a loss must both decompose exactly, in either FX direction.
+    #[test]
+    fn the_decomposition_is_exact_across_directions() {
+        assert_split_is_exact(4_425.0, 12_507.0, 1_913.42, 6.5531);
+        assert_split_is_exact(-4_469.0, 40_206.0, 6_151.0, 6.5662);
+        assert_split_is_exact(2_356.0, 3_127.0, 445.31, 7.0215);
+        assert_split_is_exact(-891.0, 19_601.0, 2_621.82, 7.4756);
+    }
 
     #[test]
     fn parses_ecb_daily_rates() {

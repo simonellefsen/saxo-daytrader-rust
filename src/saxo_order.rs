@@ -2475,11 +2475,21 @@ async fn insert_trade_ledger_for_fill(
     } else {
         0.0
     };
-    let realised_gain_local = if side == "SELL" && fx_rate.abs() > f64::EPSILON {
-        realised_gain_dkk / fx_rate
+    // Attribute the realised gain between the instrument's price and the
+    // currency. `realised_gain_local` was previously `realised_gain_dkk /
+    // fx_rate`, which is the DKK gain restated at the sale rate rather than the
+    // gain in local terms, and made the price/FX split circular.
+    let gain_split = if side == "SELL" {
+        crate::fx::split_realised_gain(
+            realised_gain_dkk,
+            cost_basis_sold_dkk,
+            cost_basis_sold_local,
+            fx_rate,
+        )
     } else {
-        0.0
+        crate::fx::RealisedGainSplit::default()
     };
+    let realised_gain_local = gain_split.realised_gain_local;
     let notes = format!(
         "Saxo broker fill sync from execution_order:{}",
         value_i64(order, "id")
@@ -2508,7 +2518,7 @@ async fn insert_trade_ledger_for_fill(
             portfolio_before_json, portfolio_after_json, decision_context_json, tax_year, batch_id
         ) VALUES (
             '{}', '{}', {}, NULL, '{}', '{}', {}, {}, '{}', {}, {}, {}, 0, {}, {}, {}, {},
-            {}, 0, {}, {}, {}, {}, '{}', 'executed', '{}', '{}', '{}', '{}', {}, {}
+            {}, {}, {}, {}, {}, {}, '{}', 'executed', '{}', '{}', '{}', '{}', {}, {}
         )",
         sql_escape(&now),
         sql_escape(&symbol),
@@ -2526,7 +2536,8 @@ async fn insert_trade_ledger_for_fill(
         cost_basis_sold_dkk,
         cost_basis_sold_local,
         realised_gain_local,
-        realised_gain_dkk,
+        gain_split.fx_gain_dkk,
+        gain_split.price_gain_dkk,
         fx_rate,
         if cost_basis_sold_local.abs() > f64::EPSILON {
             cost_basis_sold_dkk / cost_basis_sold_local

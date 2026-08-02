@@ -9698,6 +9698,65 @@ impl AppState {
         .await
         .context("creating missed-trade shadow tracking index")?;
         self.backfill_trading_manager_strategy_type().await?;
+        self.backfill_realised_gain_currency_split().await?;
+        Ok(())
+    }
+
+    /// Recompute the price/currency split on ledger rows written while
+    /// `fx_gain_dkk` was a hardcoded `0` literal (every sale up to 2026-08-02).
+    ///
+    /// This is a pure recomputation from columns already stored on each row —
+    /// `realised_gain_dkk`, `cost_basis_sold_dkk`, `cost_basis_sold_local`, and
+    /// `sale_fx_rate_to_dkk` — so no external rate lookup is involved and the
+    /// result cannot drift with today's FX. It is idempotent: the same inputs
+    /// produce the same split on every run.
+    ///
+    /// The cost rate is derived as `cost_basis_sold_dkk / cost_basis_sold_local`
+    /// rather than read from `cost_basis_fx_rate_to_dkk`, which is deliberate:
+    /// rows written before 2026-07-09 by the legacy Python path stored that
+    /// column 100x too small (0.0713 where the rate was 7.0221). The derived
+    /// ratio is correct on every row, so the backfill does not inherit that
+    /// defect.
+    ///
+    /// Scoped to SELL rows that still show the literal-zero signature and carry
+    /// a usable local cost basis. Rows the split would degrade on are left
+    /// exactly as they are.
+    async fn backfill_realised_gain_currency_split(&self) -> Result<()> {
+        let rows = sqlx::query(
+            "SELECT id, realised_gain_dkk, cost_basis_sold_dkk, cost_basis_sold_local, \
+                    sale_fx_rate_to_dkk \
+             FROM trade_ledger \
+             WHERE side = 'SELL' AND fx_gain_dkk = 0 AND cost_basis_sold_local <> 0",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("loading trade-ledger rows for currency-split backfill")?;
+        let mut updated = 0_u64;
+        for row in rows {
+            let id: i64 = row.try_get("id").unwrap_or_default();
+            let split = crate::fx::split_realised_gain(
+                row.try_get("realised_gain_dkk").unwrap_or(0.0),
+                row.try_get("cost_basis_sold_dkk").unwrap_or(0.0),
+                row.try_get("cost_basis_sold_local").unwrap_or(0.0),
+                row.try_get("sale_fx_rate_to_dkk").unwrap_or(0.0),
+            );
+            if split.fx_gain_dkk.abs() < 0.005 {
+                continue;
+            }
+            sqlx::query(&format!(
+                "UPDATE trade_ledger \
+                 SET fx_gain_dkk = {}, price_gain_dkk = {}, realised_gain_local = {} \
+                 WHERE id = {id}",
+                split.fx_gain_dkk, split.price_gain_dkk, split.realised_gain_local
+            ))
+            .execute(&self.pool)
+            .await
+            .context("backfilling trade-ledger currency split")?;
+            updated += 1;
+        }
+        if updated > 0 {
+            info!(rows = updated, "backfilled realised-gain currency split");
+        }
         Ok(())
     }
 
@@ -13429,6 +13488,118 @@ market_data:
              so age alone must not flag it; an ordinary stale order and a protective stop \
              with an unresolved placement are both still real faults"
         );
+    }
+
+    /// Rows 1-3 are the real production shapes: a USD sale across a falling
+    /// dollar, a DKK sale with no currency exposure, and a legacy row whose
+    /// stored `cost_basis_fx_rate_to_dkk` is 100x too small. The last must still
+    /// backfill correctly, because the split derives its cost rate from the DKK
+    /// and local cost bases rather than trusting that column.
+    #[tokio::test]
+    async fn currency_split_backfill_recomputes_only_where_currency_actually_moved() {
+        let state = runtime_settings_test_state("app: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE trade_ledger (
+                id INTEGER PRIMARY KEY,
+                side TEXT,
+                realised_gain_dkk REAL,
+                cost_basis_sold_dkk REAL,
+                cost_basis_sold_local REAL,
+                sale_fx_rate_to_dkk REAL,
+                cost_basis_fx_rate_to_dkk REAL,
+                fx_gain_dkk REAL,
+                price_gain_dkk REAL,
+                realised_gain_local REAL
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create trade_ledger test table");
+        sqlx::query(
+            "INSERT INTO trade_ledger VALUES \
+                (1, 'SELL', -543.0, 7160.45, 1089.75, 6.4986, 6.5705, 0, -543.0, 0), \
+                (2, 'SELL', -1489.0, 10042.0, 10042.0, 1.0, 1.0, 0, -1489.0, 0), \
+                (3, 'SELL', 2356.0, 3127.0, 445.31, 7.0215, 0.0713, 0, 2356.0, 0), \
+                (4, 'SELL', -250.0, 100.0, 0.0, 6.5, 6.5, 0, -250.0, 0), \
+                (5, 'BUY', 0, 0, 0, 6.5, 6.5, 0, 0, 0)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert trade_ledger test rows");
+
+        state
+            .backfill_realised_gain_currency_split()
+            .await
+            .expect("backfill currency split");
+        let after_first = state
+            .select_json("SELECT id, fx_gain_dkk, price_gain_dkk FROM trade_ledger ORDER BY id")
+            .await
+            .expect("read back split");
+        state
+            .backfill_realised_gain_currency_split()
+            .await
+            .expect("backfill currency split again");
+        let after_second = state
+            .select_json("SELECT id, fx_gain_dkk, price_gain_dkk FROM trade_ledger ORDER BY id")
+            .await
+            .expect("read back split again");
+        assert_eq!(
+            after_first, after_second,
+            "recomputation from stored columns must be idempotent"
+        );
+
+        let fx_of = |id: i64| -> f64 {
+            after_first
+                .iter()
+                .find(|row| row.get("id").and_then(|v| v.as_i64()) == Some(id))
+                .and_then(|row| row.get("fx_gain_dkk").and_then(|v| v.as_f64()))
+                .unwrap_or_default()
+        };
+
+        assert!(
+            fx_of(1) < -70.0 && fx_of(1) > -90.0,
+            "a 6.5705 -> 6.4986 move on a 1089.75 USD basis is about -78 DKK, got {}",
+            fx_of(1)
+        );
+        assert_eq!(fx_of(2), 0.0, "a DKK sale has no currency component");
+        // The discriminator: the derived cost rate is 3127.0/445.31 = 7.0221
+        // against a 7.0215 sale rate, so the true currency component is a
+        // fraction of a krone. Had the backfill trusted the stored
+        // `cost_basis_fx_rate_to_dkk` of 0.0713, it would have computed
+        // 445.31 * (7.0215 - 0.0713) = about +3,095 DKK of fictional currency
+        // gain on a 2,356 DKK profit.
+        assert!(
+            fx_of(3).abs() < 1.0,
+            "the legacy row must derive its cost rate from the DKK and local \
+             cost bases; a value near +3095 means it trusted the 100x-too-small \
+             stored rate, got {}",
+            fx_of(3)
+        );
+        assert_eq!(
+            fx_of(4),
+            0.0,
+            "a row with no local cost basis must be left alone"
+        );
+
+        for row in &after_first {
+            let id = row.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
+            if id == 5 {
+                continue;
+            }
+            let fx = row
+                .get("fx_gain_dkk")
+                .and_then(|v| v.as_f64())
+                .unwrap_or_default();
+            let price = row
+                .get("price_gain_dkk")
+                .and_then(|v| v.as_f64())
+                .unwrap_or_default();
+            let realised = [-543.0, -1489.0, 2356.0, -250.0][(id - 1) as usize];
+            assert!(
+                (fx + price - realised).abs() < 0.01,
+                "row {id}: price {price} + fx {fx} must reconstruct {realised}"
+            );
+        }
     }
 
     #[tokio::test]

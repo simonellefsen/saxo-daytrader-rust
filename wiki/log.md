@@ -10,6 +10,15 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-02] strategy | Attribute realised gains to price and currency (U10)
+
+- `crate::fx::split_realised_gain` replaces a `fx_gain_dkk` column that was a hardcoded `0` literal in the ledger insert while `price_gain_dkk` received the whole realised gain. Every sale therefore reported 100% price and 0% currency by construction, on a book that is 63% USD during a month when USD/DKK fell 7.66%.
+- The decomposition is exact rather than approximate: price is `(net_local − cost_local) × sale_rate`, currency is `cost_local × (sale_rate − cost_rate)`, and the two sum to the realised gain. A helper asserts that identity on four real production rows covering gains, losses, and both FX directions.
+- A second defect surfaced while fixing the first. `realised_gain_local` was computed as `realised_gain_dkk / sale_rate` — the DKK gain restated at the sale rate, not the gain in local currency — which made any price/FX split circular. It is now `net_local − cost_local`.
+- A startup backfill recomputes historical rows from columns already on each row, so it performs no rate lookup and cannot drift with current FX. It derives the cost rate as `cost_basis_sold_dkk / cost_basis_sold_local` rather than reading `cost_basis_fx_rate_to_dkk`, because that column is 100x too small on rows written before 2026-07-09 by the legacy Python path; trusting it would have produced roughly +3,095 DKK of fictional currency gain on one 2,356 DKK profit. A test pins that discrimination.
+- Both the split and the backfill degrade to the previous behaviour rather than to a wrong answer: with no usable local cost basis there is nothing to attribute currency against, so the whole gain stays classified as price and `fx_gain_dkk` stays zero.
+- 523 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+
 ## [2026-08-02] strategy | Restore 27 unresolvable universe symbols (U11)
 
 - Corrected every symbol the Markov and daily-indicator sweeps have been unable to resolve: 20 Stockholm names moved from the `:xsto` suffix to Saxo's `:xome`, five tickers corrected (`SAP`→`SAPG`, `DB1`→`DB1Gn`, `SCHP`→`SCHO`, `SHOP`→`SHOP_NEW:xnas`, `AKRBP`→`AKERBP`), `WMT` moved to Nasdaq, and `NZYM-B` replaced by its merger successor `NSIS-B` (Novozymes into Novonesis). Each replacement was verified individually against live SIM `/ref/v1/instruments`.
