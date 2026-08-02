@@ -9718,15 +9718,22 @@ impl AppState {
     /// ratio is correct on every row, so the backfill does not inherit that
     /// defect.
     ///
-    /// Scoped to SELL rows that still show the literal-zero signature and carry
-    /// a usable local cost basis. Rows the split would degrade on are left
-    /// exactly as they are.
+    /// Scoped to every SELL row, not only those still showing the hardcoded
+    /// zero. The retired Python path wrote its own `fx_gain_dkk` against the
+    /// same corrupt rate column, so rows with a nonzero value are not
+    /// necessarily right — filtering on `fx_gain_dkk = 0` would have left the
+    /// worst rows untouched and the price/currency identity broken on them.
+    /// Recomputation is idempotent, so rewriting a correct row costs nothing.
+    ///
+    /// Rows the split declines to attribute — no local cost basis, or a derived
+    /// cost rate that cannot be a real exchange rate — are reset to price-only
+    /// rather than left carrying a stale legacy figure.
     async fn backfill_realised_gain_currency_split(&self) -> Result<()> {
         let rows = sqlx::query(
             "SELECT id, realised_gain_dkk, cost_basis_sold_dkk, cost_basis_sold_local, \
-                    sale_fx_rate_to_dkk \
+                    sale_fx_rate_to_dkk, fx_gain_dkk, price_gain_dkk \
              FROM trade_ledger \
-             WHERE side = 'SELL' AND fx_gain_dkk = 0 AND cost_basis_sold_local <> 0",
+             WHERE side = 'SELL'",
         )
         .fetch_all(&self.pool)
         .await
@@ -9740,7 +9747,11 @@ impl AppState {
                 row.try_get("cost_basis_sold_local").unwrap_or(0.0),
                 row.try_get("sale_fx_rate_to_dkk").unwrap_or(0.0),
             );
-            if split.fx_gain_dkk.abs() < 0.005 {
+            let stored_fx: f64 = row.try_get("fx_gain_dkk").unwrap_or(0.0);
+            let stored_price: f64 = row.try_get("price_gain_dkk").unwrap_or(0.0);
+            if (stored_fx - split.fx_gain_dkk).abs() < 0.005
+                && (stored_price - split.price_gain_dkk).abs() < 0.005
+            {
                 continue;
             }
             sqlx::query(&format!(

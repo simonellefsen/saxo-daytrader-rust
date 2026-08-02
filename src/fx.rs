@@ -513,6 +513,17 @@ pub(crate) fn split_realised_gain(
     if !cost_rate.is_finite() {
         return degraded;
     }
+    // Reject a cost rate that cannot be a real exchange rate for this pair.
+    // Historical rows carry genuinely corrupt bases -- observed in production:
+    // 128.2545 and 31.8992 against a ~7.02 sale rate, and exact zeros. Without
+    // this guard the split is still internally exact, which is the trap: it
+    // would produce a large, confident, entirely fictional currency component.
+    // No currency in this book moves by half between a purchase and a sale, so
+    // anything outside a 2x band either way is data corruption rather than an
+    // FX move, and "we cannot say" is the honest output.
+    if cost_rate <= sale_rate_to_dkk * 0.5 || cost_rate >= sale_rate_to_dkk * 2.0 {
+        return degraded;
+    }
     let net_amount_dkk = realised_gain_dkk + cost_basis_sold_dkk;
     let realised_gain_local = net_amount_dkk / sale_rate_to_dkk - cost_basis_sold_local;
     let price_gain_dkk = realised_gain_local * sale_rate_to_dkk;
@@ -651,6 +662,34 @@ mod tests {
         );
         assert!((split.fx_gain_dkk - -500.0).abs() < 1e-6);
         assert!(split.realised_gain_local.abs() < 1e-6);
+    }
+
+    /// A corrupt cost basis is the dangerous case, because the split stays
+    /// internally exact while being entirely fictional. These are real stored
+    /// values: a 128.2545 and a 31.8992 derived cost rate against a ~7.02 sale
+    /// rate, and exact zeros. Attributing currency from them would have
+    /// produced large, confident, wrong numbers.
+    #[test]
+    fn an_impossible_cost_rate_is_refused_rather_than_attributed() {
+        let sale_rate = 7.0215;
+        for cost_rate in [128.2545, 31.8992, 0.0713, 0.0665] {
+            let cost_local = 445.31;
+            let split = split_realised_gain(2_356.0, cost_local * cost_rate, cost_local, sale_rate);
+            assert_eq!(
+                split.fx_gain_dkk, 0.0,
+                "cost rate {cost_rate} against a {sale_rate} sale rate cannot be \
+                 a real FX move and must not be attributed"
+            );
+            assert_eq!(split.price_gain_dkk, 2_356.0);
+        }
+        // The band must still admit a genuine move. USD/DKK 7.02 -> 6.49 is
+        // -7.7% and has to survive.
+        let genuine = split_realised_gain(-543.0, 1_089.75 * 7.0215, 1_089.75, 6.4837);
+        assert!(
+            genuine.fx_gain_dkk < 0.0,
+            "a real 7.7% currency move must still be attributed, got {}",
+            genuine.fx_gain_dkk
+        );
     }
 
     /// Without a local cost basis there is nothing to attribute currency
