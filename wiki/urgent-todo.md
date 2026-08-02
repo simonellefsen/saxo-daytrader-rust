@@ -5,7 +5,7 @@ tags:
   - roadmap
   - urgent
   - maintained-by-llm
-updated: 2026-07-27
+updated: 2026-08-02
 ---
 
 # Daytrader Urgent Todo
@@ -15,6 +15,8 @@ This page holds the small set of items where current evidence says the system is
 Entry criteria for this page: a verified gap between what the runtime claims or is configured to do and what it actually enforces, or an exposure that grew because of a recent change. Speculative improvements belong in the roadmap.
 
 Reviewed 2026-07-25 against `config.yaml`, `src/*.rs`, and the current roadmap.
+
+Re-reviewed **2026-08-02** against live production data (Postgres), the live Saxo SIM API, and the Saxo OpenAPI reference documentation. U9–U15 come from that pass. Two of them (U9, U11) are conditions that already exist in production rather than latent risks, and U9 is the only item on this page whose next step is an operator decision rather than a code change.
 
 ## Ranked Items
 
@@ -27,6 +29,13 @@ Reviewed 2026-07-25 against `config.yaml`, `src/*.rs`, and the current roadmap.
 | U4 | Prompt-injection screen for editorial research | The editorial-research path feeds third-party RSS titles and summaries into the decision prompt (`src/xai_decision.rs`) and into Hermes context. `normalize_text` (`src/editorial_research.rs`) strips HTML tags and collapses whitespace; it does not screen for instruction-shaped content. Every earlier prompt input — Markov, daily indicators, Quiver — is numeric and runtime-computed, so this is the first attacker-influenceable free text in the pipeline. It should be hardened before the configured feed catalog expands to Yahoo Finance, CNBC, and Reuters. | Landed 2026-07-25, and none too soon — the feature began ingesting live items into the decision prompt that morning. A narrow marker list detects text addressed at a model rather than a reader; flagged items are retained for operator review but excluded at the context boundary, which also covers rows stored before screening existed. The prompt now carries an explicit security-boundary instruction labelling the section untrusted. Two tests: one proves injection-shaped text never reaches the prompt, the other proves ordinary market language ("upgrade to Buy", "sell off", "disregard one month of data") is not flagged. |
 | U5 | CI on every push | The suite ran only when someone typed `make validate`; deploy provenance alone could not prove the intended commit passed tests. | **Landed 2026-07-25 and verified 2026-07-26.** `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo check --all-targets`, and `cargo test` with `-D warnings` on push, pull request, and manual dispatch. `origin` uses SSH, and the stale global HTTPS OAuth rewrite was removed on 2026-07-26; see [Credential Hygiene](#credential-hygiene). |
 | U8 | `strategy_type` is never set on Trading Manager orders | `CandidateOrder::from_json` (`src/trading_manager.rs:1904`) reads `strategy_type` out of the model's suggested-trade JSON, but the decision-report schema has no such field — the string `strategy_type` does not appear anywhere in `src/xai_decision.rs`. So it is NULL on every order the Rust Trading Manager has ever queued: 101 of 156 rows, most recent 2026-07-23. The three populated values come from other paths (`portfolio_sync` and `clean_reconciliation` from `src/portfolio_reset.rs`, `manual` from the manual order path). Two live consequences: the Execution table renders `fallback_text(row, "strategy_type", "manual")` (`src/ui.rs:4261`), so **every automated order is displayed to the operator as "manual"**; and `execution_source_label` (`src/notifications.rs:1476`) falls through to "Execution" instead of "Trading Manager" in Slack. See [Orphaned strategy_type](#orphaned-strategy_type). | Landed 2026-07-25. The runtime now sets `TRADING_MANAGER_STRATEGY_TYPE` (`swing`) at insert and ignores any value the model supplies; a startup backfill scoped to `report_id IS NOT NULL` repaired the 101 historical rows; the UI fallback is now `unknown` rather than `manual`. Two tests cover it, including one asserting the backfill cannot touch adoption, reconciliation, or manual rows. |
+| U9 | Portfolio is 1.4% away from a full BUY halt | The drawdown guardrail landed 2026-07-26 and has been in its soft band ever since, but the band has only tightened: 16.57% (07-29) → 17.27% → 18.25% → 19.04% → **18.999% on the last run (07-31)** against a 20.00% halt. Peak 297,463 DKK (2026-06-30), current 241,281. A halt fires at 237,970 — **3,311 DKK away, or one −1.4% day**. The guardrail is working exactly as designed; the point is that nobody has decided what happens when it trips. See [Drawdown Approach](#drawdown-approach). | Operator decision, not a code change, and it should be made before the halt rather than during it. Three options: accept the halt (SELLs continue, so the book drains to cash), widen `strategy.capital.drawdown_halt_pct`, or grant a scoped override with a recorded peak. Doing nothing is also a choice — it just means the choice gets made by the market on an arbitrary morning. |
+| U10 | The book is 63% unhedged USD and the runtime reports its FX exposure as exactly zero | Live exposures: **USD 87,892 DKK (63%)**, DKK 41,889 (30%), NOK 9,323 (7%). USD/DKK fell from 7.0215 (07-02) to 6.4837 (08-02) — **−7.66% in one month** — against a book whose reporting currency is DKK. `trade_ledger.fx_gain_dkk` is a **hardcoded `0` literal** in the `INSERT` at `src/saxo_order.rs:2506`, and `price_gain_dkk` is bound to `realised_gain_dkk`, so every sale reports 100% price / 0% FX by construction. The real formula exists only in the retired Python (`src/saxo_daytrader_xai/tax_engine.py:273`). Currency is the one exposure nothing gates, nothing measures, and no signal source (Markov, Quiver, indicators, editorial) observes. See [Currency Exposure](#currency-exposure). | Implement the split at the point of sale (`cost_basis_sold_local * (sale_rate - cost_rate)` for FX, remainder to price), surface a currency-concentration figure next to the drawdown guardrail, and decide whether currency is a gate input or merely reported. Backfill is possible — both rates are already stored per row. |
+| U11 | 28 of 201 universe symbols have been permanently unanalysable, including all of Stockholm | Every Markov and daily-indicator run for weeks reports exactly `201 assets / 173 success / 28 error`, all `No tradable Saxo instrument match found`, all negative-cached. Verified live against Saxo SIM: **every one is our own symbol mapping, not a Saxo limitation.** 18 are `:xsto` — Saxo's Stockholm suffix is **`:xome`** (`ERICb:xome`, `VOLVb:xome`, `ABB:xome`, `TELIA:xome` all resolve immediately). Separately, `exchange_id_for_suffix` (`src/markov_method.rs:1440`) returns **MICs** where Saxo's `ExchangeId` is a proprietary code — `XSTO` returns nothing, `SSE` returns Volvo; `XNAS`→`NASDAQ`, `XCSE`→`CSE`, `XETR`→`FSE`. **All 15 entries are wrong**, which makes the exchange-scoped fallback dead code that has never matched once. See [Instrument Resolution](#instrument-resolution). | Fix the suffix in both configs (`xsto`→`xome`), correct the six individual tickers, delete the two delisted names, and replace `exchange_id_for_suffix` with Saxo's real `ExchangeId` values — ideally resolved from `/ref/v1/exchanges` at startup rather than hardcoded again. A test should assert the fallback actually matches something. Restores ~14% of the universe and, not incidentally, the main non-USD equity market available to a DKK book (U10). |
+| U12 | The decision prompt has doubled in size and is mostly raw diagnostic data | Average `prompt_text`: **271 KB (May) → 429 KB (June) → 527 KB (July)**, max 696 KB — roughly 130k+ tokens per call, twice a weekday. The bulk is Markov `recent_labels`: the latest prompt carries **1,240 individual daily observations** (close, regime, rolling_return) and 1,350 `"close"` values across 20 symbols. That array is UI diagnostic data; the decision inputs are the current state, the transition distribution, and the conviction, all of which are already present separately. This is a live cost line and a plausible decision-quality problem — the model is handed 62 days of per-day labels per symbol and asked for a judgement. | Drop `recent_labels` and the raw per-day arrays at the prompt boundary while keeping them in storage for the UI. Expect a 40–60% prompt reduction. Measure win rate and suggestion quality before and after rather than assuming it is purely a saving. |
+| U13 | Statistics are 33 days stale, so the query planner is working from wrong row counts | Every `last_autoanalyze` in `pg_stat_user_tables` is from **2026-06-30**. The planner believes `audit_log` has **0 rows** (it has 67,578), `trade_ledger` 47 (118), `decision_reports` 85 (137). Nothing is visibly slow yet because the tables are small, but plan choice is currently arbitrary and this is the failure mode that appears suddenly under growth rather than gradually. | `ANALYZE` immediately, then lower `autovacuum_analyze_scale_factor` for the append-heavy tables so small absolute row counts still trigger. Worth a CNPG-level setting rather than per-table. |
+| U14 | `audit_log` is 65 MB of dead Python exhaust — 38% of the database | Largest table in the database. **Nothing has been written since 2026-05-10**, the Python→Rust cutover; every row is `broker_*_refreshed` spam from the legacy runtime (15,717 rows each for balance/positions/exposures/account, at ~1 row per 30s). `seq_scan = 0`, `idx_scan = 1` — the Rust runtime neither writes nor reads it. No retention policy, no index beyond the pkey. | Drop the table with the Python removal (see [Python Removal Plan](#python-removal-plan)). If any audit obligation exists it should be re-established deliberately in Rust with a retention policy, not inherited from a dead process. |
+| U15 | Useful Saxo endpoints that would replace things we compute less reliably ourselves | Verified live against SIM: **`/port/v1/closedpositions` → 200** (broker-authoritative realised P/L, an independent check on the ledger that just produced U10's zeroed FX split) and **`/hist/v4/performance/timeseries` → 200** (the broker's own account-value series back to 2021, against which our `portfolio_value_history` peak — the one driving U9's halt — could be validated). `/ca/v2/events` returns 403 in SIM, so corporate actions stay unverified: **nothing in the runtime handles a split, dividend, or merger**, and a split silently corrupts cost basis. Also unused: `/ref/v1/instruments/tradingschedule/{Uic}/{AssetType}` (authoritative session hours, incl. half-days) and the `mkt` service group. See [Unused Saxo Surface](#unused-saxo-surface). | Take these in value order, not API order: closed positions first (it validates the ledger), then corporate actions (it prevents silent corruption), then performance (it validates the guardrail input). Trading schedule and `mkt` are conveniences. |
 | U6 | Saxo rate-limit pacing for the unlimited nightly runs | `strategy.markov.max_symbols` and `strategy.swing.daily_indicators.max_symbols` were both raised to `0` (unlimited, ~199 symbols) on 2026-07-16. Saxo documents 120 requests/minute per session per service group. Two unlimited jobs ran back to back at 23:30 and 23:45 against the same limit, and the only defence was a fixed 500 ms sleep in the Markov chart loop chosen when the cap was 20. | Landed 2026-07-26 (`src/saxo_rate_limit.rs`). Pacing is keyed by Saxo service group (the first path segment) and installed in the shared `saxo_get_json`, so the Markov and daily-indicator sweeps share one budget instead of guessing independently. **Even spacing, not a token bucket** — a bucket of 100 would let a sweep fire a hundred requests back to back and then stall, the burstiest way to spend the quota; 100/min becomes one request per 600 ms, already more conservative than the 500 ms sleep it replaces. The pacer also reads the `X-RateLimit-*` headers and derives spacing from remaining quota over remaining time, tightening on its own as quota depletes rather than waiting for a 429; the tightest reported dimension wins. **Scope limit:** state is per process, and the API and scheduler pods share one Saxo session, so they cannot see each other's usage. Both sweeps run in the scheduler, so the real exposure is covered. |
 
 ## Return Goal
@@ -173,6 +182,130 @@ issued under the same GitHub CLI OAuth grant, so revoking that app authorization
 invalidated the leaked one too. Cost was one `gh auth login`; git itself never
 stopped working, because SSH key authentication is independent of the OAuth
 token. Nothing is outstanding.
+
+## Drawdown Approach
+
+Reference for U9. Live query against production on 2026-08-02.
+
+Daily closes, DKK:
+
+| Date | Close | Cash | Positions |
+| --- | --- | --- | --- |
+| 2026-06-30 | **297,463** (peak) | 15,258 | 14 |
+| 2026-07-19 | 255,599 | 10,425 | 13 |
+| 2026-07-27 | 253,378 | 10,886 | 13 |
+| 2026-07-31 | 241,281 | **93,789** | 10 |
+
+Two things are happening at once, and they compound. The book is falling *and* de-risking into cash: cash went from 4.1% of the portfolio on 2026-07-19 to **38.9%** on 2026-07-31. That is partly the guardrail working as intended — the soft band halves the BUY budget, so sales are not fully redeployed — and partly the model selling into weakness. The effect is that the remaining equity has to work harder to recover the drawdown, while the drawdown percentage itself is measured against a peak that includes the cash.
+
+Worth being explicit about a design consequence nobody has had to face yet: **at the halt, SELLs still execute and BUYs do not.** That is the correct direction of failure for a risk control, but sustained it converts the portfolio to cash and there is no re-entry rule. The guardrail was built to stop a bleeding book; it has no opinion about how a book resumes. That is the actual decision in U9, and it is worth making deliberately rather than discovering it.
+
+## Realised Outcomes
+
+Reference for U9 and U10. Every closed round trip since the Rust cutover:
+
+| Holding period | Positions | Net DKK |
+| --- | --- | --- |
+| 1–9 days | 4 | −6,812 |
+| 20–36 days | 7 | +16,610 |
+| 48–83 days | 6 | −9,131 |
+
+Seventeen closed positions: **2 winners, 15 losers**. The winners are `GOOGL` (+36,355, 20 days) and `AMD` (+5,929, 83 days). Total realised is **+1,187 DKK** — that is, the entire result of the strategy to date is one Alphabet trade, and without it the book is down ~35,000 DKK on closed positions alone.
+
+An 11.8% win rate is not automatically wrong; a long-tail strategy can be profitable on a handful of large winners. But that is not what this configuration claims to be — the target is +15%/year with a −3%/−6% monthly loss floor, which needs a far steadier distribution than one 30x outlier carrying 15 losers. With n=17 there is no statistical case either way yet; the honest reading is that **the strategy has not demonstrated an edge**, and the single result that makes it look flat rather than bad is not repeatable evidence.
+
+Two patterns worth naming:
+
+- **Round trips of 1–2 days.** `AJG` bought 07-29, sold 07-30 (−7.0%). `JNJ` bought 07-28, sold 07-30 (−7.6%). `DSV` bought 07-21, sold 07-23 (−14.9%). Whatever thesis justified the buy did not survive 48 hours. On a swing horizon this is the model contradicting itself across two pulses, and each round trip pays spread and commission twice.
+- **The losses cluster in the long tail.** Six positions held 48–83 days net −9,131. Protective stops (U1) landed 2026-07-26 and should truncate this going forward; that hypothesis is now testable and has not yet been tested.
+
+## Currency Exposure
+
+Reference for U10. Live exposures 2026-08-02, converted at current rates:
+
+| Currency | Positions | Cost basis DKK | Share |
+| --- | --- | --- | --- |
+| USD | 5 | 87,892 | **63%** |
+| DKK | 4 | 41,889 | 30% |
+| NOK | 1 | 9,323 | 7% |
+
+USD/DKK observed in our own ledger: **7.0215** (2026-07-02 sale) → **6.5072** (2026-07-31 sale) → **6.48371** (current spot). A −7.66% move against 63% of the book is roughly −4.8% of portfolio value from currency alone, on a −18.9% total drawdown.
+
+That number is an estimate, and it should not have to be. Both `cost_basis_fx_rate_to_dkk` and `sale_fx_rate_to_dkk` are stored on every ledger row; the split is computable exactly, for history as well as going forward. It reads as zero only because the column is written as a literal.
+
+Two smaller observations from the same query:
+
+- `currency_fx_rates` holds 30 pairs, but only 6 come from `saxo_fx_spot`. The other 24 are ECB daily rates whose `expires_at` was **2026-07-23** — expired for ten days. They are not currently load-bearing (the book holds only USD/DKK/NOK) but they will be the moment a position is opened in one of them.
+- Historical rows before 2026-07-09 store `cost_basis_fx_rate_to_dkk` **100x too small** (0.0713 where the rate was 7.0221; 0.0100 for DKK). The derived `cost_basis_sold_dkk` is correct, so realised P/L is unaffected — this is a display-only artifact of the legacy Python path, fixed by the Rust rewrite but never backfilled.
+
+## Instrument Resolution
+
+Reference for U11. Probed live against Saxo SIM `/ref/v1/instruments` on 2026-08-02.
+
+The 28 permanent failures decompose cleanly:
+
+| Cause | Count | Fix |
+| --- | --- | --- |
+| Stockholm suffix is `xome`, not `xsto` | 18 | `ABB`, `ALFA`, `ASSA-B`, `ATCO-A`, `BOL`, `ELUX-B`, `ERIC-B`, `ESSITY-B`, `HEXA-B`, `HM-B`, `INVE-B`, `NDA-SE`, `SAND`, `SCA-B`, `SEB-A`, `SHB-A`, `SKF-B`, `SWED-A`, `TELIA`, `VOLV-B` → `:xome` |
+| Wrong ticker | 4 | `SAP:xetr`→`SAPG:xetr`, `DB1:xetr`→`DB1Gn:xetr`, `SCHP:xcse`→`SCHO:xcse`, `SHOP:xnys`→`SHOP_NEW:xnas` |
+| Wrong exchange | 1 | `WMT:xnys` → `WMT:xnas` (Walmart moved to Nasdaq) |
+| Delisted / no Saxo match | 2 | `NZYM-B:xcse` (Novozymes merged into Novonesis), `SPCX:xnas` |
+
+The share-class variant generator is *not* the problem — `base_lookup_variants("ERIC-B")` correctly produces `ERICb`, which is exactly Saxo's format. It fails only because the suffix appended to it is `:xsto`.
+
+The second defect is more interesting because it hid the first. `lookup_instrument` tries symbol keywords first, then falls back to an exchange-scoped search. That fallback passes `exchange_id_for_suffix(...)`, which returns the **ISO MIC**; Saxo's `ExchangeId` is a proprietary code. Verified directly:
+
+```
+ExchangeId=XSTO  →  NO MATCH
+ExchangeId=SSE   →  VOLVb:xome | VOLV_A:xome | VOLCAR:xome
+```
+
+The correct values are `XNAS`→`NASDAQ`, `XNYS`→`NYSE`, `XCSE`→`CSE`, `XETR`→`FSE`, `XHEL`→`HSE`, `XOSL`→`OSE`, `XLON`→`LSE_SETS`, `ARCX`→`NYSE_ARCA`, and Stockholm is `SSE` with MIC `XOME`. **None of the 15 hardcoded entries is right**, so the fallback has never resolved a single instrument. It looks like a safety net in the code and is not one — the 173 symbols that work do so entirely on the first keyword attempt.
+
+Note this is also why the failures are *silent*: the negative cache (30 entries, 7-day retry) is doing its job correctly, caching a genuine failure. The cache is not the bug; it just makes a permanent misconfiguration look like a transient upstream problem.
+
+## Unused Saxo Surface
+
+Reference for U15. Endpoints currently called: `/chart/v3/charts`, `/cs/v1/audit/orderactivities`, `/ens/v1/activities`, `/port/v1/{accounts,balances,positions,orders,exposure}`, `/ref/v1/{exchanges,instruments}`, `/trade/v1/infoprices/list`, `/trade/v2/orders{,/precheck}`.
+
+Probed live in SIM:
+
+| Endpoint | Result | Why it matters here |
+| --- | --- | --- |
+| `/port/v1/closedpositions` | **200**, 6 rows | Broker's own realised P/L. An independent check on exactly the ledger arithmetic that U10 found zeroed. |
+| `/hist/v4/performance/timeseries` | **200**, series from 2021 | Broker's own account-value history. Would validate the `portfolio_value_history` peak that U9's halt threshold is measured against. |
+| `/ca/v2/events` | **403** in SIM | Corporate actions. Unverifiable here, but nothing in the runtime handles splits, dividends, or mergers today — and a split silently corrupts cost basis, which would look exactly like a large unexplained loss. |
+| `/ref/v1/instruments/tradingschedule/{Uic}/{AssetType}` | not called | Authoritative per-instrument session hours including half-days; currently inferred from `/ref/v1/exchanges`. |
+| `mkt` service group | not called | Exchange winners/losers. A candidate source, not a gap. |
+
+`/hist/v3/perf` returns 404 — v4 is the live version, so any older integration notes referring to v3 are stale.
+
+## Python Removal Plan
+
+The Next.js frontend is **already gone** — no `.ts`, `.tsx`, `.jsx`, `package.json`, or `next.config.*` remains anywhere in the tree. What is left is Python: **91 tracked files, 28,353 lines**.
+
+Three categories, and only the first is load-bearing:
+
+**Keep — live in production.** `scripts/create_postgres_backup.py` and `scripts/prune_postgres_backups.py`. These run as CronJobs (`daytrader-postgres-backup-schedule`, `-retention`) and were observed completing minutes ago. `Dockerfile.backup` builds them on `python:3.13-alpine` with just `boto3` and `requests`. They are ~2 files and have no dependency on the rest of the Python tree. Porting them to Rust is possible but buys little and risks the backup path; leaving them is the right call, and `requirements.txt` should be reduced to the two packages they actually import rather than the twelve it currently pins.
+
+**Delete — dead application code.**
+
+| Path | Files | Note |
+| --- | --- | --- |
+| `src/saxo_daytrader_xai/` | 30 | The entire legacy app: `api/app.py`, `saxo_openapi.py`, `execution_engine.py`, `portfolio.py`, `tax_engine.py`, `db.py`. Fully superseded. |
+| `main.py`, `web_main.py` | 2 | Old Streamlit/FastAPI entrypoints. |
+| `scripts/validate_phase*.py` | ~43 | Phase validators for a runtime that no longer exists. |
+| `scripts/run_scheduler.py` | 1 | Superseded by the Rust scheduler. |
+| `deploy/systemd/*.tmpl`, `deploy/launchd/*.tmpl` | 4 | Reference `main.py` and `scripts/run_scheduler.py`; superseded by Kubernetes. |
+| `audit_log` table | — | 65 MB, 38% of the database, written only by this code, nothing since 2026-05-10. See U14. |
+
+**Archive then delete — one-shot migration.** `scripts/migrate_sqlite_to_postgres.py` and `deploy/k8s/postgres/sqlite-migration-job.template.yaml`. The migration completed months ago and cannot be re-run meaningfully. Tag the commit before deleting so it stays recoverable from history.
+
+**Sequencing.** Do the documentation first, because it is the part that is actively causing harm: `AGENTS.md:100-118` has a section titled *Legacy Python/Next.js Structure* that instructs agents to use `src/saxo_daytrader_xai/api/app.py` as "the reference for API behavior" and `saxo_openapi.py` as the porting reference for token handling and tick-size normalization. **The Rust implementations are now the authority and are further along**, so that section currently points every future agent at stale code. `README.md:823` still draws the package in the tree diagram.
+
+Then delete in this order, one commit each so any of them can be reverted independently: phase validators → systemd/launchd templates → `main.py`/`web_main.py` → `src/saxo_daytrader_xai/` → `requirements.txt` reduction → `audit_log` drop. The order matters only in that the package goes late, since it is the thing most likely to be referenced by something unnoticed.
+
+**One caveat worth checking before the package is deleted.** `tax_engine.py:273` holds the only correct FX-attribution formula in the repository, and U10 needs it. Port that arithmetic into Rust *first*, or the deletion removes the reference implementation for a bug that is still open. Nothing else in the package is known to be ahead of the Rust runtime, but the same question is worth asking of the tax bracket logic, since `estimated_tax_dkk` is still hardcoded to `0.0`.
 
 ## Related Pages
 

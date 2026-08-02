@@ -3,12 +3,20 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-01
+updated: 2026-08-02
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-02] review | Live production, Saxo API, and SQL review
+
+- Reviewed a month of live production data, the live Saxo SIM API, and the Saxo OpenAPI reference docs. Filed seven new items (U9-U15) in `wiki/urgent-todo.md` with backing reference sections, plus roadmap entries for the non-urgent findings.
+- Read-only throughout: production Postgres was queried, and the Saxo probes were `GET` requests to `/ref/v1`, `/port/v1/closedpositions`, and `/hist/v4`. No order was placed, modified, or cancelled, and no configuration or table was changed.
+- Two findings are live conditions rather than latent risks. The drawdown guardrail stands at **18.999% against a 20% halt** (peak 297,463 DKK on 2026-06-30, current 241,281) — one −1.4% day from suspending all BUYs, with no re-entry rule defined. And **28 of 201 universe symbols have never been analysable**, all of Stockholm among them, because Saxo's suffix is `xome` rather than `xsto`; `exchange_id_for_suffix` compounds it by returning ISO MICs where Saxo expects proprietary `ExchangeId` codes, making the exchange fallback dead code in all 15 cases.
+- Also recorded: `trade_ledger.fx_gain_dkk` is a hardcoded `0` literal, so a 63%-USD book that lost 7.66% to currency in a month reports its FX attribution as zero; the decision prompt has doubled to 527 KB, mostly raw Markov `recent_labels`; planner statistics are 33 days stale; and `audit_log` is 65 MB of dead Python exhaust.
+- Added a Python/Next.js removal plan. Next.js is already fully gone. Python is 91 tracked files / 28,353 lines, of which only the two Postgres backup CronJob scripts are live. `AGENTS.md` still directs agents to the retired package as the behavior reference, which is the part doing active harm.
 
 ## [2026-08-01] architecture | Typed Decision Gate Replay API envelope
 
