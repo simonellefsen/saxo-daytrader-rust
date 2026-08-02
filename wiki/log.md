@@ -17,6 +17,8 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - `exchange_id_for_suffix` returned ISO MICs where Saxo's `ExchangeId` is a proprietary code, so the exchange-scoped fallback in `lookup_instrument` had never matched anything in any of its fifteen cases; verified live that `ExchangeId=XSTO` returns an empty set where `SSE` returns Stockholm. Replaced with real codes and pinned by a test that also asserts no entry returns its own MIC.
 - `base_lookup_variants` now emits both Saxo share-class spellings, the bare-letter (`ERICb`) and underscored (`ESSITY_B`) forms, since Saxo uses both and the symbol alone does not indicate which. Keeping this in code rather than configuration avoids per-symbol maintenance.
 - No negative-cache purge was required: every corrected symbol is a new string, so none inherits a cached failure and all are looked up fresh on the next sweep.
+- Market-open detection is unaffected and `analysis_pulses.exchange_codes` deliberately keeps `XSTO`: that path keys on the exchange `code`/`iso_mic`, both of which are still `XSTO`, and Stockholm has been reported open throughout. Only the instrument-lookup path needed Saxo's `ExchangeId`.
+- Noted for the follow-up: `saxo_exchange_snapshots` has stored the correct `code=XSTO, exchange_id=SSE, mic=XOME` mapping since 2026-05-17, so the hardcoded table was duplicating — incorrectly — a fact the runtime already held. Resolving it from stored reference data is the durable fix, but its `XNYS` row resolves to `AMEX`/`XASE` (NYSE American), so a naive swap would break NYSE.
 - 517 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
 
 ## [2026-08-02] review | Live production, Saxo API, and SQL review
