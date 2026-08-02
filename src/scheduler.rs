@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::{
     daily_indicators::run_daily_indicators_cycle,
     editorial_research::run_editorial_research_cycle,
+    fx::run_fx_rate_refresh_cycle,
     markov_method::run_markov_method_cycle,
     notifications::{dispatch_execution_notifications, dispatch_operational_notifications},
     performance_benchmarks::run_performance_benchmark_cycle,
@@ -111,6 +112,21 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     let step_started = Instant::now();
     let saxo = maintain_saxo_session(state).await;
     record_step_duration(&mut step_durations, "saxo_session", step_started);
+    let step_started = Instant::now();
+    // Runs every cycle regardless of market hours or day of week -- unlike the
+    // price monitor, which only reaches FX refresh while a watched exchange is
+    // open. Every DKK conversion downstream in this same cycle depends on this
+    // being current, so it runs before broker/ledger reads rather than after.
+    let fx_rate_refresh = match run_fx_rate_refresh_cycle(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!(
+                "FX rate refresh failed; downstream conversions will use cached/static FX: {err:#}"
+            );
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(&mut step_durations, "fx_rate_refresh", step_started);
     let step_started = Instant::now();
     let broker_read_model = match refresh_broker_snapshots(state).await {
         Ok(value) => value,
@@ -362,6 +378,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "step_durations": step_durations,
         "hermes_experiment_expiry": hermes_experiment_expiry,
         "saxo_session": saxo,
+        "fx_rate_refresh": fx_rate_refresh,
         "broker_read_model": broker_read_model,
         "broker_order_sync": broker_order_sync,
         "ens_activity_backfill": ens_activity_backfill,

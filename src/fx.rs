@@ -97,6 +97,40 @@ pub(crate) async fn refresh_best_effort_fx_rates(
     refresh_ecb_fx_rates(&state.pool).await
 }
 
+/// Scheduler entry point for FX rate freshness, independent of whether any
+/// watched exchange is currently open.
+///
+/// This used to be reached only through the price-monitor loop, which returns
+/// early -- before ever calling FX -- whenever every watched exchange is
+/// closed or the Saxo session is unavailable (`src/price_monitor.rs`). FX
+/// markets trade nearly continuously, but the equity markets this runtime
+/// watches do not, so on a quiet weekend the cache went stale for two days
+/// straight and every DKK conversion silently fell back to
+/// `static_fx_rate_to_dkk` -- a literal pinned to 2026-07-02, roughly 8% off
+/// live USD/DKK by 2026-08-02. See `wiki/urgent-todo.md` for the incident.
+///
+/// Called unconditionally from the main scheduler cycle (`src/scheduler.rs`),
+/// which runs every 10 minutes (1 minute while orders are outstanding)
+/// regardless of market hours or day of week. `refresh_best_effort_fx_rates`'s
+/// own 30-minute cache TTL is what actually throttles network calls, so this
+/// keeps the cache within about half an hour of live rather than the hour the
+/// operator asked for -- tighter, and for free, since the alternative would
+/// have been a second cadence to maintain.
+///
+/// A missing or expired Saxo session degrades to the ECB daily fallback
+/// directly rather than failing the step, so a broken Saxo session --
+/// possible for hours at a time, per the runbooks -- does not also stop FX
+/// rates from updating.
+pub(crate) async fn run_fx_rate_refresh_cycle(state: &AppState) -> Result<serde_json::Value> {
+    match state.ensure_saxo_session_json("fx_rate_refresh").await {
+        Ok(session) => refresh_best_effort_fx_rates(state, &session).await,
+        Err(err) => {
+            warn!("FX refresh proceeding without a Saxo session, ECB fallback only: {err:#}");
+            refresh_ecb_fx_rates(&state.pool).await
+        }
+    }
+}
+
 pub(crate) async fn refresh_ecb_fx_rates(pool: &AnyPool) -> Result<serde_json::Value> {
     if let Some(summary) = fresh_cache_summary(pool, ECB_FX_SOURCE, "EUR").await? {
         return Ok(summary);

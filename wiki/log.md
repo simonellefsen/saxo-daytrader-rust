@@ -10,6 +10,15 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-02] operations | Decouple FX rate refresh from market hours (U16)
+
+- Found while closing U10: all six major currency pairs in `currency_fx_rates` had not refreshed since 2026-07-31T19:39:20Z against a 30-minute TTL — over two days stale in production, silently.
+- Root cause: `refresh_best_effort_fx_rates` was only reachable through `refresh_portfolio_prices` (`src/price_monitor.rs`), which returns early whenever every watched exchange is closed or the Saxo session is unavailable — both before the FX refresh call. FX trades nearly continuously; the equity exchanges this runtime watches do not, so a plain weekend silently exhausted the cache. Every downstream conversion then fell through to `static_fx_rate_to_dkk`, a literal pinned to 2026-07-02 and roughly 8% off live USD/DKK, with no signal that it had happened.
+- `crate::fx::run_fx_rate_refresh_cycle` now runs unconditionally from the main scheduler cycle (`src/scheduler.rs`), which fires every 10 minutes regardless of market hours or weekday, ahead of any broker or ledger read in the same cycle. The existing 30-minute cache TTL throttles the actual network call, so this keeps rates within about half an hour of live — tighter than the hourly cadence requested, for free, since it reuses a cadence that already exists rather than adding a second one.
+- A missing or expired Saxo session now degrades straight to the ECB daily fallback instead of skipping the step, so a broken session no longer also stops FX from updating.
+- The price-monitor call site is untouched; the two refreshes are redundant by design, both gated by the same cache TTL so neither over-calls Saxo.
+- 524 tests pass (unchanged — this is a scheduling wiring fix, not new pure logic; the codebase's existing tests don't mock the network-touching refresh calls, consistent with `refresh_saxo_fx_rates`/`refresh_ecb_fx_rates` having none either). `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+
 ## [2026-08-02] strategy | Attribute realised gains to price and currency (U10)
 
 - `crate::fx::split_realised_gain` replaces a `fx_gain_dkk` column that was a hardcoded `0` literal in the ledger insert while `price_gain_dkk` received the whole realised gain. Every sale therefore reported 100% price and 0% currency by construction, on a book that is 63% USD during a month when USD/DKK fell 7.66%.
