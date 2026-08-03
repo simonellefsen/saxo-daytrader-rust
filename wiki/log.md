@@ -18,6 +18,7 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Guarded to Postgres only via a new `database_url_is_postgres` helper, since SQLite (local dev, every other test) has no autovacuum and does not accept the syntax. Runs on every pod startup as part of the existing schema-migration function, consistent with its idempotent neighbours.
 - `audit_log` is included even though U14 plans to drop it — tuning costs nothing and covers the case where that deletion lands later than this fix.
 - 525 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+- Verified live post-deploy against `daytrader-postgres-2` (the actual primary — `daytrader-postgres-1`, used for every read-only query earlier in the session, is currently the standby; `pg_stat_user_tables.last_analyze`/`last_autoanalyze` are per-instance activity counters that do not replicate, unlike `pg_statistic` itself, so they must be read from the primary to mean anything). `n_live_tup` now reads correctly — `audit_log` 67,578 (was 0), `trade_ledger` 118 (was 47), `decision_reports` 137 (was 85) — `last_analyze` is fresh from the deploy, and `reloptions` carries the tightened settings on all nine tables.
 
 ## [2026-08-02] operations | Decouple FX rate refresh from market hours (U16)
 
