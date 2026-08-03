@@ -217,10 +217,6 @@ Important files:
   - Namespace: `saxo`.
   - Keep this in `saxo` unless explicitly migrating the database.
 
-- `deploy/k8s/postgres/sqlite-migration-job.template.yaml`
-  - Legacy SQLite-to-Postgres migration job.
-  - Namespace: `saxo`.
-
 - `scripts/deploy_k8s_docker_desktop.sh`
   - Main Docker Desktop deployment script.
   - Builds the Rust image.
