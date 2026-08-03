@@ -5,7 +5,7 @@ tags:
   - roadmap
   - urgent
   - maintained-by-llm
-updated: 2026-08-02
+updated: 2026-08-03
 ---
 
 # Daytrader Urgent Todo
@@ -284,30 +284,29 @@ Probed live in SIM:
 
 ## Python Removal Plan
 
-The Next.js frontend is **already gone** — no `.ts`, `.tsx`, `.jsx`, `package.json`, or `next.config.*` remains anywhere in the tree. What is left is Python: **91 tracked files, 28,353 lines**.
+**Executed 2026-08-03**, one commit per step (`e5394fb`, `bc679ae`, `b27ae6f`, `dfc77e0`, `b43f0b7`, `790fa8a`, `e7fc99e`), each independently revertible. The Next.js frontend was already gone before this pass — no `.ts`, `.tsx`, `.jsx`, `package.json`, or `next.config.*` anywhere in the tree.
 
-Three categories, and only the first is load-bearing:
+**Both caveats from the original plan were checked and cleared before deleting `src/saxo_daytrader_xai/`, not assumed.** `tax_engine.py:273`'s FX-attribution formula was ported this session as `crate::fx::split_realised_gain` (U10). The tax-bracket logic (`_tax_due_for_share_income`, marginal delta against YTD realised income) turned out to be **already ported** — `share_income_tax_due_dkk`/`incremental_share_income_tax_dkk` in `src/state.rs` implement the identical algorithm, verified line-for-line before the Python reference was removed. The original roadmap note that `estimated_tax_dkk` was "hardcoded to 0.0" was itself stale; that literal is only the `unavailable`-status fallback, not the general path.
 
-**Keep — live in production.** `scripts/create_postgres_backup.py` and `scripts/prune_postgres_backups.py`. These run as CronJobs (`daytrader-postgres-backup-schedule`, `-retention`) and were observed completing minutes ago. `Dockerfile.backup` builds them on `python:3.13-alpine` with just `boto3` and `requests`. They are ~2 files and have no dependency on the rest of the Python tree. Porting them to Rust is possible but buys little and risks the backup path; leaving them is the right call, and `requirements.txt` should be reduced to the two packages they actually import rather than the twelve it currently pins.
+**Landed:**
 
-**Delete — dead application code.**
-
-| Path | Files | Note |
+| Path | Files | Commit |
 | --- | --- | --- |
-| `src/saxo_daytrader_xai/` | 30 | The entire legacy app: `api/app.py`, `saxo_openapi.py`, `execution_engine.py`, `portfolio.py`, `tax_engine.py`, `db.py`. Fully superseded. |
-| `main.py`, `web_main.py` | 2 | Old Streamlit/FastAPI entrypoints. |
-| `scripts/validate_phase*.py` | ~43 | Phase validators for a runtime that no longer exists. |
-| `scripts/run_scheduler.py` | 1 | Superseded by the Rust scheduler. |
-| `deploy/systemd/*.tmpl`, `deploy/launchd/*.tmpl` | 4 | Reference `main.py` and `scripts/run_scheduler.py`; superseded by Kubernetes. |
-| `audit_log` table | — | 65 MB, 38% of the database, written only by this code, nothing since 2026-05-10. See U14. |
+| `AGENTS.md` correction | — | `e5394fb` — removed the "Legacy Python/Next.js Structure" and "Future Porting Order" sections, which pointed agents at dead code as the behavior reference; all 8 porting-order steps were already done, including order cancel/reissue which the doc still claimed was Python-only |
+| `scripts/validate_phase*.py` | 43 | `bc679ae` |
+| `deploy/systemd/*.tmpl`, `deploy/launchd/*.tmpl`, `scripts/render_service_templates.py` | 5 | `b27ae6f` — the renderer went with its templates, since it existed only to produce them |
+| `main.py`, `web_main.py`, `scripts/run_scheduler.py` | 3 | `dfc77e0` |
+| `src/saxo_daytrader_xai/` | 28 | `b43f0b7` |
+| `requirements.txt` trimmed to `requests`/`boto3` | — | `790fa8a` — documentation only; `Dockerfile.backup` already installs both directly, doesn't read this file |
+| `scripts/migrate_sqlite_to_postgres.py`, `deploy/k8s/postgres/sqlite-migration-job.template.yaml` | 2 | `e7fc99e` — tagged `pre-python-removal-cleanup` at the commit before this pass |
 
-**Archive then delete — one-shot migration.** `scripts/migrate_sqlite_to_postgres.py` and `deploy/k8s/postgres/sqlite-migration-job.template.yaml`. The migration completed months ago and cannot be re-run meaningfully. Tag the commit before deleting so it stays recoverable from history.
+`kubectl kustomize deploy/k8s/base` still builds clean; nothing in the active deployment path referenced anything removed. No Rust code changed, so no deploy was needed — pushing to `main` is the entire deliverable for this pass.
 
-**Sequencing.** Do the documentation first, because it is the part that is actively causing harm: `AGENTS.md:100-118` has a section titled *Legacy Python/Next.js Structure* that instructs agents to use `src/saxo_daytrader_xai/api/app.py` as "the reference for API behavior" and `saxo_openapi.py` as the porting reference for token handling and tick-size normalization. **The Rust implementations are now the authority and are further along**, so that section currently points every future agent at stale code. `README.md:823` still draws the package in the tree diagram.
+**Not touched, and worth a decision rather than an assumption.** Eleven more Python files exist under `scripts/` that the original plan never enumerated: `check_saxo_order_status.py`, `create_clean_reconciliation_target.py`, `diagnose_saxo_instrument_lookup.py`, `import_sqlite_performance_history.py`, `reset_portfolio_baseline.py`, `saxo_oauth_helper.py`, `stop_runtime.py`, `validate_execution_regressions.py`, `validate_strategy_journal.py`, `validate_swing_indicators.py`, `validate_swing_strategy.py`. Unlike the phase validators, these look like standalone manual/diagnostic tools someone might still run by hand against Saxo directly — deleting them on a guess risked losing something genuinely still useful. `stop_runtime.py` now references a deleted `main.py` and is already effectively dead; the rest are unverified either way.
 
-Then delete in this order, one commit each so any of them can be reverted independently: phase validators → systemd/launchd templates → `main.py`/`web_main.py` → `src/saxo_daytrader_xai/` → `requirements.txt` reduction → `audit_log` drop. The order matters only in that the package goes late, since it is the thing most likely to be referenced by something unnoticed.
+**Still outstanding, blocked on operator confirmation, not on any technical unknown.** Dropping the `audit_log` table (U14) is the one remaining piece of this plan. It is a destructive production-database operation and was deliberately not executed autonomously.
 
-**One caveat worth checking before the package is deleted.** `tax_engine.py:273` holds the only correct FX-attribution formula in the repository, and U10 needs it. Port that arithmetic into Rust *first*, or the deletion removes the reference implementation for a bug that is still open. Nothing else in the package is known to be ahead of the Rust runtime, but the same question is worth asking of the tax bracket logic, since `estimated_tax_dkk` is still hardcoded to `0.0`.
+**README.md** turned out to need far more than the single tree-diagram line the original plan estimated — 848 lines, ~91 Python references, ~27 Rust mentions, a wrong config path, and a notification feature list claiming things (like writing to `audit_log`) that stopped being true in May. Flagged as its own follow-up task rather than folded in here; a proper rewrite is a different size of job than a cleanup pass.
 
 ## Related Pages
 

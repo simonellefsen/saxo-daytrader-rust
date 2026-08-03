@@ -10,6 +10,16 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] hygiene | Execute the Python removal plan
+
+- Ran the removal plan drafted earlier in `wiki/urgent-todo.md`, one commit per step so any part is independently revertible: `e5394fb` (AGENTS.md), `bc679ae` (phase validators), `b27ae6f` (systemd/launchd + renderer), `dfc77e0` (main.py/web_main.py/run_scheduler.py), `b43f0b7` (src/saxo_daytrader_xai/), `790fa8a` (requirements.txt), `e7fc99e` (SQLite migration one-shot).
+- Checked both caveats the plan named before deleting the package, rather than assuming they were fine. The FX-attribution formula was ported this session as part of U10. The tax-bracket calculation turned out to already be ported (`share_income_tax_due_dkk` in `state.rs`) -- the roadmap's "hardcoded to 0.0" note was itself stale, describing only the unavailable-status fallback.
+- AGENTS.md needed more than the Python-removal plan anticipated: it still claimed broker sync/reconcile/cancel "use the legacy Python code" and carried an 8-step porting order where every step was already done, including order cancel (implemented as cancel-and-reissue via `saxo_delete_json`, confirmed before writing the correction).
+- Found 11 more Python scripts under `scripts/` the original plan never enumerated (diagnostic/manual tools like `saxo_oauth_helper.py`, `reset_portfolio_baseline.py`). Left them alone -- unlike the phase validators, these look like they could still be run by hand, and deleting on a guess isn't reversible in the way that matters (git history doesn't restore an operator's confidence that a tool they relied on didn't just vanish silently).
+- Found README.md is far more Python-era than the plan's single-line estimate: 848 lines, ~91 `.py` references, ~27 Rust mentions, a wrong config path, and a stale claim about `audit_log` still being written. Spawned a separate follow-up task for the full rewrite rather than folding an 848-line rewrite into a cleanup pass.
+- `audit_log` drop (U14) is the one item left in the plan, deliberately not executed -- a destructive production DB operation needs explicit confirmation, not a "continue" instruction.
+- No Rust code changed; `kubectl kustomize deploy/k8s/base` still builds clean; no deploy needed.
+
 ## [2026-08-03] review | U15's two most promising Saxo endpoints are unusable in SIM right now, for data reasons not access reasons
 
 - Set out to build the `/port/v1/closedpositions` ledger cross-check U15 recommended first. Before writing code, checked what the endpoint actually returns: 6 rows total, all `stop-test:*` closures from manual protective-stop testing on 2026-07-30/31. None of the other 39 SELLs in `trade_ledger` (back to June) appear. `FromDate`/`ToDate` query parameters don't change the count -- this is the account's real recorded history, not a lookback-window default.
