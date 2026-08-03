@@ -10,6 +10,14 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] performance | Stop duplicating the Markov run payload into the decision prompt (U12)
+
+- The original diagnosis (recent_labels reaching the prompt via the per-symbol context) was wrong in its specifics, though right that Markov data was the bulk source. `compact_markov_context`'s own `signals` list was already properly trimmed. The actual source was a second field, `latest_run`, which embedded `markov_signal_runs.summary_json` verbatim -- and that row deliberately carries up to 20 full signal objects with `raw_payload_json.recent_labels` for operational debugging.
+- Measured directly against the live production row rather than estimated: `summary_json` was 189,664 bytes, of which 189,053 bytes (99.7%) was the embedded `signals` array alone -- 35% of the entire 527 KB average prompt from one nested field.
+- `trim_markov_run_for_prompt` strips only that array, keeping the run-level metadata (status, run_id, counts, config) that is genuinely useful for judging signal freshness. Lands for all three consumers of `compact_markov_context` at once: the decision prompt, the MCP tool, and the Hermes evidence pack.
+- Checked both sibling modules for the same defect before assuming it was Markov-specific. `daily_indicators.rs` was already clean -- its `latest_run` query never selects `summary_json`. `quiver.rs` has the identical pattern but the cost is small (10,418 bytes, ~2% of the prompt); left alone and noted as a minor follow-up rather than bundled in.
+- Four new tests reproduce the real production shape (a run row with 20 embedded signals × 62 recent_labels each) and assert an 80%+ size reduction plus that run-level metadata survives; plus null/malformed-input handling. 528 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+
 ## [2026-08-03] operations | Fix stale query-planner statistics (U13)
 
 - Every `pg_stat_user_tables.last_autoanalyze` in production dated to 2026-06-30, 33 days stale at the time of the review. The planner believed `audit_log` held 0 rows where it held 67,578, `trade_ledger` 47 where it held 118, `decision_reports` 85 where it held 137.

@@ -1248,10 +1248,41 @@ pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<Json
             "conviction": row.get("conviction").cloned().unwrap_or(JsonValue::Null)
         }));
     }
+    let latest_run = latest_markov_run(state).await.unwrap_or(JsonValue::Null);
     Ok(json!({
-        "latest_run": latest_markov_run(state).await.unwrap_or(JsonValue::Null),
+        "latest_run": trim_markov_run_for_prompt(&latest_run),
         "signals": signals
     }))
+}
+
+/// Strip the embedded per-signal payload out of a Markov run row before it
+/// reaches the decision prompt.
+///
+/// `markov_signal_runs.summary_json` deliberately embeds up to 20 full signal
+/// rows for operational debugging (`run_markov_method_for_date`), and each one
+/// carries its `raw_payload_json.recent_labels` -- 60 raw daily observations
+/// per symbol. `compact_markov_context` already serializes a properly trimmed
+/// `signals` list of its own from `latest_markov_signals`, so embedding the
+/// raw run row verbatim as `latest_run` duplicated that data and was the
+/// actual source of the bloat the function's name promised not to have: the
+/// decision prompt averaged 527 KB by July 2026, and the bulk of it was these
+/// 20 embedded `recent_labels` arrays. See `wiki/urgent-todo.md` U12.
+///
+/// Everything else on the row -- `status`, `run_id`, `asset_count`,
+/// `success_count`, `error_count`, `config` -- is run-level metadata the model
+/// can use to judge signal freshness and coverage, and stays.
+fn trim_markov_run_for_prompt(run: &JsonValue) -> JsonValue {
+    let Some(object) = run.as_object() else {
+        return run.clone();
+    };
+    let mut trimmed = object.clone();
+    if let Some(summary) = trimmed
+        .get_mut("summary_json")
+        .and_then(JsonValue::as_object_mut)
+    {
+        summary.remove("signals");
+    }
+    JsonValue::Object(trimmed)
 }
 
 pub fn markov_config_json_for_state(state: &AppState) -> JsonValue {
@@ -1828,6 +1859,122 @@ mod tests {
             instrument_negative_cache_retry_days: DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS,
             symbol_aliases: HashMap::new(),
         }
+    }
+
+    /// Reproduces the real shape observed in production `markov_signal_runs`:
+    /// `summary_json.signals` embeds up to 20 full signal rows, each carrying
+    /// `raw_payload_json.recent_labels` -- one entry per trading day in the
+    /// window, 62 in production. This was the actual source of the prompt
+    /// bloat `wiki/urgent-todo.md` U12 measured (527 KB average by July 2026):
+    /// `compact_markov_context`'s own `signals` list was already trimmed, but
+    /// embedding this raw run row verbatim as `latest_run` defeated it.
+    fn production_shaped_markov_run(
+        embedded_signal_count: usize,
+        labels_per_signal: usize,
+    ) -> JsonValue {
+        let recent_label = json!({
+            "close": 325.05,
+            "regime": "Sideways",
+            "rolling_return": 0.0318,
+            "time": "2026-05-06T00:00:00Z"
+        });
+        let embedded_signal = json!({
+            "id": "markov-1785533673049411-v-xnys",
+            "symbol": "V:xnys",
+            "instrument_name": "Visa Inc.",
+            "current_state": "Sideways",
+            "bull_prob": 0.163,
+            "bear_prob": 0.113,
+            "conviction": 0.05,
+            "forecasts_json": [
+                {"days": 1, "distribution": {"Bear": 0.05, "Bull": 0.05, "Sideways": 0.9}, "signed_signal": 0.0},
+                {"days": 5, "distribution": {"Bear": 0.11, "Bull": 0.16, "Sideways": 0.72}, "signed_signal": 0.05}
+            ],
+            "raw_payload_json": {
+                "method": "observable_markov_rolling_return",
+                "label_counts": {"Bear": 53, "Bull": 136, "Sideways": 311},
+                "recent_labels": vec![recent_label; labels_per_signal]
+            }
+        });
+        json!({
+            "id": "markov-1785533673049411",
+            "created_at": "2026-07-31T21:34:33Z",
+            "run_date": "2026-07-31",
+            "status": "completed",
+            "asset_count": 201,
+            "success_count": 173,
+            "error_count": 28,
+            "config_json": {"window_days": 20, "threshold": 0.05},
+            "summary_json": {
+                "status": "completed",
+                "run_id": "markov-1785533673049411",
+                "run_date": "2026-07-31",
+                "asset_count": 201,
+                "success_count": 173,
+                "error_count": 28,
+                "config": {"window_days": 20, "threshold": 0.05},
+                "signals": vec![embedded_signal; embedded_signal_count]
+            }
+        })
+    }
+
+    #[test]
+    fn trimming_the_markov_run_removes_the_duplicated_signal_payload() {
+        let run = production_shaped_markov_run(20, 62);
+        let untrimmed_bytes = serde_json::to_string(&run).unwrap().len();
+
+        let trimmed = trim_markov_run_for_prompt(&run);
+        let trimmed_bytes = serde_json::to_string(&trimmed).unwrap().len();
+
+        assert!(
+            trimmed["summary_json"].get("signals").is_none(),
+            "the embedded per-signal payload must be gone"
+        );
+        assert_eq!(
+            trimmed["summary_json"]["status"], "completed",
+            "run-level metadata inside summary_json must survive"
+        );
+        assert_eq!(trimmed["summary_json"]["success_count"], 173);
+        assert_eq!(
+            trimmed["summary_json"]["config"]["window_days"], 20,
+            "config, needed to judge signal freshness, must survive"
+        );
+        assert_eq!(trimmed["status"], "completed");
+        assert_eq!(trimmed["asset_count"], 201);
+        assert!(
+            trimmed_bytes < untrimmed_bytes / 5,
+            "expected at least an 80% reduction on the production-shaped fixture, \
+             got {untrimmed_bytes} -> {trimmed_bytes}"
+        );
+    }
+
+    #[test]
+    fn trimming_a_run_with_no_embedded_signals_is_a_harmless_no_op() {
+        let run = production_shaped_markov_run(0, 0);
+        let trimmed = trim_markov_run_for_prompt(&run);
+        assert_eq!(trimmed["status"], "completed");
+        assert!(
+            trimmed["summary_json"].get("signals").is_none(),
+            "the key is removed outright, not replaced with an empty array"
+        );
+    }
+
+    #[test]
+    fn trimming_tolerates_missing_or_malformed_run_data() {
+        assert_eq!(
+            trim_markov_run_for_prompt(&JsonValue::Null),
+            JsonValue::Null
+        );
+        assert_eq!(
+            trim_markov_run_for_prompt(&json!("not an object")),
+            json!("not an object")
+        );
+        // No summary_json at all -- must not panic, must pass the rest through.
+        let sparse = json!({"status": "empty"});
+        assert_eq!(trim_markov_run_for_prompt(&sparse), sparse);
+        // summary_json present but not an object.
+        let malformed = json!({"status": "ok", "summary_json": "not-an-object"});
+        assert_eq!(trim_markov_run_for_prompt(&malformed), malformed);
     }
 
     #[test]
