@@ -10,6 +10,13 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] review | U15's two most promising Saxo endpoints are unusable in SIM right now, for data reasons not access reasons
+
+- Set out to build the `/port/v1/closedpositions` ledger cross-check U15 recommended first. Before writing code, checked what the endpoint actually returns: 6 rows total, all `stop-test:*` closures from manual protective-stop testing on 2026-07-30/31. None of the other 39 SELLs in `trade_ledger` (back to June) appear. `FromDate`/`ToDate` query parameters don't change the count -- this is the account's real recorded history, not a lookback-window default.
+- Checked `hist/v4/performance/timeseries` the same way rather than trusting the earlier "verified reachable" note. Its 5 points run 2021-03-16 to 2021-03-22 -- stale SIM provisioning data, zero points after 2026-06-01.
+- Building either cross-check now would compare our ledger against data Saxo never recorded for this account, producing false-positive divergence alerts rather than real findings. Declined to build it; updated U15 to record why and what would make it actionable (more SIM trading history for closedpositions; a LIVE-environment check, out of scope, for performance/timeseries).
+- No code changed. This is worth recording precisely because the earlier "verified reachable, 200 OK" note in U15 was true but incomplete -- reachability isn't the same as usable data, and the gap between them would have produced a broken feature if built on the earlier note alone.
+
 ## [2026-08-03] performance | Stop duplicating the Markov run payload into the decision prompt (U12)
 
 - The original diagnosis (recent_labels reaching the prompt via the per-symbol context) was wrong in its specifics, though right that Markov data was the bulk source. `compact_markov_context`'s own `signals` list was already properly trimmed. The actual source was a second field, `latest_run`, which embedded `markov_signal_runs.summary_json` verbatim -- and that row deliberately carries up to 20 full signal objects with `raw_payload_json.recent_labels` for operational debugging.
