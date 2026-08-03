@@ -20,6 +20,13 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Verified against production before deploying: all five reported symbols resolve (EQNR BUY today, BAKKA/DANSKE BUY and DEMANT HOLD 07-31, ALMB BUY 07-30). `V:xnys` is the clearer win -- it displayed a 3-month-old `HOLD` while its actual latest view is a `BUY` from 07-30, recent enough to render as current rather than stale.
 - Three new tests: newest-report-wins with per-symbol timestamps, the same-report enrichment boundary, and malformed/missing payload tolerance. 532 tests pass.
 
+## [2026-08-03] operations | Drop the two dead swing_* tables
+
+- Operator confirmed dropping `swing_sentiment_snapshots` and `swing_position_targets` after the `latest_symbol_decisions` fix (earlier today) moved off them onto live `report_json` data.
+- Same sequencing as the `audit_log` drop: found and removed a live reader first, deployed, verified, only then dropped. The reader was a second, older code path in the Watchlist builder that queried `swing_sentiment_snapshots` directly (separate from `latest_symbol_decisions`) -- fully redundant with the fixed path above it, and its only unique behaviour (a `legacy_archive_fallback` placeholder row) was already inert in production since the watchlist universe is configured (`legacy_archive_fallback = configured_universe.is_empty() = false`). Removing it also stopped a wasted round-trip and future log noise the drop would otherwise have caused on every Overview/Watchlist load, since `unwrap_or_default()` would have silently swallowed the resulting "relation does not exist" error rather than surfacing it.
+- Dropped both tables on the primary (`daytrader-postgres-2`). Database 109 MB -> 108 MB (small; these were always tiny compared to the deleted `audit_log`). Verified: both `to_regclass` calls return null, scheduler cycle still `ok`, 0 pod restarts, no errors in logs, and the live `/api/portfolio/positions` endpoint still returns all 13 positions with a decision -- confirming the fix truly no longer depends on these tables at all.
+- 532 tests pass throughout; no test referenced either table.
+
 ## [2026-08-03] operations | Fix the ENS activity backfill's 14-day boundary bug
 
 - User asked for a diagnostics pass on the day's activity. `make diagnostics` and a direct check of `scheduler_cycle_history` surfaced `ens_activity_backfill` failing every cycle since 2026-08-03T09:09:25Z with `"Saxo GET failed: The request is invalid!"` -- unrelated to anything landed earlier today, so worth chasing rather than dismissing as noise.

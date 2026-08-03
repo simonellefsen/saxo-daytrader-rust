@@ -4626,10 +4626,11 @@ impl AppState {
     /// Latest per-symbol decision view, read from the decision reports
     /// themselves rather than the retired `swing_*` projection tables.
     ///
-    /// Those two tables (`swing_sentiment_snapshots`, `swing_position_targets`)
-    /// are written only by the retired Python runtime — no `INSERT` for either
-    /// exists anywhere in `src/`. They are frozen at `report_id = 12`
-    /// (2026-05-08). Because the previous implementation selected "the most
+    /// Those two tables (`swing_sentiment_snapshots`, `swing_position_targets`,
+    /// dropped 2026-08-03 once nothing referenced them) were written only by
+    /// the retired Python runtime — no `INSERT` for either ever existed in
+    /// `src/`. They were frozen at `report_id = 12` (2026-05-08). Because the
+    /// previous implementation selected "the most
     /// recent report that has rows in those tables," it always resolved to
     /// report 12 no matter how many newer reports existed, so every position in
     /// that report's fixed ~82-symbol US large-cap universe rendered a decision
