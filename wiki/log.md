@@ -10,6 +10,14 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] operations | Fix the ENS activity backfill's 14-day boundary bug
+
+- User asked for a diagnostics pass on the day's activity. `make diagnostics` and a direct check of `scheduler_cycle_history` surfaced `ens_activity_backfill` failing every cycle since 2026-08-03T09:09:25Z with `"Saxo GET failed: The request is invalid!"` -- unrelated to anything landed earlier today, so worth chasing rather than dismissing as noise.
+- Reproduced the exact call live against SIM: `FromDateTime` computed as `now - 14 days` gets `400 InvalidRequest`, `ModelState.FromDateTime: ["Maximum 14-days old activities can be fetched."]`. The boundary is exclusive -- a request landing exactly on the 14-day line is rejected -- so the bug was latent since the feature landed 2026-07-26 and only started firing once the wall clock ticked past the original request's time-of-day on the 14th day.
+- Confirmed a 13-day lookback returns 200 with real data before changing anything. Extracted the computation into `ens_activity_backfill_from_datetime`, taking `now` as a parameter for a deterministic test, and gave it a one-day margin. Read-only endpoint, sanitized aggregate storage only -- unaffected by execution-critical paths.
+- One new test pins the gap strictly under 14 days; 529 total tests pass.
+- Also verified today's other landed fixes against live data while diagnosing: U16 (FX cache fresh, `expires_at` in the future), U13 (`last_analyze` fresh from this morning's deploy), U12 (today's real decision-report prompts are 298-362 KB versus 479-545 KB on 07-31, a 34-38% reduction matching the isolated-field estimate). U11's fix is deployed but unproven against a live run -- the last Markov sweep predates it; tonight's 23:30 CET run is the first real test. U9 pulled back slightly to 18.98% (was 18.999%), still soft_reduce not halted.
+
 ## [2026-08-03] review | Investigated the 1-2 day round trips before building a churn guard
 
 - Chose "Trading quality" as the next roadmap direction. Before implementing the "cooldown and churn guard" idea, investigated whether the three fast round trips flagged in the 2026-08-02 review (`AJG`, `JNJ`, `DSV`) were actually the pattern they looked like -- the roadmap's own note said to determine the cause before adding a rule.

@@ -658,8 +658,7 @@ pub async fn backfill_saxo_ens_activities(state: &AppState) -> Result<JsonValue>
         .await
         .context("loading Saxo session before ENS activity backfill")?;
     let client_key = client_key(state, &session)?;
-    let from_datetime = (Utc::now() - ChronoDuration::days(ENS_ACTIVITY_BACKFILL_LOOKBACK_DAYS))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let from_datetime = ens_activity_backfill_from_datetime(Utc::now());
     let to_datetime = now_iso();
     let payload = saxo_get_json(
         state,
@@ -998,6 +997,22 @@ fn unknown_placement_external_reference(order: &JsonValue) -> String {
         .and_then(|value| json_text(value, "external_reference"))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| external_reference(value_i64(order, "id")))
+}
+
+/// `FromDateTime` for `/ens/v1/activities`, kept safely inside Saxo's
+/// undocumented exclusive boundary.
+///
+/// Saxo rejects the request outright with `400 InvalidRequest` /
+/// `"Maximum 14-days old activities can be fetched."` the moment `FromDateTime`
+/// reaches exactly 14 days back -- verified live against SIM 2026-08-03. A
+/// `Utc::now() - 14 days` computation sits exactly on that line and starts
+/// failing the instant the wall clock ticks past the original request's
+/// time-of-day on the 14th day, which is why this went undetected for weeks
+/// and then failed on every cycle starting mid-day. A one-day margin keeps
+/// every request inside the allowed window regardless of time-of-day.
+fn ens_activity_backfill_from_datetime(now: DateTime<Utc>) -> String {
+    (now - ChronoDuration::days(ENS_ACTIVITY_BACKFILL_LOOKBACK_DAYS - 1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn unknown_placement_from_datetime(order: &JsonValue) -> String {
@@ -4180,6 +4195,29 @@ mod tests {
     use super::*;
     use sqlx::{Row, any::AnyPoolOptions};
     use std::{path::PathBuf, sync::Once};
+
+    /// Reproduces the live failure: a naive `now - 14 days` sits exactly on
+    /// Saxo's exclusive boundary and gets rejected the moment the clock ticks
+    /// past the original request's time-of-day. Pins that the computed window
+    /// always stays strictly under 14 days, with margin, at second precision
+    /// -- not just "less than or equal."
+    #[test]
+    fn ens_backfill_from_datetime_stays_inside_saxos_exclusive_fourteen_day_boundary() {
+        let now = Utc::now();
+        let from = DateTime::parse_from_rfc3339(&ens_activity_backfill_from_datetime(now))
+            .expect("from_datetime must be valid RFC3339")
+            .with_timezone(&Utc);
+        let gap = now - from;
+        assert!(
+            gap < ChronoDuration::days(14),
+            "gap {gap:?} must be strictly under Saxo's 14-day limit, not exactly at it"
+        );
+        assert!(
+            gap >= ChronoDuration::days(13)
+                && gap <= ChronoDuration::days(13) + ChronoDuration::hours(1),
+            "expected roughly a 13-day window with second-level rounding only, got {gap:?}"
+        );
+    }
 
     async fn execution_order_test_state() -> AppState {
         static INSTALL_DRIVERS: Once = Once::new();
