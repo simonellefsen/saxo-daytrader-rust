@@ -10,6 +10,16 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] correctness | Read position decisions from decision reports, not retired Python tables
+
+- User asked why the Overview "Decision" column showed `n/a` for BAKKA, DANSKE, EQNR, DEMANT, and ALMB. Root cause was not those five symbols: `latest_symbol_decisions` read from `swing_sentiment_snapshots` and `swing_position_targets`, neither of which any Rust code writes -- no `INSERT` for either exists in `src/`. Both are frozen at `report_id = 12` (2026-05-08), written by the retired Python runtime.
+- The query selected "the most recent report that has rows in those tables," which therefore always resolved to report 12 regardless of the 191 newer reports. Consequences: every position inside that one report's fixed ~82-symbol US large-cap universe rendered a chip whose age only ever grew ("Stale · HOLD, 87d old"), and every position outside it -- the Nordic holdings especially -- rendered `n/a` permanently. Same failure class as the `audit_log` table dropped earlier today: a Python-era table nothing in Rust populates, still presented as live.
+- `report_json` already carries the live equivalents. `symbol_sentiment` matches the sentiment/confidence/rationale half exactly; `suggested_trades` supplies the action and the `strategy_metadata.technical` snapshot the trend sparkline reads via `source.technical`. Now scans the 40 most recent reports newest-first, keeping the first entry per symbol, so each symbol carries its own report's timestamp and the existing 7-day staleness horizon applies per symbol instead of uniformly to one frozen report.
+- A suggested trade may only enrich an entry its own report created. Pairing a newer report's sentiment with an older report's action would present two different moments as one decision.
+- Bounded to 40 reports (~4 weeks at two weekday pulses) because this runs on dashboard load; anything older should read as absent rather than as very stale advice. JSON is parsed in Rust rather than SQL to stay portable across the SQLite and PostgreSQL backends `AnyPool` serves -- `json_array_elements` is Postgres-only.
+- Verified against production before deploying: all five reported symbols resolve (EQNR BUY today, BAKKA/DANSKE BUY and DEMANT HOLD 07-31, ALMB BUY 07-30). `V:xnys` is the clearer win -- it displayed a 3-month-old `HOLD` while its actual latest view is a `BUY` from 07-30, recent enough to render as current rather than stale.
+- Three new tests: newest-report-wins with per-symbol timestamps, the same-report enrichment boundary, and malformed/missing payload tolerance. 532 tests pass.
+
 ## [2026-08-03] operations | Fix the ENS activity backfill's 14-day boundary bug
 
 - User asked for a diagnostics pass on the day's activity. `make diagnostics` and a direct check of `scheduler_cycle_history` surfaced `ens_activity_backfill` failing every cycle since 2026-08-03T09:09:25Z with `"Saxo GET failed: The request is invalid!"` -- unrelated to anything landed earlier today, so worth chasing rather than dismissing as noise.

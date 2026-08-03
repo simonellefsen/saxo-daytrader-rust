@@ -211,6 +211,110 @@ struct ExchangeDaySession {
     close_at: DateTime<Utc>,
 }
 
+/// How many recent decision reports `latest_symbol_decisions` scans for
+/// per-symbol sentiment. Two weekday pulses put this at roughly four weeks.
+const SYMBOL_DECISION_REPORT_SCAN: i64 = 40;
+
+/// Fold one decision report's per-symbol view into `decisions`, newest-first.
+///
+/// Existing entries are never overwritten: callers iterate reports in
+/// descending id order, so the first writer for a symbol is its most recent
+/// view. Both halves of a symbol's decision come from the same report, so a
+/// symbol mentioned in an older report cannot have its sentiment paired with a
+/// newer report's action.
+fn merge_report_symbol_decisions(report: &JsonValue, decisions: &mut HashMap<String, JsonValue>) {
+    let report_json = report
+        .get("report_json")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let base = |symbol: &str| {
+        json!({
+            "symbol": symbol,
+            "report_id": report.get("id").cloned().unwrap_or(JsonValue::Null),
+            "created_at": report.get("created_at").cloned().unwrap_or(JsonValue::Null),
+            "status": report.get("status").cloned().unwrap_or(JsonValue::Null),
+            "pulse_key": report.get("analysis_pulse_key").cloned().unwrap_or(JsonValue::Null),
+            "pulse_label": report.get("analysis_pulse_label").cloned().unwrap_or(JsonValue::Null),
+        })
+    };
+
+    for entry in report_json
+        .get("symbol_sentiment")
+        .and_then(JsonValue::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let symbol = text_value(entry, "symbol");
+        if symbol.is_empty() || decisions.contains_key(&symbol) {
+            continue;
+        }
+        let mut decision = base(&symbol);
+        if let Some(object) = decision.as_object_mut() {
+            object.insert(
+                "sentiment".to_string(),
+                entry.get("sentiment").cloned().unwrap_or(JsonValue::Null),
+            );
+            object.insert(
+                "confidence".to_string(),
+                JsonValue::from(value_f64(entry, "confidence")),
+            );
+            object.insert(
+                "rationale".to_string(),
+                entry.get("rationale").cloned().unwrap_or(JsonValue::Null),
+            );
+        }
+        decisions.insert(symbol, decision);
+    }
+
+    // A suggested trade carries the concrete action and the technical snapshot
+    // the sparkline reads. It may name a symbol the sentiment list omits, so it
+    // can create an entry as well as enrich one -- but only within this report.
+    for trade in report_json
+        .get("suggested_trades")
+        .and_then(JsonValue::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let symbol = text_value(trade, "symbol");
+        if symbol.is_empty() {
+            continue;
+        }
+        let owns_entry = match decisions.get(&symbol) {
+            // Only enrich an entry this same report created; a newer report's
+            // entry must not absorb this older report's action.
+            Some(existing) => existing.get("report_id") == report.get("id"),
+            None => true,
+        };
+        if !owns_entry {
+            continue;
+        }
+        let entry = decisions
+            .entry(symbol.clone())
+            .or_insert_with(|| base(&symbol));
+        let Some(object) = entry.as_object_mut() else {
+            continue;
+        };
+        object.insert(
+            "action".to_string(),
+            trade.get("action").cloned().unwrap_or(JsonValue::Null),
+        );
+        object.insert(
+            "strategy_role".to_string(),
+            trade
+                .get("strategy_role")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        );
+        if let Some(technical) = trade
+            .get("strategy_metadata")
+            .and_then(|metadata| metadata.get("technical"))
+            .cloned()
+        {
+            object.insert("source".to_string(), json!({ "technical": technical }));
+        }
+    }
+}
+
 /// True for a Postgres/PostgreSQL connection string. Used to skip
 /// Postgres-only DDL (storage-parameter `ALTER TABLE ... SET (...)`) on the
 /// SQLite pool used locally and in tests, which has no autovacuum and does
@@ -4588,107 +4692,50 @@ impl AppState {
         Ok(rows)
     }
 
+    /// Latest per-symbol decision view, read from the decision reports
+    /// themselves rather than the retired `swing_*` projection tables.
+    ///
+    /// Those two tables (`swing_sentiment_snapshots`, `swing_position_targets`)
+    /// are written only by the retired Python runtime — no `INSERT` for either
+    /// exists anywhere in `src/`. They are frozen at `report_id = 12`
+    /// (2026-05-08). Because the previous implementation selected "the most
+    /// recent report that has rows in those tables," it always resolved to
+    /// report 12 no matter how many newer reports existed, so every position in
+    /// that report's fixed ~82-symbol US large-cap universe rendered a decision
+    /// chip whose age only ever grew ("Stale · HOLD, 87d old"), and every
+    /// position outside it — the Nordic holdings especially — rendered `n/a`
+    /// forever. Same failure class as the `audit_log` table dropped 2026-08-03:
+    /// a Python-era table nothing in Rust populates, still presented as live.
+    ///
+    /// `report_json` carries the live equivalents: `symbol_sentiment` (the
+    /// sentiment/confidence/rationale half) and `suggested_trades` (the
+    /// action/technical half, whose `strategy_metadata.technical` also drives
+    /// the trend sparkline via `source.technical`). Scanning newest-first and
+    /// keeping the first entry per symbol yields each symbol's most recent
+    /// view, with its own report timestamp so the existing staleness horizon
+    /// (`strategy.swing.position_decision_stale_after_days`) applies per symbol
+    /// instead of uniformly to one frozen report.
+    ///
+    /// Bounded to the most recent [`SYMBOL_DECISION_REPORT_SCAN`] reports —
+    /// roughly four weeks at two weekday pulses. A decision older than that
+    /// should read as absent rather than as very stale advice, and the bound
+    /// keeps this off the unbounded-scan path since it runs on dashboard load.
+    /// JSON is parsed in Rust, not SQL, to stay portable across the SQLite and
+    /// PostgreSQL backends `AnyPool` serves.
     async fn latest_symbol_decisions(&self) -> Result<HashMap<String, JsonValue>> {
-        let Some(report) = self
-            .first_json(
-                "SELECT dr.id, dr.created_at, dr.status, dr.analysis_pulse_key, dr.analysis_pulse_label
-                 FROM decision_reports dr
-                 WHERE dr.report_json IS NOT NULL
-                   AND (
-                     EXISTS (SELECT 1 FROM swing_sentiment_snapshots s WHERE s.report_id = dr.id)
-                     OR EXISTS (SELECT 1 FROM swing_position_targets t WHERE t.report_id = dr.id)
-                   )
-                 ORDER BY dr.id DESC
-                 LIMIT 1",
-            )
-            .await?
-        else {
-            return Ok(HashMap::new());
-        };
-        let report_id = value_i64(&report, "id");
+        let reports = self
+            .select_json(&format!(
+                "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, report_json
+                 FROM decision_reports
+                 WHERE report_json IS NOT NULL
+                 ORDER BY id DESC
+                 LIMIT {SYMBOL_DECISION_REPORT_SCAN}"
+            ))
+            .await
+            .unwrap_or_default();
         let mut decisions = HashMap::new();
-        let sentiment_rows = self
-            .select_json(&format!(
-                "SELECT symbol, sentiment, confidence, macro_bias, rationale, catalysts_json, risk_notes_json, source_json FROM swing_sentiment_snapshots WHERE report_id = {} ORDER BY symbol ASC, id DESC",
-                report_id
-            ))
-            .await
-            .unwrap_or_default();
-        for row in sentiment_rows {
-            let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() {
-                continue;
-            }
-            decisions.insert(
-                symbol.clone(),
-                json!({
-                    "symbol": symbol,
-                    "report_id": report_id,
-                    "created_at": report.get("created_at").cloned().unwrap_or(JsonValue::Null),
-                    "status": report.get("status").cloned().unwrap_or(JsonValue::Null),
-                    "pulse_key": report.get("analysis_pulse_key").cloned().unwrap_or(JsonValue::Null),
-                    "pulse_label": report.get("analysis_pulse_label").cloned().unwrap_or(JsonValue::Null),
-                    "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null),
-                    "confidence": value_f64(&row, "confidence"),
-                    "macro_bias": row.get("macro_bias").cloned().unwrap_or(JsonValue::Null),
-                    "rationale": row.get("rationale").cloned().unwrap_or(JsonValue::Null),
-                    "catalysts": row.get("catalysts_json").cloned().unwrap_or_else(|| json!([])),
-                    "risk_notes": row.get("risk_notes_json").cloned().unwrap_or_else(|| json!([])),
-                    "source": row.get("source_json").cloned().unwrap_or_else(|| json!({})),
-                }),
-            );
-        }
-        let target_rows = self
-            .select_json(&format!(
-                "SELECT symbol, sentiment, action, current_weight_pct, target_weight_pct, current_quantity, target_quantity, estimated_delta_quantity, estimated_value_dkk, priority, confidence, rationale, risk_json FROM swing_position_targets WHERE report_id = {} ORDER BY symbol ASC, id DESC",
-                report_id
-            ))
-            .await
-            .unwrap_or_default();
-        for row in target_rows {
-            let symbol = text_value(&row, "symbol");
-            if symbol.is_empty() {
-                continue;
-            }
-            let entry = decisions.entry(symbol.clone()).or_insert_with(|| {
-                json!({
-                    "symbol": symbol,
-                    "report_id": report_id,
-                    "created_at": report.get("created_at").cloned().unwrap_or(JsonValue::Null),
-                    "status": report.get("status").cloned().unwrap_or(JsonValue::Null),
-                    "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null)
-                })
-            });
-            if let Some(obj) = entry.as_object_mut() {
-                obj.insert(
-                    "action".to_string(),
-                    row.get("action").cloned().unwrap_or(JsonValue::Null),
-                );
-                obj.insert(
-                    "priority".to_string(),
-                    row.get("priority").cloned().unwrap_or(JsonValue::Null),
-                );
-                obj.insert(
-                    "target_confidence".to_string(),
-                    JsonValue::from(value_f64(&row, "confidence")),
-                );
-                obj.insert(
-                    "target_rationale".to_string(),
-                    row.get("rationale").cloned().unwrap_or(JsonValue::Null),
-                );
-                obj.insert(
-                    "current_weight_pct".to_string(),
-                    JsonValue::from(value_f64(&row, "current_weight_pct")),
-                );
-                obj.insert(
-                    "target_weight_pct".to_string(),
-                    JsonValue::from(value_f64(&row, "target_weight_pct")),
-                );
-                obj.insert(
-                    "risk".to_string(),
-                    row.get("risk_json").cloned().unwrap_or_else(|| json!({})),
-                );
-            }
+        for report in &reports {
+            merge_report_symbol_decisions(report, &mut decisions);
         }
         Ok(decisions)
     }
@@ -16025,6 +16072,139 @@ analysis_windows:
         assert_eq!(
             redacted_database_url("sqlite:///Users/example/private/ledger.db"),
             "SQLite · local database"
+        );
+    }
+
+    fn decision_report_row(id: i64, created_at: &str, report_json: JsonValue) -> JsonValue {
+        json!({
+            "id": id,
+            "created_at": created_at,
+            "status": "completed",
+            "analysis_pulse_key": format!("us_open_followup:{created_at}"),
+            "analysis_pulse_label": "US open",
+            "report_json": report_json,
+        })
+    }
+
+    /// The defect this replaced: decisions were read from `swing_*` tables that
+    /// no Rust code writes, frozen at report 12, so a symbol's chip age only
+    /// grew and symbols outside that one report were `n/a` forever. Reports are
+    /// scanned newest-first and the first entry per symbol wins, so each symbol
+    /// carries its own report's timestamp.
+    #[test]
+    fn symbol_decisions_keep_the_most_recent_report_per_symbol() {
+        let newer = decision_report_row(
+            203,
+            "2026-08-03T14:46:13Z",
+            json!({
+                "symbol_sentiment": [
+                    {"symbol": "ADBE:xnas", "sentiment": "BUY", "confidence": 88, "rationale": "fresh"}
+                ]
+            }),
+        );
+        let older = decision_report_row(
+            188,
+            "2026-07-23T08:22:28Z",
+            json!({
+                "symbol_sentiment": [
+                    {"symbol": "ADBE:xnas", "sentiment": "SELL", "confidence": 40, "rationale": "stale"},
+                    {"symbol": "DANSKE:xcse", "sentiment": "HOLD", "confidence": 60, "rationale": "older but only view"}
+                ]
+            }),
+        );
+
+        let mut decisions = HashMap::new();
+        for report in [&newer, &older] {
+            merge_report_symbol_decisions(report, &mut decisions);
+        }
+
+        let adbe = decisions.get("ADBE:xnas").expect("ADBE decision");
+        assert_eq!(adbe["sentiment"], "BUY", "newest report must win");
+        assert_eq!(adbe["created_at"], "2026-08-03T14:46:13Z");
+        assert_eq!(adbe["report_id"], 203);
+
+        // A symbol only the older report mentions still resolves, carrying that
+        // report's own timestamp so staleness is judged per symbol.
+        let danske = decisions.get("DANSKE:xcse").expect("DANSKE decision");
+        assert_eq!(danske["sentiment"], "HOLD");
+        assert_eq!(danske["created_at"], "2026-07-23T08:22:28Z");
+    }
+
+    /// `suggested_trades` supplies the action and the technical snapshot the
+    /// trend sparkline reads, but only for the report that owns the entry --
+    /// pairing a newer report's sentiment with an older report's action would
+    /// present two different moments as one decision.
+    #[test]
+    fn suggested_trades_enrich_only_their_own_reports_entry() {
+        let newer = decision_report_row(
+            203,
+            "2026-08-03T14:46:13Z",
+            json!({
+                "symbol_sentiment": [
+                    {"symbol": "ADBE:xnas", "sentiment": "BUY", "confidence": 88, "rationale": "fresh"}
+                ],
+                "suggested_trades": [{
+                    "symbol": "ADBE:xnas",
+                    "action": "BUY",
+                    "strategy_role": "starter",
+                    "strategy_metadata": {"technical": {"trend_bias": "bullish", "confluence_count": 4}}
+                }]
+            }),
+        );
+        let older = decision_report_row(
+            188,
+            "2026-07-23T08:22:28Z",
+            json!({
+                "suggested_trades": [
+                    {"symbol": "ADBE:xnas", "action": "SELL", "strategy_role": "flatten"},
+                    {"symbol": "GN:xcse", "action": "BUY", "strategy_role": "starter"}
+                ]
+            }),
+        );
+
+        let mut decisions = HashMap::new();
+        for report in [&newer, &older] {
+            merge_report_symbol_decisions(report, &mut decisions);
+        }
+
+        let adbe = decisions.get("ADBE:xnas").expect("ADBE decision");
+        assert_eq!(adbe["action"], "BUY", "older report must not overwrite");
+        assert_eq!(adbe["strategy_role"], "starter");
+        assert_eq!(
+            adbe["source"]["technical"]["trend_bias"], "bullish",
+            "sparkline reads source.technical.trend_bias"
+        );
+
+        // A suggested trade may name a symbol the sentiment list omits; it
+        // should still produce a usable entry rather than being dropped.
+        let gn = decisions
+            .get("GN:xcse")
+            .expect("GN decision from trade only");
+        assert_eq!(gn["action"], "BUY");
+        assert_eq!(gn["created_at"], "2026-07-23T08:22:28Z");
+    }
+
+    #[test]
+    fn symbol_decisions_tolerate_missing_or_malformed_report_payloads() {
+        let mut decisions = HashMap::new();
+        // No report_json at all, wrong types, and unnamed entries must not
+        // panic or create junk keys.
+        merge_report_symbol_decisions(&json!({"id": 1, "created_at": "x"}), &mut decisions);
+        merge_report_symbol_decisions(
+            &decision_report_row(2, "y", json!({"symbol_sentiment": "not-an-array"})),
+            &mut decisions,
+        );
+        merge_report_symbol_decisions(
+            &decision_report_row(
+                3,
+                "z",
+                json!({"symbol_sentiment": [{"sentiment": "BUY"}], "suggested_trades": [{"action": "BUY"}]}),
+            ),
+            &mut decisions,
+        );
+        assert!(
+            decisions.is_empty(),
+            "entries without a symbol must be skipped, got {decisions:?}"
         );
     }
 
