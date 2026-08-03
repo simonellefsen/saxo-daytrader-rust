@@ -1,6 +1,6 @@
 # saxo-rust Project Guide
 
-This repository is being converted from a Python/FastAPI + Next.js Saxo day-trading dashboard into a Rust Axum + Dioxus application.
+This is a Rust Axum + Dioxus Saxo day-trading dashboard. It replaced an earlier Python/FastAPI + Next.js implementation; that predecessor is gone from the active runtime (Next.js was removed 2026-07-04, the remaining Python is queued for removal per `wiki/urgent-todo.md`'s Python Removal Plan — the only Python still live is two Postgres backup CronJob scripts, unrelated to the trading application).
 
 Follow the global instruction in `/Users/lindau/.codex/RTK.md`: prefix shell commands with `rtk`.
 
@@ -16,7 +16,7 @@ The active runtime is a single Rust binary named `saxo-rust`.
 - Kubernetes app namespace: `saxo`
 - Public endpoint: shared ngrok gateway in `/Users/lindau/codex/shared-ngrok-gateway`, routing `/saxo-daytrader` to this repo's internal `saxo-daytrader.internal` AgentEndpoint
 
-Trading-critical mutation paths are being ported incrementally. Saxo OAuth/session handling, scheduled decision reports, Trading Manager queue creation, and Saxo order precheck/placement now run in Rust. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption still use the legacy Python code as the behavior reference and should remain gated until each path has Rust audit/status tests.
+All trading-critical mutation paths run in Rust: Saxo OAuth/session handling, scheduled decision reports, Trading Manager queue creation, order precheck/placement, broker status sync, order cancel (`saxo_delete_json`; replace is cancel-and-reissue, not a PATCH-style update), fill reconciliation, and portfolio adoption. Nothing in the live path depends on the Python runtime.
 
 ## Project Knowledge Wiki
 
@@ -57,8 +57,7 @@ Target these files for future Rust work:
 
 - `src/state.rs`
   - Application state, config loading, database pool, and API payload builders.
-  - Target this file when porting Python backend read models.
-  - It currently builds compatibility JSON for overview, positions, execution, scheduler, decisions, and settings.
+  - Most dashboard API responses (execution, scheduler, decisions, positions, trades, performance, market status/watchlists, Hermes, Markov/Quiver signals — see `pub struct *Payload` in `src/models.rs`) are typed structs built here; a shrinking set of pages still return generic compatibility JSON. See the Refactoring And Architecture section of `wiki/roadmap.md` for the remaining conversions.
   - It also owns the `saxo_sessions` runtime table used to persist the refreshable Saxo session into CNPG/PostgreSQL so a Kubernetes rollout can restore the session into the next pod.
 
 - `src/ui.rs`
@@ -96,26 +95,6 @@ Target these files for future Rust work:
 
 - `assets/app.css`
   - Dashboard styling.
-
-## Legacy Python/Next.js Structure
-
-The legacy implementation is still present for reference and staged porting.
-
-- `src/saxo_daytrader_xai/api/app.py`
-  - Old FastAPI routes. Use this as the reference for API behavior.
-
-- `src/saxo_daytrader_xai/saxo_openapi.py`
-  - Old Saxo OpenAPI integration.
-  - Preserve sim/live separation, token handling, `AccountKey`/`ClientKey` distinctions, precheck-before-place behavior, tick-size normalization, and order auditability when porting.
-
-- `src/saxo_daytrader_xai/execution_engine.py`
-  - Old execution queue, broker sync, order management, and reconciliation.
-
-- `src/saxo_daytrader_xai/portfolio.py`
-  - Old portfolio summary and position read models.
-
-- `scripts/run_scheduler.py`
-  - Old scheduler behavior.
 
 ## Local Development
 
@@ -364,7 +343,7 @@ rtk make k8s-stop
 
 ## Saxo Safety Notes
 
-When porting Saxo trading features from Python:
+When touching any Saxo trading path:
 
 - Keep SIM and LIVE config/session paths separate.
 - Never hard-code tokens, Saxo client secrets, `ClientKey`, or `AccountKey`.
@@ -374,17 +353,6 @@ When porting Saxo trading features from Python:
 - Preserve `x-request-id` or equivalent idempotency-style headers for order mutations.
 - Preserve local audit records for every precheck, placement, replace, cancel, fill, and reconciliation event.
 - Normalize prices to valid Saxo tick increments before precheck/place.
-- Keep broker status sync, replace/cancel, fills, and reconciliation gated until their Rust paths are fully audited and tested.
+- Broker status sync, cancel/reissue, fills, and reconciliation are implemented in Rust and run live; keep changes to these paths covered by tests before deploying.
 
-## Future Porting Order
-
-Recommended order for future development:
-
-1. Replace generic JSON payloads in `state.rs` with typed structs in `models.rs`.
-2. Port portfolio summary/read models from `portfolio.py`.
-3. Extend the Rust Saxo session layer only through `src/auth.rs`; status, OAuth start/callback, refresh, logout, and sanitized session JSON are already implemented.
-4. Port market status/watchlist read models.
-5. Replace generic JSON payloads in `saxo_order.rs` with typed request/response structs.
-6. Port broker status sync and fill reconciliation.
-7. Port order replace/cancel management.
-8. Re-enable remaining mutation endpoints one at a time.
+For ongoing architecture direction (remaining generic-JSON-to-typed-struct conversions, `state.rs`/`ui.rs` size, module extraction candidates), see the Refactoring And Architecture section of `wiki/roadmap.md` rather than a fixed porting order — porting from Python is complete.
