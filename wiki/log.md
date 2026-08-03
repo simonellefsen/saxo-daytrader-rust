@@ -10,6 +10,15 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] operations | Fix stale query-planner statistics (U13)
+
+- Every `pg_stat_user_tables.last_autoanalyze` in production dated to 2026-06-30, 33 days stale at the time of the review. The planner believed `audit_log` held 0 rows where it held 67,578, `trade_ledger` 47 where it held 118, `decision_reports` 85 where it held 137.
+- `AppState::tune_append_heavy_table_autovacuum` now runs an immediate `ANALYZE` and lowers `autovacuum_analyze_scale_factor` to 0.02 with `autovacuum_analyze_threshold = 50` on nine append-heavy tables, so a much smaller amount of row-count drift is enough to trigger a re-analyze than Postgres's 0.10 default.
+- Deliberately per-table rather than a CNPG Cluster-level default: a cluster-wide autovacuum setting needs a CNPG reconcile and affects every table, not just the ones actually accumulating stale statistics; per-table `ALTER TABLE ... SET (...)` applies immediately via ordinary DDL.
+- Guarded to Postgres only via a new `database_url_is_postgres` helper, since SQLite (local dev, every other test) has no autovacuum and does not accept the syntax. Runs on every pod startup as part of the existing schema-migration function, consistent with its idempotent neighbours.
+- `audit_log` is included even though U14 plans to drop it — tuning costs nothing and covers the case where that deletion lands later than this fix.
+- 525 tests pass; `cargo fmt --check` and `RUSTFLAGS="-D warnings" cargo check --all-targets` clean.
+
 ## [2026-08-02] operations | Decouple FX rate refresh from market hours (U16)
 
 - Found while closing U10: all six major currency pairs in `currency_fx_rates` had not refreshed since 2026-07-31T19:39:20Z against a 30-minute TTL — over two days stale in production, silently.

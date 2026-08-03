@@ -211,6 +211,14 @@ struct ExchangeDaySession {
     close_at: DateTime<Utc>,
 }
 
+/// True for a Postgres/PostgreSQL connection string. Used to skip
+/// Postgres-only DDL (storage-parameter `ALTER TABLE ... SET (...)`) on the
+/// SQLite pool used locally and in tests, which has no autovacuum and does
+/// not accept that syntax.
+fn database_url_is_postgres(value: &str) -> bool {
+    value.starts_with("postgres://") || value.starts_with("postgresql://")
+}
+
 fn redacted_database_url(value: &str) -> String {
     // This value reaches both logs and the operator dashboard. Render only
     // connection topology, never URL user-info, query parameters, or a local
@@ -9699,6 +9707,57 @@ impl AppState {
         .context("creating missed-trade shadow tracking index")?;
         self.backfill_trading_manager_strategy_type().await?;
         self.backfill_realised_gain_currency_split().await?;
+        self.tune_append_heavy_table_autovacuum().await?;
+        Ok(())
+    }
+
+    /// Lower the autovacuum analyze threshold on append-heavy tables and run
+    /// an immediate `ANALYZE`.
+    ///
+    /// Verified live on 2026-08-02: every `pg_stat_user_tables.last_autoanalyze`
+    /// in production dated to 2026-06-30, 33 days stale. The planner believed
+    /// `audit_log` held 0 rows where it held 67,578, `trade_ledger` 47 where it
+    /// held 118, `decision_reports` 85 where it held 137. Postgres's default
+    /// `autovacuum_analyze_scale_factor` (0.10) only re-triggers after row
+    /// count changes by a tenth, which these tables' absolute sizes rarely
+    /// clear on their own -- `decision_reports` grows by one or two rows a
+    /// weekday. The 0.02 / 50-row settings below make a much smaller amount of
+    /// drift enough to trigger a re-analyze.
+    ///
+    /// Postgres-only: SQLite has no autovacuum and `ALTER TABLE ... SET (...)`
+    /// storage parameters are Postgres syntax. Idempotent -- setting the same
+    /// reloption twice is a cheap catalog update, and `ANALYZE` takes only an
+    /// `AccessShareLock` -- so running this on every pod startup (api,
+    /// scheduler, mcp) during a rolling deploy is harmless, consistent with the
+    /// other `CREATE TABLE IF NOT EXISTS` migrations in this function.
+    async fn tune_append_heavy_table_autovacuum(&self) -> Result<()> {
+        if !database_url_is_postgres(&self.db_url) {
+            return Ok(());
+        }
+        const APPEND_HEAVY_TABLES: &[&str] = &[
+            "audit_log",
+            "decision_reports",
+            "trading_manager_runs",
+            "trade_ledger",
+            "execution_orders",
+            "execution_order_events",
+            "markov_asset_signals",
+            "scheduler_cycle_history",
+            "portfolio_value_history",
+        ];
+        for table in APPEND_HEAVY_TABLES {
+            sqlx::query(&format!(
+                "ALTER TABLE {table} SET (autovacuum_analyze_scale_factor = 0.02, \
+                 autovacuum_analyze_threshold = 50)"
+            ))
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("tuning autovacuum analyze settings for {table}"))?;
+        }
+        sqlx::query("ANALYZE")
+            .execute(&self.pool)
+            .await
+            .context("running ANALYZE after autovacuum tuning")?;
         Ok(())
     }
 
@@ -15968,6 +16027,23 @@ analysis_windows:
             redacted_database_url("sqlite:///Users/example/private/ledger.db"),
             "SQLite · local database"
         );
+    }
+
+    /// The autovacuum tuning migration runs `ALTER TABLE ... SET (...)`
+    /// storage-parameter syntax that only Postgres accepts; SQLite (used
+    /// locally and in every other test here) has no autovacuum at all. This
+    /// pins the guard so a future edit cannot accidentally run Postgres DDL
+    /// against the SQLite pool the rest of the test suite depends on.
+    #[test]
+    fn postgres_url_detection_gates_autovacuum_tuning_to_postgres_only() {
+        assert!(database_url_is_postgres(
+            "postgresql://daytrader:secret@daytrader-postgres-rw.saxo.svc.cluster.local:5432/daytrader"
+        ));
+        assert!(database_url_is_postgres("postgres://user:pw@localhost/db"));
+        assert!(!database_url_is_postgres("sqlite::memory:"));
+        assert!(!database_url_is_postgres(
+            "sqlite:///Users/example/private/ledger.db"
+        ));
     }
 
     #[test]
