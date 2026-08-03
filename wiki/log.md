@@ -10,6 +10,14 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] review | Investigated the 1-2 day round trips before building a churn guard
+
+- Chose "Trading quality" as the next roadmap direction. Before implementing the "cooldown and churn guard" idea, investigated whether the three fast round trips flagged in the 2026-08-02 review (`AJG`, `JNJ`, `DSV`) were actually the pattern they looked like -- the roadmap's own note said to determine the cause before adding a rule.
+- Checked `execution_orders.strategy_type` for each closing SELL rather than assuming holding period alone meant indecision. `AJG` and `JNJ` both closed via `protective_stop` -- the ATR stop firing correctly, exactly the behavior U1 was built for.
+- Widened the query to every fast round trip in the trading history (correctly paired to each symbol's most recent preceding BUY, not a flawed lifetime-first-BUY join that undercounted multi-cycle symbols). Found 9 total: 3 were one coordinated portfolio-wide flatten from a single report two days after the 2026-05-05 launch import (a one-time bootstrap event), 3 were `strategy_type: manual` (operator-placed, not automated), 2 were the protective stops already found, and exactly **1** (`DSV`) was a genuine discretionary same-week reversal, with an explicit rationale rather than an unexplained flip.
+- Conclusion: do not build the cooldown/churn guard on this evidence. n=1 is not a pattern, and two of the original three examples were the safety system working correctly, not failing. Updated both `urgent-todo.md` and `roadmap.md` with the finding and the concrete signal to watch for if it should be revisited (recurring discretionary reversals specifically, tracked by `strategy_type`, not raw holding period).
+- No code changed; this is a diagnosis that prevented building the wrong thing, not a landed feature.
+
 ## [2026-08-03] operations | Drop the dead audit_log table (U14)
 
 - Operator confirmed dropping `audit_log` (65 MB, 38% of the database, no writes since 2026-05-10, nothing in Rust reads it) -- a destructive production DB operation, so this was not executed on the standing "continue with the next item" instruction alone; explicitly asked first.

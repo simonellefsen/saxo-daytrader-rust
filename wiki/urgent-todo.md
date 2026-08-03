@@ -217,7 +217,7 @@ An 11.8% win rate is not automatically wrong; a long-tail strategy can be profit
 
 Two patterns worth naming:
 
-- **Round trips of 1–2 days.** `AJG` bought 07-29, sold 07-30 (−7.0%). `JNJ` bought 07-28, sold 07-30 (−7.6%). `DSV` bought 07-21, sold 07-23 (−14.9%). Whatever thesis justified the buy did not survive 48 hours. On a swing horizon this is the model contradicting itself across two pulses, and each round trip pays spread and commission twice.
+- ~~Round trips of 1–2 days~~ **Investigated 2026-08-03 — mostly not the model contradicting itself.** `AJG` and `JNJ` both closed via `execution_orders.strategy_type = 'protective_stop'`: the ATR stop firing correctly, not a discretionary reversal. Only `DSV` (bought 07-21, sold 07-23, −14.9%) was a genuine same-week discretionary exit, with an explicit rationale (fresh bearish Markov regime against a momentum entry) rather than an unexplained flip. See [roadmap](roadmap.md) *Trading Quality* for the full investigation, which widened this to every fast round trip in the trading history and found only that one genuine case. No cooldown/churn-guard mechanism is justified on this evidence.
 - **The losses cluster in the long tail.** Six positions held 48–83 days net −9,131. Protective stops (U1) landed 2026-07-26 and should truncate this going forward; that hypothesis is now testable and has not yet been tested.
 
 ## Currency Exposure
