@@ -9735,7 +9735,6 @@ impl AppState {
             return Ok(());
         }
         const APPEND_HEAVY_TABLES: &[&str] = &[
-            "audit_log",
             "decision_reports",
             "trading_manager_runs",
             "trade_ledger",
