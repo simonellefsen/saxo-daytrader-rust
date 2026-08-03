@@ -10,6 +10,12 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] operations | Drop the dead audit_log table (U14)
+
+- Operator confirmed dropping `audit_log` (65 MB, 38% of the database, no writes since 2026-05-10, nothing in Rust reads it) -- a destructive production DB operation, so this was not executed on the standing "continue with the next item" instruction alone; explicitly asked first.
+- Found and fixed a real prerequisite before touching production: `tune_append_heavy_table_autovacuum` (landed earlier today for U13) runs `ALTER TABLE audit_log SET (...)` on every pod startup. Dropping the table first would have crash-looped every future pod restart or rollout on a missing table. Removed `audit_log` from that list, deployed (`44a0945`), confirmed all four deployments rolled out clean with 0 smoke warnings, only then dropped the table.
+- `DROP TABLE audit_log` against the primary (`daytrader-postgres-2`, confirmed via `pg_is_in_recovery()` before writing). Database size 172 MB -> 109 MB. Verified: `to_regclass('audit_log')` returns null, the scheduler's next cycle still completed `ok`, no pod restarts, no errors in either API or scheduler logs in the five minutes after.
+
 ## [2026-08-03] hygiene | Execute the Python removal plan
 
 - Ran the removal plan drafted earlier in `wiki/urgent-todo.md`, one commit per step so any part is independently revertible: `e5394fb` (AGENTS.md), `bc679ae` (phase validators), `b27ae6f` (systemd/launchd + renderer), `dfc77e0` (main.py/web_main.py/run_scheduler.py), `b43f0b7` (src/saxo_daytrader_xai/), `790fa8a` (requirements.txt), `e7fc99e` (SQLite migration one-shot).
