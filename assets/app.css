@@ -744,6 +744,14 @@ tr:last-child td {
   vertical-align: middle;
 }
 
+/* Keep a tag on the same line as the value it qualifies. Without this the
+   narrow Action column breaks between "SELL" and its tag, pushing the tag to a
+   second line and inflating the row. The enclosing .table-wrap already scrolls
+   horizontally, so widening the column is the safe trade. */
+.order-tag-cell {
+  white-space: nowrap;
+}
+
 .status-stack {
   display: flex;
   flex-wrap: wrap;

@@ -5899,7 +5899,7 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{id}" }
             td { "{created_at}" }
             td { "{symbol}" }
-            td {
+            td { class: "order-tag-cell",
                 span { "{action}" }
                 if protective {
                     span {
@@ -5911,7 +5911,7 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
             td { span { class: "status", "{status}" } }
             td { "{quantity}" }
-            td {
+            td { class: "order-tag-cell",
                 span { "{trigger_price}" }
                 if !trigger_kind.is_empty() {
                     span { class: "order-tag muted", "{trigger_kind}" }
