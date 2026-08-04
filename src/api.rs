@@ -138,6 +138,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/decision/schema", get(decision_schema))
         .route("/api/strategy-journal", get(strategy_journal))
         .route("/api/execution", get(execution))
+        .route(
+            "/api/execution/orders/{order_id}/events",
+            get(execution_order_events),
+        )
         .route("/api/scheduler", get(scheduler))
         .route("/api/hermes/capabilities", get(hermes_capabilities))
         .route("/api/hermes/context", get(hermes_context))
@@ -1863,6 +1867,28 @@ async fn decision_report_debug(
             Json(json!({"status": "not_found", "detail": "Decision Report was not found."})),
         )
             .into_response(),
+        Err(err) => json_result(Err(err)),
+    }
+}
+
+/// Broker lifecycle timeline for one execution order, loaded on demand.
+///
+/// Loading per order rather than filtering the dashboard's flat event list
+/// client-side is deliberate: that list is capped at 50 rows, so any order
+/// older than the most recent handful would silently render an empty timeline
+/// and look like an order that never reached the broker.
+async fn execution_order_events(
+    State(state): State<Arc<AppState>>,
+    Path(order_id): Path<i64>,
+) -> Response {
+    match state.execution_order_events(order_id, 200).await {
+        Ok(events) => Json(json!({
+            "status": "ok",
+            "execution_order_id": order_id,
+            "event_count": events.len(),
+            "events": events
+        }))
+        .into_response(),
         Err(err) => json_result(Err(err)),
     }
 }

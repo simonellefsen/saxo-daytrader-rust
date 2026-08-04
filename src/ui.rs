@@ -155,6 +155,67 @@ const APP_SCRIPT: &str = r#"
         if (details.open) void load();
       });
     });
+    document.querySelectorAll("details[data-order-events]").forEach((details) => {
+      if (details.dataset.bound === "true") return;
+      details.dataset.bound = "true";
+      const output = details.querySelector("[data-order-events-output]");
+      const orderId = details.dataset.orderId;
+      if (!output || !orderId) return;
+      const load = async () => {
+        if (details.dataset.loadState === "loading" || details.dataset.loadState === "loaded") return;
+        details.dataset.loadState = "loading";
+        output.textContent = "Loading broker events...";
+        try {
+          const base = appBasePath();
+          const response = await fetch(`${base}/api/execution/orders/${encodeURIComponent(orderId)}/events`, {
+            headers: { "Accept": "application/json" }
+          });
+          if (!response.ok) throw new Error("events unavailable");
+          const payload = await response.json();
+          const events = Array.isArray(payload.events) ? payload.events : [];
+          output.replaceChildren();
+          if (events.length === 0) {
+            // An order with no events is a real state, not a failure: it was
+            // never submitted to the broker. Say so rather than showing blank.
+            output.textContent = "No broker events recorded for this order.";
+            details.dataset.loadState = "loaded";
+            return;
+          }
+          const list = document.createElement("ol");
+          list.className = "order-event-timeline";
+          events.forEach((event) => {
+            const item = document.createElement("li");
+            const when = document.createElement("span");
+            when.className = "order-event-time";
+            when.textContent = String(event.created_at || "").replace("T", " ").replace("Z", "");
+            const what = document.createElement("strong");
+            what.textContent = String(event.event_type || "event");
+            const detail = document.createElement("span");
+            detail.className = "muted";
+            const bits = [];
+            if (event.broker_status) bits.push(String(event.broker_status));
+            if (event.broker_substatus) bits.push(String(event.broker_substatus));
+            if (event.broker_quantity !== null && event.broker_quantity !== undefined) {
+              bits.push(`qty ${event.broker_quantity}`);
+            }
+            if (event.broker_price_local !== null && event.broker_price_local !== undefined) {
+              bits.push(`@ ${event.broker_price_local}`);
+            }
+            detail.textContent = bits.join(" · ");
+            item.append(when, what, detail);
+            list.appendChild(item);
+          });
+          output.appendChild(list);
+          details.dataset.loadState = "loaded";
+        } catch (_) {
+          details.dataset.loadState = "failed";
+          output.textContent = "Broker events are unavailable. Close and reopen to retry.";
+        }
+      };
+      details.addEventListener("toggle", () => {
+        if (details.open) void load();
+      });
+    });
   };
   const loadTradingViewModal = (modal) => {
     if (!modal) return;
@@ -4779,7 +4840,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: "muted", "{data.execution_order_total} total · page {data.execution_page} of {total_pages}" }
                 }
                 table {
-                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Expiry" } th { "Attribution" } th { "Error" } } }
+                    thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Strategy" } th { "Role" } th { "Order Type" } th { "Status" } th { "Qty" } th { "Price" } th { "Limit" } th { "Stop" } th { "Expiry" } th { "Timeline" } th { "Attribution" } th { "Error" } } }
                     tbody {
                         for row in data.orders.iter() {
                             ExecutionOrderRow { row: row.clone(), prefs: prefs.clone() }
@@ -6007,6 +6068,19 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
             td { class: "muted", title: "{lifecycle_detail}", "{expiry}" }
+            td { class: "muted",
+                details {
+                    class: "error-details order-events-details",
+                    "data-order-events": "true",
+                    "data-order-id": "{text(&row, \"id\")}",
+                    summary { "Broker events" }
+                    div {
+                        class: "order-events-output",
+                        "data-order-events-output": "true",
+                        "Expand to load this order's broker lifecycle."
+                    }
+                }
+            }
             td { class: "muted attribution-cell",
                 details { class: "error-details attribution-details",
                     summary { span { class: "{attribution_tone}", "{attribution_label}" } }

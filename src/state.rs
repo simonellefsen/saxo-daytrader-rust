@@ -5835,6 +5835,34 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    /// Broker lifecycle events for one order, oldest first.
+    ///
+    /// The column list is an allowlist, not a `SELECT *` minus a few fields:
+    /// `raw_payload_json` holds unredacted Saxo responses and `account_uid`
+    /// identifies the account, and neither may reach a browser. Adding a column
+    /// to the table must not silently add it to this response.
+    ///
+    /// Ordered ascending because this renders as a timeline — the interesting
+    /// reading is placement to terminal state, not newest-first like the flat
+    /// event list on the Execution tab.
+    pub async fn execution_order_events(
+        &self,
+        order_id: i64,
+        limit: i64,
+    ) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, event_type, broker_status, broker_substatus,
+                    broker_quantity, broker_price_local, broker_order_id
+             FROM execution_order_events
+             WHERE execution_order_id = {}
+             ORDER BY created_at ASC, id ASC
+             LIMIT {}",
+            order_id,
+            clamp_limit(limit, 1, 200)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
     pub async fn execution_events(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT * FROM execution_order_events ORDER BY created_at DESC, id DESC LIMIT {}",
@@ -13567,6 +13595,64 @@ market_data:
              so age alone must not flag it; an ordinary stale order and a protective stop \
              with an unresolved placement are both still real faults"
         );
+    }
+
+    /// The per-order timeline reaches a browser, so the column list must stay
+    /// an allowlist. `raw_payload_json` holds unredacted Saxo responses and
+    /// `account_uid` identifies the account; neither may be served, and adding
+    /// a column to the table must not silently add it to the response.
+    #[tokio::test]
+    async fn order_event_timeline_never_serves_raw_broker_payloads() {
+        let state = runtime_settings_test_state("app: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE execution_order_events (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT,
+                execution_order_id INTEGER,
+                broker_order_id TEXT,
+                event_type TEXT,
+                broker_status TEXT,
+                broker_substatus TEXT,
+                broker_quantity REAL,
+                broker_price_local REAL,
+                event_signature TEXT,
+                raw_payload_json TEXT,
+                environment_id TEXT,
+                account_uid TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create execution_order_events test table");
+        sqlx::query(
+            "INSERT INTO execution_order_events VALUES
+                (1,'2026-08-04T14:55:00Z',285,'5039465258','placed','Working',NULL,6,NULL,'sig','{\"Secret\":\"broker-token\"}','SIM','ACCT-SECRET'),
+                (2,'2026-08-04T14:55:30Z',285,'5039465258','filled','Filled',NULL,6,193.12,'sig','{\"Secret\":\"broker-token\"}','SIM','ACCT-SECRET'),
+                (3,'2026-08-04T14:50:00Z',999,'other','placed','Working',NULL,1,NULL,'sig','{}','SIM','ACCT-SECRET')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("insert execution_order_events test rows");
+
+        let events = state
+            .execution_order_events(285, 200)
+            .await
+            .expect("load order events");
+
+        assert_eq!(events.len(), 2, "must scope to the requested order only");
+        let serialized = serde_json::to_string(&events).expect("serialize");
+        assert!(
+            !serialized.contains("broker-token"),
+            "raw broker payload must never be served: {serialized}"
+        );
+        assert!(
+            !serialized.contains("ACCT-SECRET"),
+            "account identifier must never be served: {serialized}"
+        );
+        // Oldest first: the timeline reads placement -> terminal state.
+        assert_eq!(events[0]["event_type"], "placed");
+        assert_eq!(events[1]["event_type"], "filled");
+        assert_eq!(events[1]["broker_price_local"], 193.12);
     }
 
     /// Rows 1-3 are the real production shapes: a USD sale across a falling

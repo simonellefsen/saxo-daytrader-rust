@@ -744,6 +744,34 @@ tr:last-child td {
   vertical-align: middle;
 }
 
+/* Broker lifecycle timeline inside an execution order row. Loaded on demand so
+   the Execution tab does not pay for every order's events up front. */
+.order-events-output {
+  min-width: 220px;
+}
+
+.order-event-timeline {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.order-event-timeline li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.order-event-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+
 /* Server-side table filters. Each chip is a plain link carrying its own query
    string, so filtering works without JavaScript and every filtered view has a
    shareable URL. */
