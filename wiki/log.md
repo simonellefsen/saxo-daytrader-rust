@@ -10,6 +10,14 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-04] ui | Split the Hermes tab into sections with per-section data loading
+
+- The tab rendered nine sections in one 335-line scroll and ran eleven separate queries on every load regardless of what the operator was looking at. Now Overview / Advice / Reflections / Experiments / Baselines, as plain links carrying their own query string.
+- The substance is the data gating, not the visual grouping: each of the eleven datasets is bound to the one section that renders it, extending the existing per-tab lazy-read policy a level deeper. Measured live: default Overview is 22.5 KB against roughly 327 KB for all sections combined, about a 93% reduction on first load. Advice (165 KB) and Reflections (88 KB) are the heavy ones and are now paid for only when opened.
+- **The header pills had to be gated the same way, and this was the subtle part.** They read counts from all eleven datasets; with only the active section loaded, sitting on Baselines would have rendered "Reflections: 0" when twenty exist. A zero that means "not loaded" reads as "none exist" — a worse defect than the one being fixed. Each section now shows only the pills whose data it loads. Verified live: Overview shows only `One-variable: 1`, Advice only `Counterfactuals: 19`, Baselines no count pills, Reflections the true `Reflections: 20 / Lessons: 28`.
+- A test asserts every dataset gates to exactly one section — gated to none renders a permanently empty table, gated to several defeats the split — and that nothing loads while another view is active.
+- 543 tests pass; fmt and `-D warnings` clean; 0 smoke warnings.
+
 ## [2026-08-04] ui | On-demand broker event timeline for execution orders
 
 - Answers "what actually happened with this order" in the UI — the question the operator had to ask in chat on 2026-08-03 about orders 272-274.
