@@ -10,6 +10,15 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-04] risk | Widen the drawdown halt to 25% (U9), and fix two Hermes contract drifts it exposed
+
+- Operator decision after a recap of the options: widen `strategy.capital.drawdown_halt_pct` 0.20 -> 0.25 in both shipped configs. The book was at 19.37% against the 20% floor (peak 297,463 DKK on 2026-06-30, current ~240,300), roughly a 1% day from suspending all BUYs. Halt threshold moves 237,970 -> 223,097 DKK.
+- The soft band stays at 0.10 deliberately -- it is already active and halving the cycle BUY budget, so only the hard stop moved and caution is retained. `DEFAULT_HALT_PCT` in `src/drawdown_guard.rs` also stays 0.20: it is the fallback for missing config, and falling to the stricter value is the correct direction for a risk control.
+- **The change exposed two genuine drifts in the Hermes goal contract.** `deploy/k8s/base/hermes.yaml` embeds `SELF_IMPROVEMENT_GOAL.yaml` in the `hermes-daytrader-context` ConfigMap, mounted into the Hermes pod at `/opt/daytrader-context` -- a *second, static copy* of the goal contract that the U3 guarantee ("the contract reads the same key the gate applies, so the two cannot drift") does not cover, because that guarantee only holds for the Rust `hermes_goal_contract_value`. It still carried `max_drawdown: 0.20`, which after this change would have told Hermes a limit the runtime no longer enforces -- exactly the U3 failure class, reappearing through a copy nobody had checked. It also still carried `gas_reserve: 0.05`, which U3 recorded as deleted but had only been removed from the Rust side. Both corrected, with a comment on the file naming the invariant.
+- `docs/hermes-agent.md` had drifted further still: `max_drawdown: 0.20`, `gas_reserve: 0.05`, `min_cash_buffer_pct: 0.10` (the deployed value is 0.02), and prose describing "the 47% 30-day return target" -- the objective corrected to 0.0117 on 2026-07-25. All fixed.
+- Verified no `0.20` drawdown value remains in any shipped config, manifest, or doc. `kubectl kustomize` builds clean; 536 tests pass; fmt and `-D warnings` clean.
+- **Unchanged and still open: there is no re-entry rule.** Widening moves the cliff, it does not define how a halted book resumes. That should be settled before the 25% floor is ever reached.
+
 ## [2026-08-03] ui | Make protective stops legible in the Overview Execution Queue
 
 - Direct evidence from this session: the operator saw orders 272-274 on the Overview tab and had to ask what they were. The table could not answer -- it rendered `SELL / broker_working / Limit: n/a / GoodTillCancel`, which reads as a mysterious resting sell rather than the automatic ATR protective stops they actually were.

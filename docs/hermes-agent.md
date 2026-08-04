@@ -16,7 +16,7 @@ hermes_self_improvement:
   objective:
     target_return_30d: 0.0117
     target_return_note: "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15"
-    max_drawdown: 0.20
+    max_drawdown: 0.25
     min_sharpe: 1.0
     failure_below_30d_return: -0.02
     reflection_every: 7d
@@ -24,8 +24,7 @@ hermes_self_improvement:
   constraints:
     max_positions: 25
     slippage_tolerance: 0.02
-    gas_reserve: 0.05
-    min_cash_buffer_pct: 0.10
+    min_cash_buffer_pct: 0.02
     allow_shorting: false
     require_human_approval: true
     require_backtest_before_activation: true
@@ -43,9 +42,9 @@ hermes_self_improvement:
       safety_violation: true
 ```
 
-The 47% 30-day return target is intentionally aggressive. Treat it as a research objective, not as permission to increase risk until the system happens to hit the number. The hard gates are drawdown, Sharpe, cash reserve, slippage tolerance, position count, and human approval.
+`target_return_30d: 0.0117` is roughly +15% per year compounded monthly, matching the operator's actual target. It replaced an earlier 0.47 ("10x in 6 months") on 2026-07-25, which was about 70x the real goal and made every promotion gate unreachable on merit. Treat the target as an objective, not as permission to increase risk until the system happens to hit the number. The hard gates are drawdown, Sharpe, cash reserve, slippage tolerance, position count, and human approval.
 
-`gas_reserve` is a strategy-level reserve. In this equity/Saxo system it should be implemented as reserved cash or unused buying power, not as blockchain gas.
+`max_drawdown` must stay equal to `strategy.capital.drawdown_halt_pct` in the shipped configs. The Rust goal contract reads that key directly so it cannot drift, but the `SELF_IMPROVEMENT_GOAL.yaml` copy mounted into the Hermes pod is static and has to be updated by hand alongside it.
 
 ## Scientific Method Rule
 

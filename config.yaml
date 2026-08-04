@@ -379,10 +379,19 @@ strategy:
     # number the Hermes goal contract publishes as max_drawdown; the contract
     # reads this key, so the two cannot drift apart. Set <= 0 to disable both
     # tiers. Too little history disables the guardrail rather than tripping it.
+    # Widened 0.20 -> 0.25 on 2026-08-04 by operator decision. The book sat at
+    # 19.37% against the 20% floor (peak 297,463 DKK on 2026-06-30, current
+    # ~240,300), so a ~1% day would have suspended BUYs with no re-entry rule
+    # defined -- the guardrail can stop a decline but has no notion of how a
+    # halted book resumes. The soft band stays at 0.10 deliberately: it is
+    # already active and halving the cycle BUY budget, so caution is retained
+    # rather than removed. Revisit the pair together, and note the halt only
+    # falls back below the peak's influence once 2026-06-30 leaves the
+    # 90-day lookback (around 2026-09-28).
     drawdown_lookback_days: 90
     drawdown_soft_reduce_pct: 0.10
     drawdown_soft_buy_multiplier: 0.50
-    drawdown_halt_pct: 0.20
+    drawdown_halt_pct: 0.25
   markov:
     enabled: true
     timezone: Europe/Copenhagen
