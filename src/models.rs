@@ -40,6 +40,7 @@ pub struct DashboardView {
     pub markov_page_size: i64,
     pub markov_signal_total: i64,
     pub markov_filter: String,
+    pub hermes_section: String,
     pub quiver_page: i64,
     pub quiver_page_size: i64,
     pub quiver_signal_total: i64,
@@ -403,6 +404,7 @@ pub struct ViewParams {
     pub execution_page: Option<i64>,
     pub markov_page: Option<i64>,
     pub markov_filter: Option<String>,
+    pub hermes_section: Option<String>,
     pub quiver_page: Option<i64>,
     pub scheduler_page: Option<i64>,
 }

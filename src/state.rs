@@ -2518,6 +2518,44 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
+/// Hermes sub-sections, in the order the tab strip presents them.
+pub(crate) const HERMES_SECTIONS: &[&str] = &[
+    "overview",
+    "advice",
+    "reflections",
+    "experiments",
+    "baselines",
+];
+
+pub(crate) fn normalize_hermes_section(value: Option<&str>) -> String {
+    let requested = value.unwrap_or("overview").trim().to_ascii_lowercase();
+    if HERMES_SECTIONS.contains(&requested.as_str()) {
+        requested
+    } else {
+        "overview".to_string()
+    }
+}
+
+pub(crate) fn hermes_section_label(section: &str) -> &'static str {
+    match section {
+        "advice" => "Advice",
+        "reflections" => "Reflections",
+        "experiments" => "Experiments",
+        "baselines" => "Baselines",
+        _ => "Overview",
+    }
+}
+
+/// Whether a Hermes sub-section's data should be loaded for this request.
+///
+/// The Hermes tab ran eleven separate queries on every load regardless of what
+/// the operator was looking at. Gating each one to the section that renders it
+/// extends the existing per-tab lazy-read policy a level deeper, so opening
+/// Hermes costs only the section in front of you rather than all of it.
+fn dashboard_loads_hermes_section(active_view: &str, section: &str, wanted: &str) -> bool {
+    active_view == "hermes" && section == wanted
+}
+
 fn scheduler_history_policy_values(
     configured_max_rows: Option<i64>,
     configured_retention_days: Option<i64>,
@@ -2621,6 +2659,7 @@ impl AppState {
         requested_execution_page: i64,
         requested_markov_page: i64,
         markov_filter: String,
+        hermes_section: String,
         requested_quiver_page: i64,
         requested_scheduler_page: i64,
     ) -> DashboardView {
@@ -2843,16 +2882,17 @@ impl AppState {
         } else {
             Vec::new()
         };
-        let hermes_reflections = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.hermes_reflections(20).await.unwrap_or_else(|err| {
-                warn!("dashboard Hermes reflections degraded: {err:#}");
+        let hermes_reflections =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
+                self.hermes_reflections(20).await.unwrap_or_else(|err| {
+                    warn!("dashboard Hermes reflections degraded: {err:#}");
+                    Vec::new()
+                })
+            } else {
                 Vec::new()
-            })
-        } else {
-            Vec::new()
-        };
+            };
         let hermes_lessons_pending_review =
-            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
                 self.hermes_lessons_pending_review(LESSONS_PENDING_REVIEW_LIMIT as i64)
                     .await
                     .unwrap_or_else(|err| {
@@ -2862,32 +2902,34 @@ impl AppState {
             } else {
                 Vec::new()
             };
-        let hermes_learning_memory = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.hermes_learning_memory(LEARNING_MEMORY_LIMIT as i64)
-                .await
-                .unwrap_or_else(|err| {
-                    warn!("dashboard Hermes learning memory degraded: {err:#}");
+        let hermes_learning_memory =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
+                self.hermes_learning_memory(LEARNING_MEMORY_LIMIT as i64)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard Hermes learning memory degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
+        let hermes_experiments =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "experiments") {
+                self.hermes_experiments(20).await.unwrap_or_else(|err| {
+                    warn!("dashboard Hermes experiments degraded: {err:#}");
                     Vec::new()
                 })
-        } else {
-            Vec::new()
-        };
-        let hermes_experiments = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.hermes_experiments(20).await.unwrap_or_else(|err| {
-                warn!("dashboard Hermes experiments degraded: {err:#}");
+            } else {
                 Vec::new()
-            })
-        } else {
-            Vec::new()
-        };
-        let hermes_proposal_quality = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
-        {
-            hermes_proposal_quality_from_experiments(&hermes_experiments)
-        } else {
-            Vec::new()
-        };
+            };
+        let hermes_proposal_quality =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "overview") {
+                hermes_proposal_quality_from_experiments(&hermes_experiments)
+            } else {
+                Vec::new()
+            };
         let hermes_decision_advice_audit =
-            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
                 self.hermes_decision_advice_audit(20)
                     .await
                     .unwrap_or_else(|err| {
@@ -2897,24 +2939,26 @@ impl AppState {
             } else {
                 Vec::new()
             };
-        let hermes_counterfactuals = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
-                warn!("dashboard Hermes counterfactuals degraded: {err:#}");
-                Vec::new()
-            })
-        } else {
-            Vec::new()
-        };
-        let missed_trade_shadows = if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
-            self.missed_trade_shadows(MISSED_TRADE_SHADOW_LIMIT)
-                .await
-                .unwrap_or_else(|err| {
-                    warn!("dashboard missed-trade shadows degraded: {err:#}");
+        let hermes_counterfactuals =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
+                self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
+                    warn!("dashboard Hermes counterfactuals degraded: {err:#}");
                     Vec::new()
                 })
-        } else {
-            Vec::new()
-        };
+            } else {
+                Vec::new()
+            };
+        let missed_trade_shadows =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
+                self.missed_trade_shadows(MISSED_TRADE_SHADOW_LIMIT)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard missed-trade shadows degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
         let missed_trade_shadow_evidence = if dashboard_loads_tab_exclusive_data(
             &active_view,
             "hermes",
@@ -2932,17 +2976,17 @@ impl AppState {
         } else {
             JsonValue::Null
         };
-        let active_strategy_baseline = if dashboard_loads_tab_exclusive_data(&active_view, "hermes")
-        {
-            self.active_strategy_baseline().await.unwrap_or_else(|err| {
-                warn!("dashboard active strategy baseline degraded: {err:#}");
+        let active_strategy_baseline =
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "baselines") {
+                self.active_strategy_baseline().await.unwrap_or_else(|err| {
+                    warn!("dashboard active strategy baseline degraded: {err:#}");
+                    JsonValue::Null
+                })
+            } else {
                 JsonValue::Null
-            })
-        } else {
-            JsonValue::Null
-        };
+            };
         let hermes_baseline_evidence_pack =
-            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "baselines") {
                 self.hermes_baseline_evidence_pack(&active_strategy_baseline)
                     .await
                     .unwrap_or_else(|err| {
@@ -2956,7 +3000,7 @@ impl AppState {
                 JsonValue::Null
             };
         let hermes_one_variable_audit =
-            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+            if dashboard_loads_hermes_section(&active_view, &hermes_section, "overview") {
                 self.hermes_one_variable_audit()
                     .await
                     .unwrap_or_else(|err| {
@@ -3177,6 +3221,7 @@ impl AppState {
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
             markov_signal_total,
             markov_filter,
+            hermes_section,
             quiver_page: quiver_signal_page.page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
@@ -16255,6 +16300,41 @@ analysis_windows:
             decisions.is_empty(),
             "entries without a symbol must be skipped, got {decisions:?}"
         );
+    }
+
+    #[test]
+    fn an_unknown_hermes_section_falls_back_to_overview() {
+        assert_eq!(normalize_hermes_section(None), "overview");
+        assert_eq!(normalize_hermes_section(Some("")), "overview");
+        assert_eq!(normalize_hermes_section(Some("nonsense")), "overview");
+        assert_eq!(normalize_hermes_section(Some("  ADVICE ")), "advice");
+        for key in HERMES_SECTIONS {
+            assert_eq!(&normalize_hermes_section(Some(key)), key);
+        }
+    }
+
+    /// Each of the Hermes tab's eleven datasets must load for exactly one
+    /// section. A dataset gated to no section renders as a permanently empty
+    /// table; one gated to several defeats the point of splitting the tab.
+    #[test]
+    fn every_hermes_section_gates_only_its_own_data() {
+        // Nothing loads while another tab is active.
+        for key in HERMES_SECTIONS {
+            assert!(
+                !dashboard_loads_hermes_section("overview", key, key),
+                "the Hermes tab must not load {key} data from another view"
+            );
+        }
+        // Within Hermes, a section loads its own data and nothing else.
+        for selected in HERMES_SECTIONS {
+            for candidate in HERMES_SECTIONS {
+                assert_eq!(
+                    dashboard_loads_hermes_section("hermes", selected, candidate),
+                    selected == candidate,
+                    "section {selected} should load {candidate} data only when they match"
+                );
+            }
+        }
     }
 
     /// The autovacuum tuning migration runs `ALTER TABLE ... SET (...)`

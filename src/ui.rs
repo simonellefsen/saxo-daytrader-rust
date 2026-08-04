@@ -4212,6 +4212,9 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    // Only the active section's data is loaded server-side, so a section that
+    // is not selected renders nothing rather than an empty-looking table.
+    let section = data.hermes_section.clone();
     let latest_reflection = data
         .hermes_reflections
         .first()
@@ -4255,26 +4258,49 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     h2 { "Hermes Self-Improvement" }
                     p { class: "muted", "Operator review and lifecycle controls for Hermes reflections and one-variable experiment proposals. Promotion records a baseline audit artifact; live trading remains separately gated." }
                 }
+                // Each pill is scoped to the section whose data is actually
+                // loaded. Rendering them all would print "Reflections: 0" while
+                // sitting on Baselines -- a zero that means "not loaded" reads
+                // as "none exist", which is worse than showing nothing.
                 div { class: "pill-row right",
-                    span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
-                    span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
-                    span { class: "pill", "Memory: {stable_learning_memory} stable / {stale_learning_memory} stale" }
-                    span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
-                    span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
-                    if !data.hermes_baseline_evidence_pack.is_null() {
+                    if section == "reflections" {
+                        span { class: "pill", "Reflections: {data.hermes_reflections.len()}" }
+                        span { class: "pill", "Lessons: {data.hermes_lessons_pending_review.len()}" }
+                        span { class: "pill", "Memory: {stable_learning_memory} stable / {stale_learning_memory} stale" }
+                    }
+                    if section == "overview" {
+                        span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
+                        span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
+                    }
+                    if section == "baselines" && !data.hermes_baseline_evidence_pack.is_null() {
                         span { class: "pill", "Baseline evidence: {text_or(&data.hermes_baseline_evidence_pack, \"status\", \"n/a\")}" }
                     }
-                    span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
-                    span { class: "pill", "Advised reports: {advised_reports}" }
-                    span { class: "pill", "Changed: {changed_reports}" }
-                    span { class: "pill", "Counterfactuals: {data.hermes_counterfactuals.len()}" }
-                    span { class: "pill", "Pending: {pending_experiments}" }
+                    if section == "experiments" {
+                        span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
+                        span { class: "pill", "Pending: {pending_experiments}" }
+                    }
+                    if section == "advice" {
+                        span { class: "pill", "Advised reports: {advised_reports}" }
+                        span { class: "pill", "Changed: {changed_reports}" }
+                        span { class: "pill", "Counterfactuals: {data.hermes_counterfactuals.len()}" }
+                    }
                 }
             }
             div { class: "notice-banner warn-banner",
                 strong { "Safety boundary" }
                 span { "Hermes can observe and propose. This dashboard can record paper/SIM lifecycle decisions, but it cannot place Saxo orders, expose secrets, or activate live broker behavior." }
             }
+            div { class: "filter-chip-row hermes-section-nav", aria_label: "Hermes sections",
+                for key in crate::state::HERMES_SECTIONS.iter() {
+                    a {
+                        class: if *key == section { "filter-chip active" } else { "filter-chip" },
+                        href: "/?view=hermes&hermes_section={key}",
+                        aria_current: if *key == section { "true" } else { "false" },
+                        "{crate::state::hermes_section_label(key)}"
+                    }
+                }
+            }
+            if section == "baselines" {
             if !data.active_strategy_baseline.is_null() {
                 div { class: "event prewrap",
                     strong { "Active Baseline Audit Record" }
@@ -4290,6 +4316,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
             HermesBaselineEvidencePack { pack: data.hermes_baseline_evidence_pack.clone(), prefs: prefs.clone() }
+            }
+            if section == "overview" {
             div { class: "table-wrap",
                 h3 { "One-Variable Audit" }
                 p { class: "muted", "Read-only view of the promoted baseline artifact and the exact experiment overlay the Trading Manager will consider. An overlay is limited to paper/SIM-eligible queue creation and never rewrites configuration or activates live trading." }
@@ -4347,6 +4375,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Findings", value: json_item_count(&latest_reflection, "findings_json").to_string(), tone: "" }
                 MetricCard { label: "Actions", value: json_item_count(&latest_reflection, "proposed_actions_json").to_string(), tone: "" }
             }
+            }
+            if section == "advice" {
             div { class: "table-wrap",
                 h3 { "Decision Advice Audit" }
                 table {
@@ -4370,6 +4400,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            }
+            if section == "reflections" {
             div { class: "table-wrap",
                 h3 { "Lessons Pending Review" }
                 p { class: "muted", "Recent advisory actions derived from Hermes reflections. Duplicate text is collapsed to the newest item. These are not approved experiments, strategy changes, or trading instructions." }
@@ -4424,6 +4456,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            }
+            if section == "advice" {
             div { class: "table-wrap",
                 h3 { "Counterfactual Tracking" }
                 p { class: "muted", "Quote-to-quote shadow outcomes for trade quantity Hermes blocked or reduced. They are observational estimates only and exclude fees, FX, slippage, and broker execution." }
@@ -4497,6 +4531,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            }
+            if section == "reflections" {
             div { class: "table-wrap",
                 h3 { "Recent Reflections" }
                 table {
@@ -4517,6 +4553,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            }
+            if section == "experiments" {
             div { class: "table-wrap",
                 h3 { "Experiment Proposals" }
                 table {
@@ -4540,6 +4578,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                 }
+            }
             }
         }
     }

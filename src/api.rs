@@ -240,6 +240,7 @@ async fn index(
     let markov_page = normalize_markov_page(params.markov_page);
     let markov_filter =
         crate::markov_method::normalize_markov_filter(params.markov_filter.as_deref());
+    let hermes_section = crate::state::normalize_hermes_section(params.hermes_section.as_deref());
     let quiver_page = normalize_quiver_page(params.quiver_page);
     let scheduler_page = normalize_scheduler_page(params.scheduler_page);
     info!(
@@ -260,6 +261,7 @@ async fn index(
                 execution_page,
                 markov_page,
                 markov_filter,
+                hermes_section,
                 quiver_page,
                 scheduler_page,
             )
