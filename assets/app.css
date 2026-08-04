@@ -744,6 +744,40 @@ tr:last-child td {
   vertical-align: middle;
 }
 
+/* Server-side table filters. Each chip is a plain link carrying its own query
+   string, so filtering works without JavaScript and every filtered view has a
+   shareable URL. */
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.filter-chip {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.filter-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+
 /* Keep a tag on the same line as the value it qualifies. Without this the
    narrow Action column breaks between "SELL" and its tag, pushing the tag to a
    second line and inflating the row. The enclosing .table-wrap already scrolls

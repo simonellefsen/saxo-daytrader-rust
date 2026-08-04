@@ -2426,8 +2426,20 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let error_count = value_i64(&run, "error_count");
     let total_pages =
         ((data.markov_signal_total + data.markov_page_size - 1) / data.markov_page_size).max(1);
-    let previous_page_href = format!("/?view=markov&markov_page={}", data.markov_page - 1);
-    let next_page_href = format!("/?view=markov&markov_page={}", data.markov_page + 1);
+    // Paging must carry the active filter, or moving to page 2 silently drops
+    // back to the unfiltered set while the chips still show a filter selected.
+    let previous_page_href = format!(
+        "/?view=markov&markov_filter={}&markov_page={}",
+        data.markov_filter,
+        data.markov_page - 1
+    );
+    let next_page_href = format!(
+        "/?view=markov&markov_filter={}&markov_page={}",
+        data.markov_filter,
+        data.markov_page + 1
+    );
+    let active_filter = data.markov_filter.clone();
+    let filter_label = crate::markov_method::markov_filter_label(&active_filter);
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -2462,8 +2474,24 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "table-wrap compact-table",
                 div { class: "section-title-row compact",
                     h3 { "Signals" }
+                    div { class: "filter-chip-row", aria_label: "Markov signal filters",
+                        for key in crate::markov_method::MARKOV_FILTERS.iter() {
+                            a {
+                                class: if *key == active_filter { "filter-chip active" } else { "filter-chip" },
+                                href: "/?view=markov&markov_filter={key}",
+                                aria_current: if *key == active_filter { "true" } else { "false" },
+                                "{crate::markov_method::markov_filter_label(key)}"
+                            }
+                        }
+                    }
                     div { class: "table-pagination table-pagination-top", aria_label: "Markov signal pages",
-                        span { class: "muted", "{data.markov_signal_total} total · page {data.markov_page} of {total_pages}" }
+                        span { class: "muted",
+                            if active_filter == "all" {
+                                "{data.markov_signal_total} total · page {data.markov_page} of {total_pages}"
+                            } else {
+                                "{data.markov_signal_total} matching {filter_label} · page {data.markov_page} of {total_pages}"
+                            }
+                        }
                         if data.markov_page > 1 {
                             a { class: "small-button", href: "{previous_page_href}", "Previous" }
                         }
@@ -2489,6 +2517,17 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                     }
                     tbody {
+                        if data.markov_signals.is_empty() {
+                            tr {
+                                td { colspan: "11", class: "muted",
+                                    if active_filter == "all" {
+                                        "No Markov signals in the latest run."
+                                    } else {
+                                        "No signals match the {filter_label} filter in the latest run."
+                                    }
+                                }
+                            }
+                        }
                         for row in data.markov_signals.iter() {
                             MarkovSignalRow { row: row.clone(), prefs: prefs.clone() }
                         }

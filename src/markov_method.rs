@@ -1127,13 +1127,75 @@ async fn markov_run_exists(state: &AppState, run_date: NaiveDate) -> Result<bool
 }
 
 pub async fn latest_markov_signals(state: &AppState, limit: i64) -> Result<Vec<JsonValue>> {
-    latest_markov_signals_page(state, limit, 0).await
+    latest_markov_signals_page_filtered(state, limit, 0, "all", 0.0).await
 }
 
-pub async fn latest_markov_signals_page(
+/// Canonical Markov signal filters, in the order the UI presents them.
+///
+/// Deliberately omits the roadmap's suggested "stale signals" filter. Every row
+/// in a single run shares that run's `run_date`, so staleness is a property of
+/// the run as a whole, never of one signal against its siblings — a per-row
+/// stale filter would either match everything or nothing, and dressing that up
+/// as a choice would be misleading.
+pub(crate) const MARKOV_FILTERS: &[&str] =
+    &["all", "portfolio", "watchlist", "conviction", "errors"];
+
+pub(crate) fn normalize_markov_filter(value: Option<&str>) -> String {
+    let requested = value.unwrap_or("all").trim().to_ascii_lowercase();
+    if MARKOV_FILTERS.contains(&requested.as_str()) {
+        requested
+    } else {
+        "all".to_string()
+    }
+}
+
+pub(crate) fn markov_filter_label(filter: &str) -> &'static str {
+    match filter {
+        "portfolio" => "Portfolio",
+        "watchlist" => "Watchlist",
+        "conviction" => "High conviction",
+        "errors" => "Errors",
+        _ => "All",
+    }
+}
+
+/// The SQL fragment a filter appends to the shared `WHERE run_id = (...)` base.
+///
+/// Both [`latest_markov_signals_page`] and [`latest_markov_signal_count`] build
+/// on this one function on purpose: if the page and the count ever applied
+/// different predicates, the pagination controls would advertise pages that
+/// render empty, which is worse than having no filter at all.
+///
+/// Portfolio membership is matched case-insensitively because broker and
+/// universe spellings genuinely differ for the same instrument — Saxo returns
+/// `DB1Gn:xetr` where the configured universe carries `db1gn:xetr`.
+pub(crate) fn markov_filter_sql(filter: &str, min_signed_signal: f64) -> String {
+    const HELD: &str = "SELECT UPPER(symbol) FROM broker_instrument_exposures WHERE quantity > 0";
+    match filter {
+        "portfolio" => format!(" AND UPPER(symbol) IN ({HELD})"),
+        "watchlist" => format!(" AND UPPER(symbol) NOT IN ({HELD})"),
+        // Compares against the same threshold the Trading Manager's Markov gate
+        // applies, so "high conviction" means "would clear the gate" rather
+        // than an arbitrary display cutoff.
+        "conviction" => {
+            let threshold = if min_signed_signal.is_finite() && min_signed_signal > 0.0 {
+                min_signed_signal
+            } else {
+                0.0
+            };
+            format!(" AND status = 'ok' AND ABS(signed_signal) >= {threshold}")
+        }
+        "errors" => " AND status <> 'ok'".to_string(),
+        _ => String::new(),
+    }
+}
+
+pub async fn latest_markov_signals_page_filtered(
     state: &AppState,
     limit: i64,
     offset: i64,
+    filter: &str,
+    min_signed_signal: f64,
 ) -> Result<Vec<JsonValue>> {
     let sql = format!(
         "SELECT id, run_id, created_at, run_date, status, symbol, instrument_name,
@@ -1149,9 +1211,10 @@ pub async fn latest_markov_signals_page(
             FROM markov_signal_runs
             ORDER BY run_date DESC, created_at DESC
             LIMIT 1
-         )
+         ){}
          ORDER BY run_date DESC, created_at DESC, symbol ASC
          LIMIT {} OFFSET {}",
+        markov_filter_sql(filter, min_signed_signal),
         clamp_limit(limit, 1, 500),
         offset.max(0).min(100_000),
     );
@@ -1159,8 +1222,12 @@ pub async fn latest_markov_signals_page(
     Ok(rows.iter().map(row_to_json).collect())
 }
 
-pub async fn latest_markov_signal_count(state: &AppState) -> Result<i64> {
-    let row = sqlx::query(
+pub async fn latest_markov_signal_count_filtered(
+    state: &AppState,
+    filter: &str,
+    min_signed_signal: f64,
+) -> Result<i64> {
+    let row = sqlx::query(&format!(
         "SELECT COUNT(*) AS count
          FROM markov_asset_signals
          WHERE run_id = (
@@ -1168,8 +1235,9 @@ pub async fn latest_markov_signal_count(state: &AppState) -> Result<i64> {
             FROM markov_signal_runs
             ORDER BY run_date DESC, created_at DESC
             LIMIT 1
-         )",
-    )
+         ){}",
+        markov_filter_sql(filter, min_signed_signal)
+    ))
     .fetch_optional(&state.pool)
     .await?;
     Ok(row
@@ -2079,6 +2147,88 @@ mod tests {
         assert!(candidate_matches_requested(
             &candidate, "SPY:arcx", &requested
         ));
+    }
+
+    #[test]
+    fn an_unknown_or_hostile_filter_falls_back_to_all() {
+        assert_eq!(normalize_markov_filter(None), "all");
+        assert_eq!(normalize_markov_filter(Some("")), "all");
+        assert_eq!(normalize_markov_filter(Some("nonsense")), "all");
+        // The value reaches SQL, so anything not on the allowlist must be
+        // rejected outright rather than sanitized and passed through.
+        assert_eq!(
+            normalize_markov_filter(Some("all'; DROP TABLE markov_asset_signals; --")),
+            "all"
+        );
+        assert_eq!(normalize_markov_filter(Some("  PORTFOLIO  ")), "portfolio");
+        for key in MARKOV_FILTERS {
+            assert_eq!(&normalize_markov_filter(Some(key)), key);
+        }
+    }
+
+    /// The page query and the count query must apply an identical predicate.
+    /// If they diverge, the pagination control advertises pages that render
+    /// empty -- worse than shipping no filter at all.
+    #[test]
+    fn every_filter_produces_one_predicate_shared_by_page_and_count() {
+        for key in MARKOV_FILTERS {
+            let predicate = markov_filter_sql(key, 0.15);
+            if *key == "all" {
+                assert!(predicate.is_empty(), "all must not constrain the run");
+                continue;
+            }
+            assert!(
+                predicate.starts_with(" AND "),
+                "{key} must extend the shared WHERE rather than replace it, got {predicate}"
+            );
+            assert!(
+                !predicate.contains(';'),
+                "{key} must not be able to terminate the statement"
+            );
+        }
+    }
+
+    #[test]
+    fn portfolio_and_watchlist_are_exact_complements() {
+        let held = markov_filter_sql("portfolio", 0.0);
+        let not_held = markov_filter_sql("watchlist", 0.0);
+        assert!(held.contains(" IN ("), "got {held}");
+        assert!(not_held.contains(" NOT IN ("), "got {not_held}");
+        // Case-insensitive on both sides: Saxo returns `DB1Gn:xetr` where the
+        // configured universe carries `db1gn:xetr`, and an exact match would
+        // silently classify a held position as watchlist.
+        assert!(held.contains("UPPER(symbol) IN"), "got {held}");
+        assert!(held.contains("SELECT UPPER(symbol)"), "got {held}");
+        assert_eq!(
+            held.replace(" IN (", " NOT IN ("),
+            not_held,
+            "the two filters must partition the run with no gap or overlap"
+        );
+    }
+
+    /// "High conviction" is defined as "would clear the Trading Manager's
+    /// Markov gate", not an arbitrary display cutoff, so it must carry the
+    /// configured threshold through.
+    #[test]
+    fn the_conviction_filter_uses_the_configured_gate_threshold() {
+        let predicate = markov_filter_sql("conviction", 0.15);
+        assert!(
+            predicate.contains("ABS(signed_signal) >= 0.15"),
+            "got {predicate}"
+        );
+        assert!(
+            predicate.contains("status = 'ok'"),
+            "an errored row has no usable signal to be convicted about, got {predicate}"
+        );
+        // A missing or nonsensical threshold must not become a negative bound
+        // that admits every row including errors.
+        for bad in [0.0, -1.0, f64::NAN] {
+            let fallback = markov_filter_sql("conviction", bad);
+            assert!(
+                fallback.contains("ABS(signed_signal) >= 0"),
+                "threshold {bad} must clamp to 0, got {fallback}"
+            );
+        }
     }
 
     /// The exchange-scoped fallback in `lookup_instrument` passes this value to

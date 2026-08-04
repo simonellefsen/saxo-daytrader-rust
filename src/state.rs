@@ -2620,6 +2620,7 @@ impl AppState {
         selected_report_id: Option<i64>,
         requested_execution_page: i64,
         requested_markov_page: i64,
+        markov_filter: String,
         requested_quiver_page: i64,
         requested_scheduler_page: i64,
     ) -> DashboardView {
@@ -2965,22 +2966,33 @@ impl AppState {
             } else {
                 Vec::new()
             };
+        // The count and the page must use the same filter, or the pagination
+        // controls advertise pages that render empty.
+        let markov_min_signed_signal =
+            crate::trading_manager::markov_gate_config(self).min_signed_signal;
         let markov_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
-            self.markov_signals_count().await.unwrap_or_else(|err| {
-                warn!("dashboard Markov signal count degraded: {err:#}");
-                0
-            })
+            self.markov_signals_count_filtered(&markov_filter, markov_min_signed_signal)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard Markov signal count degraded: {err:#}");
+                    0
+                })
         } else {
             0
         };
         let markov_signal_page = markov_signal_page(requested_markov_page, markov_signal_total);
         let markov_signals = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
-            self.markov_signals_page(MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page.offset)
-                .await
-                .unwrap_or_else(|err| {
-                    warn!("dashboard Markov signals degraded: {err:#}");
-                    Vec::new()
-                })
+            self.markov_signals_page_filtered(
+                MARKOV_SIGNALS_PAGE_SIZE,
+                markov_signal_page.offset,
+                &markov_filter,
+                markov_min_signed_signal,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                warn!("dashboard Markov signals degraded: {err:#}");
+                Vec::new()
+            })
         } else {
             Vec::new()
         };
@@ -3164,6 +3176,7 @@ impl AppState {
             markov_page: markov_signal_page.page,
             markov_page_size: MARKOV_SIGNALS_PAGE_SIZE,
             markov_signal_total,
+            markov_filter,
             quiver_page: quiver_signal_page.page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
@@ -6053,12 +6066,30 @@ impl AppState {
         crate::markov_method::latest_markov_signals(self, limit).await
     }
 
-    pub async fn markov_signals_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
-        crate::markov_method::latest_markov_signals_page(self, limit, offset).await
+    pub async fn markov_signals_page_filtered(
+        &self,
+        limit: i64,
+        offset: i64,
+        filter: &str,
+        min_signed_signal: f64,
+    ) -> Result<Vec<JsonValue>> {
+        crate::markov_method::latest_markov_signals_page_filtered(
+            self,
+            limit,
+            offset,
+            filter,
+            min_signed_signal,
+        )
+        .await
     }
 
-    pub async fn markov_signals_count(&self) -> Result<i64> {
-        crate::markov_method::latest_markov_signal_count(self).await
+    pub async fn markov_signals_count_filtered(
+        &self,
+        filter: &str,
+        min_signed_signal: f64,
+    ) -> Result<i64> {
+        crate::markov_method::latest_markov_signal_count_filtered(self, filter, min_signed_signal)
+            .await
     }
 
     pub async fn latest_markov_run(&self) -> Result<JsonValue> {

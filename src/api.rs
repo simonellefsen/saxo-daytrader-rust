@@ -234,6 +234,8 @@ async fn index(
     let performance_range = normalize_performance_range(params.range_key.as_deref());
     let execution_page = normalize_execution_page(params.execution_page);
     let markov_page = normalize_markov_page(params.markov_page);
+    let markov_filter =
+        crate::markov_method::normalize_markov_filter(params.markov_filter.as_deref());
     let quiver_page = normalize_quiver_page(params.quiver_page);
     let scheduler_page = normalize_scheduler_page(params.scheduler_page);
     info!(
@@ -253,6 +255,7 @@ async fn index(
                 params.report_id,
                 execution_page,
                 markov_page,
+                markov_filter,
                 quiver_page,
                 scheduler_page,
             )
