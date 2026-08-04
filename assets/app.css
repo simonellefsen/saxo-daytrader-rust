@@ -729,6 +729,21 @@ tr:last-child td {
   font-weight: 700;
 }
 
+/* Compact qualifier shown beside an order's action or price: marks an
+   automatic protective stop, and names whether a price is a stop or a limit. */
+.order-tag {
+  display: inline-block;
+  margin-left: 6px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--panel-alt);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
 .status-stack {
   display: flex;
   flex-wrap: wrap;

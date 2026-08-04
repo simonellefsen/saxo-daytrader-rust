@@ -631,7 +631,7 @@ fn OverviewView(
                         h2 { "Execution Queue" }
                         div { class: "table-wrap",
                             table {
-                                thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Status" } th { "Qty" } th { "Limit" } th { "Expiry" } } }
+                                thead { tr { th { "ID" } th { "Created" } th { "Symbol" } th { "Action" } th { "Status" } th { "Qty" } th { "Trigger" } th { "Expiry" } } }
                                 tbody { for row in data.orders.iter() { OrderRow { row: row.clone(), prefs: prefs.clone() } } }
                             }
                         }
@@ -5890,18 +5890,33 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let status = text(&row, "status");
     let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
     let currency = execution_order_price_currency(&row);
-    let limit = format_local_money(value_f64(&row, "limit_price_local"), &currency, &prefs);
+    let (trigger_price, trigger_kind) = execution_order_trigger_price(&row, &currency, &prefs);
     let expiry = execution_order_lifecycle_label(&row, &prefs);
     let lifecycle_detail = execution_order_lifecycle_detail(&row, &prefs);
+    let protective = is_protective_stop_order(&row);
     rsx! {
         tr {
             td { "{id}" }
             td { "{created_at}" }
             td { "{symbol}" }
-            td { "{action}" }
+            td {
+                span { "{action}" }
+                if protective {
+                    span {
+                        class: "order-tag",
+                        title: "Automatic protective stop placed by the runtime after a BUY fill, not a decided sell.",
+                        "protective"
+                    }
+                }
+            }
             td { span { class: "status", "{status}" } }
             td { "{quantity}" }
-            td { "{limit}" }
+            td {
+                span { "{trigger_price}" }
+                if !trigger_kind.is_empty() {
+                    span { class: "order-tag muted", "{trigger_kind}" }
+                }
+            }
             td { class: "muted", title: "{lifecycle_detail}", "{expiry}" }
         }
     }
@@ -8649,6 +8664,58 @@ fn age_label(minutes: f64) -> String {
     }
 }
 
+/// The price that actually governs an order, with a label naming which kind.
+///
+/// The Execution Queue column previously rendered `limit_price_local` alone, so
+/// every stop order displayed `n/a` despite having a real trigger price — the
+/// automatic protective stops placed after each BUY fill are `Stop` orders and
+/// carry `stop_price_local`, never a limit. Combined with a `SELL` action and a
+/// `GoodTillCancel` expiry, a resting protective stop was indistinguishable
+/// from a discretionary sell nobody could account for.
+///
+/// Returns `(value, kind)` where an empty kind means no governing price exists
+/// (a Market order), so the caller can render the bare value without inventing
+/// a label.
+fn execution_order_trigger_price(
+    row: &JsonValue,
+    currency: &str,
+    prefs: &LocalizationPrefs,
+) -> (String, String) {
+    let stop = value_f64(row, "stop_price_local");
+    let limit = value_f64(row, "limit_price_local");
+    let order_type = text(row, "order_type").to_ascii_lowercase();
+    // Trust the order type first; fall back to whichever price is present so a
+    // row with an unexpected or missing type still shows what it has.
+    let prefers_stop = order_type.contains("stop");
+    if prefers_stop && stop.is_finite() && stop != 0.0 {
+        return (
+            format_local_money(stop, currency, prefs),
+            "Stop".to_string(),
+        );
+    }
+    if limit.is_finite() && limit != 0.0 {
+        return (
+            format_local_money(limit, currency, prefs),
+            "Limit".to_string(),
+        );
+    }
+    if stop.is_finite() && stop != 0.0 {
+        return (
+            format_local_money(stop, currency, prefs),
+            "Stop".to_string(),
+        );
+    }
+    (format_local_money(limit, currency, prefs), String::new())
+}
+
+/// True when this runtime placed the order as automatic downside protection.
+///
+/// `strategy_type` is set by the runtime at insert (never by the model), so it
+/// is reliable provenance rather than a heuristic on price or action.
+fn is_protective_stop_order(row: &JsonValue) -> bool {
+    text(row, "strategy_type") == "protective_stop"
+}
+
 fn execution_order_price_currency(row: &JsonValue) -> String {
     let currency = text(row, "currency");
     if !currency.trim().is_empty() {
@@ -9464,6 +9531,73 @@ mod tests {
             ),
             "New symbol blocked: 3 of 3 configured USD bucket slots were already occupied."
         );
+    }
+
+    /// Reproduces the real 2026-08-03 rows (orders 272-274): protective stops
+    /// carry `stop_price_local` and never a limit, so the Execution Queue's
+    /// price column rendered `n/a` for an order that very much had a price.
+    #[test]
+    fn a_protective_stop_shows_its_stop_price_rather_than_an_empty_limit() {
+        let row = json!({
+            "symbol": "ADBE:xnas",
+            "currency": "USD",
+            "action": "SELL",
+            "order_type": "stop",
+            "strategy_type": "protective_stop",
+            "stop_price_local": 226.17495727539062,
+            "limit_price_local": null,
+        });
+        let (value, kind) = execution_order_trigger_price(&row, "USD", &default_prefs());
+        assert_eq!(kind, "Stop");
+        assert!(
+            value.contains("226"),
+            "stop price must be rendered, got {value}"
+        );
+        assert!(
+            is_protective_stop_order(&row),
+            "runtime-set strategy_type is the provenance signal"
+        );
+    }
+
+    #[test]
+    fn a_limit_order_still_reports_its_limit_price() {
+        let row = json!({
+            "symbol": "AMD:xnas",
+            "order_type": "limit",
+            "strategy_type": "swing",
+            "limit_price_local": 142.5,
+            "stop_price_local": null,
+        });
+        let (value, kind) = execution_order_trigger_price(&row, "USD", &default_prefs());
+        assert_eq!(kind, "Limit");
+        assert!(value.contains("142"), "got {value}");
+        assert!(
+            !is_protective_stop_order(&row),
+            "a discretionary swing order is not a protective stop"
+        );
+    }
+
+    /// A market order has no governing price. The kind must stay empty so the
+    /// caller does not label a blank value as a limit that was never set.
+    #[test]
+    fn a_market_order_claims_neither_a_stop_nor_a_limit() {
+        let row = json!({
+            "symbol": "V:xnys",
+            "order_type": "market",
+            "strategy_type": "swing",
+        });
+        let (_, kind) = execution_order_trigger_price(&row, "USD", &default_prefs());
+        assert!(kind.is_empty(), "market orders must not claim a price kind");
+    }
+
+    /// An unexpected or missing `order_type` must still surface whichever price
+    /// the row actually carries rather than falling through to nothing.
+    #[test]
+    fn an_unknown_order_type_falls_back_to_whichever_price_exists() {
+        let stop_only = json!({"order_type": "", "stop_price_local": 114.0});
+        let (value, kind) = execution_order_trigger_price(&stop_only, "USD", &default_prefs());
+        assert_eq!(kind, "Stop");
+        assert!(value.contains("114"), "got {value}");
     }
 
     #[test]

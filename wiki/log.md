@@ -10,6 +10,14 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-03] ui | Make protective stops legible in the Overview Execution Queue
+
+- Direct evidence from this session: the operator saw orders 272-274 on the Overview tab and had to ask what they were. The table could not answer -- it rendered `SELL / broker_working / Limit: n/a / GoodTillCancel`, which reads as a mysterious resting sell rather than the automatic ATR protective stops they actually were.
+- Two separate problems, both fixed. (1) The price column bound `limit_price_local` only, so every stop order showed `n/a` despite carrying a real `stop_price_local` -- the column was not merely uninformative, it asserted the order had no price. `execution_order_trigger_price` now resolves the governing price by order type, labels it `Stop` or `Limit`, and returns an empty kind for market orders so a blank value is never mislabelled. Header renamed `Limit` -> `Trigger`. (2) Nothing distinguished an automatic protective stop from a decided sell; a compact `protective` tag now marks them, keyed on `strategy_type` (set by the runtime at insert, never by the model, so it is provenance rather than a heuristic on price or action).
+- Backend untouched: `execution_orders_page` already selected `order_type`, `stop_price_local`, and `strategy_type`. This was purely the UI failing to render data it already had.
+- Note the Execution tab was already adequate here -- it has 15 columns including Strategy and Order Type. Only the 8-column Overview table, which is what the operator was actually looking at, lacked the distinction.
+- Four tests covering the real order-272 shape, limit orders, market orders (must claim no price kind), and an unknown/missing `order_type` falling back to whichever price exists. 536 tests pass.
+
 ## [2026-08-03] correctness | Read position decisions from decision reports, not retired Python tables
 
 - User asked why the Overview "Decision" column showed `n/a` for BAKKA, DANSKE, EQNR, DEMANT, and ALMB. Root cause was not those five symbols: `latest_symbol_decisions` read from `swing_sentiment_snapshots` and `swing_position_targets`, neither of which any Rust code writes -- no `INSERT` for either exists in `src/`. Both are frozen at `report_id = 12` (2026-05-08), written by the retired Python runtime.
