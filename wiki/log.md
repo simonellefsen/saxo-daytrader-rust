@@ -10,6 +10,16 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-04] ui | On-demand broker event timeline for execution orders
+
+- Answers "what actually happened with this order" in the UI — the question the operator had to ask in chat on 2026-08-03 about orders 272-274.
+- Built as an inline expandable cell, not the modal the roadmap wording suggested. The Execution row already carries the order's own fields across 16 columns and the Error column already holds broker error details with the failure-stage taxonomy; the only thing genuinely missing was the broker lifecycle, and an expandable cell keeps it beside the row it describes rather than behind a dialog.
+- `GET /api/execution/orders/{id}/events`, loaded on demand following the existing `data-decision-debug` pattern. **Per-order rather than filtering the dashboard's flat event list client-side**, because that list is capped at 50 rows — any order older than the most recent handful would have rendered an empty timeline and looked like an order that never reached the broker.
+- The endpoint's column list is an allowlist rather than `SELECT *` minus a few fields: `raw_payload_json` holds unredacted Saxo responses and `account_uid` identifies the account. A test asserts neither is served and that adding a column to the table cannot silently add it to the response — verified live across four orders with zero leaked fields.
+- Events are ordered oldest-first because this reads as a timeline (placement to terminal state), unlike the newest-first flat list. An order with no events says so explicitly rather than rendering blank: never submitted to the broker is a real state, not a failure.
+- Verified in a browser, not just by tests: 25 timeline cells bound; expanding order 285 renders `queued_by_trading_manager` 14:55:42 → `submitted_to_broker` 14:55:43 (broker id 5039464790) → `broker_final_fill` 14:55:59 (FinalFill · Confirmed · qty 6 · @ 193.12); no console errors; reopening does not re-fetch (one request, content retained), confirming the `loadState` guard.
+- 541 tests pass; fmt and `-D warnings` clean; 0 smoke warnings.
+
 ## [2026-08-04] ui | Server-side filters for the Markov signals table
 
 - The table carries ~200 signals across pages since the U11 instrument fix restored the universe, so finding held positions, gate-clearing signals, or the one remaining failure meant paging through everything.
