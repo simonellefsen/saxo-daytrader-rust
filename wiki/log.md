@@ -10,6 +10,17 @@ updated: 2026-08-02
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-04] ui | Server-side filters for the Markov signals table
+
+- The table carries ~200 signals across pages since the U11 instrument fix restored the universe, so finding held positions, gate-clearing signals, or the one remaining failure meant paging through everything.
+- Filters are plain links carrying their own query string: no JavaScript, and every filtered view has a shareable URL. Changing filter resets to page 1 by omitting the page param.
+- The load-bearing design choice: the page query and the count query share one `markov_filter_sql` function. If they ever applied different predicates the pagination control would advertise pages that render empty — worse than shipping no filter. A test asserts every filter yields a single predicate that extends the shared `WHERE` rather than replacing it. The paging links carry the active filter for the same reason.
+- "High conviction" compares against `strategy.swing.markov_gate.min_signed_signal` — the threshold the Trading Manager actually applies — so it means "would clear the gate", not an arbitrary display cutoff. A non-finite or non-positive configured threshold clamps to 0 rather than becoming a negative bound that would admit errored rows.
+- **"Stale signals" from the roadmap was deliberately not implemented.** Every row in a run shares that run's `run_date`, so staleness is a property of the run as a whole, never of one signal against its siblings; a per-row stale filter would match everything or nothing, and presenting that as a choice would mislead.
+- The filter value reaches SQL, so it is validated against an allowlist rather than sanitized — a test pins that an injection-shaped value falls back to `all`.
+- Verified live against production: All 201, Portfolio 18 (exactly the 18 held positions), Watchlist 183, High conviction 117, Errors 1 (SPCX, with its full diagnostic). 18 + 183 = 201 confirms portfolio/watchlist partition the run with no gap or overlap. Paging checked on the conviction filter: page 2 of 3 reports "117 matching High conviction", and the prev/next hrefs carry `markov_filter=conviction`.
+- 540 tests pass; fmt and `-D warnings` clean; 0 smoke warnings.
+
 ## [2026-08-04] risk | Widen the drawdown halt to 25% (U9), and fix two Hermes contract drifts it exposed
 
 - Operator decision after a recap of the options: widen `strategy.capital.drawdown_halt_pct` 0.20 -> 0.25 in both shipped configs. The book was at 19.37% against the 20% floor (peak 297,463 DKK on 2026-06-30, current ~240,300), roughly a 1% day from suspending all BUYs. Halt threshold moves 237,970 -> 223,097 DKK.

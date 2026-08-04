@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-03
+updated: 2026-08-04
 ---
 
 # Daytrader Roadmap
@@ -399,7 +399,7 @@ The dashboard should make action, risk, and system state obvious without needing
 - Add report detail pages with tabs for prompt, response, normalized report, manager result, Hermes advice, and orders.
 - Add execution order detail modals with timeline events and broker error details.
 - Add a Hermes tab split into Overview, Advice, Reflections, Experiments, and Baselines.
-- Add a Markov tab table filter for portfolio, watchlist, errors, stale signals, and high-conviction signals.
+- ~~Add a Markov tab table filter for portfolio, watchlist, errors, stale signals, and high-conviction signals~~ Landed 2026-08-04: server-side filters (All / Portfolio / Watchlist / High conviction / Errors) as plain links carrying their own query string, so they work without JavaScript and every filtered view has a shareable URL. The page and count queries share one `markov_filter_sql` function deliberately — divergent predicates would make the pagination control advertise pages that render empty, which is worse than no filter — and the paging links carry the active filter for the same reason. "High conviction" compares against `strategy.swing.markov_gate.min_signed_signal`, the threshold the Trading Manager actually applies, so it means "would clear the gate" rather than a display cutoff. Verified live: All 201, Portfolio 18 (matching the 18 held positions exactly), Watchlist 183, Errors 1 (SPCX), and 18+183=201 confirming the two are exact complements on real data. **"Stale signals" was deliberately not implemented**: every row in a run shares that run's `run_date`, so staleness is a property of the run, not of one signal against its siblings — a per-row stale filter would match everything or nothing. Signal *age* is already surfaced at the run level.
 - Add keyboard-safe and mobile-safe layouts for the main monitoring views.
 - Per-tab lazy read models (see P0 UI performance row): each view fetches only its own data, heavy JSON/prompt payloads load on demand, and long tables (positions, Markov signals, execution orders, scheduler cycles) paginate server-side. Target: any tab under 300 ms server time and under 200 KB HTML.
 - ~~Age-label or hide stale per-position decisions~~ Landed 2026-07-14: portfolio and watchlist decision chips show relative age, become `Stale` after the configurable seven-day default horizon, and treat missing timestamps as stale rather than current advice.
