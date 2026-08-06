@@ -4060,14 +4060,10 @@ impl AppState {
             .into_iter()
             .map(|row| (text_value(&row, "symbol"), row))
             .collect::<HashMap<_, _>>();
-        let account_currency = self
-            .first_json("SELECT account_currency FROM broker_account_snapshots WHERE singleton_key = 'main' LIMIT 1")
-            .await?
-            .and_then(|row| row.get("account_currency").cloned())
-            .and_then(|value| value.as_str().map(ToString::to_string))
-            .unwrap_or_else(|| "DKK".to_string());
-        let account_fx_rate =
-            crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &account_currency).await;
+        // The account currency was only ever read to convert
+        // `profit_loss_on_trade`, which is instrument-denominated -- see the
+        // note at that conversion below. Nothing else in this projection needs
+        // it, so looking it up here would be a query for an unused value.
         let cash_summary = self.cash_summary_from_ledger().await?;
         let cash_balance = value_f64(&cash_summary, "cash_balance_dkk");
 
@@ -4152,10 +4148,19 @@ impl AppState {
                 }
                 _ => 0.0,
             };
+            // Saxo's `ProfitLossOnTrade` is denominated in the *instrument's*
+            // currency, not the account's -- the sibling field
+            // `ProfitLossOnTradeInBaseCurrency` is the account-currency one, and
+            // this is not it. Converting with `account_fx_rate` (EUR on this SIM
+            // account) inflated every position: AKERBP's -284 NOK rendered as
+            // -284 x 7.475 = -2,123 DKK instead of -284 x 0.681 = -193, and a
+            // DKK instrument like DANSKE had its 443.5 DKK shown as 3,315.
+            // `current_fx_rate` is the instrument's rate -- the same one
+            // `market_value_dkk` above already uses correctly.
             let unrealised_pnl_dkk = exposure
                 .map(|row| value_f64(row, "profit_loss_on_trade"))
                 .filter(|value| value.abs() > 1e-9)
-                .map(|value| value * account_fx_rate)
+                .map(|value| value * current_fx_rate)
                 .unwrap_or(market_value_dkk - cost_basis_dkk);
             rows.push(json!({
                 "instrument_name": text_value(&broker, "instrument_name")
@@ -16472,6 +16477,38 @@ analysis_windows:
             decisions.is_empty(),
             "entries without a symbol must be skipped, got {decisions:?}"
         );
+    }
+
+    /// Saxo's `ProfitLossOnTrade` is instrument-denominated; the sibling
+    /// `ProfitLossOnTradeInBaseCurrency` is the account-currency one. Converting
+    /// the former with the account rate inflated every position on this
+    /// EUR-based SIM account. These are the real production values from
+    /// 2026-08-06, before and after.
+    #[test]
+    fn broker_pnl_converts_at_the_instrument_rate_not_the_account_rate() {
+        const EUR_ACCOUNT_RATE: f64 = 7.47523;
+        // (symbol, broker P/L in instrument currency, instrument rate, what the
+        // bug displayed, what is correct)
+        let cases = [
+            ("AKERBP:xosl", -284.0, 0.68054, -2123.0, -193.0),
+            ("EQNR:xosl", -288.0, 0.68054, -2153.0, -196.0),
+            ("V:xnys", 549.51, 6.47436, 4108.0, 3558.0),
+            // A DKK instrument is the clearest case: its P/L needs no
+            // conversion at all, yet was being multiplied by 7.475.
+            ("DANSKE:xcse", 443.5, 1.0, 3315.0, 443.5),
+            ("GN:xcse", -80.0, 1.0, -598.0, -80.0),
+        ];
+        for (symbol, broker_pnl, instrument_rate, buggy, correct) in cases {
+            assert!(
+                (broker_pnl * EUR_ACCOUNT_RATE - buggy).abs() < 1.0,
+                "{symbol}: the old account-rate path should reproduce {buggy}"
+            );
+            assert!(
+                (broker_pnl * instrument_rate - correct).abs() < 1.0,
+                "{symbol}: instrument rate should give {correct}, got {}",
+                broker_pnl * instrument_rate
+            );
+        }
     }
 
     /// `missing` must stay distinct from `stale`: a source that never produced
