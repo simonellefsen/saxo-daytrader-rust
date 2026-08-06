@@ -4064,6 +4064,7 @@ impl AppState {
         // `profit_loss_on_trade`, which is instrument-denominated -- see the
         // note at that conversion below. Nothing else in this projection needs
         // it, so looking it up here would be a query for an unused value.
+        let same_session_buy_quantity = self.same_session_buy_quantity().await;
         let cash_summary = self.cash_summary_from_ledger().await?;
         let cash_balance = value_f64(&cash_summary, "cash_balance_dkk");
 
@@ -4136,7 +4137,27 @@ impl AppState {
                 broker_open_price * quantity
             };
             let market_value_dkk = quantity * current_price_local * current_fx_rate;
+            // A position established entirely after the session baseline did not
+            // live through the session's move, so measuring it against that
+            // baseline attributes a whole day to a few hours of holding. DDOG on
+            // 2026-08-06 is the case: sold at 225.55 and re-bought at 242.39
+            // within the session, then displayed -15.8% "1D" against the
+            // previous close of 283.17 -- a fall it was not held through, and
+            // whose realised half already sits in the trade ledger.
+            //
+            // Anchoring to cost is only correct when the *whole* position is
+            // same-day. A position partly added to today still carries genuine
+            // overnight exposure on the older shares, so it keeps the session
+            // baseline.
+            let opened_this_session = quantity > 0.0
+                && same_session_buy_quantity
+                    .get(&symbol.to_uppercase())
+                    .copied()
+                    .unwrap_or(0.0)
+                    + 1e-9
+                    >= quantity;
             let daily_pnl_dkk = match price {
+                _ if opened_this_session => market_value_dkk - cost_basis_dkk,
                 Some(price) if value_f64(price, "baseline_price_local") > 0.0 => {
                     quantity
                         * (current_price_local * current_fx_rate
@@ -6269,6 +6290,54 @@ impl AppState {
 
     pub async fn markov_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
         crate::markov_method::latest_markov_signals(self, limit).await
+    }
+
+    /// Quantity bought per symbol since the current session baseline.
+    ///
+    /// Used to decide whether a position's daily P/L should anchor to the
+    /// session baseline or to its own entry. Keyed by upper-cased symbol
+    /// because broker and ledger spellings differ for the same instrument
+    /// (`DB1Gn:xetr` against `db1gn:xetr`).
+    ///
+    /// Deliberately sums BUY quantity rather than net BUY-minus-SELL: a
+    /// same-day round trip that exits and re-enters — DDOG on 2026-08-06 —
+    /// nets to zero while genuinely having established the whole position
+    /// today, which is exactly the case this is here to catch.
+    async fn same_session_buy_quantity(&self) -> HashMap<String, f64> {
+        let timezone = yaml_string(&self.config, &["price_monitor", "timezone"])
+            .or_else(|| yaml_string(&self.config, &["localization", "time_zone"]))
+            .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+            .unwrap_or(chrono_tz::Europe::Copenhagen);
+        let reset_hour = yaml_i64(&self.config, &["price_monitor", "reset_hour_local"])
+            .unwrap_or(6)
+            .clamp(0, 23) as u32;
+        let session_date = crate::price_monitor::session_date_for(Utc::now(), timezone, reset_hour);
+        let Some(session_start) = session_date
+            .and_hms_opt(reset_hour, 0, 0)
+            .and_then(|naive| naive.and_local_timezone(timezone).single())
+        else {
+            return HashMap::new();
+        };
+        let session_start_utc = session_start
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let rows = self
+            .select_json(&format!(
+                "SELECT symbol, SUM(quantity) AS bought FROM trade_ledger \
+                 WHERE side = 'BUY' AND created_at >= '{}' GROUP BY symbol",
+                sql_escape(&session_start_utc)
+            ))
+            .await
+            .unwrap_or_default();
+        rows.iter()
+            .filter_map(|row| {
+                let symbol = text_value(row, "symbol");
+                if symbol.is_empty() {
+                    return None;
+                }
+                Some((symbol.to_uppercase(), value_f64(row, "bought")))
+            })
+            .collect()
     }
 
     /// Per-source data freshness for the dashboard's staleness strip.
@@ -16477,6 +16546,39 @@ analysis_windows:
             decisions.is_empty(),
             "entries without a symbol must be skipped, got {decisions:?}"
         );
+    }
+
+    /// Reproduces DDOG on 2026-08-06: sold at 225.55 and re-bought at 242.39
+    /// inside one session, then shown as -15.8% "1D" against the previous
+    /// close of 283.17 -- a fall the position was not held through, and whose
+    /// realised half already sits in the trade ledger.
+    ///
+    /// The rule is quantity-based rather than net, because a same-day round
+    /// trip nets to zero while genuinely re-establishing the whole position.
+    #[test]
+    fn daily_pnl_anchors_to_entry_only_when_the_whole_position_is_same_session() {
+        // (bought this session, current quantity, should anchor to entry)
+        let cases = [
+            // DDOG: sold 5, re-bought 5, holding 5. Net is zero; BUY quantity
+            // is 5, which covers the position.
+            (5.0, 5.0, true),
+            // Untouched overnight holding.
+            (0.0, 5.0, false),
+            // Partially added to today: the older shares carry real overnight
+            // exposure, so the session baseline still applies.
+            (5.0, 15.0, false),
+            // Opened and added to, all today.
+            (15.0, 10.0, true),
+            // A flat symbol must never claim a same-session entry.
+            (5.0, 0.0, false),
+        ];
+        for (bought_today, quantity, expected) in cases {
+            let opened_this_session = quantity > 0.0 && bought_today + 1e-9 >= quantity;
+            assert_eq!(
+                opened_this_session, expected,
+                "bought {bought_today} of {quantity} held"
+            );
+        }
     }
 
     /// Saxo's `ProfitLossOnTrade` is instrument-denominated; the sibling
