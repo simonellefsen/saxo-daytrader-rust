@@ -41,6 +41,7 @@ pub struct DashboardView {
     pub markov_signal_total: i64,
     pub markov_filter: String,
     pub hermes_section: String,
+    pub data_freshness: Vec<JsonValue>,
     pub quiver_page: i64,
     pub quiver_page_size: i64,
     pub quiver_signal_total: i64,

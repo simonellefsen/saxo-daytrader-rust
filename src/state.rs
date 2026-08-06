@@ -2518,6 +2518,131 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
+/// One independently-refreshed data source the dashboard displays.
+///
+/// `stale_after_minutes` is derived from each source's own cadence rather than
+/// picked uniformly: an FX rate carrying a 30-minute cache TTL and a nightly
+/// weekday sweep are stale at very different ages.
+///
+/// The weekday-only sweeps get a deliberately generous three-day threshold so a
+/// normal weekend does not raise a false alarm. Precise market-aware staleness
+/// already exists in the operations banner; duplicating that calendar logic here
+/// would mean two places to keep correct, so this strip answers the cruder
+/// question — "has this stopped updating entirely?" — which is the one that went
+/// unanswered when FX silently froze for two days on 2026-08-02.
+struct FreshnessSource {
+    key: &'static str,
+    label: &'static str,
+    tab: &'static str,
+    sql: &'static str,
+    stale_after_minutes: i64,
+}
+
+const FRESHNESS_SOURCES: &[FreshnessSource] = &[
+    FreshnessSource {
+        key: "fx_rates",
+        label: "FX rates",
+        tab: "overview",
+        sql: "SELECT MAX(observed_at) AS at FROM currency_fx_rates",
+        // Three times the 30-minute cache TTL: one missed refresh is normal,
+        // three in a row is the failure that hid for two days.
+        stale_after_minutes: 90,
+    },
+    FreshnessSource {
+        key: "broker_exposures",
+        label: "Broker positions",
+        tab: "overview",
+        sql: "SELECT MAX(updated_at) AS at FROM broker_instrument_exposures",
+        // Refreshed every 10-minute scheduler cycle.
+        stale_after_minutes: 45,
+    },
+    FreshnessSource {
+        key: "portfolio_value",
+        label: "Portfolio value",
+        tab: "performance",
+        sql: "SELECT MAX(recorded_at) AS at FROM portfolio_value_history",
+        stale_after_minutes: 45,
+    },
+    FreshnessSource {
+        key: "decision_reports",
+        label: "Decision reports",
+        tab: "decisions",
+        sql: "SELECT MAX(created_at) AS at FROM decision_reports",
+        stale_after_minutes: 3 * 24 * 60,
+    },
+    FreshnessSource {
+        key: "markov_run",
+        label: "Markov run",
+        tab: "markov",
+        sql: "SELECT MAX(created_at) AS at FROM markov_signal_runs",
+        stale_after_minutes: 3 * 24 * 60,
+    },
+    FreshnessSource {
+        key: "indicator_run",
+        label: "Daily indicators",
+        tab: "markov",
+        sql: "SELECT MAX(created_at) AS at FROM daily_indicator_runs",
+        stale_after_minutes: 3 * 24 * 60,
+    },
+    FreshnessSource {
+        key: "quiver_run",
+        label: "Quiver run",
+        tab: "quiver",
+        sql: "SELECT MAX(created_at) AS at FROM quiver_signal_runs",
+        stale_after_minutes: 3 * 24 * 60,
+    },
+];
+
+/// Accepts both timestamp spellings in the database: the Rust runtime writes
+/// `...Z`, the retired Python path wrote `...+00:00`.
+fn parse_freshness_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(trimmed)
+        .map(|value| value.with_timezone(&Utc))
+        .ok()
+}
+
+/// Classify one source's age. Pure so the thresholds are testable without a
+/// database.
+///
+/// `missing` is deliberately distinct from `stale`: a source that has never
+/// produced a row is a different fault from one that produced rows and then
+/// stopped, and conflating them sends an operator looking in the wrong place.
+pub(crate) fn freshness_state(age_minutes: Option<i64>, stale_after_minutes: i64) -> &'static str {
+    let Some(age_minutes) = age_minutes else {
+        return "missing";
+    };
+    let stale_after = stale_after_minutes.max(1);
+    if age_minutes >= stale_after {
+        "stale"
+    } else if age_minutes * 2 >= stale_after {
+        "aging"
+    } else {
+        "fresh"
+    }
+}
+
+/// Compact human age. Kept coarse on purpose — the exact minute count of a
+/// three-day-old sweep is noise; that it is measured in days is the signal.
+pub(crate) fn freshness_age_label(age_minutes: Option<i64>) -> String {
+    let Some(age_minutes) = age_minutes else {
+        return "never".to_string();
+    };
+    let age_minutes = age_minutes.max(0);
+    if age_minutes < 1 {
+        "just now".to_string()
+    } else if age_minutes < 60 {
+        format!("{age_minutes}m ago")
+    } else if age_minutes < 24 * 60 {
+        format!("{}h ago", age_minutes / 60)
+    } else {
+        format!("{}d ago", age_minutes / (24 * 60))
+    }
+}
+
 /// Hermes sub-sections, in the order the tab strip presents them.
 pub(crate) const HERMES_SECTIONS: &[&str] = &[
     "overview",
@@ -3014,6 +3139,7 @@ impl AppState {
         // controls advertise pages that render empty.
         let markov_min_signed_signal =
             crate::trading_manager::markov_gate_config(self).min_signed_signal;
+        let data_freshness = self.data_freshness().await;
         let markov_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "markov") {
             self.markov_signals_count_filtered(&markov_filter, markov_min_signed_signal)
                 .await
@@ -3222,6 +3348,7 @@ impl AppState {
             markov_signal_total,
             markov_filter,
             hermes_section,
+            data_freshness,
             quiver_page: quiver_signal_page.page,
             quiver_page_size: QUIVER_SIGNALS_PAGE_SIZE,
             quiver_signal_total,
@@ -6137,6 +6264,51 @@ impl AppState {
 
     pub async fn markov_signals(&self, limit: i64) -> Result<Vec<JsonValue>> {
         crate::markov_method::latest_markov_signals(self, limit).await
+    }
+
+    /// Per-source data freshness for the dashboard's staleness strip.
+    ///
+    /// Motivated by three separate staleness faults found on 2026-08-02/03 that
+    /// were all invisible in the UI: the FX cache had been frozen for two days,
+    /// planner statistics for 33, and the position Decision column was serving
+    /// data from a table dead for three months. Each was discovered by querying
+    /// production by hand. This surfaces the same question in the dashboard.
+    ///
+    /// Sources are queried individually rather than as one UNION so a single
+    /// missing table degrades that row to `missing` instead of failing the whole
+    /// strip — this is a diagnostic, and a diagnostic that disappears when
+    /// something is wrong is worse than none.
+    pub(crate) async fn data_freshness(&self) -> Vec<JsonValue> {
+        let now = Utc::now();
+        let mut rows = Vec::new();
+        for source in FRESHNESS_SOURCES {
+            let observed_at = self
+                .first_json(source.sql)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|row| {
+                    row.get("at")
+                        .and_then(JsonValue::as_str)
+                        .map(str::to_string)
+                })
+                .filter(|value| !value.trim().is_empty());
+            let age_minutes = observed_at
+                .as_deref()
+                .and_then(parse_freshness_timestamp)
+                .map(|observed| (now - observed).num_minutes().max(0));
+            rows.push(json!({
+                "key": source.key,
+                "label": source.label,
+                "tab": source.tab,
+                "observed_at": observed_at,
+                "age_minutes": age_minutes,
+                "age_label": freshness_age_label(age_minutes),
+                "stale_after_minutes": source.stale_after_minutes,
+                "state": freshness_state(age_minutes, source.stale_after_minutes),
+            }));
+        }
+        rows
     }
 
     pub async fn markov_signals_page_filtered(
@@ -16300,6 +16472,79 @@ analysis_windows:
             decisions.is_empty(),
             "entries without a symbol must be skipped, got {decisions:?}"
         );
+    }
+
+    /// `missing` must stay distinct from `stale`: a source that never produced
+    /// a row is a different fault from one that produced rows and stopped, and
+    /// conflating them sends an operator looking in the wrong place.
+    #[test]
+    fn freshness_separates_never_seen_from_stopped_updating() {
+        assert_eq!(freshness_state(None, 90), "missing");
+        assert_eq!(freshness_state(Some(0), 90), "fresh");
+        assert_eq!(freshness_state(Some(44), 90), "fresh");
+        // Half the budget is where it starts warning, not where it fails.
+        assert_eq!(freshness_state(Some(45), 90), "aging");
+        assert_eq!(freshness_state(Some(89), 90), "aging");
+        assert_eq!(freshness_state(Some(90), 90), "stale");
+        assert_eq!(freshness_state(Some(10_000), 90), "stale");
+    }
+
+    /// The real incidents this strip exists to catch, at the thresholds
+    /// actually shipped in `FRESHNESS_SOURCES`.
+    #[test]
+    fn the_real_staleness_incidents_would_have_been_flagged() {
+        // FX froze for two days against a 90-minute budget (2026-08-02).
+        assert_eq!(freshness_state(Some(2 * 24 * 60), 90), "stale");
+        // A single missed 30-minute refresh must not cry wolf.
+        assert_eq!(freshness_state(Some(31), 90), "fresh");
+        // A nightly weekday sweep across a normal weekend is not a fault:
+        // Friday night to Monday morning is under the 3-day budget.
+        assert_eq!(freshness_state(Some(60 * 60), 3 * 24 * 60), "aging");
+        // A sweep that has genuinely stopped is.
+        assert_eq!(freshness_state(Some(4 * 24 * 60), 3 * 24 * 60), "stale");
+    }
+
+    #[test]
+    fn freshness_age_labels_stay_coarse() {
+        assert_eq!(freshness_age_label(None), "never");
+        assert_eq!(freshness_age_label(Some(0)), "just now");
+        assert_eq!(freshness_age_label(Some(45)), "45m ago");
+        assert_eq!(freshness_age_label(Some(90)), "1h ago");
+        assert_eq!(freshness_age_label(Some(2 * 24 * 60)), "2d ago");
+        // Negative clock skew must not render as a bizarre age.
+        assert_eq!(freshness_age_label(Some(-5)), "just now");
+    }
+
+    /// Every shipped source must name a tab that exists, or its chip can only
+    /// ever appear via the cross-tab stale rule and never on its own tab.
+    #[test]
+    fn every_freshness_source_targets_a_real_tab() {
+        const TABS: &[&str] = &[
+            "overview",
+            "performance",
+            "market",
+            "watchlists",
+            "markov",
+            "quiver",
+            "decisions",
+            "prompts",
+            "hermes",
+            "eod",
+            "execution",
+        ];
+        for source in FRESHNESS_SOURCES {
+            assert!(
+                TABS.contains(&source.tab),
+                "{} targets unknown tab {}",
+                source.key,
+                source.tab
+            );
+            assert!(
+                source.stale_after_minutes > 0,
+                "{} needs a positive staleness budget",
+                source.key
+            );
+        }
     }
 
     #[test]

@@ -428,6 +428,10 @@ fn Dashboard(props: DashboardProps) -> Element {
                 }
             }
             TabNav { active_view: data.active_view.clone() }
+            DataFreshnessStrip {
+                sources: data.data_freshness.clone(),
+                active_view: data.active_view.clone()
+            }
             DashboardBody {
                 data: data.clone(),
                 prefs: prefs.clone(),
@@ -618,6 +622,74 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=eod", label: "End-Of-Day", active: active_view == "eod" }
             TabLink { href: "/?view=execution", label: "Execution", active: active_view == "execution" }
         }
+    }
+}
+
+/// Age of each data source the active tab depends on.
+///
+/// Shows the current tab's own sources, plus anything currently `stale` from
+/// any tab. That second rule is the point of the strip: the 2026-08-02 FX
+/// freeze, the 33-day-old planner statistics, and the three-month-old position
+/// decisions were all invisible precisely because nobody was looking at the tab
+/// that would have shown them. A source that has stopped updating should follow
+/// the operator around rather than wait to be visited.
+///
+/// Renders nothing when everything relevant is fresh, so a healthy system does
+/// not pay for a permanent banner that trains the eye to ignore it.
+#[component]
+fn DataFreshnessStrip(sources: Vec<JsonValue>, active_view: String) -> Element {
+    let visible = sources
+        .iter()
+        .filter(|source| {
+            let state = text(source, "state");
+            let owned_by_tab = text(source, "tab") == active_view;
+            // `missing` is not surfaced from other tabs: a source that has never
+            // produced a row is usually an unconfigured feature, not a fault.
+            (owned_by_tab && state != "fresh") || state == "stale"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if visible.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "freshness-strip", aria_label: "Data freshness",
+            for source in visible.iter() {
+                span {
+                    class: "freshness-chip {freshness_tone(&text(source, \"state\"))}",
+                    title: "{freshness_tooltip(source)}",
+                    strong { "{text(source, \"label\")}" }
+                    span { "{text(source, \"age_label\")}" }
+                }
+            }
+        }
+    }
+}
+
+fn freshness_tone(state: &str) -> &'static str {
+    match state {
+        "stale" => "bad",
+        "aging" => "warn",
+        "missing" => "muted",
+        _ => "",
+    }
+}
+
+fn freshness_tooltip(source: &JsonValue) -> String {
+    let label = text(source, "label");
+    let observed = text(source, "observed_at");
+    let stale_after = value_f64(source, "stale_after_minutes") as i64;
+    let threshold = if stale_after >= 24 * 60 {
+        format!("{} days", stale_after / (24 * 60))
+    } else {
+        format!("{stale_after} minutes")
+    };
+    match text(source, "state").as_str() {
+        "missing" => format!("{label} has never recorded a value."),
+        "stale" => format!(
+            "{label} last updated {observed}. Expected to refresh well inside {threshold}; it has not, so treat anything derived from it as suspect."
+        ),
+        _ => format!("{label} last updated {observed}. Stale after {threshold}."),
     }
 }
 

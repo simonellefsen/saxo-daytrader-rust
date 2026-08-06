@@ -744,6 +744,43 @@ tr:last-child td {
   vertical-align: middle;
 }
 
+/* Data freshness strip. Absent entirely when everything relevant is fresh, so
+   its presence is itself the signal rather than a permanent banner. */
+.freshness-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 8px 0 0;
+}
+
+.freshness-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 3px 10px;
+  background: var(--panel);
+  font-size: 0.76rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.freshness-chip strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.freshness-chip.warn {
+  border-left-color: var(--warn);
+}
+
+.freshness-chip.bad {
+  border-left-color: var(--bad);
+}
+
 /* Broker lifecycle timeline inside an execution order row. Loaded on demand so
    the Execution tab does not pay for every order's events up front. */
 .order-events-output {
