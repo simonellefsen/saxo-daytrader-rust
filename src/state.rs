@@ -4201,8 +4201,21 @@ impl AppState {
                 "daily_pnl_dkk": daily_pnl_dkk,
                 // Watchlist rows use `change_pct`; position views retain the
                 // explicit daily name. Keep both projections aligned.
+                //
+                // `daily_change_pct` normally carries the *instrument's*
+                // session price move, which is what a watchlist row wants. For
+                // a position opened this session that would contradict the DKK
+                // beside it -- DDOG's stock was genuinely -15.8% on the day
+                // while the position, entered after most of the fall, was only
+                // -2.7%. A percentage and an amount in the same row must
+                // describe the same thing, so an entry-anchored position
+                // reports its own return.
                 "change_pct": daily_change_pct,
-                "daily_change_pct": daily_change_pct,
+                "daily_change_pct": if opened_this_session && cost_basis_dkk.abs() > 1e-9 {
+                    daily_pnl_dkk / cost_basis_dkk
+                } else {
+                    daily_change_pct
+                },
                 "total_return_pct": if cost_basis_dkk.abs() > 1e-9 { unrealised_pnl_dkk / cost_basis_dkk } else { 0.0 },
                 "allocation_pct": 0.0,
                 "asset_class": text_value(&broker, "asset_type")
