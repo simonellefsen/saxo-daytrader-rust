@@ -8495,13 +8495,20 @@ impl AppState {
             PERFORMANCE_MAX_CHART_POINTS
         );
         rows.extend(self.select_json(&sql).await.unwrap_or_default());
-        // Sampling can drop the newest row, which would leave the chart ending
-        // short of the window it advertises.
+        // Sampling can drop the window's first and last rows, which would both
+        // leave the chart short of the window it advertises and -- worse --
+        // make `change_dkk` an artifact of the stride, since it is measured
+        // from the first row present. Observed live: 3M and YTD reported
+        // -107,527 and -69,391 from an identical start date purely because
+        // their strides selected different opening rows. Pinning both ends
+        // makes the endpoints stride-independent.
         if stride > 1 {
-            let newest_sql = format!(
-                "SELECT {columns} FROM portfolio_value_history {where_clause} ORDER BY recorded_at DESC, id DESC LIMIT 1"
-            );
-            rows.extend(self.select_json(&newest_sql).await.unwrap_or_default());
+            for order in ["ASC", "DESC"] {
+                let edge_sql = format!(
+                    "SELECT {columns} FROM portfolio_value_history {where_clause} ORDER BY recorded_at {order}, id {order} LIMIT 1"
+                );
+                rows.extend(self.select_json(&edge_sql).await.unwrap_or_default());
+            }
         }
         rows.sort_by(|left, right| {
             text_value(left, "recorded_at")
@@ -8509,6 +8516,13 @@ impl AppState {
                 .then_with(|| {
                     text_value(left, "snapshot_type").cmp(&text_value(right, "snapshot_type"))
                 })
+        });
+        // The anchor and pinned edge rows can each coincide with a sampled row,
+        // which would plot the same instant twice and let a duplicated endpoint
+        // skew the range metrics.
+        rows.dedup_by(|left, right| {
+            text_value(left, "recorded_at") == text_value(right, "recorded_at")
+                && text_value(left, "snapshot_type") == text_value(right, "snapshot_type")
         });
         Ok(rows)
     }
