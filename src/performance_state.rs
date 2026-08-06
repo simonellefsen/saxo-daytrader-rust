@@ -40,6 +40,20 @@ pub(crate) fn performance_summary_from_history(
         "range_return_pct": range_return_pct,
         "range_max_drawdown_pct": range_max_drawdown_pct,
         "confidence": performance_confidence(history, now),
+        // Snapshots between 2026-06-03 and 2026-07-09 stored an arithmetically
+        // impossible cost basis. It cannot be recomputed -- snapshots hold only
+        // aggregates -- so a range covering it is marked rather than silently
+        // plotted. Only cost-basis-derived figures are affected; market value,
+        // which the drawdown guardrail reads, is sound throughout.
+        "unreliable_cost_basis_points": history
+            .iter()
+            .filter(|row| {
+                !crate::state::cost_basis_is_plausible(
+                    value_f64(row, "total_cost_basis_dkk"),
+                    value_f64(row, "invested_market_value_dkk"),
+                )
+            })
+            .count(),
     })
 }
 

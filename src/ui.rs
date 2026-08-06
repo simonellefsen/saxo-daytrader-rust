@@ -1942,6 +1942,10 @@ fn PerformanceContextPanel(
         .cloned()
         .unwrap_or(JsonValue::Null);
     let since_reset_status = text(&since_reset, "status");
+    let unreliable_cost_basis_points = summary
+        .get("unreliable_cost_basis_points")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0);
     let since_reset_pnl = since_reset.get("pnl_dkk").and_then(JsonValue::as_f64);
     let since_reset_return = since_reset.get("return_pct").and_then(JsonValue::as_f64);
     let since_reset_at = format_timestamp(&text(&since_reset, "baseline_recorded_at"), &prefs);
@@ -1996,6 +2000,14 @@ fn PerformanceContextPanel(
                 div {
                     h3 { "Portfolio Context" }
                     p { class: "muted", "Comparable account-value history for the active import batch and selected range." }
+                }
+            }
+            if unreliable_cost_basis_points > 0 {
+                div { class: "notice-banner warn-banner",
+                    strong { "Cost basis unreliable in this range" }
+                    span {
+                        "{unreliable_cost_basis_points} snapshot(s) between 2026-06-03 and 2026-07-09 stored an arithmetically impossible cost basis (up to 26.9M DKK against roughly 240k invested). The underlying fault was repaired on 2026-07-08 and is now blocked by an integrity check, but the snapshots keep the bad figure — they store only aggregates, so there is nothing to recompute from. Account value, return and drawdown are unaffected; anything derived from cost basis is not."
+                    }
                 }
             }
             div { class: "mini-grid",

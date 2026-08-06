@@ -68,6 +68,41 @@ const INTEGRITY_BROKER_EXPOSURE_ABS_TOLERANCE_DKK: f64 = 1_000.0;
 const INTEGRITY_BROKER_EXPOSURE_REL_TOLERANCE: f64 = 0.10;
 const INTEGRITY_BROKER_QUANTITY_ABS_TOLERANCE: f64 = 1e-6;
 const INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK: f64 = 100_000.0;
+
+/// Upper bound on points returned for a performance chart. A line chart gains
+/// nothing past roughly this density, and it bounds the payload for `ALL`.
+const PERFORMANCE_MAX_CHART_POINTS: i64 = 1_500;
+
+/// A snapshot's `total_cost_basis_dkk` is unusable when it exceeds the invested
+/// market value by more than this multiple.
+///
+/// Between 2026-06-03 and 2026-07-09 roughly 6,300 snapshots stored a cost basis
+/// of 5.4M-26.9M DKK against an invested value near 240k -- ratios of 20x to
+/// 100x. The underlying `position_lots` fault was repaired on 2026-07-08 and is
+/// now blocked by `INTEGRITY_IMPLAUSIBLE_UNIT_COST_DKK`, but the snapshots keep
+/// the bad figure: they store only aggregates, so there is no per-position
+/// detail to recompute from. The window is marked rather than repaired, which
+/// also preserves the evidence.
+///
+/// A real portfolio can hold a cost basis above its market value after a large
+/// drawdown, so the threshold is deliberately generous -- it separates "under
+/// water" from "arithmetically impossible".
+const PERFORMANCE_COST_BASIS_MAX_RATIO: f64 = 3.0;
+
+/// Whether a snapshot's stored cost basis can be trusted.
+pub(crate) fn cost_basis_is_plausible(cost_basis_dkk: f64, invested_market_value_dkk: f64) -> bool {
+    if !cost_basis_dkk.is_finite() || !invested_market_value_dkk.is_finite() {
+        return false;
+    }
+    // Nothing invested and nothing claimed is consistent, not suspect.
+    if cost_basis_dkk <= 0.0 {
+        return true;
+    }
+    if invested_market_value_dkk <= 0.0 {
+        return false;
+    }
+    cost_basis_dkk / invested_market_value_dkk <= PERFORMANCE_COST_BASIS_MAX_RATIO
+}
 const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
 const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, error_text, analysis_pulse_key, analysis_pulse_label";
 const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label";
@@ -8420,12 +8455,54 @@ impl AppState {
             }
             None => String::new(),
         };
-        let remaining = (limit - rows.len() as i64).max(1);
+        // Downsample rather than truncate. `ORDER BY recorded_at ASC` with a
+        // LIMIT keeps the *oldest* rows in the window, so every range longer
+        // than about a month returned the same early slice with today's point
+        // appended: 3M, YTD, 1Y and ALL rendered identically, and 1M reported a
+        // -46,562 DKK "change" measured against a row from three weeks before
+        // the window it claimed to cover.
+        //
+        // Sampling on `id % stride` keeps the series spanning the whole window
+        // at reduced resolution, and is portable across both backends `AnyPool`
+        // serves -- window functions are not uniformly available.
+        let matched = self
+            .first_json(&format!(
+                "SELECT COUNT(*) AS count FROM portfolio_value_history {where_clause}"
+            ))
+            .await
+            .ok()
+            .flatten()
+            .map(|row| value_f64(&row, "count") as i64)
+            .unwrap_or(0);
+        let target = clamp_limit(limit, 1, PERFORMANCE_MAX_CHART_POINTS);
+        let stride = if matched > target {
+            (matched as f64 / target as f64).ceil() as i64
+        } else {
+            1
+        };
+        let sample_clause = if stride > 1 {
+            let joiner = if where_clause.is_empty() {
+                "WHERE"
+            } else {
+                "AND"
+            };
+            format!(" {joiner} (id % {stride} = 0)")
+        } else {
+            String::new()
+        };
         let sql = format!(
-            "SELECT {columns} FROM portfolio_value_history {where_clause} ORDER BY recorded_at ASC, id ASC LIMIT {}",
-            clamp_limit(remaining, 1, 5000)
+            "SELECT {columns} FROM portfolio_value_history {where_clause}{sample_clause} ORDER BY recorded_at ASC, id ASC LIMIT {}",
+            PERFORMANCE_MAX_CHART_POINTS
         );
         rows.extend(self.select_json(&sql).await.unwrap_or_default());
+        // Sampling can drop the newest row, which would leave the chart ending
+        // short of the window it advertises.
+        if stride > 1 {
+            let newest_sql = format!(
+                "SELECT {columns} FROM portfolio_value_history {where_clause} ORDER BY recorded_at DESC, id DESC LIMIT 1"
+            );
+            rows.extend(self.select_json(&newest_sql).await.unwrap_or_default());
+        }
         rows.sort_by(|left, right| {
             text_value(left, "recorded_at")
                 .cmp(&text_value(right, "recorded_at"))
@@ -16559,6 +16636,25 @@ analysis_windows:
             decisions.is_empty(),
             "entries without a symbol must be skipped, got {decisions:?}"
         );
+    }
+
+    /// The threshold must separate "under water" from "arithmetically
+    /// impossible". A real book can carry a cost basis above market value after
+    /// a drawdown; it cannot carry 26.9M against 240k invested.
+    #[test]
+    fn cost_basis_plausibility_flags_the_corrupt_window_but_not_a_drawdown() {
+        // Real corrupt production values from the 2026-06/07 window.
+        assert!(!cost_basis_is_plausible(17_605_178.0, 240_061.0));
+        assert!(!cost_basis_is_plausible(26_881_060.0, 245_000.0));
+        assert!(!cost_basis_is_plausible(5_428_221.0, 250_000.0));
+        // A book 40% under water is unremarkable and must not be flagged.
+        assert!(cost_basis_is_plausible(340_000.0, 204_000.0));
+        assert!(cost_basis_is_plausible(204_324.0, 209_279.0));
+        // Nothing invested and nothing claimed is consistent.
+        assert!(cost_basis_is_plausible(0.0, 0.0));
+        // A claimed basis against no holdings is not.
+        assert!(!cost_basis_is_plausible(100_000.0, 0.0));
+        assert!(!cost_basis_is_plausible(f64::NAN, 240_000.0));
     }
 
     /// Reproduces DDOG on 2026-08-06: sold at 225.55 and re-bought at 242.39

@@ -366,6 +366,35 @@ Strategy changes should be evidence-driven and reversible.
 - Landed 2026-07-25: read-only multi-horizon support-risk context from daily Saxo OHLC data. The current model uses clustered pivot-low zones from up to 1-year and 5-year windows and exposes nearest/next support, downside measures, break risk, confidence, and actual history coverage in the Decision Report, Hermes context, and Watchlist. Follow-up: add volume-aware zone evidence only when a reliable daily-volume source is available; no trading decision currently depends on this projection.
 - Continue the multi-horizon support-risk evaluation after sufficient collection: compare held-out outcomes for candidates near support, candidates breaking support, and a no-overlay baseline; include costs/gaps where a suitable data source exists. Require a one-variable Hermes/SIM proposal with explicit sizing or review-only effect before any promotion. Do not treat chart levels as deterministic floors or targets.
 
+## Portfolio Snapshot Schema
+
+`portfolio_value_history` stores only aggregates — one row of totals per snapshot, with no record of which positions produced them. That choice is why the 2026-06-03 → 2026-07-09 cost-basis corruption is **permanently unrepairable**: roughly 6,300 rows hold a `total_cost_basis_dkk` of 5.4M–26.9M DKK against ~240k invested, and there is no per-position detail to recompute a correct total from. The same limitation blocked the unrealised-P/L backfill after the 2026-08-06 broker-currency bug — that column had to be left wrong too.
+
+The pattern is worth naming: **an aggregate-only snapshot converts any upstream arithmetic bug into permanent history.** Both incidents were fixed at source within days, and both left a scar that cannot be removed. A third will do the same.
+
+**Proposal: `portfolio_position_snapshots`, a per-position sibling table.**
+
+| Column | Purpose |
+| --- | --- |
+| `snapshot_id` | FK to the `portfolio_value_history` row |
+| `symbol`, `currency`, `quantity` | Position identity and size |
+| `price_local`, `fx_rate_to_dkk` | The two inputs every DKK figure derives from |
+| `cost_basis_local`, `cost_basis_dkk` | Both sides, so a bad conversion is detectable by ratio |
+| `market_value_dkk`, `unrealised_pnl_dkk` | Stored derived values, recomputable from the above |
+
+The property that matters: **every stored DKK figure is reproducible from `quantity × price_local × fx_rate_to_dkk`.** A future conversion bug becomes a backfill rather than a scar, exactly as the 2026-08-06 FX-split repair was possible only because `trade_ledger` already stored both rates per row. That precedent is the argument — the ledger got this right and was repairable; the snapshot table did not and was not.
+
+**Sizing.** ~145 snapshots/day × ~19 positions ≈ 2,750 rows/day, ~1M/year. That is larger than everything else in the database combined, so this needs a retention policy from the start, not added later: keep per-position detail for a bounded recent window (90 days is the drawdown lookback and a natural fit) and thin older snapshots to daily closes. `scheduler_cycle_history` already establishes the prune-on-cycle pattern to copy.
+
+**Sequencing, smallest useful slice first.**
+
+1. Create the table and write to it alongside the existing aggregate. Change nothing that reads. This alone stops the bleeding — from that day on, history is repairable.
+2. Add the retention prune to the scheduler cycle, before volume becomes a problem rather than after.
+3. Add an integrity check comparing each snapshot's aggregate against the sum of its positions. A divergence is a bug caught in hours instead of a month.
+4. Only then consider making read models prefer per-position detail where it helps.
+
+**Deliberately not in scope:** repairing the existing corrupt window. It stays unrepairable regardless — this prevents the *next* one. The 2026-06/07 range is marked in the Performance view instead (landed 2026-08-06).
+
 ## Portfolio And Performance Analytics
 
 Performance should be explainable at portfolio, report, and position level.
