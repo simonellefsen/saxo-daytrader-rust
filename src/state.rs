@@ -2779,6 +2779,32 @@ fn canonical_symbol_key(symbol: &str) -> String {
     symbol.trim().to_ascii_uppercase()
 }
 
+fn effective_execution_mode(
+    configured_mode: &str,
+    adapter: &str,
+    dry_run: bool,
+    require_approval: bool,
+    configured_saxo_environment: &str,
+    session_environment: Option<&str>,
+) -> String {
+    if !configured_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
+        return configured_mode.to_string();
+    }
+    if dry_run {
+        return "dry_run".to_string();
+    }
+    if require_approval {
+        return "approval_required".to_string();
+    }
+    if !configured_saxo_environment.eq_ignore_ascii_case("live") {
+        return "disabled_sim_environment".to_string();
+    }
+    if !session_environment.is_some_and(|environment| environment.eq_ignore_ascii_case("live")) {
+        return "disabled_session_environment".to_string();
+    }
+    "live".to_string()
+}
+
 /// Prefer ISIN when both source records retain it; otherwise use the
 /// case-normalized display symbol as the least-lossy common key.
 fn position_identity_key(symbol: &str, isin: Option<&str>) -> String {
@@ -3497,6 +3523,24 @@ impl AppState {
             yaml_i64(&self.config, &["execution", "max_daily_orders"]).unwrap_or(0);
         let executed_today = self.executed_orders_today().await.unwrap_or(0);
         let decision_refresh = crate::xai_decision::decision_pulse_summary(self);
+        let configured_execution_mode = yaml_string(&self.config, &["execution", "mode"])
+            .unwrap_or_else(|| "simulation".to_string());
+        let execution_adapter = yaml_string(&self.config, &["execution", "adapter"])
+            .unwrap_or_else(|| "simulation".to_string());
+        let execution_dry_run = yaml_bool(&self.config, &["app", "dry_run"]).unwrap_or(true);
+        let require_approval_live =
+            yaml_bool(&self.config, &["execution", "require_approval_live"]).unwrap_or(true);
+        let configured_saxo_environment = yaml_string(&self.config, &["saxo", "environment"])
+            .unwrap_or_else(|| "sim".to_string());
+        let saxo_auth = self.saxo_auth_status_value().await;
+        let effective_execution_mode = effective_execution_mode(
+            &configured_execution_mode,
+            &execution_adapter,
+            execution_dry_run,
+            require_approval_live,
+            &configured_saxo_environment,
+            saxo_auth.get("environment").and_then(JsonValue::as_str),
+        );
         let integrity = self
             .overview_integrity(&aggregate, &latest_history, &cash_summary)
             .await
@@ -3526,9 +3570,12 @@ impl AppState {
                 "runtime": "rust-dioxus"
             },
             "execution": {
-                "mode": yaml_string(&self.config, &["execution", "mode"]),
-                "adapter": yaml_string(&self.config, &["execution", "adapter"]),
-                "require_approval_live": yaml_bool(&self.config, &["execution", "require_approval_live"]).unwrap_or(true),
+                "mode": effective_execution_mode,
+                "configured_mode": configured_execution_mode,
+                "adapter": execution_adapter,
+                "configured_saxo_environment": configured_saxo_environment,
+                "session_environment": saxo_auth.get("environment").cloned().unwrap_or(JsonValue::Null),
+                "require_approval_live": require_approval_live,
                 "max_daily_orders": max_daily_orders,
                 "daily_order_capacity": {
                     "max": max_daily_orders,
@@ -3575,7 +3622,7 @@ impl AppState {
                 "config": crate::quiver::quiver_config_json_for_state(self),
                 "latest_run": self.latest_quiver_run().await.unwrap_or(JsonValue::Null),
             },
-            "saxo_auth": self.saxo_auth_status_value().await,
+            "saxo_auth": saxo_auth,
             "settings": {
                 "cash_buffer": self.cash_buffer_value(),
                 "ai": self.ai_settings_value().await.unwrap_or_else(|_| self.default_ai_settings_value())
@@ -10773,7 +10820,8 @@ fn unrealised_pnl_reconciliation(
             "unrealised_pnl_dkk": broker_pnl,
             "difference_from_dashboard_dkk": broker_difference_dkk,
             "account_currency": broker_exposure_snapshot.get("account_currency").cloned().unwrap_or(JsonValue::Null),
-            "fx_rate_to_dkk": broker_exposure_snapshot.get("fx_rate_to_dkk").cloned().unwrap_or(JsonValue::Null),
+            "fx_basis": broker_exposure_snapshot.get("fx_basis").cloned().unwrap_or(JsonValue::Null),
+            "instrument_fx_rates_to_dkk": broker_exposure_snapshot.get("instrument_fx_rates_to_dkk").cloned().unwrap_or(JsonValue::Null),
             "exposure_count": broker_exposure_snapshot.get("exposure_count").cloned().unwrap_or(JsonValue::Null),
             "updated_at": broker_exposure_snapshot.get("updated_at").cloned().unwrap_or(JsonValue::Null),
         },
@@ -12803,6 +12851,22 @@ mod tests {
             &json!({"unrealised_pnl_dkk": 1_000.0}),
         );
         assert_eq!(drift["broker_exposure"]["status"], json!("drift"));
+    }
+
+    #[test]
+    fn effective_execution_mode_never_labels_sim_or_unverified_sessions_as_live() {
+        assert_eq!(
+            effective_execution_mode("live", "saxo", false, false, "sim", Some("sim")),
+            "disabled_sim_environment"
+        );
+        assert_eq!(
+            effective_execution_mode("live", "saxo", false, false, "live", Some("sim")),
+            "disabled_session_environment"
+        );
+        assert_eq!(
+            effective_execution_mode("live", "saxo", false, false, "live", Some("live")),
+            "live"
+        );
     }
 
     #[test]
