@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     path::PathBuf,
     process,
@@ -2771,6 +2771,23 @@ fn daily_change_pct_from_sources(
         .unwrap_or(0.0)
 }
 
+/// Normalized display-symbol key for records that do not retain a durable
+/// instrument identifier. Keep the exchange suffix: symbols on different
+/// exchanges remain distinct, while Saxo and imported history may disagree
+/// only on ticker casing.
+fn canonical_symbol_key(symbol: &str) -> String {
+    symbol.trim().to_ascii_uppercase()
+}
+
+/// Prefer ISIN when both source records retain it; otherwise use the
+/// case-normalized display symbol as the least-lossy common key.
+fn position_identity_key(symbol: &str, isin: Option<&str>) -> String {
+    isin.map(str::trim)
+        .filter(|isin| !isin.is_empty())
+        .map(|isin| format!("isin:{}", isin.to_ascii_uppercase()))
+        .unwrap_or_else(|| format!("symbol:{}", canonical_symbol_key(symbol)))
+}
+
 impl AppState {
     // Associated functions are like static/class methods. `Self` means
     // `AppState`, so this returns a fully initialized application state.
@@ -4073,9 +4090,17 @@ impl AppState {
             return Ok(rows);
         }
 
-        let base_by_symbol = base_rows
+        let base_by_identity = base_rows
             .into_iter()
-            .map(|row| (text_value(&row, "symbol"), row))
+            .map(|row| {
+                (
+                    position_identity_key(
+                        &text_value(&row, "symbol"),
+                        row.get("isin").and_then(JsonValue::as_str),
+                    ),
+                    row,
+                )
+            })
             .collect::<HashMap<_, _>>();
         let price_by_symbol = self
             .select_json(
@@ -4084,7 +4109,7 @@ impl AppState {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|row| (text_value(&row, "symbol"), row))
+            .map(|row| (canonical_symbol_key(&text_value(&row, "symbol")), row))
             .collect::<HashMap<_, _>>();
         let exposure_by_symbol = self
             .select_json(
@@ -4093,7 +4118,7 @@ impl AppState {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|row| (text_value(&row, "symbol"), row))
+            .map(|row| (canonical_symbol_key(&text_value(&row, "symbol")), row))
             .collect::<HashMap<_, _>>();
         // The account currency was only ever read to convert
         // `profit_loss_on_trade`, which is instrument-denominated -- see the
@@ -4110,9 +4135,13 @@ impl AppState {
             if symbol.is_empty() || quantity <= 1e-9 {
                 continue;
             }
-            let base = base_by_symbol.get(&symbol);
-            let price = price_by_symbol.get(&symbol);
-            let exposure = exposure_by_symbol.get(&symbol);
+            let symbol_key = canonical_symbol_key(&symbol);
+            let base = base_by_identity.get(&position_identity_key(
+                &symbol,
+                broker.get("isin").and_then(JsonValue::as_str),
+            ));
+            let price = price_by_symbol.get(&symbol_key);
+            let exposure = exposure_by_symbol.get(&symbol_key);
             // The price monitor derives this from Saxo's LastClose and the
             // current infoprice. Broker exposures can legitimately report
             // zero for delayed/approximated SIM prices, so they are only a
@@ -4543,6 +4572,22 @@ impl AppState {
             )
             .await
             .unwrap_or_default();
+        let mut broker_exposure_fx_rates = BTreeMap::new();
+        for currency in broker_exposures
+            .iter()
+            .map(|row| text_value(row, "currency"))
+            .map(|currency| {
+                if currency.is_empty() {
+                    "DKK".to_string()
+                } else {
+                    currency
+                }
+            })
+            .collect::<BTreeSet<_>>()
+        {
+            let fx_rate = crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &currency).await;
+            broker_exposure_fx_rates.insert(currency, fx_rate);
+        }
         let broker_exposure_snapshot = if broker_exposures.is_empty() {
             JsonValue::Null
         } else {
@@ -4557,17 +4602,20 @@ impl AppState {
                 .and_then(|value| value.as_str().map(ToString::to_string))
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "DKK".to_string());
-            let broker_account_fx =
-                crate::fx::cached_or_static_fx_rate_to_dkk(&self.pool, &broker_account_currency)
-                    .await;
             json!({
                 "status": "available",
                 "unrealised_pnl_dkk": broker_exposures
                     .iter()
-                    .map(|row| value_f64(row, "profit_loss_on_trade") * broker_account_fx)
+                    .map(|row| {
+                        let currency = text_value(row, "currency");
+                        let currency = if currency.is_empty() { "DKK" } else { &currency };
+                        value_f64(row, "profit_loss_on_trade")
+                            * broker_exposure_fx_rates.get(currency).copied().unwrap_or(1.0)
+                    })
                     .sum::<f64>(),
                 "account_currency": broker_account_currency,
-                "fx_rate_to_dkk": broker_account_fx,
+                "fx_basis": "instrument_currency",
+                "instrument_fx_rates_to_dkk": broker_exposure_fx_rates,
                 "exposure_count": broker_exposures.len(),
                 "updated_at": latest_snapshot_timestamp(&broker_exposures, "updated_at"),
             })
@@ -4577,10 +4625,7 @@ impl AppState {
         let unrealised_pnl_attribution = broker_exposure_pnl_attribution(
             &broker_exposures,
             &broker_exposure_snapshot,
-            broker_exposure_snapshot
-                .get("fx_rate_to_dkk")
-                .and_then(JsonValue::as_f64)
-                .filter(|value| value.is_finite() && *value > 0.0),
+            &broker_exposure_fx_rates,
         );
         let realised_sell_rows = self
             .select_json(&format!(
@@ -4616,7 +4661,6 @@ impl AppState {
             );
         } else {
             let broker_account_currency = text_value(&broker_exposure_snapshot, "account_currency");
-            let broker_account_fx = value_f64(&broker_exposure_snapshot, "fx_rate_to_dkk");
             let exposure_unrealised_pnl_dkk =
                 value_f64(&broker_exposure_snapshot, "unrealised_pnl_dkk");
             let aggregate_unrealised_pnl_dkk = value_f64(aggregate, "total_unrealised_pnl_dkk");
@@ -4633,7 +4677,7 @@ impl AppState {
                     "dashboard_unrealised_pnl_dkk": aggregate_unrealised_pnl_dkk,
                     "broker_exposure_unrealised_pnl_dkk": exposure_unrealised_pnl_dkk,
                     "broker_account_currency": broker_account_currency,
-                    "broker_account_fx_rate_to_dkk": broker_account_fx,
+                    "broker_exposure_fx_basis": "instrument_currency",
                     "difference_dkk": aggregate_unrealised_pnl_dkk - exposure_unrealised_pnl_dkk,
                     "exposure_count": broker_exposures.len()
                 }));
@@ -4649,7 +4693,7 @@ impl AppState {
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .map(|row| (text_value(&row, "symbol"), row))
+                .map(|row| (canonical_symbol_key(&text_value(&row, "symbol")), row))
                 .collect::<HashMap<_, _>>();
             let quantity_mismatches =
                 broker_exposure_quantity_mismatches(&broker_exposures, &broker_positions);
@@ -10737,22 +10781,13 @@ fn unrealised_pnl_reconciliation(
 }
 
 /// Read-only current-exposure attribution. Saxo reports `ProfitLossOnTrade`
-/// in the account currency, so the instrument currency here is a grouping
-/// label, not a claim that this isolates the portfolio's FX contribution.
+/// in the instrument currency, so every row is converted using that
+/// instrument's current FX rate rather than the broker account currency.
 fn broker_exposure_pnl_attribution(
     broker_exposures: &[JsonValue],
     broker_exposure_snapshot: &JsonValue,
-    account_fx_rate_to_dkk: Option<f64>,
+    instrument_fx_rates_to_dkk: &BTreeMap<String, f64>,
 ) -> JsonValue {
-    let Some(account_fx_rate_to_dkk) = account_fx_rate_to_dkk else {
-        return json!({
-            "status": "unavailable",
-            "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
-            "rows": [],
-            "currencies": [],
-            "exposure_count": broker_exposures.len(),
-        });
-    };
     if broker_exposures.is_empty() {
         return json!({
             "status": "unavailable",
@@ -10774,18 +10809,23 @@ fn broker_exposure_pnl_attribution(
                 return None;
             }
             let instrument_currency = text_value(row, "currency")
-                .if_empty_then(|| Some("Unknown".to_string()))
-                .unwrap_or_else(|| "Unknown".to_string());
-            let profit_loss_account_currency = row
+                .if_empty_then(|| Some("DKK".to_string()))
+                .unwrap_or_else(|| "DKK".to_string());
+            let profit_loss_instrument_currency = row
                 .get("profit_loss_on_trade")
                 .and_then(JsonValue::as_f64)
                 .filter(|value| value.is_finite())?;
+            let fx_rate_to_dkk = instrument_fx_rates_to_dkk
+                .get(&instrument_currency)
+                .copied()
+                .filter(|value| value.is_finite() && *value > 0.0)?;
             Some(json!({
                 "symbol": symbol,
                 "instrument_currency": instrument_currency,
                 "quantity": row.get("quantity").cloned().unwrap_or(JsonValue::Null),
-                "unrealised_pnl_dkk": profit_loss_account_currency * account_fx_rate_to_dkk,
-                "profit_loss_account_currency": profit_loss_account_currency,
+                "unrealised_pnl_dkk": profit_loss_instrument_currency * fx_rate_to_dkk,
+                "profit_loss_instrument_currency": profit_loss_instrument_currency,
+                "fx_rate_to_dkk": fx_rate_to_dkk,
                 "calculation_reliability": row.get("calculation_reliability").cloned().unwrap_or(JsonValue::Null),
                 "updated_at": row.get("updated_at").cloned().unwrap_or(JsonValue::Null),
             }))
@@ -10839,7 +10879,8 @@ fn broker_exposure_pnl_attribution(
         "status": "available",
         "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
         "account_currency": account_currency,
-        "fx_rate_to_dkk": account_fx_rate_to_dkk,
+        "fx_basis": "instrument_currency",
+        "instrument_fx_rates_to_dkk": instrument_fx_rates_to_dkk,
         "updated_at": broker_exposure_snapshot.get("updated_at").cloned().unwrap_or(JsonValue::Null),
         "exposure_count": total_rows,
         "shown_row_count": rows.len(),
@@ -11335,6 +11376,10 @@ fn broker_exposure_quantity_mismatches(
     exposures: &[JsonValue],
     positions: &HashMap<String, JsonValue>,
 ) -> Vec<JsonValue> {
+    let positions_by_symbol = positions
+        .iter()
+        .map(|(symbol, row)| (canonical_symbol_key(symbol), row))
+        .collect::<HashMap<_, _>>();
     exposures
         .iter()
         .filter_map(|exposure| {
@@ -11343,8 +11388,9 @@ fn broker_exposure_quantity_mismatches(
                 return None;
             }
             let exposure_quantity = value_f64(exposure, "quantity");
-            let position_quantity = positions
-                .get(&symbol)
+            let position = positions_by_symbol
+                .get(&canonical_symbol_key(&symbol));
+            let position_quantity = position
                 .map(|row| value_f64(row, "quantity"))
                 .unwrap_or(0.0);
             let difference = exposure_quantity - position_quantity;
@@ -11357,8 +11403,7 @@ fn broker_exposure_quantity_mismatches(
                 "position_quantity": position_quantity,
                 "difference": difference,
                 "exposure_updated_at": exposure.get("updated_at").cloned().unwrap_or(JsonValue::Null),
-                "position_updated_at": positions
-                    .get(&text_value(exposure, "symbol"))
+                "position_updated_at": position
                     .and_then(|row| row.get("updated_at"))
                     .cloned()
                     .unwrap_or(JsonValue::Null)
@@ -12783,22 +12828,26 @@ mod tests {
             ],
             &json!({
                 "account_currency": "DKK",
-                "fx_rate_to_dkk": 1.0,
-                "unrealised_pnl_dkk": 50.0,
+                "unrealised_pnl_dkk": 1_010.0,
                 "updated_at": "2026-07-30T10:00:00Z",
             }),
-            Some(1.0),
+            &BTreeMap::from([("USD".to_string(), 6.4), ("EUR".to_string(), 7.4)]),
         );
         assert_eq!(attribution["status"], json!("available"));
         assert_eq!(attribution["exposure_count"], json!(2));
         assert_eq!(attribution["rows"][0]["symbol"], json!("USDWIN:xnas"));
+        assert_eq!(
+            attribution["rows"][0]["profit_loss_instrument_currency"],
+            json!(100.0)
+        );
+        assert_eq!(attribution["rows"][0]["fx_rate_to_dkk"], json!(6.4));
         assert_eq!(
             attribution["currencies"][0]["instrument_currency"],
             json!("USD")
         );
         assert_eq!(
             attribution["currencies"][0]["absolute_contribution_pct"],
-            json!(66.66666666666666)
+            json!(63.366336633663366)
         );
         assert_eq!(
             attribution["scope"],

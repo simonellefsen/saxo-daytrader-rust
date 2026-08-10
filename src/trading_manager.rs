@@ -3921,7 +3921,7 @@ async fn verified_risk_off_evidence(
 ) -> Option<String> {
     let open_price = sqlx::query(&format!(
         "SELECT open_price_local FROM broker_position_snapshots
-         WHERE symbol = '{}' AND quantity > 0 AND COALESCE(can_be_closed, 1) <> 0
+         WHERE UPPER(symbol) = UPPER('{}') AND quantity > 0 AND COALESCE(can_be_closed, 1) <> 0
          LIMIT 1",
         sql_escape(symbol)
     ))
@@ -4578,7 +4578,7 @@ async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64>
         let row = sqlx::query(&format!(
             "SELECT COALESCE(SUM(quantity), 0) AS quantity
              FROM broker_position_snapshots
-             WHERE symbol = '{}'",
+             WHERE UPPER(symbol) = UPPER('{}')",
             sql_escape(symbol)
         ))
         .fetch_optional(&state.pool)
@@ -4599,7 +4599,7 @@ async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64>
         .map(|batch| format!(" AND batch_id = '{}'", sql_escape(batch)))
         .unwrap_or_default();
     let row = sqlx::query(&format!(
-        "SELECT quantity FROM position_snapshots WHERE symbol = '{}' AND excluded = 0{} ORDER BY id DESC LIMIT 1",
+        "SELECT quantity FROM position_snapshots WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0{} ORDER BY id DESC LIMIT 1",
         sql_escape(symbol),
         where_batch
     ))
@@ -4615,7 +4615,7 @@ async fn latest_sellable_position_quantity(state: &AppState, symbol: &str) -> Re
         let row = sqlx::query(&format!(
             "SELECT COALESCE(SUM(quantity), 0) AS quantity
              FROM broker_position_snapshots
-             WHERE symbol = '{}'
+             WHERE UPPER(symbol) = UPPER('{}')
                AND COALESCE(can_be_closed, 1) <> 0",
             sql_escape(symbol)
         ))

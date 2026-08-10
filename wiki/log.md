@@ -1930,3 +1930,8 @@ broker mutation was added.
 - Replaced the public `/api/execution` compatibility-JSON envelope with typed `ExecutionPayload`.
 - Kept persisted execution order, fill, and event rows as compatibility JSON inside the explicit read-only envelope, including its existing per-list degraded-read behavior.
 - Added a serialization regression; broker synchronization, queue processing, Trading Manager, Hermes, protective stops, and Saxo execution are unchanged.
+
+## 2026-08-10 - Saxo execution environment and reconciliation integrity
+
+- Recorded and fixed the running-system findings: execution admission now verifies configured and cached Saxo LIVE environments; local/broker holding reconciliation uses ISIN-first and case-normalized identity; stored Saxo exposure P/L uses instrument-currency FX rates.
+- Added focused regressions for the SIM rejection, symbol-casing identity, and corrected attribution. No credentials, broker payloads, account identifiers, or session data were added to the wiki.

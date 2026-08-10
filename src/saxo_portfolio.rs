@@ -124,7 +124,7 @@ async fn local_broker_quantity_divergences(
 ) -> Result<Vec<JsonValue>> {
     use sqlx::Row;
     let rows = sqlx::query(
-        "SELECT symbol, quantity
+        "SELECT symbol, isin, quantity
          FROM position_snapshots
          WHERE excluded = 0
          ORDER BY imported_at DESC, id DESC",
@@ -132,20 +132,29 @@ async fn local_broker_quantity_divergences(
     .fetch_all(&state.pool)
     .await
     .context("reading local position book for divergence check")?;
-    let mut local: HashMap<String, f64> = HashMap::new();
+    let mut local: HashMap<String, (String, f64)> = HashMap::new();
     for row in &rows {
         let Ok(symbol) = row.try_get::<String, _>("symbol") else {
             continue;
         };
+        let isin = row.try_get::<Option<String>, _>("isin").ok().flatten();
         let quantity = row.try_get::<f64, _>("quantity").unwrap_or(0.0);
-        // First row per symbol is the latest snapshot, matching the basis reader.
-        local.entry(symbol).or_insert(quantity);
+        // First row per durable identity is the latest snapshot, matching the
+        // basis reader. Imported symbols and Saxo display symbols can differ
+        // only by case, so symbol text alone is not a safe comparison key.
+        local
+            .entry(position_identity_key(&symbol, isin.as_deref()))
+            .or_insert((symbol, quantity));
     }
     let mut divergences = Vec::new();
-    let mut broker_symbols: HashSet<&str> = HashSet::new();
+    let mut broker_identities: HashSet<String> = HashSet::new();
     for position in broker_positions {
-        broker_symbols.insert(position.symbol.as_str());
-        let local_quantity = local.get(&position.symbol).copied().unwrap_or(0.0);
+        let identity = position_identity_key(&position.symbol, position.isin.as_deref());
+        broker_identities.insert(identity.clone());
+        let local_quantity = local
+            .get(&identity)
+            .map(|(_, quantity)| *quantity)
+            .unwrap_or(0.0);
         if (local_quantity - position.quantity).abs() > 1e-6 {
             divergences.push(json!({
                 "symbol": position.symbol,
@@ -154,8 +163,8 @@ async fn local_broker_quantity_divergences(
             }));
         }
     }
-    for (symbol, quantity) in &local {
-        if *quantity > 1e-6 && !broker_symbols.contains(symbol.as_str()) {
+    for (identity, (symbol, quantity)) in &local {
+        if *quantity > 1e-6 && !broker_identities.contains(identity) {
             divergences.push(json!({
                 "symbol": symbol,
                 "local_quantity": quantity,
@@ -170,6 +179,17 @@ async fn local_broker_quantity_divergences(
             .cmp(right["symbol"].as_str().unwrap_or_default())
     });
     Ok(divergences)
+}
+
+fn canonical_symbol_key(symbol: &str) -> String {
+    symbol.trim().to_ascii_uppercase()
+}
+
+fn position_identity_key(symbol: &str, isin: Option<&str>) -> String {
+    isin.map(str::trim)
+        .filter(|isin| !isin.is_empty())
+        .map(|isin| format!("isin:{}", isin.to_ascii_uppercase()))
+        .unwrap_or_else(|| format!("symbol:{}", canonical_symbol_key(symbol)))
 }
 
 fn parse_broker_positions(payload: &JsonValue) -> Vec<BrokerPositionRow> {
@@ -677,6 +697,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn position_identity_prefers_isin_and_normalizes_symbol_casing() {
+        assert_eq!(
+            position_identity_key("DB1GN:xetr", None),
+            position_identity_key("DB1Gn:xetr", None)
+        );
+        assert_eq!(
+            position_identity_key("different:xetr", Some("DE000A0Z2ZZ5")),
+            position_identity_key("DB1Gn:xetr", Some("de000a0z2zz5"))
+        );
+    }
+
     #[tokio::test]
     async fn flags_quantity_divergence_between_local_book_and_broker() {
         use std::{path::PathBuf, sync::Once};
@@ -695,6 +727,7 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 imported_at TEXT NOT NULL,
                 symbol TEXT NOT NULL,
+                isin TEXT,
                 quantity REAL NOT NULL,
                 excluded INTEGER NOT NULL DEFAULT 0
             )",
@@ -711,6 +744,7 @@ mod tests {
             ("2026-07-16T00:00:00Z", "AMD:xnas", 10.0, 0),
             ("2026-07-16T00:00:00Z", "NNIT:xcse", 5.0, 0),
             ("2026-07-16T00:00:00Z", "AJG:xnys", 2.0, 0),
+            ("2026-07-16T00:00:00Z", "DB1GN:xetr", 4.0, 0),
             ("2026-07-16T00:00:00Z", "ORSTED:xcse", 7.0, 1),
         ] {
             sqlx::query(&format!(
@@ -732,6 +766,7 @@ mod tests {
             broker_row("AMD:xnas", 8.0),
             broker_row("AJG:xnys", 2.0),
             broker_row("ARM:xnas", 5.0),
+            broker_row("DB1Gn:xetr", 4.0),
         ];
 
         let divergences = local_broker_quantity_divergences(&state, &broker_positions)

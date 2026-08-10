@@ -83,6 +83,8 @@ enum ExecutionQueueGate {
     NotLiveSaxo,
     DryRun,
     ApprovalRequired,
+    ConfiguredEnvironmentNotLive,
+    SessionEnvironmentNotLive,
 }
 
 impl ExecutionQueueGate {
@@ -93,6 +95,12 @@ impl ExecutionQueueGate {
             }
             Self::DryRun => "app.dry_run is true",
             Self::ApprovalRequired => "execution.require_approval_live is true",
+            Self::ConfiguredEnvironmentNotLive => {
+                "Saxo execution queue requires saxo.environment=LIVE."
+            }
+            Self::SessionEnvironmentNotLive => {
+                "Saxo execution queue requires a verified LIVE Saxo session."
+            }
         }
     }
 }
@@ -106,6 +114,7 @@ fn execution_queue_gate(
     adapter: &str,
     dry_run: bool,
     require_approval: bool,
+    configured_environment: &str,
 ) -> Option<ExecutionQueueGate> {
     if !execution_mode.eq_ignore_ascii_case("live") || !adapter.eq_ignore_ascii_case("saxo") {
         Some(ExecutionQueueGate::NotLiveSaxo)
@@ -113,9 +122,16 @@ fn execution_queue_gate(
         Some(ExecutionQueueGate::DryRun)
     } else if require_approval {
         Some(ExecutionQueueGate::ApprovalRequired)
+    } else if !configured_environment.eq_ignore_ascii_case("live") {
+        Some(ExecutionQueueGate::ConfiguredEnvironmentNotLive)
     } else {
         None
     }
+}
+
+fn verified_live_session(session: &JsonValue) -> bool {
+    session_text(session, "environment")
+        .is_some_and(|environment| environment.eq_ignore_ascii_case("live"))
 }
 
 pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
@@ -126,8 +142,16 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
     let dry_run = yaml_bool(&state.config, &["app", "dry_run"]).unwrap_or(true);
     let require_approval =
         yaml_bool(&state.config, &["execution", "require_approval_live"]).unwrap_or(true);
+    let configured_environment =
+        yaml_string(&state.config, &["saxo", "environment"]).unwrap_or_else(|| "sim".to_string());
 
-    if let Some(gate) = execution_queue_gate(&execution_mode, &adapter, dry_run, require_approval) {
+    if let Some(gate) = execution_queue_gate(
+        &execution_mode,
+        &adapter,
+        dry_run,
+        require_approval,
+        &configured_environment,
+    ) {
         return Ok(match gate {
             ExecutionQueueGate::NotLiveSaxo => json!({
                 "status": "disabled",
@@ -135,10 +159,14 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
                 "execution_mode": execution_mode,
                 "adapter": adapter
             }),
-            ExecutionQueueGate::DryRun | ExecutionQueueGate::ApprovalRequired => json!({
+            ExecutionQueueGate::DryRun
+            | ExecutionQueueGate::ApprovalRequired
+            | ExecutionQueueGate::ConfiguredEnvironmentNotLive => json!({
                 "status": "disabled",
                 "reason": gate.reason(),
+                "configured_saxo_environment": configured_environment,
             }),
+            ExecutionQueueGate::SessionEnvironmentNotLive => unreachable!(),
         });
     }
 
@@ -153,6 +181,14 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         .ensure_saxo_session_json("execution_queue")
         .await
         .context("loading Saxo session before executing queued orders")?;
+    if !verified_live_session(&session) {
+        return Ok(json!({
+            "status": "disabled",
+            "reason": ExecutionQueueGate::SessionEnvironmentNotLive.reason(),
+            "configured_saxo_environment": configured_environment,
+            "session_environment": session_text(&session, "environment"),
+        }));
+    }
 
     if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
         warn!("Saxo execution queue using fallback exchange calendar: {err:#}");
@@ -1434,7 +1470,7 @@ async fn execute_order(
         // Python/Node systems often trust their latest cached row, while broker APIs can
         // already have a later fill that changed the holding.
         let local_snapshot_quantity = latest_position_quantity(state, &symbol).await?;
-        let broker_position = broker_positions.get(&symbol);
+        let broker_position = broker_position_for_symbol(&broker_positions, &symbol);
         let held_quantity = broker_position
             .map(|position| position.quantity.max(0.0))
             .unwrap_or(0.0);
@@ -1470,7 +1506,7 @@ async fn execute_order(
     }
 
     let closing_position = if action == "SELL" {
-        broker_positions.get(&symbol)
+        broker_position_for_symbol(&broker_positions, &symbol)
     } else {
         None
     };
@@ -2726,7 +2762,7 @@ async fn latest_position_quantity(state: &AppState, symbol: &str) -> Result<f64>
         .map(|batch| format!(" AND batch_id = '{}'", sql_escape(batch)))
         .unwrap_or_default();
     let row = sqlx::query(&format!(
-        "SELECT quantity FROM position_snapshots WHERE symbol = '{}' AND excluded = 0{} ORDER BY id DESC LIMIT 1",
+        "SELECT quantity FROM position_snapshots WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0{} ORDER BY id DESC LIMIT 1",
         sql_escape(symbol),
         where_batch
     ))
@@ -2749,7 +2785,7 @@ async fn latest_position_isin(state: &AppState, symbol: &str) -> Result<Option<S
         .map(|batch| format!(" AND batch_id = '{}'", sql_escape(batch)))
         .unwrap_or_default();
     let row = sqlx::query(&format!(
-        "SELECT isin FROM position_snapshots WHERE symbol = '{}' AND excluded = 0{} ORDER BY id DESC LIMIT 1",
+        "SELECT isin FROM position_snapshots WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0{} ORDER BY id DESC LIMIT 1",
         sql_escape(symbol),
         where_batch
     ))
@@ -2765,7 +2801,7 @@ async fn latest_position_cost_basis(state: &AppState, symbol: &str) -> Result<Po
     let row = sqlx::query(&format!(
         "SELECT quantity, cost_basis_dkk, cost_basis_local, isin, instrument_name
          FROM position_snapshots
-         WHERE symbol = '{}' AND excluded = 0
+         WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0
          ORDER BY imported_at DESC, id DESC
          LIMIT 1",
         sql_escape(symbol)
@@ -2811,7 +2847,7 @@ async fn broker_position_cost_basis(
         "SELECT quantity, open_price_local, open_price_including_costs_local,
                 currency, isin, instrument_name
          FROM broker_position_snapshots
-         WHERE symbol = '{}' AND quantity > 0
+         WHERE UPPER(symbol) = UPPER('{}') AND quantity > 0
          LIMIT 1",
         sql_escape(symbol)
     ))
@@ -2862,7 +2898,7 @@ async fn apply_fill_to_local_book(
     let snapshot = sqlx::query(&format!(
         "SELECT id, quantity, cost_basis_local, cost_basis_dkk
          FROM position_snapshots
-         WHERE symbol = '{}' AND excluded = 0
+         WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0
          ORDER BY imported_at DESC, id DESC
          LIMIT 1",
         sql_escape(&symbol)
@@ -3061,7 +3097,7 @@ async fn resolve_order_currency(
     let row = sqlx::query(&format!(
         "SELECT currency
          FROM position_snapshots
-         WHERE symbol = '{}' AND excluded = 0
+         WHERE UPPER(symbol) = UPPER('{}') AND excluded = 0
          ORDER BY imported_at DESC, id DESC
          LIMIT 1",
         sql_escape(&symbol)
@@ -3194,7 +3230,7 @@ async fn cancel_protective_stops_before_sell(
         .join(", ");
     let rows = sqlx::query(&format!(
         "SELECT * FROM execution_orders
-         WHERE symbol = '{}'
+         WHERE UPPER(symbol) = UPPER('{}')
            AND action = 'SELL'
            AND COALESCE(strategy_type, '') = '{}'
            AND status IN ({statuses})
@@ -3311,7 +3347,7 @@ async fn active_sell_reservations(
     let row = sqlx::query(&format!(
         "SELECT COALESCE(SUM(quantity), 0) AS quantity
          FROM execution_orders
-         WHERE symbol = '{}'
+         WHERE UPPER(symbol) = UPPER('{}')
            AND action = 'SELL'
            AND id <> {}
            AND status IN ({})
@@ -3334,6 +3370,18 @@ fn openapi_base_url(state: &AppState, session: &JsonValue) -> Result<&'static st
         .unwrap_or_else(|| "sim".to_string())
         .to_lowercase();
     crate::saxo_http::openapi_base_url(&environment)
+}
+
+fn broker_position_for_symbol<'a>(
+    positions: &'a HashMap<String, BrokerPosition>,
+    symbol: &str,
+) -> Option<&'a BrokerPosition> {
+    positions.get(symbol).or_else(|| {
+        positions
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(symbol))
+            .map(|(_, position)| position)
+    })
 }
 
 fn account_key(state: &AppState, session: &JsonValue) -> Result<String> {
@@ -4438,24 +4486,38 @@ mod tests {
     }
 
     #[test]
-    fn execution_queue_gate_fails_closed_until_live_saxo_is_explicitly_ungated() {
+    fn execution_queue_gate_fails_closed_until_live_saxo_and_environment_are_explicitly_ungated() {
         assert_eq!(
-            execution_queue_gate("simulation", "saxo", false, false),
+            execution_queue_gate("simulation", "saxo", false, false, "live"),
             Some(ExecutionQueueGate::NotLiveSaxo)
         );
         assert_eq!(
-            execution_queue_gate("live", "simulation", false, false),
+            execution_queue_gate("live", "simulation", false, false, "live"),
             Some(ExecutionQueueGate::NotLiveSaxo)
         );
         assert_eq!(
-            execution_queue_gate("live", "saxo", true, false),
+            execution_queue_gate("live", "saxo", true, false, "live"),
             Some(ExecutionQueueGate::DryRun)
         );
         assert_eq!(
-            execution_queue_gate("live", "saxo", false, true),
+            execution_queue_gate("live", "saxo", false, true, "live"),
             Some(ExecutionQueueGate::ApprovalRequired)
         );
-        assert_eq!(execution_queue_gate("live", "saxo", false, false), None);
+        assert_eq!(
+            execution_queue_gate("live", "saxo", false, false, "sim"),
+            Some(ExecutionQueueGate::ConfiguredEnvironmentNotLive)
+        );
+        assert_eq!(
+            execution_queue_gate("live", "saxo", false, false, "live"),
+            None
+        );
+    }
+
+    #[test]
+    fn verified_live_session_refuses_missing_or_sim_environments() {
+        assert!(!verified_live_session(&json!({})));
+        assert!(!verified_live_session(&json!({"environment": "SIM"})));
+        assert!(verified_live_session(&json!({"environment": "LIVE"})));
     }
 
     /// Saxo rejected every protective stop on 2026-07-25 with

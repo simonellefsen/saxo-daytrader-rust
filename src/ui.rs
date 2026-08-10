@@ -1584,10 +1584,8 @@ fn PerformancePnlReconciliationPanel(
     };
     let broker_detail = match broker_status.as_str() {
         "aligned" | "drift" => format!(
-            "{} exposure(s) · {} account FX {} · {}",
+            "{} exposure(s) · instrument FX conversion · {}",
             text(&broker, "exposure_count"),
-            text(&broker, "account_currency"),
-            text(&broker, "fx_rate_to_dkk"),
             format_timestamp(&text(&broker, "updated_at"), &prefs),
         ),
         _ => "No stored Saxo instrument-exposure snapshot is available.".to_string(),
@@ -1663,10 +1661,8 @@ fn PerformanceExposureAttributionPanel(
     };
     let evidence = if available {
         format!(
-            "{} stored exposure(s) · {} account FX {} · {}",
+            "{} stored exposure(s) · instrument FX conversion · {}",
             text(&attribution, "exposure_count"),
-            text(&attribution, "account_currency"),
-            text(&attribution, "fx_rate_to_dkk"),
             format_timestamp(&text(&attribution, "updated_at"), &prefs),
         )
     } else {

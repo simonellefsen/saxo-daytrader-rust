@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-04
+updated: 2026-08-10
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-10: Closed the SIM/live execution-admission mismatch found in the running-system diagnostics. The Saxo queue now fails closed unless execution mode, adapter, dry-run, approval, configured Saxo environment, and the refreshed durable Saxo session all explicitly permit LIVE operation. A SIM session can no longer be described as, or treated as, live execution. Reconciliation now uses ISIN-first/case-normalized holding identity so a broker display-symbol casing change cannot split one holding into a false quantity divergence or detach its local basis. The Performance integrity aggregate and exposure attribution now convert Saxo ProfitLossOnTrade with each instrument currency's FX rate, matching the dashboard projection. Focused regressions cover the environment gate, symbol casing, and FX attribution.
 - 2026-08-01: Replaced the public Decision Gate Replay compatibility-JSON envelope with typed Rust `DecisionGateReplayPayload`. Its stable availability, run count, scenarios, safety, interpretation, and support-risk evidence fields are explicit while nested historical-analysis details remain compatibility JSON during the staged port. This does not change target-gate replay calculation, support-risk evidence collection, Decision Reports, Hermes, Trading Manager gates, configuration, protective stops, or Saxo execution. A focused regression pins the serialization. Follow-up: continue only with another small independently tested public contract before attempting broad dashboard-payload conversion.
 - 2026-08-01: Replaced the public performance compatibility-JSON envelope with typed Rust `PerformancePayload`. Its stable range key, history list, summary, benchmarks, and goal-tracking fields are explicit while their nested read-model details remain compatibility JSON during the staged port. This does not change performance collection, benchmark retrieval, goal tracking, Decision Reports, Hermes, Trading Manager gates, protective stops, or Saxo execution. A focused regression pins the serialization. Follow-up: continue only with another small independently tested public contract before attempting broad dashboard-payload conversion.
 - 2026-08-01: Replaced the public market-status compatibility-JSON envelope with typed Rust `MarketStatusPayload`. Its stable exchange-row, summary, scheduler, and price-monitor fields are explicit while their nested read-model details remain compatibility JSON during the staged port. This does not change exchange-calendar refreshes, market-window calculation, quote monitoring, Decision Reports, Hermes, Trading Manager gates, protective stops, or Saxo execution. A focused regression pins the serialization. Follow-up: continue only with another small independently tested public contract before attempting broad dashboard-payload conversion.
