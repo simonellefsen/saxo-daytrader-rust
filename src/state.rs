@@ -2796,13 +2796,24 @@ fn effective_execution_mode(
     if require_approval {
         return "approval_required".to_string();
     }
-    if !configured_saxo_environment.eq_ignore_ascii_case("live") {
-        return "disabled_sim_environment".to_string();
-    }
-    if !session_environment.is_some_and(|environment| environment.eq_ignore_ascii_case("live")) {
+    let configured_environment = if configured_saxo_environment.eq_ignore_ascii_case("sim") {
+        "SIM"
+    } else if configured_saxo_environment.eq_ignore_ascii_case("live") {
+        "LIVE"
+    } else {
+        return "disabled_unknown_environment".to_string();
+    };
+    let Some(session_environment) = session_environment else {
         return "disabled_session_environment".to_string();
+    };
+    if !session_environment.eq_ignore_ascii_case(configured_environment) {
+        return "disabled_environment_mismatch".to_string();
     }
-    "live".to_string()
+    match configured_environment {
+        "SIM" => "simulated_broker".to_string(),
+        "LIVE" => "live_broker".to_string(),
+        _ => unreachable!("configured Saxo environment was normalized"),
+    }
 }
 
 /// Prefer ISIN when both source records retain it; otherwise use the
@@ -12854,18 +12865,26 @@ mod tests {
     }
 
     #[test]
-    fn effective_execution_mode_never_labels_sim_or_unverified_sessions_as_live() {
+    fn effective_execution_mode_distinguishes_enabled_sim_from_environment_mismatch() {
         assert_eq!(
             effective_execution_mode("live", "saxo", false, false, "sim", Some("sim")),
-            "disabled_sim_environment"
+            "simulated_broker"
         );
         assert_eq!(
             effective_execution_mode("live", "saxo", false, false, "live", Some("sim")),
-            "disabled_session_environment"
+            "disabled_environment_mismatch"
         );
         assert_eq!(
             effective_execution_mode("live", "saxo", false, false, "live", Some("live")),
-            "live"
+            "live_broker"
+        );
+        assert_eq!(
+            effective_execution_mode("live", "saxo", false, false, "sim", None),
+            "disabled_session_environment"
+        );
+        assert_eq!(
+            effective_execution_mode("live", "saxo", false, false, "paper", Some("paper")),
+            "disabled_unknown_environment"
         );
     }
 

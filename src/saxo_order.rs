@@ -83,8 +83,8 @@ enum ExecutionQueueGate {
     NotLiveSaxo,
     DryRun,
     ApprovalRequired,
-    ConfiguredEnvironmentNotLive,
-    SessionEnvironmentNotLive,
+    UnsupportedConfiguredEnvironment,
+    SessionEnvironmentMismatch,
 }
 
 impl ExecutionQueueGate {
@@ -95,13 +95,23 @@ impl ExecutionQueueGate {
             }
             Self::DryRun => "app.dry_run is true",
             Self::ApprovalRequired => "execution.require_approval_live is true",
-            Self::ConfiguredEnvironmentNotLive => {
-                "Saxo execution queue requires saxo.environment=LIVE."
+            Self::UnsupportedConfiguredEnvironment => {
+                "Saxo execution queue requires saxo.environment=SIM or saxo.environment=LIVE."
             }
-            Self::SessionEnvironmentNotLive => {
-                "Saxo execution queue requires a verified LIVE Saxo session."
+            Self::SessionEnvironmentMismatch => {
+                "Saxo execution queue requires a verified Saxo session matching saxo.environment."
             }
         }
+    }
+}
+
+fn normalized_saxo_environment(environment: &str) -> Option<&'static str> {
+    if environment.eq_ignore_ascii_case("sim") {
+        Some("SIM")
+    } else if environment.eq_ignore_ascii_case("live") {
+        Some("LIVE")
+    } else {
+        None
     }
 }
 
@@ -122,16 +132,24 @@ fn execution_queue_gate(
         Some(ExecutionQueueGate::DryRun)
     } else if require_approval {
         Some(ExecutionQueueGate::ApprovalRequired)
-    } else if !configured_environment.eq_ignore_ascii_case("live") {
-        Some(ExecutionQueueGate::ConfiguredEnvironmentNotLive)
+    } else if normalized_saxo_environment(configured_environment).is_none() {
+        Some(ExecutionQueueGate::UnsupportedConfiguredEnvironment)
     } else {
         None
     }
 }
 
-fn verified_live_session(session: &JsonValue) -> bool {
+fn verified_session_matches_configured_environment(
+    session: &JsonValue,
+    configured_environment: &str,
+) -> bool {
+    let Some(expected_environment) = normalized_saxo_environment(configured_environment) else {
+        return false;
+    };
     session_text(session, "environment")
-        .is_some_and(|environment| environment.eq_ignore_ascii_case("live"))
+        .as_deref()
+        .and_then(normalized_saxo_environment)
+        .is_some_and(|actual_environment| actual_environment == expected_environment)
 }
 
 pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
@@ -161,12 +179,12 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
             }),
             ExecutionQueueGate::DryRun
             | ExecutionQueueGate::ApprovalRequired
-            | ExecutionQueueGate::ConfiguredEnvironmentNotLive => json!({
+            | ExecutionQueueGate::UnsupportedConfiguredEnvironment => json!({
                 "status": "disabled",
                 "reason": gate.reason(),
                 "configured_saxo_environment": configured_environment,
             }),
-            ExecutionQueueGate::SessionEnvironmentNotLive => unreachable!(),
+            ExecutionQueueGate::SessionEnvironmentMismatch => unreachable!(),
         });
     }
 
@@ -181,10 +199,10 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         .ensure_saxo_session_json("execution_queue")
         .await
         .context("loading Saxo session before executing queued orders")?;
-    if !verified_live_session(&session) {
+    if !verified_session_matches_configured_environment(&session, &configured_environment) {
         return Ok(json!({
             "status": "disabled",
-            "reason": ExecutionQueueGate::SessionEnvironmentNotLive.reason(),
+            "reason": ExecutionQueueGate::SessionEnvironmentMismatch.reason(),
             "configured_saxo_environment": configured_environment,
             "session_environment": session_text(&session, "environment"),
         }));
@@ -4486,7 +4504,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_queue_gate_fails_closed_until_live_saxo_and_environment_are_explicitly_ungated() {
+    fn execution_queue_gate_allows_matching_sim_or_live_saxo_environment() {
         assert_eq!(
             execution_queue_gate("simulation", "saxo", false, false, "live"),
             Some(ExecutionQueueGate::NotLiveSaxo)
@@ -4505,19 +4523,36 @@ mod tests {
         );
         assert_eq!(
             execution_queue_gate("live", "saxo", false, false, "sim"),
-            Some(ExecutionQueueGate::ConfiguredEnvironmentNotLive)
+            None
         );
         assert_eq!(
             execution_queue_gate("live", "saxo", false, false, "live"),
             None
         );
+        assert_eq!(
+            execution_queue_gate("live", "saxo", false, false, "paper"),
+            Some(ExecutionQueueGate::UnsupportedConfiguredEnvironment)
+        );
     }
 
     #[test]
-    fn verified_live_session_refuses_missing_or_sim_environments() {
-        assert!(!verified_live_session(&json!({})));
-        assert!(!verified_live_session(&json!({"environment": "SIM"})));
-        assert!(verified_live_session(&json!({"environment": "LIVE"})));
+    fn verified_session_requires_the_configured_saxo_environment() {
+        assert!(!verified_session_matches_configured_environment(
+            &json!({}),
+            "sim"
+        ));
+        assert!(verified_session_matches_configured_environment(
+            &json!({"environment": "SIM"}),
+            "sim"
+        ));
+        assert!(verified_session_matches_configured_environment(
+            &json!({"environment": "LIVE"}),
+            "live"
+        ));
+        assert!(!verified_session_matches_configured_environment(
+            &json!({"environment": "SIM"}),
+            "live"
+        ));
     }
 
     /// Saxo rejected every protective stop on 2026-07-25 with

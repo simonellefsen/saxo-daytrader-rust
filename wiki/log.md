@@ -1935,3 +1935,9 @@ broker mutation was added.
 
 - Recorded and fixed the running-system findings: execution admission now verifies configured and cached Saxo LIVE environments; local/broker holding reconciliation uses ISIN-first and case-normalized identity; stored Saxo exposure P/L uses instrument-currency FX rates.
 - Added focused regressions for the SIM rejection, symbol-casing identity, and corrected attribution. No credentials, broker payloads, account identifiers, or session data were added to the wiki.
+
+## 2026-08-17 - Correct Saxo SIM execution admission
+
+- Corrected the prior environment gate: SIM is Saxo's simulated broker venue and is allowed when both `saxo.environment` and the durable session report SIM. LIVE remains allowed only when both sides report LIVE.
+- Unknown, missing, or mismatched environments fail closed; the overview distinguishes `simulated_broker`, `live_broker`, and disabled mismatch states so configured intent cannot be confused with broker venue.
+- Added focused queue-gate and status regressions. No credentials, broker payloads, account identifiers, or session data were added to the wiki.
