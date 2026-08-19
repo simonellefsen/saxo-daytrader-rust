@@ -2025,4 +2025,10 @@ broker mutation was added.
 
 - Landed Phase 3's initial outcome-ledger slice. Each valid BUY/SELL from a persisted server-owned shadow report receives an idempotent observation row with pulse/report provenance, candidate rank, same-date opening-pulse presence, proposed quantity/currency, compact technical/Markov/cash context, and any report-supplied price labelled as context only.
 - New observations enter the existing read-only Saxo info-price monitor as `awaiting_reference`; the first returned info price establishes the local reference. The baseline path has no Trading Manager gate, Hermes request, queue insertion, Saxo precheck, or Saxo order mutation.
-- Gate/Hermes/policy provenance, FX, Quiver, Support Risk, after-cost, excursions, and 1/5/20-session maturity remain explicitly uncollected in this first slice rather than being inferred from local-currency quote movement.
+- Gate/Hermes/policy provenance, FX, Quiver, Support Risk, after-cost, and excursions remain explicitly uncollected in the capture slice rather than being inferred from local-currency quote movement.
+
+## [2026-08-19] implementation | Mature shadow outcomes from daily closes
+
+- Landed the next Phase 3 slice: after each daily-indicator run, referenced shadow candidates derive and persist 1-, 5-, and 20-session directional observations from later distinct stored trading-session closes. Maturity remains explicit as `collecting`, `preliminary`, or `mature`.
+- The comparison is case-normalized by symbol and excludes the reference day, weekends, holidays, and missing-session coverage. BUY and SELL observations invert direction appropriately, but neither is reported as a broker fill, realised P/L, execution simulation, or causal result.
+- The maturation pass is local database evidence only: no Saxo quote/request, provider request, Hermes request, manager gate, queue insertion, precheck, or order mutation is reachable.

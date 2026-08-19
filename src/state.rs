@@ -2270,6 +2270,68 @@ fn compact_holding_period_outcome(
     })
 }
 
+/// Forward shadow movement is deliberately measured only from the durable
+/// read-only Saxo reference quote to later persisted daily-indicator closes.
+/// It is not fill evidence, realised P/L, an execution simulation, or an
+/// assertion that the suggestion should have been traded.
+fn compact_shadow_report_forward_outcome(
+    action: &str,
+    reference_price_local: f64,
+    reference_at: &str,
+    subsequent_closes: &[JsonValue],
+) -> JsonValue {
+    let action = action.trim().to_ascii_uppercase();
+    if !matches!(action.as_str(), "BUY" | "SELL")
+        || !reference_price_local.is_finite()
+        || reference_price_local <= 0.0
+        || reference_at.trim().is_empty()
+    {
+        return JsonValue::Null;
+    }
+    let directional_multiplier = if action == "BUY" { 1.0 } else { -1.0 };
+    let session_outcome = |session: usize, close: Option<&JsonValue>| {
+        let Some(close) = close else {
+            return JsonValue::Null;
+        };
+        let close_local = value_f64(close, "close");
+        if !close_local.is_finite() || close_local <= 0.0 {
+            return JsonValue::Null;
+        }
+        let market_return_pct = close_local / reference_price_local - 1.0;
+        json!({
+            "as_of": json_text(close, "run_date"),
+            "session": session,
+            "close_local": close_local,
+            "market_return_pct": market_return_pct,
+            "directional_return_pct": market_return_pct * directional_multiplier,
+        })
+    };
+    let one_session = session_outcome(1, subsequent_closes.first());
+    let five_session = session_outcome(5, subsequent_closes.get(4));
+    let twenty_session = session_outcome(20, subsequent_closes.get(19));
+    let maturity_status = if !twenty_session.is_null() {
+        "mature"
+    } else if !five_session.is_null() {
+        "preliminary"
+    } else if !one_session.is_null() {
+        "collecting"
+    } else {
+        "awaiting_daily_close"
+    };
+    json!({
+        "status": maturity_status,
+        "evidence_source": "saxo_infoprice_reference_and_daily_indicator_closes",
+        "action": action,
+        "reference_price_local": reference_price_local,
+        "reference_at": reference_at,
+        "available_sessions": subsequent_closes.len(),
+        "one_session": one_session,
+        "five_session": five_session,
+        "twenty_session": twenty_session,
+        "interpretation": "Directional return compares an observed read-only Saxo reference quote with later persisted daily closes. It excludes FX, commissions, tax, slippage, fills, position changes, and any causal or realised-P/L claim."
+    })
+}
+
 /// Turns durable BUY-thesis records and the latest local broker-position
 /// snapshot into an operator review queue. A due review is deliberately not
 /// an exit recommendation: imported lots and later position changes can make
@@ -6080,7 +6142,7 @@ impl AppState {
             .select_json(&format!(
                 "SELECT run_date, MAX(close) AS close
                  FROM daily_indicator_signals
-                 WHERE symbol = '{}' AND status = 'ok' AND close > 0 AND run_date > '{}'
+                     WHERE UPPER(symbol) = UPPER('{}') AND status = 'ok' AND close > 0 AND run_date > '{}'
                  GROUP BY run_date
                  ORDER BY run_date ASC
                  LIMIT 5",
@@ -8048,6 +8110,86 @@ impl AppState {
             updated += result.rows_affected() as usize;
         }
         Ok(updated)
+    }
+
+    /// Matures shadow-report observations from already persisted daily closes.
+    /// This is invoked after a daily-indicator run and performs database reads
+    /// and writes only; it deliberately cannot refresh a Saxo quote, request a
+    /// provider response, run Hermes, evaluate a manager gate, or mutate an
+    /// order.
+    pub async fn refresh_shadow_report_outcome_daily_outcomes(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(
+                "SELECT id, symbol, action, reference_price_local, reference_price_at\n                 FROM shadow_report_outcomes\n                 WHERE reference_price_source = 'saxo_infoprices'\n                   AND reference_price_local > 0\n                   AND reference_price_at IS NOT NULL\n                   AND (outcome_maturity_status IS NULL OR outcome_maturity_status <> 'mature')\n                 ORDER BY reference_price_at ASC, id ASC\n                 LIMIT 500",
+            )
+            .await?;
+        let mut refreshed = 0usize;
+        let mut awaiting_daily_close = 0usize;
+        let mut mature = 0usize;
+        let mut skipped = 0usize;
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        for row in rows {
+            let id = json_text(&row, "id");
+            let reference_at = json_text(&row, "reference_price_at");
+            let reference_date = reference_at.chars().take(10).collect::<String>();
+            if id.is_empty() || reference_date.len() != 10 {
+                skipped += 1;
+                continue;
+            }
+            // Distinct run dates are trading-session observations. Weekends,
+            // holidays, and missing instrument coverage never manufacture a
+            // forward session simply because calendar time elapsed.
+            let subsequent_closes = self
+                .select_json(&format!(
+                    "SELECT run_date, MAX(close) AS close\n                     FROM daily_indicator_signals\n                     WHERE symbol = '{}' AND status = 'ok' AND close > 0 AND run_date > '{}'\n                     GROUP BY run_date\n                     ORDER BY run_date ASC\n                     LIMIT 20",
+                    sql_escape(&json_text(&row, "symbol")),
+                    sql_escape(&reference_date),
+                ))
+                .await?;
+            let outcome = compact_shadow_report_forward_outcome(
+                &json_text(&row, "action"),
+                value_f64(&row, "reference_price_local"),
+                &reference_at,
+                &subsequent_closes,
+            );
+            if outcome.is_null() {
+                skipped += 1;
+                continue;
+            }
+            let maturity_status = json_text(&outcome, "status");
+            let result = sqlx::query(&format!(
+                "UPDATE shadow_report_outcomes\n                 SET updated_at = '{}',\n                     one_session_outcome_json = '{}',\n                     five_session_outcome_json = '{}',\n                     twenty_session_outcome_json = '{}',\n                     outcome_maturity_status = '{}'\n                 WHERE id = '{}'",
+                sql_escape(&now),
+                sql_escape(&serde_json::to_string(
+                    outcome.get("one_session").unwrap_or(&JsonValue::Null)
+                )?),
+                sql_escape(&serde_json::to_string(
+                    outcome.get("five_session").unwrap_or(&JsonValue::Null)
+                )?),
+                sql_escape(&serde_json::to_string(
+                    outcome.get("twenty_session").unwrap_or(&JsonValue::Null)
+                )?),
+                sql_escape(&maturity_status),
+                sql_escape(&id),
+            ))
+            .execute(&self.pool)
+            .await
+            .context("persisting shadow report daily outcome")?;
+            refreshed += result.rows_affected() as usize;
+            if maturity_status == "awaiting_daily_close" {
+                awaiting_daily_close += 1;
+            } else if maturity_status == "mature" {
+                mature += 1;
+            }
+        }
+        Ok(json!({
+            "status": "ok",
+            "refreshed": refreshed,
+            "mature": mature,
+            "awaiting_daily_close": awaiting_daily_close,
+            "skipped": skipped,
+            "safety": "read_only_persisted_daily_indicator_close_observations_no_saxo_provider_hermes_gate_or_order_authority",
+        }))
     }
 
     pub async fn hermes_end_of_day_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -10565,6 +10707,10 @@ impl AppState {
                 latest_price_local REAL,
                 latest_price_at TEXT,
                 observation_count INTEGER NOT NULL DEFAULT 0,
+                one_session_outcome_json TEXT,
+                five_session_outcome_json TEXT,
+                twenty_session_outcome_json TEXT,
+                outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference',
                 UNIQUE(report_id, candidate_rank)
             )",
         )
@@ -10615,6 +10761,16 @@ impl AppState {
             self.ensure_table_column("daily_indicator_signals", column)
                 .await
                 .context("migrating daily indicator support-risk columns")?;
+        }
+        for column in [
+            "one_session_outcome_json TEXT",
+            "five_session_outcome_json TEXT",
+            "twenty_session_outcome_json TEXT",
+            "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
+        ] {
+            self.ensure_table_column("shadow_report_outcomes", column)
+                .await
+                .context("migrating shadow report outcome maturity columns")?;
         }
         for column in [
             "pulse_mode TEXT NOT NULL DEFAULT 'execution_eligible'",
@@ -14219,6 +14375,29 @@ market_data:
         assert_eq!(candidates[1]["currency"], json!("USD"));
     }
 
+    #[test]
+    fn shadow_forward_outcomes_require_distinct_daily_sessions_and_respect_side() {
+        let closes = (1..=20)
+            .map(|session| {
+                json!({
+                    "run_date": format!("2026-09-{session:02}"),
+                    "close": 100.0 + session as f64,
+                })
+            })
+            .collect::<Vec<_>>();
+        let buy =
+            compact_shadow_report_forward_outcome("BUY", 100.0, "2026-08-19T12:15:00Z", &closes);
+        let sell =
+            compact_shadow_report_forward_outcome("SELL", 100.0, "2026-08-19T12:15:00Z", &closes);
+
+        assert_eq!(json_text(&buy, "status"), "mature");
+        assert_eq!(value_i64(&buy, "available_sessions"), 20);
+        assert!((value_f64(&buy["one_session"], "directional_return_pct") - 0.01).abs() < 1e-9);
+        assert!((value_f64(&buy["twenty_session"], "directional_return_pct") - 0.20).abs() < 1e-9);
+        assert!((value_f64(&sell["five_session"], "directional_return_pct") + 0.05).abs() < 1e-9);
+        assert!(compact_shadow_report_forward_outcome("BUY", 100.0, "", &closes).is_null());
+    }
+
     #[tokio::test]
     async fn shadow_report_outcome_persistence_is_idempotent_and_never_needs_an_order_table() {
         let state = runtime_settings_test_state("{}").await;
@@ -14271,6 +14450,59 @@ market_data:
             rows[0]["reference_price_source"],
             json!("awaiting_saxo_infoprice")
         );
+
+        for column in [
+            "one_session_outcome_json TEXT",
+            "five_session_outcome_json TEXT",
+            "twenty_session_outcome_json TEXT",
+            "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
+        ] {
+            sqlx::query(&format!(
+                "ALTER TABLE shadow_report_outcomes ADD COLUMN {column}"
+            ))
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "CREATE TABLE daily_indicator_signals (symbol TEXT NOT NULL, run_date TEXT NOT NULL, status TEXT NOT NULL, close REAL NOT NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE shadow_report_outcomes SET reference_price_local = 100, reference_price_at = '2026-08-19T12:15:00Z', reference_price_source = 'saxo_infoprices', status = 'tracking' WHERE report_id = 7",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        for session in 1..=20 {
+            sqlx::query(&format!(
+                "INSERT INTO daily_indicator_signals (symbol, run_date, status, close) VALUES ('AAA:xcse', '2026-09-{session:02}', 'ok', {})",
+                100 + session
+            ))
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+        let maturity = state
+            .refresh_shadow_report_outcome_daily_outcomes()
+            .await
+            .unwrap();
+        let matured = state
+            .first_json("SELECT one_session_outcome_json, five_session_outcome_json, twenty_session_outcome_json, outcome_maturity_status FROM shadow_report_outcomes WHERE report_id = 7")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(maturity["mature"], json!(1));
+        assert_eq!(matured["outcome_maturity_status"], json!("mature"));
+        assert_eq!(
+            matured["one_session_outcome_json"]["as_of"],
+            json!("2026-09-01")
+        );
+        assert_eq!(matured["five_session_outcome_json"]["session"], json!(5));
+        assert_eq!(matured["twenty_session_outcome_json"]["session"], json!(20));
     }
 
     async fn runtime_settings_test_state(config_yaml: &str) -> AppState {

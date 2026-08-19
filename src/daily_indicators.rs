@@ -297,7 +297,7 @@ async fn run_for_date(
     } else {
         "error"
     };
-    let summary = json!({
+    let mut summary = json!({
         "status": status,
         "run_id": run_id,
         "run_date": run_date.to_string(),
@@ -306,6 +306,25 @@ async fn run_for_date(
         "error_count": error_count,
         "signals": ok_rows.iter().take(20).cloned().collect::<Vec<_>>(),
     });
+    // Mature shadow observations only after the locally persisted indicator
+    // closes are available. This performs no additional Saxo/provider call and
+    // cannot evaluate, queue, or place an order.
+    let shadow_outcome_maturity = match state.refresh_shadow_report_outcome_daily_outcomes().await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("shadow report daily-outcome maturation degraded: {err:#}");
+            json!({
+                "status": "error",
+                "error": "local_shadow_outcome_maturity_unavailable",
+            })
+        }
+    };
+    if let Some(summary_object) = summary.as_object_mut() {
+        summary_object.insert(
+            "shadow_outcome_maturity".to_string(),
+            shadow_outcome_maturity,
+        );
+    }
     insert_run(
         state,
         &run_id,

@@ -22,8 +22,8 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0, Phase 1, Phase 2, and Phase 3's initial
-capture/reference slice are landed.
+Implementation underway. Phase 0, Phase 1, Phase 2, and Phase 3's
+capture/reference and daily-close maturity slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -120,6 +120,17 @@ Saxo precheck, or Saxo order mutation is reachable. The initial record labels
 gate/Hermes/FX/Quiver/Support-Risk/cost/maturity fields as not yet evaluated or
 captured rather than inferring them.
 
+**Daily-close maturity slice landed 2026-08-19:** after a daily-indicator run,
+each provenance-backed reference is compared only with the next distinct
+persisted trading-session closes for the same case-normalized symbol. The
+ledger persists 1-, 5-, and 20-session directional observations, labelled
+`collecting`, `preliminary`, or `mature`; weekends, holidays, missing coverage,
+and the reference day itself cannot manufacture a session. This is an
+observational price comparison for either BUY or SELL direction, not a fill,
+execution simulation, realised P/L, cost estimate, or causal claim. The
+maturity job reads/writes local database evidence only and has no Saxo,
+provider, Hermes, gate, queue, or order authority.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
@@ -128,7 +139,6 @@ Remaining Phase 3 work, for each suggested BUY or SELL:
 - report-time technical, Markov, Quiver, Support Risk, cash, concentration, and thesis snapshot;
 - deterministic gate result and stable gate code;
 - Hermes record-only effect and the approved-policy source it used;
-- next-session, five-session, and twenty-session directional outcomes;
 - maximum adverse and favourable excursion when intraday evidence is available;
 - an estimated after-cost outcome, explicitly separated from realised P/L.
 
