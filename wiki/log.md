@@ -16,6 +16,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The Trading Manager preflight and MCP `list_experiments` projection now carry only operator-approved/active lifecycle rows plus an audit-only pending count. Prompt instructions explicitly prohibit using pending-review values for `allow`, `reduce`, `stand_down`, or `review` advice.
 - Added pure, database-backed, manager-preflight, and MCP-contract regressions. This does not change broker authority, order placement, strategy overlays, or the normal operator lifecycle flow.
 
+## [2026-08-19] safety | Expire stale discretionary orders before Saxo submission
+
+- Closed Phase 0 prerequisite 2 from the shadow-report decision record. A completed report can become stale while its order waits for the next market session or virtual-capital condition; the executor now expires that discretionary queue row after the explicit 360-minute policy rather than automatically submitting old intent.
+- Expiry runs before the executor opens a Saxo session, fetches quotes, prechecks, or places an order. It records terminal `expired_local` state, a sanitized `expired_before_submission` event, taxonomy/remediation, and a zero-broker-mutation audit flag. Concurrent claims remain protected by the terminal update condition.
+- `protective_stop` GoodTillCancel rows, already broker-submitted rows, and ambiguous broker states remain outside this timer. Dashboard and Slack failure observability distinguish local queue expiry from broker DayOrder expiry.
+
 ## [2026-08-04] ui | Split the Hermes tab into sections with per-section data loading
 
 - The tab rendered nine sections in one 335-line scroll and ran eleven separate queries on every load regardless of what the operator was looking at. Now Overview / Advice / Reflections / Experiments / Baselines, as plain links carrying their own query string.

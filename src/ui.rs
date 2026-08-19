@@ -8712,6 +8712,8 @@ fn classify_execution_detail(status: &str, detail: &str) -> String {
         "Invalid price".to_string()
     } else if lower_status == "broker_working" {
         "Broker working".to_string()
+    } else if lower_status == "expired_local" {
+        "Expired before submission".to_string()
     } else if lower_status == "broker_expired" || lower_detail.contains("expired") {
         "Expired unfilled".to_string()
     } else if lower_status == "broker_done_for_day" || lower_detail.contains("doneforday") {
@@ -10190,6 +10192,17 @@ mod tests {
             )
             .contains("Expired unfilled")
         );
+    }
+
+    #[test]
+    fn distinguishes_local_queue_expiry_from_broker_day_order_expiry() {
+        let row = json!({
+            "status": "expired_local",
+            "error_text": "Discretionary order expired before Saxo submission"
+        });
+
+        assert_eq!(execution_status_reason(&row), "Expired before submission");
+        assert_eq!(execution_status_class("expired_local"), "status bad-status");
     }
 
     #[test]

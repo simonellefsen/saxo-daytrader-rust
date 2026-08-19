@@ -13,6 +13,13 @@ pub(crate) fn classify_execution_error(status: &str, error_text: &str) -> JsonVa
             "Reconcile the order in Saxo before any manual retry.",
             "reconcile_before_retry",
         )
+    } else if status == "expired_local" {
+        (
+            "queue_expired",
+            "Discretionary queue expired",
+            "Create a fresh decision and re-evaluate current market conditions before queuing a replacement.",
+            "review_and_resubmit",
+        )
     } else if status == "broker_expired" || error.contains("expired") {
         (
             "order_expired",
@@ -213,6 +220,22 @@ mod tests {
         );
         assert_eq!(taxonomy["code"], json!("broker_state_unknown"));
         assert_eq!(taxonomy["retry_policy"], json!("reconcile_before_retry"));
+    }
+
+    #[test]
+    fn local_queue_expiry_requires_a_fresh_decision() {
+        let taxonomy = classify_execution_error(
+            "expired_local",
+            "Discretionary order expired before Saxo submission",
+        );
+        assert_eq!(taxonomy["code"], json!("queue_expired"));
+        assert_eq!(taxonomy["retry_policy"], json!("review_and_resubmit"));
+        assert!(
+            taxonomy["remediation"]
+                .as_str()
+                .expect("queue expiry remediation")
+                .contains("fresh decision")
+        );
     }
 
     #[test]

@@ -116,7 +116,7 @@ async fn pending_execution_alerts(state: &AppState) -> Result<Vec<SlackAlert>> {
          FROM execution_orders
          WHERE created_at >= '{}'
            AND status IN (
-             'executed', 'submitted_to_broker', 'execution_failed',
+             'executed', 'submitted_to_broker', 'execution_failed', 'expired_local',
              'pending_approval', 'blocked_by_dry_run', 'invalid_quantity',
              'waiting_for_market_open', 'waiting_for_cash_settlement',
              'waiting_for_virtual_cash_budget'
@@ -1323,7 +1323,7 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
                 },
             )
         }
-        "execution_failed"
+        "execution_failed" | "expired_local"
             if yaml_bool(
                 &state.config,
                 &["notifications", "alerts", "execution_failure_enabled"],
@@ -1371,7 +1371,7 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
         format!("Estimated value DKK: {estimated_value:.2}"),
         format!("Broker Order ID: {broker_order_id}"),
     ];
-    if status == "execution_failed" {
+    if matches!(status.as_str(), "execution_failed" | "expired_local") {
         let taxonomy = execution_failure_taxonomy(row);
         let label = taxonomy
             .as_ref()
@@ -1395,8 +1395,8 @@ fn alert_from_execution_order(state: &AppState, row: &JsonValue) -> Option<Slack
             lines.push(format!("Retry policy: {retry_policy}"));
         }
     }
-    let alert_key = if status == "execution_failed" {
-        format!("execution_failed:{id}")
+    let alert_key = if matches!(status.as_str(), "execution_failed" | "expired_local") {
+        format!("execution_failed:{id}:{status}")
     } else if summary_kind == "alert_execution_warning" {
         format!("execution_warning:{id}:{status}")
     } else {

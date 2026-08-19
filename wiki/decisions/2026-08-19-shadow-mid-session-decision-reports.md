@@ -81,7 +81,7 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 ### Phase 0: Repair Measurement And Authority Prerequisites
 
 1. **Landed 2026-08-19:** prevent pending-review experiment values from influencing Hermes allow/reduce/block/review advice. The manager preflight and MCP advisory view now expose only operator-approved or active statuses; pending rows are represented solely by a count, never a changed-variable value. The normal dashboard/lifecycle API remains the operator review surface.
-2. Add expiry or full execution-time revalidation for discretionary queued orders.
+2. **Landed 2026-08-19:** expire unsubmitted discretionary live/Saxo queue rows after `execution.discretionary_queue_max_age_minutes` (360 minutes). The executor applies the guard before obtaining a Saxo session, quote, precheck, or placement; it records `expired_local`, a sanitized queue-expiry event, and a fresh-decision remediation. It never expires `protective_stop` GoodTillCancel rows, broker-submitted rows, or ambiguous broker states.
 3. **Landed 2026-08-19:** include current-mode/current-adapter pending and broker-working BUY reservations in symbol exposure and cash calculations across scheduler cycles. The remaining fraction of a partial fill reserves only its remaining DKK value; an active BUY without a reliable DKK value fails closed for new BUYs until reconciled. Terminal and different-execution-environment rows do not reserve the current runtime's budget.
 4. Make report-reference pricing reliable for Hermes counterfactuals, manager-gate shadows, and the new pulse candidates.
 5. Keep protective GoodTillCancel stops outside discretionary-order expiry rules.

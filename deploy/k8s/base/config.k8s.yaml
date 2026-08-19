@@ -522,6 +522,10 @@ execution:
   # under this share of the clip (0.003 = 0.3% per side). 0 disables.
   max_commission_pct_per_side: 0.003
   max_daily_orders: 50
+  # A report can be fresh when queued and stale by the next verified market
+  # session. Expire these discretionary rows before any Saxo session/precheck
+  # call; protective GoodTillCancel stops are intentionally excluded.
+  discretionary_queue_max_age_minutes: 360
   delayed_price_limit_orders:
     enabled: true
     assumed_delay_minutes: 15

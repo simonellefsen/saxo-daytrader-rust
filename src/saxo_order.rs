@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::{
-    config::{yaml_at, yaml_bool, yaml_string},
+    config::{yaml_at, yaml_bool, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
     saxo_error::classify_execution_error,
     saxo_portfolio::refresh_broker_snapshots,
@@ -22,6 +22,12 @@ use crate::{
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
 const ENS_ACTIVITY_BACKFILL_LOOKBACK_DAYS: i64 = 14;
 const ENS_ACTIVITY_BACKFILL_PAGE_SIZE: i64 = 500;
+const DEFAULT_DISCRETIONARY_QUEUE_MAX_AGE_MINUTES: i64 = 360;
+const EXPIRABLE_DISCRETIONARY_QUEUE_STATUSES: &[&str] = &[
+    "pending_execution",
+    "waiting_for_market_open",
+    "waiting_for_virtual_cash_budget",
+];
 const ACTIVE_SELL_STATUSES: &[&str] = &[
     "pending_execution",
     "pending_approval",
@@ -188,9 +194,16 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         });
     }
 
+    let expired = expire_stale_discretionary_queue_orders(state).await?;
     let rows = pending_live_saxo_orders(state).await?;
     if rows.is_empty() {
-        return Ok(json!({"status": "ok", "processed": [], "submitted": 0, "failed": 0}));
+        return Ok(json!({
+            "status": "ok",
+            "processed": [],
+            "submitted": 0,
+            "failed": 0,
+            "expired_before_submission": expired,
+        }));
     }
 
     // Refresh is intentionally service-level. It does not depend on a logged-in UI user,
@@ -263,6 +276,7 @@ pub async fn run_saxo_execution_queue(state: &AppState) -> Result<JsonValue> {
         "processed": processed,
         "submitted": submitted,
         "failed": failed,
+        "expired_before_submission": expired,
         "broker_read_model": broker_read_model
     }))
 }
@@ -885,6 +899,135 @@ async fn pending_live_saxo_orders(state: &AppState) -> Result<Vec<JsonValue>> {
     .await
     .context("fetching pending Saxo execution orders")?;
     Ok(rows.iter().map(row_to_json).collect())
+}
+
+fn discretionary_queue_max_age_minutes(state: &AppState) -> i64 {
+    yaml_i64(
+        &state.config,
+        &["execution", "discretionary_queue_max_age_minutes"],
+    )
+    .unwrap_or(DEFAULT_DISCRETIONARY_QUEUE_MAX_AGE_MINUTES)
+    .max(1)
+}
+
+/// Expires discretionary rows before any Saxo session, quote, precheck, or
+/// placement call. A report can be fresh when the Trading Manager queues it
+/// and still become stale while waiting for an exchange open or virtual-capital
+/// condition. Reusing it automatically would turn a time-bounded decision into
+/// an unreviewed later-session trade.
+///
+/// Protective stops are deliberately excluded. Their `GoodTillCancel` duration
+/// is standing downside protection, not a discretionary report-derived order,
+/// and must remain under the protective-stop reconciliation policy.
+async fn expire_stale_discretionary_queue_orders(state: &AppState) -> Result<Vec<JsonValue>> {
+    let max_age_minutes = discretionary_queue_max_age_minutes(state);
+    let now = Utc::now();
+    let cutoff = now - ChronoDuration::minutes(max_age_minutes);
+    let statuses = EXPIRABLE_DISCRETIONARY_QUEUE_STATUSES
+        .iter()
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = sqlx::query(&format!(
+        "SELECT * FROM execution_orders
+         WHERE mode = 'live'
+           AND adapter = 'saxo'
+           AND status IN ({statuses})
+           AND (broker_order_id IS NULL OR broker_order_id = '')
+           AND COALESCE(strategy_type, '') <> '{}'
+           AND created_at < '{}'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 50",
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE),
+        sql_escape(&cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    ))
+    .fetch_all(&state.pool)
+    .await
+    .context("loading stale discretionary Saxo queue orders")?;
+
+    let mut expired = Vec::new();
+    for order in rows.iter().map(row_to_json) {
+        if let Some(result) =
+            expire_discretionary_queue_order(state, &order, now, max_age_minutes).await?
+        {
+            expired.push(result);
+        }
+    }
+    Ok(expired)
+}
+
+/// Atomically terminalize a stale queue row. The conditional update prevents a
+/// concurrent scheduler/manual runner that already claimed the order from being
+/// overwritten after it has started the broker path.
+async fn expire_discretionary_queue_order(
+    state: &AppState,
+    order: &JsonValue,
+    now: DateTime<Utc>,
+    max_age_minutes: i64,
+) -> Result<Option<JsonValue>> {
+    let order_id = value_i64(order, "id");
+    let created_at = order_text(order, "created_at");
+    let age_minutes = DateTime::parse_from_rfc3339(&created_at)
+        .ok()
+        .map(|created| (now - created.with_timezone(&Utc)).num_minutes().max(0));
+    let error_text = format!(
+        "Discretionary order expired before Saxo submission after {} minutes (maximum {} minutes); create a fresh decision instead of automatically reusing it.",
+        age_minutes.unwrap_or(max_age_minutes),
+        max_age_minutes,
+    );
+    let taxonomy = classify_execution_error("expired_local", &error_text);
+    let result_payload = json!({
+        "failure_stage": "queue_expiry",
+        "queue_expiry": {
+            "created_at": created_at,
+            "expired_at": now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "max_age_minutes": max_age_minutes,
+            "age_minutes": age_minutes,
+            "broker_mutation": false,
+            "next_action": "Create a fresh decision and queue a new order only if it still passes current gates.",
+        },
+        "error_taxonomy": taxonomy,
+    });
+    let payload_text = serde_json::to_string(&result_payload)?;
+    let statuses = EXPIRABLE_DISCRETIONARY_QUEUE_STATUSES
+        .iter()
+        .map(|status| format!("'{}'", sql_escape(status)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let updated = sqlx::query(&format!(
+        "UPDATE execution_orders
+         SET status = 'expired_local', approved_at = '{}', error_text = '{}', execution_result_json = '{}'
+         WHERE id = {}
+           AND status IN ({statuses})
+           AND (broker_order_id IS NULL OR broker_order_id = '')
+           AND COALESCE(strategy_type, '') <> '{}'",
+        sql_escape(&now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        sql_escape(&error_text),
+        sql_escape(&payload_text),
+        order_id,
+        sql_escape(PROTECTIVE_STOP_STRATEGY_TYPE),
+    ))
+    .execute(&state.pool)
+    .await
+    .context("expiring stale discretionary Saxo queue order")?;
+    if updated.rows_affected() != 1 {
+        return Ok(None);
+    }
+    insert_order_event(
+        state,
+        order_id,
+        None,
+        "expired_before_submission",
+        &result_payload,
+    )
+    .await?;
+    Ok(Some(json!({
+        "status": "expired_local",
+        "order_id": order_id,
+        "symbol": order_text(order, "symbol"),
+        "error": error_text,
+        "error_taxonomy": taxonomy,
+    })))
 }
 
 async fn broker_sync_orders(state: &AppState) -> Result<Vec<JsonValue>> {
@@ -4711,6 +4854,84 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn stale_discretionary_queue_orders_expire_without_touching_protective_stops() {
+        let state = execution_order_test_state().await;
+        let now = Utc::now();
+        let stale_at =
+            (now - ChronoDuration::hours(8)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let fresh_at =
+            (now - ChronoDuration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        for (symbol, created_at, strategy_type) in [
+            ("STALE:xnas", stale_at.as_str(), "swing"),
+            (
+                "STOP:xnas",
+                stale_at.as_str(),
+                PROTECTIVE_STOP_STRATEGY_TYPE,
+            ),
+            ("FRESH:xnas", fresh_at.as_str(), "swing"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO execution_orders (status, symbol, mode, adapter, created_at, strategy_type)
+                 VALUES ('waiting_for_market_open', '{}', 'live', 'saxo', '{}', '{}')",
+                sql_escape(symbol),
+                sql_escape(created_at),
+                sql_escape(strategy_type),
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed queue order");
+        }
+
+        let expired = expire_stale_discretionary_queue_orders(&state)
+            .await
+            .expect("expire stale discretionary order");
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0]["status"], json!("expired_local"));
+        assert_eq!(expired[0]["symbol"], json!("STALE:xnas"));
+        assert_eq!(expired[0]["error_taxonomy"]["code"], json!("queue_expired"));
+
+        let rows = sqlx::query(
+            "SELECT symbol, status, execution_result_json
+             FROM execution_orders ORDER BY symbol ASC",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .expect("read queue rows");
+        let rows = rows.iter().map(row_to_json).collect::<Vec<_>>();
+        let stale = rows
+            .iter()
+            .find(|row| order_text(row, "symbol") == "STALE:xnas")
+            .expect("stale row");
+        assert_eq!(stale["status"], json!("expired_local"));
+        assert_eq!(
+            stale["execution_result_json"]["failure_stage"],
+            json!("queue_expiry")
+        );
+        assert_eq!(
+            stale["execution_result_json"]["queue_expiry"]["broker_mutation"],
+            json!(false)
+        );
+        for symbol in ["STOP:xnas", "FRESH:xnas"] {
+            assert_eq!(
+                rows.iter()
+                    .find(|row| order_text(row, "symbol") == symbol)
+                    .expect("protected or fresh row")["status"],
+                json!("waiting_for_market_open")
+            );
+        }
+        let event_count = sqlx::query(
+            "SELECT COUNT(*) AS count FROM execution_order_events
+             WHERE event_type = 'expired_before_submission'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read expiry event")
+        .try_get::<i64, _>("count")
+        .expect("expiry event count");
+        assert_eq!(event_count, 1);
     }
 
     #[tokio::test]

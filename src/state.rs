@@ -8952,7 +8952,7 @@ impl AppState {
                 | "broker_partially_filled"
                 | "broker_replace_requested"
                 | "broker_cancel_requested" => broker_live += count,
-                "execution_failed" => failed += count,
+                "execution_failed" | "expired_local" => failed += count,
                 _ => {}
             }
         }
