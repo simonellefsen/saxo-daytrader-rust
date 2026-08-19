@@ -22,7 +22,7 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0, Phase 1, and the first four Phase 2 steps are landed.
+Implementation underway. Phase 0, Phase 1, and Phase 2 are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -103,7 +103,7 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 2. **Landed 2026-08-19:** configure the US shadow report for 14:15 America/New_York. Its target is derived from the time-zone database, so Copenhagen display time follows DST rather than using a second fixed clock. The report persists `shadow`/`queue_eligible=false` and cannot reach the manager queue.
 3. **Landed 2026-08-19:** include current portfolio, cash, scoped positions, active open/pending orders, persisted protective-stop coverage, active approved strategy baseline, Markov/Quiver/editorial/daily support-risk signals, and a bounded same-date opening-report projection in the shadow prompt. The queue/coverage and earlier-report reads are local, allowlisted, and read-only; raw Saxo payloads, account identifiers, raw provider responses, and prior prompt text never enter the provider context. The earlier report is explicitly untrusted analytical data and cannot alter policy, pulse authority, the Trading Manager, or Saxo execution.
 4. **Landed 2026-08-19:** require each midpoint shadow report with an available same-date opening reference to declare either one or more concrete `material_change` entries or `no_new_information`. The Rust completion normalizer owns the persisted `shadow_change_assessment`: `no_new_information` clears selected assets, sentiment, suggested trades, and strategy-plan candidates; malformed comparisons do the same under `comparison_invalid`. A missing opening report records `not_available`; non-midpoint reports record `not_applicable`. Neither status can change shadow execution authority.
-5. Add separate scheduler-health rows and missed-pulse alerts for both schedules.
+5. **Landed 2026-08-19:** add separate EU/US shadow scheduler-health rows alongside the existing opening and manual report rows. When an eligible shadow pulse passes its configured due window without a persisted report, the scheduler emits one date-scoped medium-severity operational alert. The alert is deduplicated by pulse key/local date and explicitly performs no provider retry, Trading Manager action, queue insertion, or Saxo request. Closed/non-eligible scope and report-present cases do not alert.
 
 ### Phase 3: Shadow Outcome Ledger
 

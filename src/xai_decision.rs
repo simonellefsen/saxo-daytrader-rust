@@ -2075,6 +2075,52 @@ fn decision_pulse_scheduler_results(state: &AppState) -> Vec<JsonValue> {
         .collect()
 }
 
+/// Read-only missed-window evidence for the two observation-only schedules.
+/// This runs after scheduled submission in each scheduler cycle, so a report
+/// that was submitted or already existed consumes the alert condition. It does
+/// not retry a provider request and has no queue or Saxo authority.
+pub(crate) async fn missed_shadow_pulse_alert_candidates(
+    state: &AppState,
+) -> Result<Vec<JsonValue>> {
+    let now = Utc::now();
+    let due_window = Duration::minutes(
+        yaml_i64(
+            &state.config,
+            &["strategy", "swing", "analysis_pulses", "due_window_minutes"],
+        )
+        .unwrap_or(DEFAULT_DUE_WINDOW_MINUTES)
+        .max(1),
+    );
+    let mut candidates = Vec::new();
+    for pulse in configured_decision_pulses(state) {
+        let report_exists = has_report_for_pulse(state, &pulse.key).await?;
+        if !shadow_pulse_missed_without_report(&pulse, now, due_window, report_exists) {
+            continue;
+        }
+        candidates.push(json!({
+            "pulse": pulse_to_json(&pulse),
+            "scheduler_status": "missed_due_window",
+            "safety": "scheduler_observability_only_no_provider_retry_queue_or_saxo_authority",
+        }));
+    }
+    Ok(candidates)
+}
+
+fn shadow_pulse_missed_without_report(
+    pulse: &DecisionPulse,
+    now: DateTime<Utc>,
+    due_window: Duration,
+    report_exists: bool,
+) -> bool {
+    pulse.mode == DecisionPulseMode::Shadow
+        && pulse.market_scope_status.is_regular_tradable()
+        && !report_exists
+        && decision_pulse_scheduler_result(pulse, now, due_window)
+            .get("status")
+            .and_then(JsonValue::as_str)
+            == Some("missed_due_window")
+}
+
 fn decision_pulse_scheduler_result(
     pulse: &DecisionPulse,
     now: DateTime<Utc>,
@@ -3319,6 +3365,48 @@ mod tests {
         assert!(!pulse.market_scope_status.is_regular_tradable());
         assert_eq!(result["status"], "market_closed");
         assert_eq!(result["pulse"]["queue_eligible"], false);
+    }
+
+    #[test]
+    fn only_eligible_unreported_shadow_pulses_become_missed_alert_candidates() {
+        let pulse = DecisionPulse {
+            key: "us_mid_session_shadow:2026-08-19".to_string(),
+            label: "US shadow".to_string(),
+            kind: "us_mid_session_shadow".to_string(),
+            mode: DecisionPulseMode::Shadow,
+            target_at_utc: "2026-08-19T18:15:00Z".to_string(),
+            target_at_local: "2026-08-19T14:15:00-04:00".to_string(),
+            local_date: "2026-08-19".to_string(),
+            schedule_time_zone: "America/New_York".to_string(),
+            target_session: DecisionPulseSession::Regular,
+            market_scope_status: DecisionPulseMarketScopeStatus::RegularTradable,
+            configured_exchange_codes: vec!["XNAS".to_string()],
+            exchange_codes: vec!["XNAS".to_string()],
+            source_markets: vec!["NASDAQ".to_string()],
+        };
+        let after_due = parse_rfc3339_text("2026-08-19T18:36:00Z").unwrap();
+
+        assert!(shadow_pulse_missed_without_report(
+            &pulse,
+            after_due,
+            Duration::minutes(20),
+            false
+        ));
+        assert!(!shadow_pulse_missed_without_report(
+            &pulse,
+            after_due,
+            Duration::minutes(20),
+            true
+        ));
+
+        let mut closed = pulse;
+        closed.market_scope_status = DecisionPulseMarketScopeStatus::MarketClosed;
+        assert!(!shadow_pulse_missed_without_report(
+            &closed,
+            after_due,
+            Duration::minutes(20),
+            false
+        ));
     }
 
     #[test]

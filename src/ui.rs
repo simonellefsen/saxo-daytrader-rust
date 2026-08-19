@@ -2990,6 +2990,22 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             .unwrap_or_else(|| {
                 decision_pulse_health(&data.reports, "us_open_followup:", "US Open +1h15")
             });
+    let europe_shadow_pulse = decision_pulse_health_from_status(
+        &data.decision_pulse_statuses,
+        "europe_mid_session_shadow",
+    )
+    .unwrap_or_else(|| {
+        decision_pulse_health(
+            &data.reports,
+            "europe_mid_session_shadow:",
+            "Nordic/EU 14:15 Shadow",
+        )
+    });
+    let us_shadow_pulse =
+        decision_pulse_health_from_status(&data.decision_pulse_statuses, "us_mid_session_shadow")
+            .unwrap_or_else(|| {
+                decision_pulse_health(&data.reports, "us_mid_session_shadow:", "US 14:15 Shadow")
+            });
     let manual_pulse = decision_pulse_health_from_status(&data.decision_pulse_statuses, "manual")
         .unwrap_or_else(|| decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run"));
     let diagnostics = decision_report_diagnostics(&report);
@@ -3045,6 +3061,8 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "mini-grid decision-summary-grid",
                 DecisionPulseHealthCard { health: europe_pulse, prefs: prefs.clone() }
                 DecisionPulseHealthCard { health: us_pulse, prefs: prefs.clone() }
+                DecisionPulseHealthCard { health: europe_shadow_pulse, prefs: prefs.clone() }
+                DecisionPulseHealthCard { health: us_shadow_pulse, prefs: prefs.clone() }
                 DecisionPulseHealthCard { health: manual_pulse, prefs: prefs.clone() }
             }
             if report.is_null() {
@@ -7747,6 +7765,16 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
             &data.decision_pulse_statuses,
             "us_open_followup",
             "US Report",
+        ),
+        decision_pulse_operation_health(
+            &data.decision_pulse_statuses,
+            "europe_mid_session_shadow",
+            "EU Shadow",
+        ),
+        decision_pulse_operation_health(
+            &data.decision_pulse_statuses,
+            "us_mid_session_shadow",
+            "US Shadow",
         ),
         run_operation_health(
             "Markov",

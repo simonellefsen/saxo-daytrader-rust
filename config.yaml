@@ -697,6 +697,9 @@ notifications:
     drawdown_guardrail_alert_enabled: true
     scheduler_stale_enabled: true
     scheduler_stale_minutes: 30
+    # One alert per pulse/local date when an eligible shadow window elapsed
+    # without a report. Observation-only; it never retries or trades.
+    shadow_pulse_missed_enabled: true
     hermes_eod_reflection_missed_enabled: true
     hermes_eod_reflection_due_hour_utc: 22
     hermes_pending_experiment_review_enabled: true

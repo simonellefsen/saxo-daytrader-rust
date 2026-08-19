@@ -2014,3 +2014,9 @@ broker mutation was added.
 - Completed Phase 2 prerequisite 4. Mid-session shadow reports with an available same-date opening report must now report either concrete material changes or `no_new_information`; missing evidence is recorded as `not_available`, and non-midpoint reports as `not_applicable`.
 - The Rust completion boundary independently normalizes the outcome. `no_new_information` and malformed comparison evidence clear selected assets, sentiment, suggested trades, and strategy-plan candidates, so a report cannot invent duplicate candidates while claiming nothing changed.
 - The normalized assessment is observation-only metadata. It leaves report persistence and scheduler completion intact, retains the server-owned shadow queue block, and performs no Saxo request or mutation.
+
+## [2026-08-19] operations | Monitor shadow Decision Report schedules
+
+- Completed Phase 2 prerequisite 5. The Decisions view and operations health strip now expose separate Nordic/EU and US 14:15 shadow-pulse rows, in addition to the existing opening and manual cadence rows.
+- An eligible shadow pulse that passes its due window without a report now creates a once-per-pulse/local-date medium operational alert. Existing reports consume the condition; closed/non-eligible scopes do not alert.
+- The alert is explicitly observational: it never retries a provider request, invokes Hermes, reaches the Trading Manager, inserts an execution order, or calls Saxo.

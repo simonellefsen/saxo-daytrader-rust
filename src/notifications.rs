@@ -230,6 +230,17 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
 
     if yaml_bool(
         &state.config,
+        &["notifications", "alerts", "shadow_pulse_missed_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        for alert in shadow_pulse_missed_alerts(state).await? {
+            maybe_push_unsent(state, &mut alerts, Some(alert)).await?;
+        }
+    }
+
+    if yaml_bool(
+        &state.config,
         &["notifications", "alerts", "integrity_alert_enabled"],
     )
     .unwrap_or(true)
@@ -796,6 +807,53 @@ async fn scheduler_stale_alert(state: &AppState) -> Result<Option<SlackAlert>> {
             "last_cycle_status": last_cycle_status,
         }),
     )))
+}
+
+async fn shadow_pulse_missed_alerts(state: &AppState) -> Result<Vec<SlackAlert>> {
+    Ok(
+        crate::xai_decision::missed_shadow_pulse_alert_candidates(state)
+            .await?
+            .iter()
+            .filter_map(shadow_pulse_missed_alert_from_candidate)
+            .collect(),
+    )
+}
+
+fn shadow_pulse_missed_alert_from_candidate(candidate: &JsonValue) -> Option<SlackAlert> {
+    let pulse = candidate.get("pulse")?;
+    let key = optional_text(pulse, "key")?;
+    let label = fallback_text(pulse, "label", "Shadow Decision Report");
+    let due_at_utc = fallback_text(pulse, "target_at_utc", "unknown");
+    let due_at_local = fallback_text(pulse, "target_at_local", "unknown");
+    let schedule_time_zone = fallback_text(pulse, "schedule_time_zone", "unknown");
+    let market_scope = fallback_text(pulse, "market_scope_status", "unknown");
+    Some(operational_alert(
+        "shadow_pulse_missed",
+        format!("ops:shadow_pulse_missed:{key}"),
+        "medium",
+        format!("Missed {label}"),
+        vec![
+            "An eligible shadow Decision Report passed its due window without a persisted report."
+                .to_string(),
+            String::new(),
+            format!("Pulse: {key}"),
+            format!("Due UTC: {due_at_utc}"),
+            format!("Due local: {due_at_local} ({schedule_time_zone})"),
+            format!("Market scope at check: {market_scope}"),
+            "This is observation-only: no provider retry, Trading Manager queue, or Saxo action was attempted."
+                .to_string(),
+        ],
+        json!({
+            "pulse_key": key,
+            "pulse_label": label,
+            "target_at_utc": due_at_utc,
+            "target_at_local": due_at_local,
+            "schedule_time_zone": schedule_time_zone,
+            "market_scope_status": market_scope,
+            "scheduler_status": candidate.get("scheduler_status").cloned().unwrap_or(JsonValue::Null),
+            "safety": candidate.get("safety").cloned().unwrap_or(JsonValue::Null),
+        }),
+    ))
 }
 
 async fn integrity_alert(state: &AppState) -> Result<Option<SlackAlert>> {
@@ -2172,6 +2230,36 @@ mod tests {
                 .payload
                 .to_string()
                 .contains("strategy-experiment-closed")
+        );
+    }
+
+    #[test]
+    fn builds_one_observation_only_alert_for_a_missed_shadow_pulse() {
+        let alert = shadow_pulse_missed_alert_from_candidate(&json!({
+            "pulse": {
+                "key": "us_mid_session_shadow:2026-08-19",
+                "label": "US 14:15 Shadow Decision Report",
+                "target_at_utc": "2026-08-19T18:15:00Z",
+                "target_at_local": "2026-08-19T14:15:00-04:00",
+                "schedule_time_zone": "America/New_York",
+                "market_scope_status": "regular_tradable"
+            },
+            "scheduler_status": "missed_due_window",
+            "safety": "scheduler_observability_only_no_provider_retry_queue_or_saxo_authority"
+        }))
+        .expect("alert");
+
+        assert_eq!(alert.summary_kind, "alert_operational_issue");
+        assert_eq!(alert.severity, "medium");
+        assert_eq!(
+            alert.scope_key,
+            "ops:shadow_pulse_missed:us_mid_session_shadow:2026-08-19"
+        );
+        assert!(alert.message_text.contains("no provider retry"));
+        assert!(alert.message_text.contains("or Saxo action"));
+        assert_eq!(
+            alert.payload["details"]["scheduler_status"],
+            "missed_due_window"
         );
     }
 }

@@ -6370,6 +6370,16 @@ impl AppState {
                 "Nordic/EU Open +1h15",
             ),
             ("us_open_followup", "us_open_followup:", "US Open +1h15"),
+            (
+                "europe_mid_session_shadow",
+                "europe_mid_session_shadow:",
+                "Nordic/EU 14:15 Shadow",
+            ),
+            (
+                "us_mid_session_shadow",
+                "us_mid_session_shadow:",
+                "US 14:15 Shadow",
+            ),
             ("manual", "manual:", "Manual / Dry Run"),
         ];
         let attempt_cutoff =
