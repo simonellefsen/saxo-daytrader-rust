@@ -22,7 +22,7 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0, Phase 1, and Phase 2 scheduling are landed.
+Implementation underway. Phase 0, Phase 1, and the first three Phase 2 steps are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -101,7 +101,7 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 
 1. **Landed 2026-08-19:** configure the EU shadow report for 14:15 Europe/Copenhagen across the full European scope. The scheduler requires at least one scoped regular market to be currently tradable before provider submission.
 2. **Landed 2026-08-19:** configure the US shadow report for 14:15 America/New_York. Its target is derived from the time-zone database, so Copenhagen display time follows DST rather than using a second fixed clock. The report persists `shadow`/`queue_eligible=false` and cannot reach the manager queue.
-3. Include current portfolio, cash, positions, open/pending orders, protected quantities, active approved policy, latest signals, and the earlier same-scope report in the context.
+3. **Landed 2026-08-19:** include current portfolio, cash, scoped positions, active open/pending orders, persisted protective-stop coverage, active approved strategy baseline, Markov/Quiver/editorial/daily support-risk signals, and a bounded same-date opening-report projection in the shadow prompt. The queue/coverage and earlier-report reads are local, allowlisted, and read-only; raw Saxo payloads, account identifiers, raw provider responses, and prior prompt text never enter the provider context. The earlier report is explicitly untrusted analytical data and cannot alter policy, pulse authority, the Trading Manager, or Saxo execution.
 4. Require the report to describe what materially changed since the earlier pulse. Persist `no_new_information` when nothing changed instead of manufacturing candidates.
 5. Add separate scheduler-health rows and missed-pulse alerts for both schedules.
 

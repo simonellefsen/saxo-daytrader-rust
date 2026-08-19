@@ -2002,3 +2002,9 @@ broker mutation was added.
 - Enabled `europe_mid_session_shadow` at 14:15 Europe/Copenhagen and `us_mid_session_shadow` at 14:15 America/New_York. The latter derives its UTC/Copenhagen time from the time-zone database, including the short EU/US DST mismatch.
 - Each fixed-time pulse is server-owned `shadow` with `queue_eligible=false`. It reaches the provider only when at least one configured exchange is currently regular and tradable; a closed scope records `market_closed` scheduler evidence instead.
 - Added deterministic EU/US anchoring and closed-scope regressions. No scheduled shadow report can enter the Trading Manager or Saxo order path.
+
+## [2026-08-19] safety | Enrich shadow reports with bounded operational context
+
+- Completed Phase 2 context prerequisite 3. Shadow prompts now include a read-only, allowlisted summary of non-terminal local execution orders and persisted protective-stop coverage alongside the existing portfolio, cash, scoped positions, approved strategy baseline, and signal context.
+- Each EU/US shadow pulse also receives only its same-local-date opening report, projected to bounded normalized market/capital/candidate fields. Historical report text is explicitly untrusted analytical data, never an instruction source; raw provider responses and original prompts remain excluded.
+- This is prompt-context work only. It performs no Saxo read or mutation, cannot alter pulse mode or queue eligibility, and adds no Trading Manager or Hermes authority.
