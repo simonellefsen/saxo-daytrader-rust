@@ -3025,13 +3025,184 @@ fn shadow_report_suggested_symbol_keys(report: &JsonValue) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Compact, persisted-safe candidates for the first shadow-outcome ledger
-/// slice. Later phases add evaluated gate/Hermes data, FX, costs, and mature
-/// forward outcomes; those fields deliberately remain labelled unavailable
-/// instead of being inferred from a provider price or a local-currency P/L.
+/// Decode the exact persisted decision-time prompt, but expose only a later
+/// allowlisted projection. The raw prompt can contain lengthy provider-facing
+/// context and must never become a general-purpose shadow-ledger payload.
+fn shadow_report_prompt_user_context(report: &JsonValue) -> JsonValue {
+    let prompt = report
+        .get("prompt_text")
+        .and_then(JsonValue::as_str)
+        .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok());
+    prompt
+        .and_then(|prompt| prompt.get("user").cloned())
+        .filter(JsonValue::is_object)
+        .unwrap_or_else(|| {
+            json!({
+                "status": "unavailable",
+                "reason": "persisted_decision_time_prompt_unavailable",
+            })
+        })
+}
+
+fn shadow_prompt_matching_symbol_row(
+    context: &JsonValue,
+    section: &str,
+    symbol: &str,
+) -> JsonValue {
+    let Some(rows) = context
+        .get(section)
+        .and_then(|section| section.get("signals"))
+        .and_then(JsonValue::as_array)
+    else {
+        return JsonValue::Null;
+    };
+    rows.iter()
+        .find(|row| canonical_symbol_key(&json_text(row, "symbol")) == canonical_symbol_key(symbol))
+        .cloned()
+        .unwrap_or(JsonValue::Null)
+}
+
+fn compact_shadow_prompt_indicator_snapshot(context: &JsonValue, symbol: &str) -> JsonValue {
+    let row = shadow_prompt_matching_symbol_row(context, "daily_indicators", symbol);
+    if row.is_null() {
+        return json!({"status": "not_available_at_report_time"});
+    }
+    json!({
+        "status": "available",
+        "source_run": context.get("daily_indicators").and_then(|value| value.get("latest_run")).cloned().unwrap_or(JsonValue::Null),
+        "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+        "close": row.get("close").cloned().unwrap_or(JsonValue::Null),
+        "currency": row.get("currency").cloned().unwrap_or(JsonValue::Null),
+        "trend_bias": row.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
+        "sentiment": row.get("sentiment").cloned().unwrap_or(JsonValue::Null),
+        "confluence_count": row.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
+        "min_confluences": row.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
+        "support_risk": row.get("support").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_shadow_prompt_markov_snapshot(context: &JsonValue, symbol: &str) -> JsonValue {
+    let row = shadow_prompt_matching_symbol_row(context, "markov_method", symbol);
+    if row.is_null() {
+        return json!({"status": "not_available_at_report_time"});
+    }
+    json!({
+        "status": "available",
+        "source_run": context.get("markov_method").and_then(|value| value.get("latest_run")).cloned().unwrap_or(JsonValue::Null),
+        "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+        "run_date": row.get("run_date").cloned().unwrap_or(JsonValue::Null),
+        "state": row.get("state").cloned().unwrap_or(JsonValue::Null),
+        "signed_signal": row.get("signed_signal").cloned().unwrap_or(JsonValue::Null),
+        "direction": row.get("direction").cloned().unwrap_or(JsonValue::Null),
+        "conviction": row.get("conviction").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn compact_shadow_prompt_quiver_snapshot(context: &JsonValue, symbol: &str) -> JsonValue {
+    let source = context
+        .get("quiver_signals")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let row = shadow_prompt_matching_symbol_row(context, "quiver_signals", symbol);
+    if row.is_null() {
+        return json!({
+            "status": "not_available_at_report_time",
+            "freshness": source.get("freshness").cloned().unwrap_or(JsonValue::Null),
+        });
+    }
+    json!({
+        "status": "available",
+        "freshness": source.get("freshness").cloned().unwrap_or(JsonValue::Null),
+        "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+        "run_date": row.get("run_date").cloned().unwrap_or(JsonValue::Null),
+        "signal": row.get("signal").cloned().unwrap_or(JsonValue::Null),
+        "direction": row.get("direction").cloned().unwrap_or(JsonValue::Null),
+        "confidence": row.get("confidence").cloned().unwrap_or(JsonValue::Null),
+        "event_count": row.get("event_count").cloned().unwrap_or(JsonValue::Null),
+        "latest_event_date": row.get("latest_event_date").cloned().unwrap_or(JsonValue::Null),
+        "safety": "advisory_prompt_snapshot_only_not_a_gate_or_execution_input",
+    })
+}
+
+fn compact_shadow_prompt_concentration_snapshot(
+    context: &JsonValue,
+    symbol: &str,
+    currency: Option<&str>,
+) -> JsonValue {
+    let target_symbol = canonical_symbol_key(symbol);
+    let target_exchange = exchange_code_for(symbol);
+    let target_currency = currency
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_ascii_uppercase())
+        .or_else(|| crate::saxo_order::currency_for_exchange(&target_exchange).map(str::to_string));
+    let positions = context
+        .get("positions")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let held = positions
+        .iter()
+        .filter(|position| value_f64(position, "quantity") > 0.0)
+        .collect::<Vec<_>>();
+    let same_symbol = held
+        .iter()
+        .filter(|position| canonical_symbol_key(&json_text(position, "symbol")) == target_symbol)
+        .count();
+    let same_exchange = held
+        .iter()
+        .filter(|position| exchange_code_for(&json_text(position, "symbol")) == target_exchange)
+        .count();
+    let same_currency = target_currency.as_ref().map(|currency| {
+        held.iter()
+            .filter(|position| {
+                let position_currency = json_text(position, "currency");
+                let fallback_currency = crate::saxo_order::currency_for_exchange(
+                    &exchange_code_for(&json_text(position, "symbol")),
+                );
+                position_currency.eq_ignore_ascii_case(currency)
+                    || fallback_currency.is_some_and(|value| value.eq_ignore_ascii_case(currency))
+            })
+            .count()
+    });
+    json!({
+        "status": if context.get("positions").is_some() { "available" } else { "unavailable" },
+        "scope": "decision_prompt_market_scope_positions_not_manager_concentration_gate",
+        "held_position_count": held.len(),
+        "matching_symbol_position_count": same_symbol,
+        "same_exchange_held_position_count": same_exchange,
+        "same_currency_held_position_count": same_currency,
+        "target_exchange": target_exchange,
+        "target_currency": target_currency,
+    })
+}
+
+fn compact_shadow_prompt_thesis_snapshot(context: &JsonValue, report: &JsonValue) -> JsonValue {
+    let baseline = context
+        .get("active_strategy_baseline")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    json!({
+        "status": if baseline.is_null() { "not_available_at_report_time" } else { "available" },
+        "strategy_baseline_id": report.get("strategy_baseline_id").cloned().unwrap_or(JsonValue::Null),
+        "active_baseline": if baseline.is_null() { JsonValue::Null } else { json!({
+            "id": baseline.get("id").cloned().unwrap_or(JsonValue::Null),
+            "status": baseline.get("status").cloned().unwrap_or(JsonValue::Null),
+            "goal_version": baseline.get("goal_version").cloned().unwrap_or(JsonValue::Null),
+            "activated_at": baseline.get("activated_at").cloned().unwrap_or(JsonValue::Null),
+        }) },
+        "candidate_entry_thesis": "not_available_pre_trade",
+        "interpretation": "The report-time approved strategy baseline is preserved where available. A candidate has no execution-entry thesis before a manager-approved order, so none is inferred.",
+    })
+}
+
+/// Compact, persisted-safe shadow candidates. All context comes from the
+/// report's saved decision-time prompt or normalized report, never from a
+/// later live query; this prevents hindsight from leaking into learning data.
 fn shadow_report_outcome_candidates(
     report: &JsonValue,
     earlier_symbols: &HashSet<String>,
+    prompt_context: &JsonValue,
 ) -> Vec<JsonValue> {
     let suggested_trades = report
         .get("suggested_trades")
@@ -3085,6 +3256,7 @@ fn shadow_report_outcome_candidates(
                 .get("strategy_metadata")
                 .cloned()
                 .unwrap_or(JsonValue::Null);
+            let currency_text = currency.as_deref().unwrap_or_default();
             Some(json!({
                 "candidate_rank": index as i64 + 1,
                 "symbol": symbol,
@@ -3094,17 +3266,24 @@ fn shadow_report_outcome_candidates(
                 "reported_reference_price_local": reported_reference_price_local,
                 "appeared_in_earlier_pulse": earlier_symbols.contains(&canonical_symbol_key(&symbol)),
                 "report_time_context": {
-                    "capture_version": "phase3_initial",
+                    "capture_version": "phase3_decision_time_prompt_projection_v1",
                     "strategy_role": trade.get("strategy_role").cloned().unwrap_or(JsonValue::Null),
                     "estimated_value_dkk": trade.get("estimated_value_dkk").cloned().unwrap_or(JsonValue::Null),
-                    "technical": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
-                    "markov": strategy_metadata.get("markov").cloned().unwrap_or(JsonValue::Null),
-                    "cash_balance_dkk": capital_plan.get("cash_balance_dkk").cloned().unwrap_or(JsonValue::Null),
-                    "available_buy_budget_dkk": capital_plan.get("available_buy_budget_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "technical_reported": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
+                    "technical_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol),
+                    "markov_reported": strategy_metadata.get("markov").cloned().unwrap_or(JsonValue::Null),
+                    "markov_snapshot": compact_shadow_prompt_markov_snapshot(prompt_context, &symbol),
+                    "quiver_snapshot": compact_shadow_prompt_quiver_snapshot(prompt_context, &symbol),
+                    "support_risk_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol).get("support_risk").cloned().unwrap_or(JsonValue::Null),
+                    "cash_snapshot": {
+                        "reported_cash_balance_dkk": capital_plan.get("cash_balance_dkk").cloned().unwrap_or(JsonValue::Null),
+                        "reported_available_buy_budget_dkk": capital_plan.get("available_buy_budget_dkk").cloned().unwrap_or(JsonValue::Null),
+                        "decision_time_capital_plan": prompt_context.get("capital_plan").cloned().unwrap_or(JsonValue::Null),
+                    },
+                    "concentration_snapshot": compact_shadow_prompt_concentration_snapshot(prompt_context, &symbol, Some(currency_text)),
+                    "thesis_snapshot": compact_shadow_prompt_thesis_snapshot(prompt_context, report),
                     "shadow_change_status": change_status,
-                    "quiver": "not_captured_phase3_initial",
-                    "support_risk": "not_captured_phase3_initial",
-                    "fx_basis": "not_captured_phase3_initial",
+                    "prompt_context_status": prompt_context.get("status").cloned().unwrap_or(JsonValue::String("available".to_string())),
                 }
             }))
         })
@@ -8078,7 +8257,7 @@ impl AppState {
     ) -> Result<JsonValue> {
         let report = self
             .first_json(&format!(
-                "SELECT id, report_date, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible\n                 FROM decision_reports\n                 WHERE id = {}\n                 LIMIT 1",
+                "SELECT id, report_date, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, prompt_text\n                 FROM decision_reports\n                 WHERE id = {}\n                 LIMIT 1",
                 report_id.max(0)
             ))
             .await?
@@ -8111,11 +8290,14 @@ impl AppState {
         let earlier_report_id = (!earlier_report.is_null())
             .then(|| value_i64(&earlier_report, "id"))
             .filter(|id| *id > 0);
+        let prompt_context = shadow_report_prompt_user_context(&report);
         let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut created = 0usize;
         let mut skipped = 0usize;
 
-        for candidate in shadow_report_outcome_candidates(report_json, &earlier_symbols) {
+        for candidate in
+            shadow_report_outcome_candidates(report_json, &earlier_symbols, &prompt_context)
+        {
             let candidate_rank = value_i64(&candidate, "candidate_rank");
             let symbol = json_text(&candidate, "symbol");
             let action = json_text(&candidate, "action");
@@ -14555,6 +14737,26 @@ market_data:
                 ]
             }),
             &earlier_symbols,
+            &json!({
+                "capital_plan": {"cash_balance_dkk": 121000.0, "available_buy_budget_dkk": 24000.0},
+                "positions": [
+                    {"symbol": "AAA:xcse", "quantity": 2.0, "currency": "DKK"},
+                    {"symbol": "CCC:xcse", "quantity": 1.0, "currency": "DKK"}
+                ],
+                "active_strategy_baseline": {"id": "baseline-approved-sim", "status": "active", "goal_version": 3, "activated_at": "2026-08-19T08:00:00Z"},
+                "daily_indicators": {
+                    "latest_run": {"run_date": "2026-08-19", "status": "ok"},
+                    "signals": [{"symbol": "AAA:xcse", "close": 100.0, "currency": "DKK", "trend_bias": "bullish", "sentiment": "BUY", "confluence_count": 4, "min_confluences": 3, "support": {"break_risk": 0.2, "break_risk_label": "low"}}]
+                },
+                "markov_method": {
+                    "latest_run": {"run_date": "2026-08-19", "status": "ok"},
+                    "signals": [{"symbol": "AAA:xcse", "run_date": "2026-08-19", "state": "bull", "signed_signal": 0.42, "direction": "long", "conviction": 0.8}]
+                },
+                "quiver_signals": {
+                    "freshness": {"status": "fresh"},
+                    "signals": [{"symbol": "AAA:xcse", "run_date": "2026-08-19", "signal": 0.5, "direction": "bullish", "confidence": 0.7, "event_count": 2, "latest_event_date": "2026-08-18"}]
+                }
+            }),
         );
 
         assert_eq!(candidates.len(), 2);
@@ -14563,12 +14765,24 @@ market_data:
         assert_eq!(candidates[0]["currency"], json!("DKK"));
         assert_eq!(candidates[0]["appeared_in_earlier_pulse"], json!(true));
         assert_eq!(
-            candidates[0]["report_time_context"]["technical"]["confluence_count"],
+            candidates[0]["report_time_context"]["technical_reported"]["confluence_count"],
             json!(4)
         );
         assert_eq!(
-            candidates[0]["report_time_context"]["quiver"],
-            json!("not_captured_phase3_initial")
+            candidates[0]["report_time_context"]["quiver_snapshot"]["signal"],
+            json!(0.5)
+        );
+        assert_eq!(
+            candidates[0]["report_time_context"]["support_risk_snapshot"]["break_risk"],
+            json!(0.2)
+        );
+        assert_eq!(
+            candidates[0]["report_time_context"]["concentration_snapshot"]["same_exchange_held_position_count"],
+            json!(2)
+        );
+        assert_eq!(
+            candidates[0]["report_time_context"]["thesis_snapshot"]["candidate_entry_thesis"],
+            json!("not_available_pre_trade")
         );
         assert_eq!(candidates[1]["candidate_rank"], json!(2));
         assert_eq!(candidates[1]["currency"], json!("USD"));
@@ -14601,7 +14815,7 @@ market_data:
     async fn shadow_report_outcome_persistence_is_idempotent_and_never_needs_an_order_table() {
         let state = runtime_settings_test_state("{}").await;
         for sql in [
-            "CREATE TABLE decision_reports (id INTEGER PRIMARY KEY, report_date TEXT NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, pulse_mode TEXT NOT NULL, queue_eligible INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, report_json TEXT)",
+            "CREATE TABLE decision_reports (id INTEGER PRIMARY KEY, report_date TEXT NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, pulse_mode TEXT NOT NULL, queue_eligible INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, prompt_text TEXT, report_json TEXT)",
             "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, hermes_effect TEXT NOT NULL, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
         ] {
             sqlx::query(sql).execute(&state.pool).await.unwrap();

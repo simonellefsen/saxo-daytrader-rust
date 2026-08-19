@@ -2038,3 +2038,9 @@ broker mutation was added.
 - New shadow references now store their fresh local FX-cache source, observed/expiry timestamps, rate-to-DKK, DKK reference notional, native exchange-minimum commission, and configured per-side slippage. A missing/expired cache stays explicitly unavailable; the static-FX fallback is prohibited for persisted shadow valuation.
 - Later 1/5/20-session directional observations derive a fixed-reference estimated after-cost result only when that baseline is available. The estimate is labelled separately from the original local-price observation and excludes actual fills/fees, tax, post-reference FX movement, and position changes, so it cannot be read as realised P/L or an execution simulation.
 - All work remains inside the local shadow ledger after the ordinary read-only quote refresh: no broker precheck/order mutation, queue insertion, manager gate, Hermes request, or provider request is added.
+
+## [2026-08-19] trading-quality | Preserve shadow decision-time signal context
+
+- New shadow candidates now receive an allowlisted projection of their exact persisted report-time prompt: symbol-matched daily technical and Support-Risk data, Markov and Quiver signal context, cash plan, market-scope concentration counts, and active approved-baseline identity.
+- The projection never re-reads current data, copies the raw prompt, or turns prompt context into a manager gate. Its concentration counts are explicitly scoped decision context rather than the full portfolio gate, and an execution-entry thesis stays `not_available_pre_trade` rather than being inferred.
+- This is local database provenance only. It adds no provider, Hermes, Saxo, queue, precheck, or order path.

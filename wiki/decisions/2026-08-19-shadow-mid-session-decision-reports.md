@@ -142,12 +142,21 @@ fills, broker fees, tax, later FX movement, and position changes; they are not
 realised P/L or an execution simulation. Historical rows without a captured
 basis remain unavailable rather than being backfilled from current FX.
 
+**Decision-time context projection landed 2026-08-19:** new candidate rows
+now extract a compact, symbol-matched technical/Support-Risk, Markov, and
+Quiver snapshot from the exact persisted decision prompt, together with its
+cash plan, market-scope position concentration counts, and approved strategy
+baseline identity. No later signal, price, position, or prompt is queried, so
+the record cannot acquire hindsight. The concentration projection is context
+only, not the Trading Manager's portfolio-wide gate; a pre-trade candidate
+entry thesis remains explicitly unavailable because no order/fill existed.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
 - candidate rank and whether the symbol appeared in the earlier pulse;
 - reference timestamp, local price, currency, DKK conversion basis, and proposed quantity; **landed for newly referenced rows**;
-- report-time technical, Markov, Quiver, Support Risk, cash, concentration, and thesis snapshot;
+- report-time technical, Markov, Quiver, Support Risk, cash, scoped concentration, and strategy-baseline snapshot; **landed for newly recorded rows**. Candidate entry thesis remains explicitly unavailable before an approved order/fill;
 - deterministic gate result and stable gate code;
 - Hermes record-only effect and the approved-policy source it used;
 - maximum adverse and favourable excursion when intraday evidence is available;
