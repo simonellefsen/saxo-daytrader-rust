@@ -86,7 +86,7 @@ Current `saxo-rust` capabilities:
 
 - Axum HTTP/API server and Dioxus SSR dashboard.
 - Scheduler heartbeat in `src/scheduler.rs`.
-- Scheduled OpenRouter decision report submission in `src/xai_decision.rs`. The active scheduler targets two daily market-pulse reports when the relevant markets are open: Nordic/EU open +1h15 and US open +1h15.
+- Scheduled OpenRouter decision report submission in `src/xai_decision.rs`. The active scheduler targets two execution-eligible open-follow-up reports (Nordic/EU and US, +1h15) plus two server-owned shadow reports at 14:15 Europe/Copenhagen and 14:15 America/New_York. Shadow reports are queue-ineligible and cannot reach Saxo execution.
 - Strategy journal generation in `src/strategy_journal.rs`, including daily end-of-day reports after the configured local journal time.
 - Markov method advisory regime signals in `src/markov_method.rs`.
 - Daily technical indicators in `src/daily_indicators.rs`, including Support Risk: nearest support, downside to support, downside after a break, break-risk label, and confidence derived from persisted chart history.

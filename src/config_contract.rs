@@ -501,6 +501,86 @@ const CONTRACT: &[ContractEntry] = &[
         ],
         "Market-scope filter for the US pulse.",
     ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "europe_mid_session_shadow",
+            "enabled",
+        ],
+        "Enables the EU shadow-only mid-session Decision Report.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "europe_mid_session_shadow",
+            "time_zone",
+        ],
+        "Local time zone for the EU shadow pulse.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "europe_mid_session_shadow",
+            "local_time",
+        ],
+        "Fixed local due time for the EU shadow pulse.",
+    ),
+    enforced_subtree(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "europe_mid_session_shadow",
+            "exchange_codes",
+        ],
+        "Market-scope filter for the EU shadow pulse.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "us_mid_session_shadow",
+            "enabled",
+        ],
+        "Enables the US shadow-only mid-session Decision Report.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "us_mid_session_shadow",
+            "time_zone",
+        ],
+        "Local time zone for the US shadow pulse.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "us_mid_session_shadow",
+            "local_time",
+        ],
+        "Fixed local due time for the US shadow pulse.",
+    ),
+    enforced_subtree(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "us_mid_session_shadow",
+            "exchange_codes",
+        ],
+        "Market-scope filter for the US shadow pulse.",
+    ),
     // ---- strategy.ladder ----
     //
     // Legacy ladder entries remain unimplemented. Protective-stop members are

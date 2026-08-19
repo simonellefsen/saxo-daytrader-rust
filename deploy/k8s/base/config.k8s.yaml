@@ -499,6 +499,18 @@ strategy:
         time_zone: America/New_York
         minutes_after_open: 75
         exchange_codes: [XNAS, XNYS]
+      europe_mid_session_shadow:
+        # Shadow-only: persisted reports cannot enter the manager queue.
+        enabled: true
+        time_zone: Europe/Copenhagen
+        local_time: "14:15"
+        exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
+      us_mid_session_shadow:
+        # Anchored to the US trading session, not a Copenhagen clock time.
+        enabled: true
+        time_zone: America/New_York
+        local_time: "14:15"
+        exchange_codes: [XNAS, XNYS]
   ladder:
     rung_count: 5
     min_rung_value_dkk: 5000

@@ -1996,3 +1996,9 @@ broker mutation was added.
 - Completed Phase 1's explicit US-session prerequisite. XNAS/XNYS pulse targets are now classified in America/New_York as regular, pre-market, post-market, Night Session, pause, or closed; only regular targets can be scheduled.
 - A calendar-provided continuous Night Session is rejected rather than changing the existing open-follow-up behavior. Pulse provenance persists the regular-session target and states that extended-hours execution is not assessed.
 - Tests cover all US session boundaries, weekend closure, and the requirement that future extended-hours capability needs both Saxo-client and instrument evidence. No extended-hours order path, queue authority, or Saxo mutation was enabled.
+
+## [2026-08-19] implementation | Scheduled EU and US shadow Decision Reports
+
+- Enabled `europe_mid_session_shadow` at 14:15 Europe/Copenhagen and `us_mid_session_shadow` at 14:15 America/New_York. The latter derives its UTC/Copenhagen time from the time-zone database, including the short EU/US DST mismatch.
+- Each fixed-time pulse is server-owned `shadow` with `queue_eligible=false`. It reaches the provider only when at least one configured exchange is currently regular and tradable; a closed scope records `market_closed` scheduler evidence instead.
+- Added deterministic EU/US anchoring and closed-scope regressions. No scheduled shadow report can enter the Trading Manager or Saxo order path.

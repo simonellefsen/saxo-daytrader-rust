@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
@@ -30,9 +30,34 @@ struct DecisionPulse {
     local_date: String,
     schedule_time_zone: String,
     target_session: DecisionPulseSession,
+    market_scope_status: DecisionPulseMarketScopeStatus,
     configured_exchange_codes: Vec<String>,
     exchange_codes: Vec<String>,
     source_markets: Vec<String>,
+}
+
+/// Scheduler-owned evidence about whether a pulse has a regular, currently
+/// tradable market in scope. A non-regular scope may be visible in scheduler
+/// history but never reaches the provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionPulseMarketScopeStatus {
+    RegularTradable,
+    MarketClosed,
+    NotApplicable,
+}
+
+impl DecisionPulseMarketScopeStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RegularTradable => "regular_tradable",
+            Self::MarketClosed => "market_closed",
+            Self::NotApplicable => "not_applicable",
+        }
+    }
+
+    fn is_regular_tradable(self) -> bool {
+        self == Self::RegularTradable
+    }
 }
 
 /// Explicit market-session classification used by Decision Pulse scheduling.
@@ -214,6 +239,7 @@ async fn submit_manual_decision_report_with_mode(
         local_date: now.date_naive().to_string(),
         schedule_time_zone: "UTC".to_string(),
         target_session: DecisionPulseSession::Manual,
+        market_scope_status: DecisionPulseMarketScopeStatus::NotApplicable,
         configured_exchange_codes: Vec::new(),
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
@@ -228,6 +254,15 @@ async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
     let pulses = active_decision_pulses(state);
     let mut submitted = Vec::new();
     for pulse in pulses {
+        if !pulse.market_scope_status.is_regular_tradable() {
+            submitted.push(json!({
+                "status": "market_closed",
+                "pulse_key": pulse.key,
+                "pulse_label": pulse.label,
+                "market_scope_status": pulse.market_scope_status.as_str(),
+            }));
+            continue;
+        }
         if has_report_for_pulse(state, &pulse.key).await? {
             submitted.push(json!({
                 "status": "already_exists",
@@ -1763,7 +1798,12 @@ fn decision_pulse_scheduler_result(
 ) -> JsonValue {
     let status = match parse_rfc3339_text(&pulse.target_at_utc) {
         Some(target) if now < target => "not_due",
-        Some(target) if now < target + due_window => "due",
+        Some(target)
+            if now < target + due_window && pulse.market_scope_status.is_regular_tradable() =>
+        {
+            "due"
+        }
+        Some(target) if now < target + due_window => "market_closed",
         Some(_) => "missed_due_window",
         None => "invalid_schedule",
     };
@@ -1856,6 +1896,58 @@ fn configured_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
             pulse_time_zone(state, "us_open_followup", chrono_tz::America::New_York),
         ));
     }
+    if scheduled_pulse_enabled_for_config(&state.config, "europe_mid_session_shadow") {
+        if let Some(pulse) = fixed_time_shadow_pulse_candidate(
+            &rows,
+            &configured_codes(
+                state,
+                &[
+                    "strategy",
+                    "swing",
+                    "analysis_pulses",
+                    "europe_mid_session_shadow",
+                    "exchange_codes",
+                ],
+                &[
+                    "XCSE", "XSTO", "XOSL", "XHEL", "XLON", "XETR", "XFRA", "XMIL", "XAMS",
+                ],
+            ),
+            "europe_mid_session_shadow",
+            "Nordic/EU 14:15 Shadow Decision Report",
+            pulse_time_zone(
+                state,
+                "europe_mid_session_shadow",
+                chrono_tz::Europe::Copenhagen,
+            ),
+            fixed_pulse_time(state, "europe_mid_session_shadow"),
+            Utc::now(),
+        ) {
+            pulses.push(pulse);
+        }
+    }
+    if scheduled_pulse_enabled_for_config(&state.config, "us_mid_session_shadow") {
+        if let Some(pulse) = fixed_time_shadow_pulse_candidate(
+            &rows,
+            &configured_codes(
+                state,
+                &[
+                    "strategy",
+                    "swing",
+                    "analysis_pulses",
+                    "us_mid_session_shadow",
+                    "exchange_codes",
+                ],
+                &["XNAS", "XNYS"],
+            ),
+            "us_mid_session_shadow",
+            "US 14:15 Shadow Decision Report",
+            pulse_time_zone(state, "us_mid_session_shadow", chrono_tz::America::New_York),
+            fixed_pulse_time(state, "us_mid_session_shadow"),
+            Utc::now(),
+        ) {
+            pulses.push(pulse);
+        }
+    }
     pulses
 }
 
@@ -1868,12 +1960,17 @@ fn scheduled_decision_reports_enabled(config: &serde_yaml::Value) -> bool {
 }
 
 fn scheduled_decision_pulse_enabled(config: &serde_yaml::Value, key: &str) -> bool {
-    matches!(key, "europe_open_followup" | "us_open_followup")
-        && crate::config::yaml_bool(
-            config,
-            &["strategy", "swing", "analysis_pulses", key, "enabled"],
-        )
-        .unwrap_or(true)
+    matches!(
+        key,
+        "europe_open_followup"
+            | "us_open_followup"
+            | "europe_mid_session_shadow"
+            | "us_mid_session_shadow"
+    ) && crate::config::yaml_bool(
+        config,
+        &["strategy", "swing", "analysis_pulses", key, "enabled"],
+    )
+    .unwrap_or(true)
 }
 
 fn scheduled_pulse_enabled_for_config(config: &serde_yaml::Value, key: &str) -> bool {
@@ -1941,12 +2038,87 @@ fn grouped_open_followup_pulse_candidates(
                 local_date,
                 schedule_time_zone: schedule_time_zone.to_string(),
                 target_session: DecisionPulseSession::Regular,
+                market_scope_status: DecisionPulseMarketScopeStatus::RegularTradable,
                 configured_exchange_codes,
                 exchange_codes: sorted_strings(exchange_codes),
                 source_markets: sorted_strings(source_markets),
             }
         })
         .collect()
+}
+
+fn fixed_time_shadow_pulse_candidate(
+    rows: &[JsonValue],
+    configured_codes: &HashSet<String>,
+    kind: &str,
+    label: &str,
+    schedule_time_zone: Tz,
+    target_time: Option<NaiveTime>,
+    now: DateTime<Utc>,
+) -> Option<DecisionPulse> {
+    let target_time = target_time?;
+    let local_now = now.with_timezone(&schedule_time_zone);
+    let local_target = schedule_time_zone
+        .from_local_datetime(&local_now.date_naive().and_time(target_time))
+        .earliest()?;
+    let target_at_utc = local_target.with_timezone(&Utc);
+    let configured_exchange_codes = sorted_strings(configured_codes.iter().cloned());
+    let scope_rows = rows
+        .iter()
+        .filter(|row| configured_codes.contains(&text(row, "code").to_uppercase()))
+        .collect::<Vec<_>>();
+    let eligible_rows = scope_rows
+        .iter()
+        .copied()
+        .filter(|row| {
+            let code = text(row, "code").to_uppercase();
+            let in_regular_session = pulse_target_session(&code, target_at_utc).is_regular();
+            let session_contains_target = parse_time(row.get("session_open_at_utc"))
+                .zip(parse_time(row.get("tradable_close_at_utc")))
+                .map(|(open, close)| target_at_utc >= open && target_at_utc < close)
+                .unwrap_or(false);
+            in_regular_session
+                && session_contains_target
+                && row
+                    .get("is_tradable")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    let exchange_codes = eligible_rows
+        .iter()
+        .map(|row| text(row, "code").to_uppercase())
+        .collect::<HashSet<_>>();
+    let source_markets = scope_rows
+        .iter()
+        .map(|row| text(row, "market"))
+        .collect::<HashSet<_>>();
+    let target_session = configured_exchange_codes
+        .iter()
+        .map(|code| pulse_target_session(code, target_at_utc))
+        .find(|session| !session.is_regular())
+        .unwrap_or(DecisionPulseSession::Regular);
+    let market_scope_status = if !exchange_codes.is_empty() && target_session.is_regular() {
+        DecisionPulseMarketScopeStatus::RegularTradable
+    } else {
+        DecisionPulseMarketScopeStatus::MarketClosed
+    };
+
+    Some(DecisionPulse {
+        key: format!("{kind}:{}", local_target.date_naive()),
+        label: label.to_string(),
+        kind: kind.to_string(),
+        mode: DecisionPulseMode::Shadow,
+        target_at_utc: target_at_utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        target_at_local: local_target.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        local_date: local_target.date_naive().to_string(),
+        schedule_time_zone: schedule_time_zone.to_string(),
+        target_session,
+        market_scope_status,
+        configured_exchange_codes,
+        exchange_codes: sorted_strings(exchange_codes),
+        source_markets: sorted_strings(source_markets),
+    })
 }
 
 pub(crate) fn market_open_followup_targets(
@@ -1987,6 +2159,14 @@ fn pulse_time_zone(state: &AppState, key: &str, fallback: Tz) -> Tz {
     )
     .and_then(|value| value.parse::<Tz>().ok())
     .unwrap_or(fallback)
+}
+
+fn fixed_pulse_time(state: &AppState, key: &str) -> Option<NaiveTime> {
+    yaml_string(
+        &state.config,
+        &["strategy", "swing", "analysis_pulses", key, "local_time"],
+    )
+    .and_then(|value| NaiveTime::parse_from_str(value.trim(), "%H:%M").ok())
 }
 
 fn sorted_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -2380,12 +2560,14 @@ fn pulse_to_json(pulse: &DecisionPulse) -> JsonValue {
         "local_date": pulse.local_date,
         "schedule_time_zone": pulse.schedule_time_zone,
         "target_session": pulse.target_session.as_str(),
+        "market_scope_status": pulse.market_scope_status.as_str(),
         "exchange_codes": pulse.exchange_codes,
         "source_markets": pulse.source_markets,
         "market_scope": {
             "calendar_source": "saxo_exchange_calendar",
             "required_session": "regular",
             "target_session": pulse.target_session.as_str(),
+            "status": pulse.market_scope_status.as_str(),
             "extended_hours_execution": "not_assessed; regular-session-only",
             "configured_exchange_codes": pulse.configured_exchange_codes,
             "eligible_exchange_codes": pulse.exchange_codes,
@@ -2774,6 +2956,87 @@ mod tests {
         assert!(night_session.is_empty());
     }
 
+    #[test]
+    fn fixed_time_shadow_pulses_anchor_to_their_market_time_zones() {
+        let eu_codes = ["XCSE".to_string()].into_iter().collect::<HashSet<_>>();
+        let eu = fixed_time_shadow_pulse_candidate(
+            &[json!({
+                "code": "XCSE",
+                "market": "Copenhagen",
+                "session_open_at_utc": "2026-08-19T07:00:00Z",
+                "tradable_close_at_utc": "2026-08-19T15:00:00Z",
+                "is_tradable": true
+            })],
+            &eu_codes,
+            "europe_mid_session_shadow",
+            "EU shadow",
+            chrono_tz::Europe::Copenhagen,
+            NaiveTime::from_hms_opt(14, 15, 0),
+            parse_rfc3339_text("2026-08-19T12:15:00Z").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(eu.key, "europe_mid_session_shadow:2026-08-19");
+        assert_eq!(eu.target_at_utc, "2026-08-19T12:15:00Z");
+        assert_eq!(eu.target_at_local, "2026-08-19T14:15:00+02:00");
+        assert_eq!(eu.mode, DecisionPulseMode::Shadow);
+        assert!(eu.market_scope_status.is_regular_tradable());
+        assert_eq!(pulse_to_json(&eu)["queue_eligible"], false);
+
+        let us_codes = ["XNAS".to_string()].into_iter().collect::<HashSet<_>>();
+        let us = fixed_time_shadow_pulse_candidate(
+            &[json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-03-10T13:30:00Z",
+                "tradable_close_at_utc": "2026-03-10T20:00:00Z",
+                "is_tradable": true
+            })],
+            &us_codes,
+            "us_mid_session_shadow",
+            "US shadow",
+            chrono_tz::America::New_York,
+            NaiveTime::from_hms_opt(14, 15, 0),
+            parse_rfc3339_text("2026-03-10T18:15:00Z").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(us.key, "us_mid_session_shadow:2026-03-10");
+        assert_eq!(us.target_at_utc, "2026-03-10T18:15:00Z");
+        assert_eq!(us.target_at_local, "2026-03-10T14:15:00-04:00");
+        assert_eq!(us.target_session, DecisionPulseSession::Regular);
+        assert!(us.market_scope_status.is_regular_tradable());
+    }
+
+    #[test]
+    fn fixed_time_shadow_pulse_records_market_closed_without_provider_authority() {
+        let codes = ["XNAS".to_string()].into_iter().collect::<HashSet<_>>();
+        let pulse = fixed_time_shadow_pulse_candidate(
+            &[json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-08-19T13:30:00Z",
+                "tradable_close_at_utc": "2026-08-19T20:00:00Z",
+                "is_tradable": false
+            })],
+            &codes,
+            "us_mid_session_shadow",
+            "US shadow",
+            chrono_tz::America::New_York,
+            NaiveTime::from_hms_opt(14, 15, 0),
+            parse_rfc3339_text("2026-08-19T18:15:00Z").unwrap(),
+        )
+        .unwrap();
+        let result = decision_pulse_scheduler_result(
+            &pulse,
+            parse_rfc3339_text("2026-08-19T18:20:00Z").unwrap(),
+            Duration::minutes(20),
+        );
+
+        assert_eq!(pulse.mode, DecisionPulseMode::Shadow);
+        assert!(!pulse.market_scope_status.is_regular_tradable());
+        assert_eq!(result["status"], "market_closed");
+        assert_eq!(result["pulse"]["queue_eligible"], false);
+    }
+
     #[tokio::test]
     async fn persisted_pulse_key_blocks_a_retry_after_scheduler_restart() {
         static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
@@ -2830,6 +3093,7 @@ mod tests {
             local_date: "2026-08-19".to_string(),
             schedule_time_zone: "America/New_York".to_string(),
             target_session: DecisionPulseSession::Regular,
+            market_scope_status: DecisionPulseMarketScopeStatus::RegularTradable,
             configured_exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
             exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
             source_markets: vec!["NASDAQ".to_string(), "NYSE".to_string()],

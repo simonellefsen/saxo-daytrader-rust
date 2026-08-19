@@ -22,9 +22,10 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0 and Phase 1 are landed; the two new shadow
-schedules remain disabled. This record does not create Decision Reports,
-activate an experiment, or alter Saxo execution.
+Implementation underway. Phase 0, Phase 1, and Phase 2 scheduling are landed.
+The two new shadow schedules may create observation-only Decision Reports at
+their due times; they cannot queue orders, activate an experiment, or alter
+Saxo execution.
 
 ## Context
 
@@ -98,8 +99,8 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 
 ### Phase 2: Schedule And Generate The Reports
 
-1. Configure the EU shadow report for 14:15 Europe/Copenhagen.
-2. Configure the US shadow report for 14:15 America/New_York and derive its Copenhagen display time from the time-zone database rather than storing a second fixed wall-clock schedule.
+1. **Landed 2026-08-19:** configure the EU shadow report for 14:15 Europe/Copenhagen across the full European scope. The scheduler requires at least one scoped regular market to be currently tradable before provider submission.
+2. **Landed 2026-08-19:** configure the US shadow report for 14:15 America/New_York. Its target is derived from the time-zone database, so Copenhagen display time follows DST rather than using a second fixed clock. The report persists `shadow`/`queue_eligible=false` and cannot reach the manager queue.
 3. Include current portfolio, cash, positions, open/pending orders, protected quantities, active approved policy, latest signals, and the earlier same-scope report in the context.
 4. Require the report to describe what materially changed since the earlier pulse. Persist `no_new_information` when nothing changed instead of manufacturing candidates.
 5. Add separate scheduler-health rows and missed-pulse alerts for both schedules.
