@@ -1978,3 +1978,9 @@ broker mutation was added.
 - Landed the first revised-roadmap Phase 0 prerequisite in `src/trading_manager.rs`: active current-mode/current-adapter BUY orders now reserve cash, deployment capacity, symbol exposure, holding slots, exchange/currency concentration, and position-weight headroom before each new manager cycle.
 - Partial fills reserve only their unfilled fraction using recorded `execution_fills`; ambiguous submission/cancellation states stay reserved until terminal reconciliation. A reservation with missing DKK valuation blocks new BUYs rather than being treated as zero exposure. Terminal or different-environment orders are excluded.
 - Added hermetic SQLite regressions for pending, broker-working, partial, terminal, cross-environment, and unvalued reservations. No Saxo request, order placement, cancellation, approval, or Hermes behavior was added or changed.
+
+## [2026-08-19] implementation | Stable Decision Pulse provenance
+
+- Completed Phase 1's third shadow-pulse contract prerequisite: scheduled pulse keys now use the explicitly configured local trading date, while every report retains local and UTC due times, schedule time zone, deterministic sorted market scope, and Saxo exchange-calendar provenance.
+- Scheduler-cycle history now records an explicit terminal scheduling result for each configured calendar pulse (`not_due`, `due`, `missed_due_window`, or `invalid_schedule`). These are read-only operational evidence, never Decision Reports, queue entries, or Saxo actions.
+- Added deterministic DST/provenance and scheduler-result regressions. The existing two execution-eligible open-follow-up pulses are unchanged; the new EU/US shadow schedules remain disabled and unconfigured.

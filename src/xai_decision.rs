@@ -3,6 +3,7 @@ use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
+use chrono_tz::Tz;
 use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
 use sqlx::Row;
@@ -25,6 +26,10 @@ struct DecisionPulse {
     kind: String,
     mode: DecisionPulseMode,
     target_at_utc: String,
+    target_at_local: String,
+    local_date: String,
+    schedule_time_zone: String,
+    configured_exchange_codes: Vec<String>,
     exchange_codes: Vec<String>,
     source_markets: Vec<String>,
 }
@@ -122,14 +127,16 @@ pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
             "status": "disabled",
             "reason": "strategy.enabled is false; scheduled decision-report submission is disabled",
             "polled": polled,
-            "submitted": []
+            "submitted": [],
+            "scheduler_results": []
         }));
     }
-    let submitted = submit_due_scheduled_reports(state).await?;
+    let scheduled = submit_due_scheduled_reports(state).await?;
     Ok(json!({
         "status": "ok",
         "polled": polled,
-        "submitted": submitted,
+        "submitted": scheduled.get("submitted").cloned().unwrap_or_else(|| json!([])),
+        "scheduler_results": scheduled.get("results").cloned().unwrap_or_else(|| json!([])),
     }))
 }
 
@@ -145,8 +152,9 @@ async fn submit_manual_decision_report_with_mode(
     state: &AppState,
     mode: DecisionReportSubmissionMode,
 ) -> Result<JsonValue> {
+    let now = Utc::now();
     let pulse = DecisionPulse {
-        key: format!("manual:{}", Utc::now().format("%Y-%m-%dT%H:%M:%SZ")),
+        key: format!("manual:{}", now.format("%Y-%m-%dT%H:%M:%SZ")),
         label: if mode.is_dry_run() {
             "Manual Decision Report (Dry Run)".to_string()
         } else {
@@ -162,21 +170,22 @@ async fn submit_manual_decision_report_with_mode(
         } else {
             DecisionPulseMode::ExecutionEligible
         },
-        target_at_utc: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        target_at_utc: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        target_at_local: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        local_date: now.date_naive().to_string(),
+        schedule_time_zone: "UTC".to_string(),
+        configured_exchange_codes: Vec::new(),
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
     };
     submit_deferred_report(state, &pulse, true, mode).await
 }
 
-async fn submit_due_scheduled_reports(state: &AppState) -> Result<Vec<JsonValue>> {
+async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
     if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
         warn!("xAI decision scheduler using fallback exchange calendar: {err:#}");
     }
     let pulses = active_decision_pulses(state);
-    if pulses.is_empty() {
-        return Ok(Vec::new());
-    }
     let mut submitted = Vec::new();
     for pulse in pulses {
         if has_report_for_pulse(state, &pulse.key).await? {
@@ -192,7 +201,10 @@ async fn submit_due_scheduled_reports(state: &AppState) -> Result<Vec<JsonValue>
                 .await?,
         );
     }
-    Ok(submitted)
+    Ok(json!({
+        "submitted": submitted,
+        "results": decision_pulse_scheduler_results(state),
+    }))
 }
 
 async fn submit_deferred_report(
@@ -1684,6 +1696,44 @@ fn active_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
         .collect()
 }
 
+/// Every configured pulse gets an explicit per-cycle result, including one
+/// that is simply not due. These records live in the scheduler-cycle history;
+/// they are not Decision Reports and therefore cannot be mistaken for a
+/// provider result or acquire execution authority.
+fn decision_pulse_scheduler_results(state: &AppState) -> Vec<JsonValue> {
+    let due_window = Duration::minutes(
+        yaml_i64(
+            &state.config,
+            &["strategy", "swing", "analysis_pulses", "due_window_minutes"],
+        )
+        .unwrap_or(DEFAULT_DUE_WINDOW_MINUTES)
+        .max(1),
+    );
+    let now = Utc::now();
+    configured_decision_pulses(state)
+        .into_iter()
+        .map(|pulse| decision_pulse_scheduler_result(&pulse, now, due_window))
+        .collect()
+}
+
+fn decision_pulse_scheduler_result(
+    pulse: &DecisionPulse,
+    now: DateTime<Utc>,
+    due_window: Duration,
+) -> JsonValue {
+    let status = match parse_rfc3339_text(&pulse.target_at_utc) {
+        Some(target) if now < target => "not_due",
+        Some(target) if now < target + due_window => "due",
+        Some(_) => "missed_due_window",
+        None => "invalid_schedule",
+    };
+    json!({
+        "status": status,
+        "terminal": true,
+        "pulse": pulse_to_json(pulse),
+    })
+}
+
 /// Build UI-facing decision-pulse metadata from the same exchange schedule used
 /// by the scheduler. This is deliberately read-only: it helps operators see
 /// whether a report is due soon without submitting a report.
@@ -1715,6 +1765,7 @@ pub fn decision_pulse_summary(state: &AppState) -> JsonValue {
 
     json!({
         "pulses": active.iter().map(pulse_to_json).collect::<Vec<_>>(),
+        "scheduler_results": decision_pulse_scheduler_results(state),
         "next_pulse_at": next.map(|pulse| JsonValue::from(pulse.target_at_utc.clone())).unwrap_or(JsonValue::Null),
         "next_pulse_label": next.map(|pulse| JsonValue::from(pulse.label.clone())).unwrap_or(JsonValue::Null),
     })
@@ -1742,6 +1793,7 @@ fn configured_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
             "europe_open_followup",
             "Nordic/EU Open +1h15 Decision Report",
             minutes_after_open(state, "europe_open_followup"),
+            pulse_time_zone(state, "europe_open_followup", chrono_tz::Europe::Copenhagen),
         ));
     }
     if scheduled_pulse_enabled_for_config(&state.config, "us_open_followup") {
@@ -1761,6 +1813,7 @@ fn configured_decision_pulses(state: &AppState) -> Vec<DecisionPulse> {
             "us_open_followup",
             "US Open +1h15 Decision Report",
             minutes_after_open(state, "us_open_followup"),
+            pulse_time_zone(state, "us_open_followup", chrono_tz::America::New_York),
         ));
     }
     pulses
@@ -1793,6 +1846,7 @@ fn grouped_open_followup_pulse_candidates(
     kind: &str,
     label: &str,
     minutes_after_open: i64,
+    schedule_time_zone: Tz,
 ) -> Vec<DecisionPulse> {
     let mut groups: Vec<(DateTime<Utc>, Vec<JsonValue>)> = Vec::new();
     for row in rows {
@@ -1819,27 +1873,29 @@ fn grouped_open_followup_pulse_candidates(
     groups
         .into_iter()
         .map(|(target, rows)| {
-            let local_date = target.date_naive().to_string();
+            let local_target = target.with_timezone(&schedule_time_zone);
+            let local_date = local_target.date_naive().to_string();
+            let configured_exchange_codes = sorted_strings(configured_codes.iter().cloned());
             let exchange_codes = rows
                 .iter()
                 .map(|row| text(row, "code").to_uppercase())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
+                .collect::<HashSet<_>>();
             let source_markets = rows
                 .iter()
                 .map(|row| text(row, "market"))
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
+                .collect::<HashSet<_>>();
             DecisionPulse {
                 key: format!("{kind}:{local_date}"),
                 label: label.to_string(),
                 kind: kind.to_string(),
                 mode: DecisionPulseMode::ExecutionEligible,
                 target_at_utc: target.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                exchange_codes,
-                source_markets,
+                target_at_local: local_target.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                local_date,
+                schedule_time_zone: schedule_time_zone.to_string(),
+                configured_exchange_codes,
+                exchange_codes: sorted_strings(exchange_codes),
+                source_markets: sorted_strings(source_markets),
             }
         })
         .collect()
@@ -1864,6 +1920,7 @@ pub(crate) fn market_open_followup_targets(
         "market_open_followup",
         "market open follow-up",
         minutes_after_open.max(0),
+        chrono_tz::UTC,
     )
     .into_iter()
     .filter_map(|pulse| {
@@ -1873,6 +1930,21 @@ pub(crate) fn market_open_followup_targets(
         })
     })
     .collect()
+}
+
+fn pulse_time_zone(state: &AppState, key: &str, fallback: Tz) -> Tz {
+    yaml_string(
+        &state.config,
+        &["strategy", "swing", "analysis_pulses", key, "time_zone"],
+    )
+    .and_then(|value| value.parse::<Tz>().ok())
+    .unwrap_or(fallback)
+}
+
+fn sorted_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort();
+    values
 }
 
 fn configured_codes(state: &AppState, keys: &[&str], fallback: &[&str]) -> HashSet<String> {
@@ -2201,8 +2273,18 @@ fn pulse_to_json(pulse: &DecisionPulse) -> JsonValue {
         "pulse_mode": pulse.mode.as_str(),
         "queue_eligible": pulse.mode.queue_eligible(),
         "target_at_utc": pulse.target_at_utc,
+        "target_at_local": pulse.target_at_local,
+        "local_date": pulse.local_date,
+        "schedule_time_zone": pulse.schedule_time_zone,
         "exchange_codes": pulse.exchange_codes,
         "source_markets": pulse.source_markets,
+        "market_scope": {
+            "calendar_source": "saxo_exchange_calendar",
+            "required_session": "regular",
+            "configured_exchange_codes": pulse.configured_exchange_codes,
+            "eligible_exchange_codes": pulse.exchange_codes,
+            "source_markets": pulse.source_markets,
+        },
     })
 }
 
@@ -2387,11 +2469,95 @@ mod tests {
             "us_open_followup",
             "US Open follow-up",
             45,
+            chrono_tz::America::New_York,
         );
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].target_at_utc, "2026-07-30T14:15:00Z");
+        assert_eq!(targets[0].target_at_local, "2026-07-30T10:15:00-04:00");
+        assert_eq!(targets[0].local_date, "2026-07-30");
+        assert_eq!(targets[0].key, "us_open_followup:2026-07-30");
         assert_eq!(targets[0].exchange_codes.len(), 2);
+    }
+
+    #[test]
+    fn pulse_provenance_keeps_local_due_time_and_market_scope_stable() {
+        let rows = vec![
+            json!({
+                "code": "XNYS",
+                "market": "NYSE",
+                "session_open_at_utc": "2026-11-02T14:30:00Z",
+                "tradable_close_at_utc": "2026-11-02T21:00:00Z"
+            }),
+            json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-11-02T14:30:00Z",
+                "tradable_close_at_utc": "2026-11-02T21:00:00Z"
+            }),
+        ];
+        let configured = ["XNAS".to_string(), "XNYS".to_string()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let pulse = grouped_open_followup_pulse_candidates(
+            &rows,
+            &configured,
+            "us_open_followup",
+            "US Open follow-up",
+            75,
+            chrono_tz::America::New_York,
+        )
+        .pop()
+        .unwrap();
+
+        assert_eq!(pulse.key, "us_open_followup:2026-11-02");
+        assert_eq!(pulse.target_at_utc, "2026-11-02T15:45:00Z");
+        assert_eq!(pulse.target_at_local, "2026-11-02T10:45:00-05:00");
+        assert_eq!(pulse.exchange_codes, vec!["XNAS", "XNYS"]);
+
+        let provenance = pulse_to_json(&pulse);
+        assert_eq!(provenance["schedule_time_zone"], "America/New_York");
+        assert_eq!(provenance["market_scope"]["required_session"], "regular");
+        assert_eq!(
+            provenance["market_scope"]["configured_exchange_codes"],
+            json!(["XNAS", "XNYS"])
+        );
+        assert_eq!(
+            provenance["market_scope"]["eligible_exchange_codes"],
+            json!(["XNAS", "XNYS"])
+        );
+    }
+
+    #[test]
+    fn scheduler_result_is_terminal_without_creating_a_report() {
+        let pulse = DecisionPulse {
+            key: "us_open_followup:2026-08-19".to_string(),
+            label: "US Open follow-up".to_string(),
+            kind: "us_open_followup".to_string(),
+            mode: DecisionPulseMode::ExecutionEligible,
+            target_at_utc: "2026-08-19T14:45:00Z".to_string(),
+            target_at_local: "2026-08-19T10:45:00-04:00".to_string(),
+            local_date: "2026-08-19".to_string(),
+            schedule_time_zone: "America/New_York".to_string(),
+            configured_exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
+            exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
+            source_markets: vec!["NASDAQ".to_string(), "NYSE".to_string()],
+        };
+        let due = decision_pulse_scheduler_result(
+            &pulse,
+            parse_rfc3339_text("2026-08-19T14:50:00Z").unwrap(),
+            Duration::minutes(20),
+        );
+        let missed = decision_pulse_scheduler_result(
+            &pulse,
+            parse_rfc3339_text("2026-08-19T15:06:00Z").unwrap(),
+            Duration::minutes(20),
+        );
+
+        assert_eq!(due["status"], "due");
+        assert_eq!(missed["status"], "missed_due_window");
+        assert_eq!(due["terminal"], true);
+        assert_eq!(due["pulse"]["key"], "us_open_followup:2026-08-19");
     }
 
     #[test]

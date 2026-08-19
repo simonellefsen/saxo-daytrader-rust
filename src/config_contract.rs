@@ -431,6 +431,16 @@ const CONTRACT: &[ContractEntry] = &[
         ],
         "Enables scheduled Nordic/EU open-followup report submission.",
     ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "europe_open_followup",
+            "time_zone",
+        ],
+        "Local trading-date and due-time zone for EU pulse identity.",
+    ),
     advisory(
         &[
             "strategy",
@@ -460,6 +470,16 @@ const CONTRACT: &[ContractEntry] = &[
             "enabled",
         ],
         "Enables scheduled US open-followup report submission.",
+    ),
+    enforced(
+        &[
+            "strategy",
+            "swing",
+            "analysis_pulses",
+            "us_open_followup",
+            "time_zone",
+        ],
+        "Local trading-date and due-time zone for US pulse identity.",
     ),
     advisory(
         &[

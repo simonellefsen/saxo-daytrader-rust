@@ -489,10 +489,14 @@ strategy:
       due_window_minutes: 20
       europe_open_followup:
         enabled: true
+        # Stable pulse identity uses the local trading date in this zone.
+        time_zone: Europe/Copenhagen
         minutes_after_open: 75
         exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
       us_open_followup:
         enabled: true
+        # Anchor US reports to the US session; Copenhagen display follows DST.
+        time_zone: America/New_York
         minutes_after_open: 75
         exchange_codes: [XNAS, XNYS]
   ladder:
