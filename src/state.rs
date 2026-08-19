@@ -25,8 +25,8 @@ use crate::{
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
     execution_state::execution_order_window,
     hermes_state::{
-        HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES, LEARNING_MEMORY_LIMIT,
-        LEARNING_MEMORY_REFLECTION_LIMIT, LESSONS_PENDING_REVIEW_LIMIT,
+        HERMES_ADVISORY_EXPERIMENT_STATUSES, HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES,
+        LEARNING_MEMORY_LIMIT, LEARNING_MEMORY_REFLECTION_LIMIT, LESSONS_PENDING_REVIEW_LIMIT,
         LESSONS_PENDING_REVIEW_REFLECTION_LIMIT, hermes_baseline_evidence_pack_from_snapshot,
         hermes_experiment_review_family, hermes_experiment_status_blocks_duplicate,
         hermes_one_variable_audit_from_snapshot, hermes_proposal_quality_from_experiments,
@@ -7933,6 +7933,42 @@ impl AppState {
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    /// Return the only experiment rows that can be used as Hermes advisory
+    /// context. Pending proposals are intentionally omitted with their values
+    /// redacted: seeing a proposed threshold or setting is enough for an LLM
+    /// to let it influence an allow/reduce/block recommendation even when the
+    /// proposal has never passed operator review.
+    pub async fn hermes_advisory_experiments(&self, limit: i64) -> Result<JsonValue> {
+        let statuses = HERMES_ADVISORY_EXPERIMENT_STATUSES
+            .iter()
+            .map(|status| format!("'{}'", sql_escape(status)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let pending_review_excluded_count = self
+            .first_json(
+                "SELECT COUNT(*) AS count
+                 FROM strategy_experiments
+                 WHERE status = 'pending_review'",
+            )
+            .await?
+            .and_then(|row| row.get("count").and_then(JsonValue::as_i64))
+            .unwrap_or(0)
+            .max(0);
+        let sql = format!(
+            "SELECT id, created_at, status, baseline_id, goal_version, hypothesis, changed_variable_path, old_value_json, new_value_json, expected_effect, risk_notes, evidence_json, approval_json, metrics_json, source_session_id, raw_payload_json
+             FROM strategy_experiments
+             WHERE status IN ({statuses})
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(json!({
+            "items": self.select_json(&sql).await.unwrap_or_default(),
+            "pending_review_excluded_count": pending_review_excluded_count,
+            "pending_review_values_included": false,
+        }))
     }
 
     /// Closes unreviewed Hermes proposals after a deliberately longer period
@@ -16028,6 +16064,72 @@ analysis_windows:
         ] {
             assert!(!hermes_experiment_status_blocks_duplicate(status));
         }
+    }
+
+    #[tokio::test]
+    async fn advisory_experiment_context_redacts_pending_review_values() {
+        let state = runtime_settings_test_state("hermes:\n  experiments: {}\n").await;
+        sqlx::query(
+            "CREATE TABLE strategy_experiments (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                baseline_id TEXT,
+                goal_version INTEGER,
+                hypothesis TEXT,
+                changed_variable_path TEXT NOT NULL,
+                old_value_json TEXT,
+                new_value_json TEXT,
+                expected_effect TEXT,
+                risk_notes TEXT,
+                evidence_json TEXT,
+                approval_json TEXT,
+                metrics_json TEXT,
+                source_session_id TEXT,
+                raw_payload_json TEXT
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create strategy experiments table");
+        for (id, status, new_value) in [
+            ("pending", "pending_review", "99"),
+            ("approved", "approved_paper", "3"),
+            ("active", "active_sim", "4"),
+            ("rejected", "rejected", "1"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO strategy_experiments (id, created_at, status, changed_variable_path, new_value_json)
+                 VALUES ('{}', '2026-08-19T12:00:00Z', '{}', 'strategy.swing.daily_indicators.min_confluences', '{}')",
+                sql_escape(id),
+                sql_escape(status),
+                sql_escape(new_value),
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed experiment");
+        }
+
+        let context = state
+            .hermes_advisory_experiments(20)
+            .await
+            .expect("load advisory experiment context");
+        assert_eq!(context["pending_review_excluded_count"], json!(1));
+        assert_eq!(context["pending_review_values_included"], json!(false));
+        assert_eq!(
+            context["items"]
+                .as_array()
+                .expect("advisory items")
+                .iter()
+                .map(|row| json_text(row, "id"))
+                .collect::<Vec<_>>(),
+            vec!["approved".to_string(), "active".to_string()]
+        );
+        assert!(
+            !serde_json::to_string(&context)
+                .expect("serialize advisory context")
+                .contains("99")
+        );
     }
 
     #[tokio::test]

@@ -10,6 +10,12 @@ updated: 2026-08-19
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
+
+- Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.
+- The Trading Manager preflight and MCP `list_experiments` projection now carry only operator-approved/active lifecycle rows plus an audit-only pending count. Prompt instructions explicitly prohibit using pending-review values for `allow`, `reduce`, `stand_down`, or `review` advice.
+- Added pure, database-backed, manager-preflight, and MCP-contract regressions. This does not change broker authority, order placement, strategy overlays, or the normal operator lifecycle flow.
+
 ## [2026-08-04] ui | Split the Hermes tab into sections with per-section data loading
 
 - The tab rendered nine sections in one 335-line scroll and ran eleven separate queries on every load regardless of what the operator was looking at. Now Overview / Advice / Reflections / Experiments / Baselines, as plain links carrying their own query string.

@@ -164,7 +164,15 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .get("limit")
                 .and_then(JsonValue::as_i64)
                 .unwrap_or(20);
-            json!({"experiments": state.hermes_experiments(limit).await?})
+            let advisory_context = state.hermes_advisory_experiments(limit).await?;
+            json!({
+                "experiments": advisory_context.get("items").cloned().unwrap_or_else(|| json!([])),
+                "pending_review_excluded_count": advisory_context
+                    .get("pending_review_excluded_count")
+                    .cloned()
+                    .unwrap_or_else(|| json!(0)),
+                "pending_review_values_included": false,
+            })
         }
         "get_decision_reports" => {
             let limit = arguments
@@ -328,7 +336,7 @@ fn mcp_tools() -> Vec<JsonValue> {
         ),
         tool_schema(
             "list_experiments",
-            "List recent one-variable Hermes experiment proposals and lifecycle states.",
+            "List operator-approved or active one-variable Hermes experiments for advisory context. Pending-review proposal values are deliberately excluded and reported only as a count.",
             json!({
                 "type": "object",
                 "properties": {
@@ -574,5 +582,19 @@ mod tests {
         assert!(!names.iter().any(|name| name.contains("saxo")));
         assert!(!names.iter().any(|name| name.contains("order")));
         assert!(!names.iter().any(|name| name.contains("secret")));
+    }
+
+    #[test]
+    fn experiment_tool_describes_pending_review_redaction() {
+        let tool = mcp_tools()
+            .into_iter()
+            .find(|tool| tool.get("name").and_then(JsonValue::as_str) == Some("list_experiments"))
+            .expect("list_experiments tool");
+        assert!(
+            tool["description"]
+                .as_str()
+                .expect("tool description")
+                .contains("Pending-review proposal values are deliberately excluded")
+        );
     }
 }

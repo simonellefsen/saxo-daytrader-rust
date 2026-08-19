@@ -15,6 +15,7 @@ use crate::{
     config::{yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64},
     drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
+    hermes_state::hermes_experiment_status_is_advisory_eligible,
     state::{AppState, SUPPORTED_EXPERIMENT_VARIABLES},
 };
 
@@ -2380,10 +2381,25 @@ async fn hermes_decision_preflight_bundle(
         _ => json!({"status": "unavailable"}),
     };
     let latest_markov_run_status = text(&latest_markov_run, "status");
-    let (experiments, experiment_context_status) = match state.hermes_experiments(20).await {
-        Ok(rows) => (compact_hermes_preflight_experiments(&rows), "available"),
-        Err(_) => (Vec::new(), "unavailable"),
-    };
+    let (experiments, pending_review_experiment_count, experiment_context_status) =
+        match state.hermes_advisory_experiments(20).await {
+            Ok(context) => (
+                compact_hermes_preflight_experiments(
+                    context
+                        .get("items")
+                        .and_then(JsonValue::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                ),
+                context
+                    .get("pending_review_excluded_count")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0)
+                    .max(0),
+                "available",
+            ),
+            Err(_) => (Vec::new(), 0, "unavailable"),
+        };
     let (recent_failures, failure_context_status) = match state.hermes_execution_failures(12).await
     {
         Ok(rows) => (compact_hermes_preflight_failures(&rows), "available"),
@@ -2495,6 +2511,10 @@ async fn hermes_decision_preflight_bundle(
         },
         "candidate_waterfall": candidate_waterfall,
         "active_experiments": experiments,
+        "experiment_policy": {
+            "pending_review_values_included": false,
+            "pending_review_excluded_count": pending_review_experiment_count,
+        },
         "recent_execution_failures": recent_failures,
         "data_availability": {
             "portfolio_snapshot": overview.get("portfolio_summary").is_some(),
@@ -2568,17 +2588,7 @@ fn compact_hermes_preflight_markov_signal(
 
 fn compact_hermes_preflight_experiments(rows: &[JsonValue]) -> Vec<JsonValue> {
     rows.iter()
-        .filter(|row| {
-            matches!(
-                text(row, "status").as_str(),
-                "pending_review"
-                    | "approved_paper"
-                    | "active_paper"
-                    | "approved_sim"
-                    | "active_sim"
-                    | "ready_for_promotion"
-            )
-        })
+        .filter(|row| hermes_experiment_status_is_advisory_eligible(&text(row, "status")))
         .map(|row| {
             json!({
                 "id": row.get("id").cloned().unwrap_or(JsonValue::Null),
@@ -2671,13 +2681,13 @@ async fn request_hermes_decision_advice(
         .min(60);
 
     let input = format!(
-        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, portfolio and candidate exposure, Markov freshness, experiment state, and classified execution failures. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, portfolio and candidate exposure, Markov freshness, operator-approved experiment state, and classified execution failures. Pending-review proposal values are omitted by the server and must never influence allow, reduce, stand_down, or review advice; the count is audit-only. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
         report.id, report.id, source_session_id
     );
     let payload = json!({
         "session_id": "saxo-daytrader-trading-manager-advice",
         "input": input,
-        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Be specific, use current Markov and learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate. Always include context_self_check so operators can audit whether you saw the latest report, Markov signals, EOD report, positions, and active experiments.",
+        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Pending-review experiment proposals have not passed operator review: do not infer, request, or use their proposed values in advice. Be specific, use current Markov and approved learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate. Always include context_self_check so operators can audit whether you saw the latest report, Markov signals, EOD report, positions, and operator-approved or active experiments.",
         "metadata": {
             "source": "rust_trading_manager",
             "decision_report_id": report.id,
@@ -2693,7 +2703,7 @@ async fn request_hermes_decision_advice(
                     "get_end_of_day_reports",
                     "get_context current positions and overview exposure",
                     "list_reflections",
-                    "list_experiments"
+                    "list_experiments (operator-approved or active statuses only)"
                 ],
                 "note": "Set booleans false when a source is unavailable; do not imply a source was reviewed unless it was actually fetched."
             }
@@ -6303,17 +6313,19 @@ mod tests {
     }
 
     #[test]
-    fn hermes_preflight_only_includes_pending_or_active_experiments() {
+    fn hermes_preflight_excludes_pending_review_experiment_values() {
         let rows = vec![
             json!({"id": "pending", "status": "pending_review", "changed_variable_path": "strategy.swing.daily_indicators.min_confluences"}),
             json!({"id": "active", "status": "active_sim", "changed_variable_path": "strategy.capital.min_cash_buffer_pct"}),
+            json!({"id": "approved", "status": "approved_paper", "changed_variable_path": "strategy.swing.daily_indicators.min_confluences"}),
             json!({"id": "rejected", "status": "rejected", "changed_variable_path": "execution.min_trade_value_dkk"}),
         ];
 
         let compact = compact_hermes_preflight_experiments(&rows);
         assert_eq!(compact.len(), 2);
-        assert_eq!(compact[0]["id"], json!("pending"));
-        assert_eq!(compact[1]["id"], json!("active"));
+        assert_eq!(compact[0]["id"], json!("active"));
+        assert_eq!(compact[1]["id"], json!("approved"));
+        assert!(!compact.iter().any(|row| row["id"] == json!("pending")));
     }
 
     #[test]

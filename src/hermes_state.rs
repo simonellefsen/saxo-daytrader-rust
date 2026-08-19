@@ -33,6 +33,22 @@ pub(crate) const HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES: &[&str] = &[
     "ready_for_promotion",
 ];
 
+/// Lifecycle states whose experiment values have passed operator review and
+/// may be shown to Hermes while it gives Trading Manager advice. A proposal in
+/// `pending_review` remains visible to operators through the normal dashboard
+/// and lifecycle API, but its proposed value must never become advisory input.
+pub(crate) const HERMES_ADVISORY_EXPERIMENT_STATUSES: &[&str] = &[
+    "approved_paper",
+    "active_paper",
+    "approved_sim",
+    "active_sim",
+    "ready_for_promotion",
+];
+
+pub(crate) fn hermes_experiment_status_is_advisory_eligible(status: &str) -> bool {
+    HERMES_ADVISORY_EXPERIMENT_STATUSES.contains(&status.trim())
+}
+
 const HERMES_EXPERIMENT_REVIEW_FAMILIES: &[(&str, &str)] = &[
     ("strategy.capital.min_cash_buffer_pct", "cash_buffer_policy"),
     ("strategy.swing.cash_buffer_pct", "cash_buffer_policy"),
@@ -796,5 +812,16 @@ mod tests {
                 row["lesson"] == "[redacted potentially sensitive reflection action]"
             })
         );
+    }
+
+    #[test]
+    fn pending_review_experiment_is_not_advisory_eligible() {
+        assert!(!hermes_experiment_status_is_advisory_eligible(
+            "pending_review"
+        ));
+        for status in HERMES_ADVISORY_EXPERIMENT_STATUSES {
+            assert!(hermes_experiment_status_is_advisory_eligible(status));
+        }
+        assert!(!hermes_experiment_status_is_advisory_eligible("rejected"));
     }
 }
