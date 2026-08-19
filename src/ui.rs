@@ -7114,6 +7114,9 @@ fn HermesCounterfactualRow(row: JsonValue, prefs: LocalizationPrefs) -> Element 
     let reference = optional_json_number(&row, "reference_price_local")
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
+    let reference_source = fallback_text(&row, "reference_price_source", "unverified");
+    let reported_reference = optional_json_number(&row, "reported_reference_price_local")
+        .map(|value| format_money(value, &currency, &prefs));
     let latest = optional_json_number(&row, "latest_price_local")
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
@@ -7149,7 +7152,16 @@ fn HermesCounterfactualRow(row: JsonValue, prefs: LocalizationPrefs) -> Element 
             }
             td { "{source}" }
             td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
-            td { "{reference}" }
+            td {
+                span { "{reference}" }
+                small { class: "muted block", "{reference_source}" }
+                if !text(&row, "reference_price_at").is_empty() {
+                    small { class: "muted block", "{format_timestamp(&text(&row, \"reference_price_at\"), &prefs)}" }
+                }
+                if let Some(reported_reference) = reported_reference {
+                    small { class: "muted block", "Report context: {reported_reference}" }
+                }
+            }
             td {
                 span { "{latest}" }
                 if !text(&row, "latest_price_at").is_empty() {
@@ -7175,6 +7187,9 @@ fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     let reference = optional_json_number(&row, "reference_price_local")
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
+    let reference_source = fallback_text(&row, "reference_price_source", "unverified");
+    let reported_reference = optional_json_number(&row, "reported_reference_price_local")
+        .map(|value| format_money(value, &currency, &prefs));
     let latest = optional_json_number(&row, "latest_price_local")
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
@@ -7210,7 +7225,16 @@ fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
             td { "{gate}" }
             td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
-            td { "{reference}" }
+            td {
+                span { "{reference}" }
+                small { class: "muted block", "{reference_source}" }
+                if !text(&row, "reference_price_at").is_empty() {
+                    small { class: "muted block", "{format_timestamp(&text(&row, \"reference_price_at\"), &prefs)}" }
+                }
+                if let Some(reported_reference) = reported_reference {
+                    small { class: "muted block", "Report context: {reported_reference}" }
+                }
+            }
             td {
                 span { "{latest}" }
                 if !text(&row, "latest_price_at").is_empty() {
@@ -7244,7 +7268,8 @@ fn optional_json_number(row: &JsonValue, key: &str) -> Option<f64> {
 fn counterfactual_status_tone(status: &str) -> &'static str {
     match status {
         "tracking" => "good-status",
-        "unpriced" => "warn-status",
+        "awaiting_reference" => "warn-status",
+        "legacy_unverified_reference" => "warn-status",
         _ => "",
     }
 }

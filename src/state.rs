@@ -7348,7 +7348,7 @@ impl AppState {
             .unwrap_or_default();
         let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut created = 0usize;
-        let mut unpriced = 0usize;
+        let mut awaiting_reference = 0usize;
         let mut skipped = 0usize;
 
         for (index, candidate) in candidates.into_iter().enumerate() {
@@ -7373,17 +7373,16 @@ impl AppState {
                 skipped += 1;
                 continue;
             }
-            let reference_price_local = candidate
+            let reported_reference_price_local = candidate
                 .get("reference_price_local")
                 .and_then(JsonValue::as_f64)
                 .filter(|value| value.is_finite() && *value > 0.0);
-            let status = if reference_price_local.is_some() {
-                "tracking"
-            } else {
-                unpriced += 1;
-                "unpriced"
-            };
-            let reference_sql = reference_price_local
+            // A provider-supplied report price is useful context, but it is
+            // not an auditable market reference: it lacks Saxo provenance and
+            // capture time. Every new shadow waits for the read-only Saxo
+            // infoprice loop to establish its baseline.
+            awaiting_reference += 1;
+            let reported_reference_sql = reported_reference_price_local
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "NULL".to_string());
             let currency = json_text(&candidate, "currency");
@@ -7392,9 +7391,10 @@ impl AppState {
                 "INSERT INTO hermes_counterfactuals (
                     id, created_at, updated_at, report_id, manager_run_id,
                     strategy_key, symbol, action, source_effect, shadow_quantity,
-                    reference_price_local, currency, status, observation_count
+                    reference_price_local, reference_price_at, reference_price_source,
+                    reported_reference_price_local, currency, status, observation_count
                 ) VALUES (
-                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', 0
+                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, NULL, NULL, 'awaiting_saxo_infoprice', {}, {}, 'awaiting_reference', 0
                 ) ON CONFLICT (manager_run_id, strategy_key) DO NOTHING",
                 sql_escape(&id),
                 sql_escape(&now),
@@ -7406,9 +7406,8 @@ impl AppState {
                 sql_escape(&action),
                 sql_escape(&effect),
                 shadow_quantity,
-                reference_sql,
+                reported_reference_sql,
                 sql_optional_text(Some(&currency)),
-                status,
             ))
             .execute(&self.pool)
             .await
@@ -7419,7 +7418,7 @@ impl AppState {
         Ok(json!({
             "status": "ok",
             "created": created,
-            "unpriced": unpriced,
+            "awaiting_reference": awaiting_reference,
             "skipped": skipped,
             "safety": "quote_to_quote_observation_only"
         }))
@@ -7429,6 +7428,7 @@ impl AppState {
         let sql = format!(
             "SELECT id, created_at, updated_at, report_id, manager_run_id, strategy_key,
                     symbol, action, source_effect, shadow_quantity, reference_price_local,
+                    reference_price_at, reference_price_source, reported_reference_price_local,
                     currency, status, latest_price_local, latest_price_at,
                     estimated_return_pct, estimated_pnl_local, observation_count
              FROM hermes_counterfactuals
@@ -7444,7 +7444,7 @@ impl AppState {
             .select_json(
                 "SELECT DISTINCT symbol
                  FROM hermes_counterfactuals
-                 WHERE status = 'tracking' AND reference_price_local > 0
+                 WHERE status IN ('tracking', 'awaiting_reference')
                  ORDER BY symbol",
             )
             .await?;
@@ -7467,15 +7467,33 @@ impl AppState {
         }
         let rows = self
             .select_json(&format!(
-                "SELECT id, action, shadow_quantity, reference_price_local
+                "SELECT id, action, shadow_quantity, reference_price_local, status
                  FROM hermes_counterfactuals
-                 WHERE symbol = '{}' AND status = 'tracking' AND reference_price_local > 0",
+                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
                 sql_escape(symbol)
             ))
             .await?;
         let mut updated = 0usize;
         for row in rows {
             let id = json_text(&row, "id");
+            if json_text(&row, "status") == "awaiting_reference" {
+                let result = sqlx::query(&format!(
+                    "UPDATE hermes_counterfactuals
+                     SET updated_at = '{}', reference_price_local = {},
+                         reference_price_at = '{}', reference_price_source = 'saxo_infoprices',
+                         status = 'tracking'
+                     WHERE id = '{}' AND status = 'awaiting_reference'",
+                    sql_escape(observed_at),
+                    latest_price_local,
+                    sql_escape(observed_at),
+                    sql_escape(&id),
+                ))
+                .execute(&self.pool)
+                .await
+                .context("capturing Hermes counterfactual reference quote")?;
+                updated += result.rows_affected() as usize;
+                continue;
+            }
             let action = json_text(&row, "action");
             let shadow_quantity = value_f64(&row, "shadow_quantity");
             let reference_price_local = value_f64(&row, "reference_price_local");
@@ -7522,7 +7540,7 @@ impl AppState {
     ) -> Result<JsonValue> {
         let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut created = 0usize;
-        let mut unpriced = 0usize;
+        let mut awaiting_reference = 0usize;
         let mut skipped = 0usize;
 
         for (index, candidate) in skipped_candidates.iter().enumerate() {
@@ -7544,17 +7562,12 @@ impl AppState {
                 skipped += 1;
                 continue;
             }
-            let reference_price_local = candidate
+            let reported_reference_price_local = candidate
                 .get("reference_price_local")
                 .and_then(JsonValue::as_f64)
                 .filter(|value| value.is_finite() && *value > 0.0);
-            let status = if reference_price_local.is_some() {
-                "tracking"
-            } else {
-                unpriced += 1;
-                "unpriced"
-            };
-            let reference_sql = reference_price_local
+            awaiting_reference += 1;
+            let reported_reference_sql = reported_reference_price_local
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "NULL".to_string());
             let currency = json_text(candidate, "currency");
@@ -7563,9 +7576,10 @@ impl AppState {
                 "INSERT INTO missed_trade_shadows (
                     id, created_at, updated_at, report_id, manager_run_id,
                     strategy_key, symbol, action, source_gate, shadow_quantity,
-                    reference_price_local, currency, status, observation_count
+                    reference_price_local, reference_price_at, reference_price_source,
+                    reported_reference_price_local, currency, status, observation_count
                 ) VALUES (
-                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, {}, {}, '{}', 0
+                    '{}', '{}', '{}', {}, {}, '{}', '{}', '{}', '{}', {}, NULL, NULL, 'awaiting_saxo_infoprice', {}, {}, 'awaiting_reference', 0
                 ) ON CONFLICT (manager_run_id, strategy_key) DO NOTHING",
                 sql_escape(&id),
                 sql_escape(&now),
@@ -7577,9 +7591,8 @@ impl AppState {
                 sql_escape(&action),
                 sql_escape(&gate_code),
                 shadow_quantity,
-                reference_sql,
+                reported_reference_sql,
                 sql_optional_text(Some(&currency)),
-                status,
             ))
             .execute(&self.pool)
             .await
@@ -7590,7 +7603,7 @@ impl AppState {
         Ok(json!({
             "status": "ok",
             "created": created,
-            "unpriced": unpriced,
+            "awaiting_reference": awaiting_reference,
             "skipped": skipped,
             "safety": "quote_to_quote_observation_only_no_gate_or_order_mutation",
         }))
@@ -7600,6 +7613,7 @@ impl AppState {
         let sql = format!(
             "SELECT id, created_at, updated_at, report_id, manager_run_id, strategy_key,
                     symbol, action, source_gate, shadow_quantity, reference_price_local,
+                    reference_price_at, reference_price_source, reported_reference_price_local,
                     currency, status, latest_price_local, latest_price_at,
                     estimated_return_pct, estimated_pnl_local, observation_count
              FROM missed_trade_shadows
@@ -7615,6 +7629,7 @@ impl AppState {
             .select_json(&format!(
                 "SELECT source_gate, estimated_return_pct
                  FROM missed_trade_shadows
+                 WHERE reference_price_source = 'saxo_infoprices'
                  ORDER BY created_at DESC, id DESC
                  LIMIT {}",
                 MISSED_TRADE_SHADOW_EVIDENCE_LIMIT
@@ -7628,7 +7643,7 @@ impl AppState {
             .select_json(
                 "SELECT DISTINCT symbol
                  FROM missed_trade_shadows
-                 WHERE status = 'tracking' AND reference_price_local > 0
+                 WHERE status IN ('tracking', 'awaiting_reference')
                  ORDER BY symbol",
             )
             .await?;
@@ -7651,15 +7666,33 @@ impl AppState {
         }
         let rows = self
             .select_json(&format!(
-                "SELECT id, action, shadow_quantity, reference_price_local
+                "SELECT id, action, shadow_quantity, reference_price_local, status
                  FROM missed_trade_shadows
-                 WHERE symbol = '{}' AND status = 'tracking' AND reference_price_local > 0",
+                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
                 sql_escape(symbol)
             ))
             .await?;
         let mut updated = 0usize;
         for row in rows {
             let id = json_text(&row, "id");
+            if json_text(&row, "status") == "awaiting_reference" {
+                let result = sqlx::query(&format!(
+                    "UPDATE missed_trade_shadows
+                     SET updated_at = '{}', reference_price_local = {},
+                         reference_price_at = '{}', reference_price_source = 'saxo_infoprices',
+                         status = 'tracking'
+                     WHERE id = '{}' AND status = 'awaiting_reference'",
+                    sql_escape(observed_at),
+                    latest_price_local,
+                    sql_escape(observed_at),
+                    sql_escape(&id),
+                ))
+                .execute(&self.pool)
+                .await
+                .context("capturing missed-trade shadow reference quote")?;
+                updated += result.rows_affected() as usize;
+                continue;
+            }
             let Some((estimated_return_pct, estimated_pnl_local)) =
                 hermes_counterfactual_quote_metrics(
                     &json_text(&row, "action"),
@@ -10135,6 +10168,9 @@ impl AppState {
                 source_effect TEXT NOT NULL,
                 shadow_quantity REAL NOT NULL,
                 reference_price_local REAL,
+                reference_price_at TEXT,
+                reference_price_source TEXT,
+                reported_reference_price_local REAL,
                 currency TEXT,
                 status TEXT NOT NULL,
                 latest_price_local REAL,
@@ -10160,6 +10196,9 @@ impl AppState {
                 source_gate TEXT NOT NULL,
                 shadow_quantity REAL NOT NULL,
                 reference_price_local REAL,
+                reference_price_at TEXT,
+                reference_price_source TEXT,
+                reported_reference_price_local REAL,
                 currency TEXT,
                 status TEXT NOT NULL,
                 latest_price_local REAL,
@@ -10216,6 +10255,41 @@ impl AppState {
             self.ensure_table_column("daily_indicator_signals", column)
                 .await
                 .context("migrating daily indicator support-risk columns")?;
+        }
+        for table in ["hermes_counterfactuals", "missed_trade_shadows"] {
+            for column in [
+                "reference_price_at TEXT",
+                "reference_price_source TEXT",
+                "reported_reference_price_local DOUBLE PRECISION",
+            ] {
+                self.ensure_table_column(table, column)
+                    .await
+                    .with_context(|| format!("migrating {table} reference-price provenance"))?;
+            }
+            // Historical rows predate Saxo quote provenance. Do not mix their
+            // model/report-derived references with the verified observations
+            // introduced below; their old outcome remains visible as legacy
+            // audit data, but is excluded from learning evidence.
+            sqlx::query(&format!(
+                "UPDATE {table}
+                 SET reported_reference_price_local = COALESCE(reported_reference_price_local, reference_price_local),
+                     reference_price_at = CASE
+                         WHEN reference_price_at IS NULL AND reference_price_local > 0 THEN created_at
+                         ELSE reference_price_at
+                     END,
+                     reference_price_source = CASE
+                         WHEN reference_price_local > 0 THEN 'legacy_report_candidate_unverified'
+                         ELSE 'missing_report_reference'
+                     END,
+                     status = CASE
+                         WHEN status IN ('tracking', 'unpriced') THEN 'legacy_unverified_reference'
+                         ELSE status
+                     END
+                 WHERE reference_price_source IS NULL"
+            ))
+            .execute(&self.pool)
+            .await
+            .with_context(|| format!("marking historical {table} references unverified"))?;
         }
         self.ensure_table_column("execution_orders", "trade_thesis_json TEXT")
             .await
@@ -14861,6 +14935,9 @@ market_data:
                 source_gate TEXT NOT NULL,
                 shadow_quantity REAL NOT NULL,
                 reference_price_local REAL,
+                reference_price_at TEXT,
+                reference_price_source TEXT,
+                reported_reference_price_local REAL,
                 currency TEXT,
                 status TEXT NOT NULL,
                 latest_price_local REAL,
@@ -14900,6 +14977,7 @@ market_data:
             .await
             .expect("record missed-trade shadows");
         assert_eq!(result["created"], json!(1));
+        assert_eq!(result["awaiting_reference"], json!(1));
         assert_eq!(result["skipped"], json!(1));
         assert_eq!(
             state
@@ -14915,14 +14993,103 @@ market_data:
                 .expect("refresh missed-trade shadow quote"),
             1
         );
+        assert_eq!(
+            state
+                .refresh_missed_trade_shadow_price("AMD:xnas", 121.0, "2026-07-27T10:01:00Z")
+                .await
+                .expect("refresh missed-trade shadow outcome quote"),
+            1
+        );
         let rows = state
             .missed_trade_shadows(10)
             .await
             .expect("read missed-trade shadows");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["source_gate"], json!("cash_budget"));
+        assert_eq!(rows[0]["status"], json!("tracking"));
+        assert_eq!(rows[0]["reference_price_local"], json!(110.0));
+        assert_eq!(rows[0]["reference_price_at"], json!("2026-07-27T10:00:00Z"));
+        assert_eq!(rows[0]["reference_price_source"], json!("saxo_infoprices"));
+        assert_eq!(rows[0]["reported_reference_price_local"], json!(100.0));
         assert!((value_f64(&rows[0], "estimated_return_pct") - 0.1).abs() < 1e-9);
-        assert!((value_f64(&rows[0], "estimated_pnl_local") - 20.0).abs() < 1e-9);
+        assert!((value_f64(&rows[0], "estimated_pnl_local") - 22.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn hermes_counterfactuals_capture_saxo_quote_before_observing_outcome() {
+        let state = runtime_settings_test_state("{}").await;
+        sqlx::query(
+            "CREATE TABLE hermes_counterfactuals (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                manager_run_id INTEGER NOT NULL,
+                strategy_key TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_effect TEXT NOT NULL,
+                shadow_quantity REAL NOT NULL,
+                reference_price_local REAL,
+                reference_price_at TEXT,
+                reference_price_source TEXT,
+                reported_reference_price_local REAL,
+                currency TEXT,
+                status TEXT NOT NULL,
+                latest_price_local REAL,
+                latest_price_at TEXT,
+                estimated_return_pct REAL,
+                estimated_pnl_local REAL,
+                observation_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(manager_run_id, strategy_key)
+            )",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create Hermes counterfactual table");
+        let advice_delta = json!({
+            "candidates": [{
+                "strategy_key": "hermes-buy:AMD:xnas:BUY",
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "currency": "USD",
+                "reference_price_local": 90.0,
+                "requested_quantity": 5.0,
+                "resulting_quantity": 2.0,
+                "effect": "reduced",
+            }]
+        });
+
+        let result = state
+            .record_hermes_counterfactuals(42, 78, &advice_delta)
+            .await
+            .expect("record Hermes counterfactual");
+        assert_eq!(result["created"], json!(1));
+        assert_eq!(result["awaiting_reference"], json!(1));
+        assert_eq!(
+            state
+                .refresh_hermes_counterfactual_price("AMD:xnas", 100.0, "2026-07-27T10:00:00Z")
+                .await
+                .expect("capture Saxo reference quote"),
+            1
+        );
+        assert_eq!(
+            state
+                .refresh_hermes_counterfactual_price("AMD:xnas", 110.0, "2026-07-27T10:01:00Z")
+                .await
+                .expect("refresh Hermes counterfactual outcome quote"),
+            1
+        );
+        let rows = state
+            .hermes_counterfactuals(10)
+            .await
+            .expect("read Hermes counterfactuals");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["reference_price_local"], json!(100.0));
+        assert_eq!(rows[0]["reference_price_source"], json!("saxo_infoprices"));
+        assert_eq!(rows[0]["reported_reference_price_local"], json!(90.0));
+        assert!((value_f64(&rows[0], "estimated_return_pct") - 0.1).abs() < 1e-9);
+        assert!((value_f64(&rows[0], "estimated_pnl_local") - 30.0).abs() < 1e-9);
     }
 
     #[test]

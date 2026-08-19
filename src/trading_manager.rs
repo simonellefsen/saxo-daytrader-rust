@@ -2307,24 +2307,37 @@ async fn run_for_report(
         None,
     )
     .await?;
+    let mut newly_recorded_shadow_count = 0usize;
     if run_id > 0 {
-        if let Err(err) = state
+        match state
             .record_hermes_counterfactuals(report.id, run_id, &hermes_advice_delta)
             .await
         {
-            warn!(
+            Ok(summary) => {
+                newly_recorded_shadow_count += summary
+                    .get("created")
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0) as usize;
+            }
+            Err(err) => warn!(
                 report_id = report.id,
                 run_id, "Hermes counterfactual audit persistence degraded: {err:#}"
-            );
+            ),
         }
-        if let Err(err) = state
+        match state
             .record_missed_trade_shadows(report.id, run_id, &missed_trade_shadow_candidates)
             .await
         {
-            warn!(
+            Ok(summary) => {
+                newly_recorded_shadow_count += summary
+                    .get("created")
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0) as usize;
+            }
+            Err(err) => warn!(
                 report_id = report.id,
                 run_id, "missed-trade shadow persistence degraded: {err:#}"
-            );
+            ),
         }
     } else {
         warn!(
@@ -2332,6 +2345,30 @@ async fn run_for_report(
             "Trading Manager run id missing; skipped Hermes counterfactual audit persistence"
         );
     }
+    // A newly recorded shadow needs an observed Saxo quote immediately, not
+    // only whenever the background loop next wakes up. This path is strictly
+    // the existing read-only quote refresh: it cannot reach precheck, order
+    // placement, replacement, cancellation, or the execution queue.
+    let shadow_reference_capture = if newly_recorded_shadow_count > 0 {
+        match crate::price_monitor::refresh_portfolio_prices(state).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!(
+                    report_id = report.id,
+                    run_id, "immediate shadow reference quote capture degraded: {err:#}"
+                );
+                json!({
+                    "status": "error",
+                    "error": "read-only Saxo reference quote capture unavailable",
+                })
+            }
+        }
+    } else {
+        json!({
+            "status": "not_required",
+            "reason": "no_new_shadow_observations",
+        })
+    };
 
     info!(
         report_id = report.id,
@@ -2351,6 +2388,7 @@ async fn run_for_report(
         "manager_key": report.pulse_key,
         "approved_orders": approved.len(),
         "queued_orders": queue_result.get("orders").cloned().unwrap_or_else(|| json!([])),
+        "shadow_reference_capture": shadow_reference_capture,
     }))
 }
 

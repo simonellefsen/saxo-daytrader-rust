@@ -1361,6 +1361,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Active rows join the read-only Saxo quote monitor and calculate a directional quote-to-quote shadow return: prevented BUYs benefit from later price increases, prevented SELLs benefit from later price decreases.
 - The Hermes dashboard now presents reference and latest quotes, directional shadow return/P&L, source effect, and tracking status. The values deliberately exclude broker execution, fees, FX, slippage, taxes, and realised P/L.
 
+## [2026-08-19] improvement | Verified shadow reference quotes
+
+- Replaced report/model price baselines for new Hermes counterfactuals and deterministic manager-gate shadows with captured Saxo read-only info-price references. The manager requests the existing quote refresh as soon as it persists a new shadow; the price monitor retries an `awaiting_reference` row when a market/session is temporarily unavailable.
+- Each baseline now records a source and timestamp, while any report-provided price is displayed only as labelled context. Historical pre-provenance rows are marked `legacy_unverified_reference` and excluded from aggregate missed-trade learning evidence so old model-derived prices cannot contaminate future tuning.
+
 ## [2026-07-10] improvement | Broker exposure integrity reconciliation
 
 - Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.

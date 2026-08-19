@@ -478,21 +478,30 @@ rationale or broker data from this projection, and viewing it makes no Hermes
 or Saxo request.
 
 When an advisory block or reduction removes a positive quantity, the manager
-also creates one `hermes_counterfactuals` row for that prevented quantity. The
-price monitor resolves active rows through Saxo's read-only reference and quote
-endpoints, then records a quote-to-quote shadow outcome:
+also creates one `hermes_counterfactuals` row for that prevented quantity. A
+report-supplied price is retained only as labelled diagnostic context; it is
+never used as the outcome baseline. The manager immediately invokes the
+existing read-only Saxo info-price refresh for new rows, and the background
+price monitor retries while a reference is awaiting capture. The first valid
+Saxo quote becomes the baseline with its source and timestamp; later quotes
+record the quote-to-quote shadow outcome:
 
 - BUY shadow: `(latest price - report reference price) / report reference price`.
 - SELL shadow: `(report reference price - latest price) / report reference price`.
-- The ledger records only the prevented/reduced quantity, source effect, price
-  reference, and observation timestamps.
+- The ledger records only the prevented/reduced quantity, source effect,
+  verified price reference, report-price context, and observation timestamps.
 
-This is an audit metric, not a backtest or realised P/L. It assumes the report
-reference price was immediately achievable and deliberately excludes broker
+Rows created before this provenance contract are labelled
+`legacy_unverified_reference` and excluded from aggregate learning evidence;
+their historical display remains available for audit. If Saxo cannot provide a
+quote immediately, a new row remains `awaiting_reference` and cannot produce a
+return until the first verified quote is captured.
+
+This is an audit metric, not a backtest or realised P/L. It assumes the first
+verified Saxo quote was immediately achievable and deliberately excludes broker
 execution, commissions, spreads, slippage, FX, taxes, corporate actions, and
 later Trading Manager gates. It never places, replaces, cancels, or otherwise
-changes a Saxo order. Unpriced rows remain visible until a report supplied a
-valid reference price; they are not silently filled from a later quote.
+changes a Saxo order.
 
 Runtime knobs:
 
