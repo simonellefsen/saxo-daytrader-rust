@@ -2008,3 +2008,9 @@ broker mutation was added.
 - Completed Phase 2 context prerequisite 3. Shadow prompts now include a read-only, allowlisted summary of non-terminal local execution orders and persisted protective-stop coverage alongside the existing portfolio, cash, scoped positions, approved strategy baseline, and signal context.
 - Each EU/US shadow pulse also receives only its same-local-date opening report, projected to bounded normalized market/capital/candidate fields. Historical report text is explicitly untrusted analytical data, never an instruction source; raw provider responses and original prompts remain excluded.
 - This is prompt-context work only. It performs no Saxo read or mutation, cannot alter pulse mode or queue eligibility, and adds no Trading Manager or Hermes authority.
+
+## [2026-08-19] safety | Normalize shadow-report material-change outcomes
+
+- Completed Phase 2 prerequisite 4. Mid-session shadow reports with an available same-date opening report must now report either concrete material changes or `no_new_information`; missing evidence is recorded as `not_available`, and non-midpoint reports as `not_applicable`.
+- The Rust completion boundary independently normalizes the outcome. `no_new_information` and malformed comparison evidence clear selected assets, sentiment, suggested trades, and strategy-plan candidates, so a report cannot invent duplicate candidates while claiming nothing changed.
+- The normalized assessment is observation-only metadata. It leaves report persistence and scheduler completion intact, retains the server-owned shadow queue block, and performs no Saxo request or mutation.
