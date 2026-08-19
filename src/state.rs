@@ -2332,6 +2332,139 @@ fn compact_shadow_report_forward_outcome(
     })
 }
 
+/// Attach a fixed-reference, estimated round-trip cost to one shadow forward
+/// observation. This is intentionally a learning metric, not a fill model:
+/// it uses the FX basis and cost schedule captured when the read-only quote
+/// arrived and never substitutes current FX, broker fees, or execution data.
+fn compact_shadow_report_after_cost_outcome(
+    forward_outcome: &JsonValue,
+    estimated_cost: &JsonValue,
+) -> JsonValue {
+    if forward_outcome.is_null() {
+        return JsonValue::Null;
+    }
+    if json_text(estimated_cost, "status") != "available" {
+        return json!({
+            "status": "unavailable",
+            "reason": json_text(estimated_cost, "reason"),
+            "interpretation": "No after-cost estimate is produced without a fresh FX basis captured with the shadow reference quote. This is not realised P/L."
+        });
+    }
+    let directional_return_pct = value_f64(forward_outcome, "directional_return_pct");
+    let reference_notional_dkk = value_f64(estimated_cost, "reference_notional_dkk");
+    let estimated_round_trip_cost_dkk = value_f64(estimated_cost, "estimated_round_trip_cost_dkk");
+    if !directional_return_pct.is_finite()
+        || !reference_notional_dkk.is_finite()
+        || reference_notional_dkk <= 0.0
+        || !estimated_round_trip_cost_dkk.is_finite()
+        || estimated_round_trip_cost_dkk < 0.0
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "non_finite_reference_cost_basis",
+            "interpretation": "No after-cost estimate is produced when the captured cost basis is not finite. This is not realised P/L."
+        });
+    }
+    let gross_directional_pnl_dkk = directional_return_pct * reference_notional_dkk;
+    let estimated_after_cost_pnl_dkk = gross_directional_pnl_dkk - estimated_round_trip_cost_dkk;
+    json!({
+        "status": "estimated",
+        "as_of": json_text(forward_outcome, "as_of"),
+        "session": value_i64(forward_outcome, "session"),
+        "directional_return_pct": directional_return_pct,
+        "reference_notional_dkk": reference_notional_dkk,
+        "gross_directional_pnl_dkk": gross_directional_pnl_dkk,
+        "estimated_round_trip_cost_dkk": estimated_round_trip_cost_dkk,
+        "estimated_after_cost_pnl_dkk": estimated_after_cost_pnl_dkk,
+        "estimated_after_cost_return_pct": estimated_after_cost_pnl_dkk / reference_notional_dkk,
+        "cost_basis": estimated_cost,
+        "interpretation": "Estimated post-cost directional outcome using the fixed FX basis, exchange minimum commission schedule, and configured slippage captured with the read-only Saxo reference quote. It excludes actual fills, actual commissions, tax, currency movement after reference, and position changes; it is not realised P/L or an execution simulation."
+    })
+}
+
+fn compact_shadow_report_reference_cost_estimate(
+    symbol: &str,
+    currency: &str,
+    proposed_quantity: f64,
+    reference_price_local: f64,
+    fx_basis: &JsonValue,
+    config: &YamlValue,
+) -> JsonValue {
+    let currency = currency.trim().to_ascii_uppercase();
+    if json_text(fx_basis, "status") != "available" {
+        return json!({
+            "status": "unavailable",
+            "reason": json_text(fx_basis, "reason"),
+            "currency": currency,
+            "fx_basis": fx_basis,
+        });
+    }
+    let rate_to_dkk = value_f64(fx_basis, "rate_to_dkk");
+    if currency.is_empty()
+        || !proposed_quantity.is_finite()
+        || proposed_quantity <= 0.0
+        || !reference_price_local.is_finite()
+        || reference_price_local <= 0.0
+        || !rate_to_dkk.is_finite()
+        || rate_to_dkk <= 0.0
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "invalid_reference_notional_or_fx_basis",
+            "currency": currency,
+            "fx_basis": fx_basis,
+        });
+    }
+    let exchange = exchange_code_for(symbol);
+    let (minimum_commission_local, commission_currency) =
+        crate::saxo_order::min_commission_local_for_exchange(&exchange);
+    if !commission_currency.eq_ignore_ascii_case(&currency) {
+        return json!({
+            "status": "unavailable",
+            "reason": "commission_currency_differs_from_reference_currency",
+            "currency": currency,
+            "commission_currency": commission_currency,
+            "fx_basis": fx_basis,
+        });
+    }
+    let reference_notional_dkk = proposed_quantity * reference_price_local * rate_to_dkk;
+    let one_way_commission_dkk = minimum_commission_local * rate_to_dkk;
+    let estimated_slippage_bps = yaml_f64(config, &["strategy", "estimated_slippage_bps"])
+        .unwrap_or(8.0)
+        .max(0.0);
+    let one_way_slippage_dkk = reference_notional_dkk * estimated_slippage_bps / 10_000.0;
+    let estimated_round_trip_cost_dkk = 2.0 * (one_way_commission_dkk + one_way_slippage_dkk);
+    if !reference_notional_dkk.is_finite()
+        || !one_way_commission_dkk.is_finite()
+        || !one_way_slippage_dkk.is_finite()
+        || !estimated_round_trip_cost_dkk.is_finite()
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "non_finite_cost_estimate",
+            "currency": currency,
+            "fx_basis": fx_basis,
+        });
+    }
+    json!({
+        "status": "available",
+        "method": "fixed_reference_fx_exchange_minimum_commission_and_configured_round_trip_slippage",
+        "currency": currency,
+        "exchange": exchange,
+        "proposed_quantity": proposed_quantity,
+        "reference_price_local": reference_price_local,
+        "reference_notional_dkk": reference_notional_dkk,
+        "fx_basis": fx_basis,
+        "minimum_commission_local_per_side": minimum_commission_local,
+        "commission_currency": commission_currency,
+        "one_way_minimum_commission_dkk": one_way_commission_dkk,
+        "estimated_slippage_bps_per_side": estimated_slippage_bps,
+        "one_way_slippage_dkk": one_way_slippage_dkk,
+        "estimated_round_trip_cost_dkk": estimated_round_trip_cost_dkk,
+        "limitations": "Minimum commission and configured slippage are estimates only. No broker precheck, order, fill, fee, tax, or later FX conversion is used."
+    })
+}
+
 /// Turns durable BUY-thesis records and the latest local broker-position
 /// snapshot into an operator review queue. A due review is deliberately not
 /// an exit recommendation: imported lots and later position changes can make
@@ -8079,7 +8212,7 @@ impl AppState {
         }
         let rows = self
             .select_json(&format!(
-                "SELECT id, status\n                 FROM shadow_report_outcomes\n                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
+                "SELECT id, status, currency, proposed_quantity\n                 FROM shadow_report_outcomes\n                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
                 sql_escape(symbol)
             ))
             .await?;
@@ -8087,11 +8220,37 @@ impl AppState {
         for row in rows {
             let id = json_text(&row, "id");
             let sql = if json_text(&row, "status") == "awaiting_reference" {
+                let currency = json_text(&row, "currency");
+                let fx_basis = crate::fx::cached_fx_conversion_basis_to_dkk(&self.pool, &currency)
+                    .await
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "status": "unavailable",
+                            "reason": "fx_cache_lookup_failed",
+                            "currency": currency,
+                        })
+                    });
+                let estimated_cost = compact_shadow_report_reference_cost_estimate(
+                    symbol,
+                    &currency,
+                    value_f64(&row, "proposed_quantity"),
+                    latest_price_local,
+                    &fx_basis,
+                    &self.config,
+                );
+                let dkk_basis = if json_text(&estimated_cost, "status") == "available" {
+                    "captured_fresh_fx"
+                } else {
+                    "unavailable_at_reference"
+                };
                 format!(
-                    "UPDATE shadow_report_outcomes\n                     SET updated_at = '{}', reference_price_local = {},\n                         reference_price_at = '{}', reference_price_source = 'saxo_infoprices',\n                         status = 'tracking'\n                     WHERE id = '{}' AND status = 'awaiting_reference'",
+                    "UPDATE shadow_report_outcomes\n                     SET updated_at = '{}', reference_price_local = {},\n                         reference_price_at = '{}', reference_price_source = 'saxo_infoprices',\n                         reference_dkk_basis = '{}', reference_fx_json = '{}', estimated_cost_json = '{}',\n                         status = 'tracking'\n                     WHERE id = '{}' AND status = 'awaiting_reference'",
                     sql_escape(observed_at),
                     latest_price_local,
                     sql_escape(observed_at),
+                    dkk_basis,
+                    sql_escape(&serde_json::to_string(&fx_basis)?),
+                    sql_escape(&serde_json::to_string(&estimated_cost)?),
                     sql_escape(&id),
                 )
             } else {
@@ -8120,7 +8279,7 @@ impl AppState {
     pub async fn refresh_shadow_report_outcome_daily_outcomes(&self) -> Result<JsonValue> {
         let rows = self
             .select_json(
-                "SELECT id, symbol, action, reference_price_local, reference_price_at\n                 FROM shadow_report_outcomes\n                 WHERE reference_price_source = 'saxo_infoprices'\n                   AND reference_price_local > 0\n                   AND reference_price_at IS NOT NULL\n                   AND (outcome_maturity_status IS NULL OR outcome_maturity_status <> 'mature')\n                 ORDER BY reference_price_at ASC, id ASC\n                 LIMIT 500",
+                "SELECT id, symbol, action, reference_price_local, reference_price_at, estimated_cost_json\n                 FROM shadow_report_outcomes\n                 WHERE reference_price_source = 'saxo_infoprices'\n                   AND reference_price_local > 0\n                   AND reference_price_at IS NOT NULL\n                   AND (outcome_maturity_status IS NULL OR outcome_maturity_status <> 'mature')\n                 ORDER BY reference_price_at ASC, id ASC\n                 LIMIT 500",
             )
             .await?;
         let mut refreshed = 0usize;
@@ -8156,9 +8315,36 @@ impl AppState {
                 skipped += 1;
                 continue;
             }
+            let estimated_cost = row
+                .get("estimated_cost_json")
+                .cloned()
+                .filter(JsonValue::is_object)
+                .or_else(|| {
+                    row.get("estimated_cost_json")
+                        .and_then(JsonValue::as_str)
+                        .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+                })
+                .unwrap_or_else(|| {
+                    json!({
+                        "status": "unavailable",
+                        "reason": "cost_basis_not_captured_at_reference",
+                    })
+                });
+            let one_session_after_cost = compact_shadow_report_after_cost_outcome(
+                outcome.get("one_session").unwrap_or(&JsonValue::Null),
+                &estimated_cost,
+            );
+            let five_session_after_cost = compact_shadow_report_after_cost_outcome(
+                outcome.get("five_session").unwrap_or(&JsonValue::Null),
+                &estimated_cost,
+            );
+            let twenty_session_after_cost = compact_shadow_report_after_cost_outcome(
+                outcome.get("twenty_session").unwrap_or(&JsonValue::Null),
+                &estimated_cost,
+            );
             let maturity_status = json_text(&outcome, "status");
             let result = sqlx::query(&format!(
-                "UPDATE shadow_report_outcomes\n                 SET updated_at = '{}',\n                     one_session_outcome_json = '{}',\n                     five_session_outcome_json = '{}',\n                     twenty_session_outcome_json = '{}',\n                     outcome_maturity_status = '{}'\n                 WHERE id = '{}'",
+                "UPDATE shadow_report_outcomes\n                 SET updated_at = '{}',\n                     one_session_outcome_json = '{}',\n                     five_session_outcome_json = '{}',\n                     twenty_session_outcome_json = '{}',\n                     one_session_after_cost_outcome_json = '{}',\n                     five_session_after_cost_outcome_json = '{}',\n                     twenty_session_after_cost_outcome_json = '{}',\n                     outcome_maturity_status = '{}'\n                 WHERE id = '{}'",
                 sql_escape(&now),
                 sql_escape(&serde_json::to_string(
                     outcome.get("one_session").unwrap_or(&JsonValue::Null)
@@ -8169,6 +8355,9 @@ impl AppState {
                 sql_escape(&serde_json::to_string(
                     outcome.get("twenty_session").unwrap_or(&JsonValue::Null)
                 )?),
+                sql_escape(&serde_json::to_string(&one_session_after_cost)?),
+                sql_escape(&serde_json::to_string(&five_session_after_cost)?),
+                sql_escape(&serde_json::to_string(&twenty_session_after_cost)?),
                 sql_escape(&maturity_status),
                 sql_escape(&id),
             ))
@@ -10703,6 +10892,8 @@ impl AppState {
                 reference_price_at TEXT,
                 reference_price_source TEXT NOT NULL,
                 reference_dkk_basis TEXT NOT NULL,
+                reference_fx_json TEXT,
+                estimated_cost_json TEXT,
                 status TEXT NOT NULL,
                 latest_price_local REAL,
                 latest_price_at TEXT,
@@ -10710,6 +10901,9 @@ impl AppState {
                 one_session_outcome_json TEXT,
                 five_session_outcome_json TEXT,
                 twenty_session_outcome_json TEXT,
+                one_session_after_cost_outcome_json TEXT,
+                five_session_after_cost_outcome_json TEXT,
+                twenty_session_after_cost_outcome_json TEXT,
                 outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference',
                 UNIQUE(report_id, candidate_rank)
             )",
@@ -10763,9 +10957,14 @@ impl AppState {
                 .context("migrating daily indicator support-risk columns")?;
         }
         for column in [
+            "reference_fx_json TEXT",
+            "estimated_cost_json TEXT",
             "one_session_outcome_json TEXT",
             "five_session_outcome_json TEXT",
             "twenty_session_outcome_json TEXT",
+            "one_session_after_cost_outcome_json TEXT",
+            "five_session_after_cost_outcome_json TEXT",
+            "twenty_session_after_cost_outcome_json TEXT",
             "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
         ] {
             self.ensure_table_column("shadow_report_outcomes", column)
@@ -14418,6 +14617,7 @@ market_data:
                 "symbol": "AAA:xcse",
                 "action": "BUY",
                 "quantity": 3.0,
+                "currency": "DKK",
                 "limit_price_local": 101.0,
                 "strategy_metadata": {}
             }]
@@ -14452,9 +14652,14 @@ market_data:
         );
 
         for column in [
+            "reference_fx_json TEXT",
+            "estimated_cost_json TEXT",
             "one_session_outcome_json TEXT",
             "five_session_outcome_json TEXT",
             "twenty_session_outcome_json TEXT",
+            "one_session_after_cost_outcome_json TEXT",
+            "five_session_after_cost_outcome_json TEXT",
+            "twenty_session_after_cost_outcome_json TEXT",
             "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
         ] {
             sqlx::query(&format!(
@@ -14470,12 +14675,13 @@ market_data:
         .execute(&state.pool)
         .await
         .unwrap();
-        sqlx::query(
-            "UPDATE shadow_report_outcomes SET reference_price_local = 100, reference_price_at = '2026-08-19T12:15:00Z', reference_price_source = 'saxo_infoprices', status = 'tracking' WHERE report_id = 7",
-        )
-        .execute(&state.pool)
-        .await
-        .unwrap();
+        assert_eq!(
+            state
+                .refresh_shadow_report_outcome_price("AAA:xcse", 100.0, "2026-08-19T12:15:00Z")
+                .await
+                .unwrap(),
+            1
+        );
         for session in 1..=20 {
             sqlx::query(&format!(
                 "INSERT INTO daily_indicator_signals (symbol, run_date, status, close) VALUES ('AAA:xcse', '2026-09-{session:02}', 'ok', {})",
@@ -14490,12 +14696,15 @@ market_data:
             .await
             .unwrap();
         let matured = state
-            .first_json("SELECT one_session_outcome_json, five_session_outcome_json, twenty_session_outcome_json, outcome_maturity_status FROM shadow_report_outcomes WHERE report_id = 7")
+            .first_json("SELECT reference_dkk_basis, reference_fx_json, estimated_cost_json, one_session_outcome_json, five_session_outcome_json, twenty_session_outcome_json, one_session_after_cost_outcome_json, five_session_after_cost_outcome_json, twenty_session_after_cost_outcome_json, outcome_maturity_status FROM shadow_report_outcomes WHERE report_id = 7")
             .await
             .unwrap()
             .unwrap();
 
         assert_eq!(maturity["mature"], json!(1));
+        assert_eq!(matured["reference_dkk_basis"], json!("captured_fresh_fx"));
+        assert_eq!(matured["reference_fx_json"]["source"], json!("native_dkk"));
+        assert_eq!(matured["estimated_cost_json"]["status"], json!("available"));
         assert_eq!(matured["outcome_maturity_status"], json!("mature"));
         assert_eq!(
             matured["one_session_outcome_json"]["as_of"],
@@ -14503,6 +14712,19 @@ market_data:
         );
         assert_eq!(matured["five_session_outcome_json"]["session"], json!(5));
         assert_eq!(matured["twenty_session_outcome_json"]["session"], json!(20));
+        assert_eq!(
+            matured["one_session_after_cost_outcome_json"]["status"],
+            json!("estimated")
+        );
+        assert!(
+            value_f64(
+                &matured["twenty_session_after_cost_outcome_json"],
+                "estimated_after_cost_pnl_dkk"
+            ) < value_f64(
+                &matured["twenty_session_after_cost_outcome_json"],
+                "gross_directional_pnl_dkk"
+            )
+        );
     }
 
     async fn runtime_settings_test_state(config_yaml: &str) -> AppState {

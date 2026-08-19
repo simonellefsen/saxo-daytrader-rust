@@ -23,7 +23,8 @@ sources:
 ## Status
 
 Implementation underway. Phase 0, Phase 1, Phase 2, and Phase 3's
-capture/reference and daily-close maturity slices are landed.
+capture/reference, daily-close maturity, and fixed-reference FX/cost estimate
+slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -131,16 +132,26 @@ execution simulation, realised P/L, cost estimate, or causal claim. The
 maturity job reads/writes local database evidence only and has no Saxo,
 provider, Hermes, gate, queue, or order authority.
 
+**FX and estimated after-cost slice landed 2026-08-19:** when the first
+read-only Saxo reference quote arrives, the ledger now captures only a fresh
+local FX-cache basis (or records it as unavailable), never a static fallback.
+It combines that fixed basis with the published exchange-minimum commission
+schedule and configured per-side slippage to produce explicitly estimated
+1/5/20-session after-cost directional outcomes. These outputs exclude actual
+fills, broker fees, tax, later FX movement, and position changes; they are not
+realised P/L or an execution simulation. Historical rows without a captured
+basis remain unavailable rather than being backfilled from current FX.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
 - candidate rank and whether the symbol appeared in the earlier pulse;
-- reference timestamp, local price, currency, DKK conversion basis, and proposed quantity;
+- reference timestamp, local price, currency, DKK conversion basis, and proposed quantity; **landed for newly referenced rows**;
 - report-time technical, Markov, Quiver, Support Risk, cash, concentration, and thesis snapshot;
 - deterministic gate result and stable gate code;
 - Hermes record-only effect and the approved-policy source it used;
 - maximum adverse and favourable excursion when intraday evidence is available;
-- an estimated after-cost outcome, explicitly separated from realised P/L.
+- an estimated after-cost outcome, explicitly separated from realised P/L; **landed for rows with a captured fresh FX basis**.
 
 Shadow observations never alter holdings, cash, capacity, gates, experiments, or orders.
 

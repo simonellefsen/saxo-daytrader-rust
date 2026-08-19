@@ -73,6 +73,73 @@ pub(crate) async fn cached_fx_rate_to_dkk(pool: &AnyPool, currency: &str) -> Res
         .filter(|value| value.is_finite() && *value > 0.0))
 }
 
+/// Return the exact local-cache conversion evidence available at the time a
+/// caller asks for it. Unlike `cached_or_static_fx_rate_to_dkk`, this never
+/// substitutes a pinned static rate: callers that persist a financial
+/// valuation need to distinguish missing evidence from a real conversion.
+pub(crate) async fn cached_fx_conversion_basis_to_dkk(
+    pool: &AnyPool,
+    currency: &str,
+) -> Result<JsonValue> {
+    let code = normalize_currency(currency);
+    if code.is_empty() {
+        return Ok(json!({
+            "status": "unavailable",
+            "reason": "missing_currency",
+        }));
+    }
+    if code == "DKK" {
+        return Ok(json!({
+            "status": "available",
+            "currency": "DKK",
+            "base_currency": "DKK",
+            "rate_to_dkk": 1.0,
+            "source": "native_dkk",
+            "observed_at": JsonValue::Null,
+            "expires_at": JsonValue::Null,
+        }));
+    }
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let row = sqlx::query(&format!(
+        "SELECT rate_to_dkk, source, observed_at, expires_at
+         FROM currency_fx_rates
+         WHERE currency_code = '{}' AND base_currency = 'DKK' AND expires_at > '{}'
+         ORDER BY observed_at DESC
+         LIMIT 1",
+        sql_escape(&code),
+        sql_escape(&now)
+    ))
+    .fetch_optional(pool)
+    .await
+    .context("loading cached FX conversion basis")?;
+    let Some(row) = row.as_ref().map(crate::db::row_to_json) else {
+        return Ok(json!({
+            "status": "unavailable",
+            "reason": "no_fresh_cached_fx_rate",
+            "currency": code,
+            "base_currency": "DKK",
+        }));
+    };
+    let rate_to_dkk = value_f64(&row, "rate_to_dkk");
+    if !rate_to_dkk.is_finite() || rate_to_dkk <= 0.0 {
+        return Ok(json!({
+            "status": "unavailable",
+            "reason": "cached_fx_rate_not_positive",
+            "currency": code,
+            "base_currency": "DKK",
+        }));
+    }
+    Ok(json!({
+        "status": "available",
+        "currency": code,
+        "base_currency": "DKK",
+        "rate_to_dkk": rate_to_dkk,
+        "source": row.get("source").cloned().unwrap_or(JsonValue::Null),
+        "observed_at": row.get("observed_at").cloned().unwrap_or(JsonValue::Null),
+        "expires_at": row.get("expires_at").cloned().unwrap_or(JsonValue::Null),
+    }))
+}
+
 pub(crate) async fn refresh_best_effort_fx_rates(
     state: &AppState,
     session: &JsonValue,

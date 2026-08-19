@@ -2032,3 +2032,9 @@ broker mutation was added.
 - Landed the next Phase 3 slice: after each daily-indicator run, referenced shadow candidates derive and persist 1-, 5-, and 20-session directional observations from later distinct stored trading-session closes. Maturity remains explicit as `collecting`, `preliminary`, or `mature`.
 - The comparison is case-normalized by symbol and excludes the reference day, weekends, holidays, and missing-session coverage. BUY and SELL observations invert direction appropriately, but neither is reported as a broker fill, realised P/L, execution simulation, or causal result.
 - The maturation pass is local database evidence only: no Saxo quote/request, provider request, Hermes request, manager gate, queue insertion, precheck, or order mutation is reachable.
+
+## [2026-08-19] trading-quality | Capture shadow FX and estimated-cost provenance
+
+- New shadow references now store their fresh local FX-cache source, observed/expiry timestamps, rate-to-DKK, DKK reference notional, native exchange-minimum commission, and configured per-side slippage. A missing/expired cache stays explicitly unavailable; the static-FX fallback is prohibited for persisted shadow valuation.
+- Later 1/5/20-session directional observations derive a fixed-reference estimated after-cost result only when that baseline is available. The estimate is labelled separately from the original local-price observation and excludes actual fills/fees, tax, post-reference FX movement, and position changes, so it cannot be read as realised P/L or an execution simulation.
+- All work remains inside the local shadow ledger after the ordinary read-only quote refresh: no broker precheck/order mutation, queue insertion, manager gate, Hermes request, or provider request is added.

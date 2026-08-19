@@ -4279,15 +4279,21 @@ fn default_min_commission_dkk(symbol: &str) -> f64 {
 /// Minimum broker commission in DKK for one order on an exchange. Used both
 /// for fill cost booking and for the commission-efficiency floor on BUYs.
 pub(crate) fn min_commission_dkk_for_exchange(exchange: &str) -> f64 {
+    let (amount, currency) = min_commission_local_for_exchange(exchange);
+    amount * fx_rate_to_dkk(currency)
+}
+
+/// Published exchange minimum commission schedule in its native charge
+/// currency. Shadow evaluation uses this with its separately captured FX
+/// basis; order gating continues to use the static DKK helper above.
+pub(crate) fn min_commission_local_for_exchange(exchange: &str) -> (f64, &'static str) {
     match exchange.trim().to_lowercase().as_str() {
-        "xnas" | "xnys" => 3.0 * fx_rate_to_dkk("USD"),
-        "xlon" => 8.0 * fx_rate_to_dkk("GBP"),
-        "xsto" => 69.0 * fx_rate_to_dkk("SEK"),
-        "xosl" => 39.0 * fx_rate_to_dkk("NOK"),
-        "xhel" | "xetr" | "xfra" | "xmil" | "xpar" | "xams" | "xbru" | "xlse" => {
-            3.0 * fx_rate_to_dkk("EUR")
-        }
-        _ => 14.0,
+        "xnas" | "xnys" => (3.0, "USD"),
+        "xlon" => (8.0, "GBP"),
+        "xsto" => (69.0, "SEK"),
+        "xosl" => (39.0, "NOK"),
+        "xhel" | "xetr" | "xfra" | "xmil" | "xpar" | "xams" | "xbru" | "xlse" => (3.0, "EUR"),
+        _ => (14.0, "DKK"),
     }
 }
 
