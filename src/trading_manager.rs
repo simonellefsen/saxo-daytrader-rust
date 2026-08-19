@@ -25,6 +25,26 @@ const EXPERIMENT_STATUS_ALLOWLIST: &[&str] = &[
     "approved_paper",
     "active_paper",
 ];
+/// BUY states that can still consume cash and position headroom in the active
+/// execution environment. Keep a reservation until the order has a terminal
+/// broker outcome: an ambiguous submission or requested cancellation is not
+/// proof that Saxo never received the order.
+const ACTIVE_BUY_RESERVATION_STATUSES: &[&str] = &[
+    "pending_execution",
+    "pending_approval",
+    "submitting_to_broker",
+    "submitted_to_broker",
+    "broker_working",
+    "broker_amended",
+    "broker_partially_filled",
+    "broker_replace_requested",
+    "broker_cancel_requested",
+    "broker_state_unknown",
+    "waiting_for_market_open",
+    "waiting_for_cash_settlement",
+    "waiting_for_virtual_cash_budget",
+    "broker_fill_unreconciled",
+];
 const HERMES_CONTEXT_SELF_CHECK_FIELDS: &[&str] = &[
     "latest_report",
     "markov_signals",
@@ -150,6 +170,29 @@ struct PositionExposure {
     invalid_symbols: HashSet<String>,
     held_symbols: HashSet<String>,
     available: bool,
+    persisted_buy_reservation_count: usize,
+    persisted_buy_reservation_value_dkk: f64,
+    unvalued_buy_reservation_count: usize,
+}
+
+/// A local, broker-safe view of BUYs which have already entered the execution
+/// lifecycle. The Trading Manager starts again on later scheduler cycles, so
+/// these reservations must be applied before fresh candidates are evaluated;
+/// same-cycle reservations alone are not sufficient.
+#[derive(Clone, Debug, PartialEq)]
+struct PersistedBuyReservations {
+    items: Vec<PersistedBuyReservation>,
+    available: bool,
+    invalid_order_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PersistedBuyReservation {
+    order_id: i64,
+    symbol: String,
+    status: String,
+    remaining_quantity: f64,
+    reserved_value_dkk: Option<f64>,
 }
 
 fn risk_per_trade_config(state: &AppState) -> RiskPerTradeConfig {
@@ -273,17 +316,19 @@ fn concentration_mode(cap: i64) -> &'static str {
 }
 
 impl PositionExposure {
-    async fn load(state: &AppState) -> Self {
+    async fn load(state: &AppState, reservations: &PersistedBuyReservations) -> Self {
+        if !reservations.available {
+            warn!(
+                invalid_order_count = reservations.invalid_order_count,
+                "position exposure unavailable because active BUY reservation evidence is invalid"
+            );
+            return Self::unavailable();
+        }
         let rows = match state.position_items(250).await {
             Ok(rows) => rows,
             Err(err) => {
                 warn!("position-weight gate could not load persisted position values: {err:#}");
-                return Self {
-                    values_dkk: HashMap::new(),
-                    invalid_symbols: HashSet::new(),
-                    held_symbols: HashSet::new(),
-                    available: false,
-                };
+                return Self::unavailable();
             }
         };
 
@@ -309,11 +354,48 @@ impl PositionExposure {
                 invalid_symbols.insert(symbol);
             }
         }
-        Self {
+        let mut exposure = Self {
             values_dkk,
             invalid_symbols,
             held_symbols,
             available: true,
+            persisted_buy_reservation_count: 0,
+            persisted_buy_reservation_value_dkk: 0.0,
+            unvalued_buy_reservation_count: 0,
+        };
+        exposure.apply_persisted_buy_reservations(reservations);
+        exposure
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            values_dkk: HashMap::new(),
+            invalid_symbols: HashSet::new(),
+            held_symbols: HashSet::new(),
+            available: false,
+            persisted_buy_reservation_count: 0,
+            persisted_buy_reservation_value_dkk: 0.0,
+            unvalued_buy_reservation_count: 0,
+        }
+    }
+
+    fn apply_persisted_buy_reservations(&mut self, reservations: &PersistedBuyReservations) {
+        for reservation in &reservations.items {
+            self.persisted_buy_reservation_count += 1;
+            self.held_symbols.insert(reservation.symbol.clone());
+            if let Some(value_dkk) = reservation.reserved_value_dkk {
+                self.persisted_buy_reservation_value_dkk += value_dkk;
+                *self
+                    .values_dkk
+                    .entry(reservation.symbol.clone())
+                    .or_insert(0.0) += value_dkk;
+            } else {
+                // We know this BUY can become a holding, but cannot value it.
+                // Preserve that uncertainty so a symbol-specific weight gate
+                // never treats the reservation as zero exposure.
+                self.unvalued_buy_reservation_count += 1;
+                self.invalid_symbols.insert(reservation.symbol.clone());
+            }
         }
     }
 
@@ -408,11 +490,158 @@ impl PositionExposure {
             "valued_symbol_count": self.values_dkk.len(),
             "invalid_value_symbol_count": self.invalid_symbols.len(),
             "held_symbol_count": self.held_symbols.len(),
+            "persisted_buy_reservation_count": self.persisted_buy_reservation_count,
+            "persisted_buy_reservation_value_dkk": self.persisted_buy_reservation_value_dkk,
+            "unvalued_buy_reservation_count": self.unvalued_buy_reservation_count,
             "exchange_counts": exchange_counts,
             "currency_counts": currency_counts,
             "unmapped_exchange_symbols": unmapped_exchange_symbols,
             "unmapped_currency_symbols": unmapped_currency_symbols,
-            "scope": "persisted_positions_plus_approved_buys_in_this_cycle",
+            "scope": "persisted_positions_plus_active_persisted_buys_plus_approved_buys_in_this_cycle",
+        })
+    }
+}
+
+impl PersistedBuyReservations {
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            available: true,
+            invalid_order_count: 0,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            items: Vec::new(),
+            available: false,
+            invalid_order_count: 0,
+        }
+    }
+
+    async fn load(state: &AppState) -> Result<Self> {
+        let execution_mode = yaml_string(&state.config, &["execution", "mode"])
+            .unwrap_or_else(|| "simulation".to_string());
+        let execution_adapter = yaml_string(&state.config, &["execution", "adapter"])
+            .unwrap_or_else(|| "saxo".to_string());
+        let statuses = ACTIVE_BUY_RESERVATION_STATUSES
+            .iter()
+            .map(|status| format!("'{}'", sql_escape(status)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // `execution_fills` records only newly observed fill deltas. Subtract
+        // the accumulated positive BUY fills so a partially filled order
+        // reserves its remaining intended value, while the filled part is
+        // represented by the refreshed position snapshot.
+        let rows = state
+            .select_json(&format!(
+                "SELECT eo.id, eo.symbol, eo.status, eo.quantity, eo.estimated_value_dkk,
+                        COALESCE(SUM(CASE WHEN f.delta_quantity > 0 THEN f.delta_quantity ELSE 0 END), 0) AS filled_quantity
+                 FROM execution_orders eo
+                 LEFT JOIN execution_fills f ON f.execution_order_id = eo.id
+                 WHERE UPPER(COALESCE(eo.action, '')) = 'BUY'
+                   AND LOWER(COALESCE(eo.mode, '')) = LOWER('{}')
+                   AND LOWER(COALESCE(eo.adapter, '')) = LOWER('{}')
+                   AND eo.status IN ({statuses})
+                 GROUP BY eo.id, eo.symbol, eo.status, eo.quantity, eo.estimated_value_dkk
+                 ORDER BY eo.id ASC",
+                sql_escape(&execution_mode),
+                sql_escape(&execution_adapter),
+            ))
+            .await
+            .context("loading active BUY reservations")?;
+
+        let mut items = Vec::new();
+        let mut invalid_order_count = 0;
+        for row in rows {
+            let order_id = row
+                .get("id")
+                .and_then(JsonValue::as_i64)
+                .unwrap_or_default();
+            let symbol = row
+                .get("symbol")
+                .and_then(JsonValue::as_str)
+                .map(normalize_symbol_key)
+                .unwrap_or_default();
+            let quantity = row.get("quantity").and_then(json_number).unwrap_or(0.0);
+            let filled_quantity = row
+                .get("filled_quantity")
+                .and_then(json_number)
+                .unwrap_or(0.0)
+                .max(0.0);
+            if order_id <= 0 || symbol.is_empty() || !quantity.is_finite() || quantity <= 0.0 {
+                invalid_order_count += 1;
+                continue;
+            }
+            let remaining_quantity = (quantity - filled_quantity).max(0.0);
+            if remaining_quantity <= f64::EPSILON {
+                continue;
+            }
+            let reserved_value_dkk = row
+                .get("estimated_value_dkk")
+                .and_then(json_number)
+                .filter(|value| *value > 0.0)
+                .map(|value| value * (remaining_quantity / quantity));
+            items.push(PersistedBuyReservation {
+                order_id,
+                symbol,
+                status: text(&row, "status"),
+                remaining_quantity,
+                reserved_value_dkk,
+            });
+        }
+        Ok(Self {
+            items,
+            available: invalid_order_count == 0,
+            invalid_order_count,
+        })
+    }
+
+    fn total_value_dkk(&self) -> f64 {
+        self.items
+            .iter()
+            .filter_map(|reservation| reservation.reserved_value_dkk)
+            .sum()
+    }
+
+    fn unvalued_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|reservation| reservation.reserved_value_dkk.is_none())
+            .count()
+    }
+
+    fn blocks_new_buys(&self) -> bool {
+        !self.available || self.unvalued_count() > 0
+    }
+
+    fn to_json(&self) -> JsonValue {
+        let mut status_counts = BTreeMap::<String, usize>::new();
+        for item in &self.items {
+            *status_counts.entry(item.status.clone()).or_default() += 1;
+        }
+        json!({
+            "status": if !self.available {
+                "invalid"
+            } else if self.unvalued_count() > 0 {
+                "unvalued"
+            } else {
+                "available"
+            },
+            "blocks_new_buys": self.blocks_new_buys(),
+            "reservation_count": self.items.len(),
+            "reservation_value_dkk": self.total_value_dkk(),
+            "unvalued_reservation_count": self.unvalued_count(),
+            "invalid_order_count": self.invalid_order_count,
+            "status_counts": status_counts,
+            "items": self.items.iter().map(|item| json!({
+                "order_id": item.order_id,
+                "symbol": item.symbol,
+                "status": item.status,
+                "remaining_quantity": item.remaining_quantity,
+                "reserved_value_dkk": item.reserved_value_dkk,
+            })).collect::<Vec<_>>(),
         })
     }
 }
@@ -652,6 +881,10 @@ struct CapitalBudget {
     remaining_deployment_capacity_dkk: f64,
     excess_cash_pct: f64,
     reinvestment_pressure_active: bool,
+    persisted_buy_reservation_count: usize,
+    persisted_buy_reservation_value_dkk: f64,
+    unvalued_buy_reservation_count: usize,
+    reservation_snapshot_available: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1297,8 +1530,19 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     let overlay_min_cash_buffer_pct = overlay
         .as_ref()
         .and_then(|overlay| overlay.f64_value("strategy.capital.min_cash_buffer_pct"));
-    let mut capital_budget = capital_budget_from_overview(&overview, overlay_min_cash_buffer_pct);
-    let mut position_exposure = PositionExposure::load(state).await;
+    let persisted_buy_reservations =
+        PersistedBuyReservations::load(state)
+            .await
+            .unwrap_or_else(|err| {
+                warn!("active BUY reservation lookup failed; new BUYs are fail-closed: {err:#}");
+                PersistedBuyReservations::unavailable()
+            });
+    let mut capital_budget = capital_budget_from_overview(
+        &overview,
+        overlay_min_cash_buffer_pct,
+        &persisted_buy_reservations,
+    );
+    let mut position_exposure = PositionExposure::load(state, &persisted_buy_reservations).await;
     let buy_halt = monthly_loss_buy_halt(state, &overview).await;
     let drawdown = portfolio_drawdown_guard(state).await;
     let mut soft_multipliers = Vec::new();
@@ -1400,6 +1644,7 @@ pub async fn run_trading_manager_cycle(state: &AppState) -> Result<JsonValue> {
     Ok(json!({
         "status": "ok",
         "open_exchange_codes": open_codes,
+        "persisted_buy_reservations": persisted_buy_reservations.to_json(),
         "runs": runs
     }))
 }
@@ -4872,6 +5117,7 @@ fn json_f64_value(value: &JsonValue) -> Option<f64> {
 fn capital_budget_from_overview(
     overview: &JsonValue,
     overlay_min_cash_buffer_pct: Option<f64>,
+    persisted_buy_reservations: &PersistedBuyReservations,
 ) -> CapitalBudget {
     let summary = overview
         .get("portfolio_summary")
@@ -4900,19 +5146,33 @@ fn capital_budget_from_overview(
     } else {
         total_market_value_dkk
     };
-    let available_cash_above_buffer_dkk = (cash_balance_dkk - required_cash_buffer_dkk).max(0.0);
+    let persisted_buy_reservation_value_dkk = persisted_buy_reservations.total_value_dkk();
+    let persisted_buy_reservation_count = persisted_buy_reservations.items.len();
+    let unvalued_buy_reservation_count = persisted_buy_reservations.unvalued_count();
+    // A queued or broker-working BUY will reduce both cash and remaining
+    // deployment capacity if it fills. Reserve it in both legs before the
+    // fresh-manager cycle has a chance to queue more exposure.
+    let available_cash_above_buffer_dkk =
+        (cash_balance_dkk - required_cash_buffer_dkk - persisted_buy_reservation_value_dkk)
+            .max(0.0);
     let remaining_deployment_capacity_dkk =
-        (deployment_cap_dkk - invested_market_value_dkk).max(0.0);
-    let available_buy_budget_dkk =
-        available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk);
+        (deployment_cap_dkk - invested_market_value_dkk - persisted_buy_reservation_value_dkk)
+            .max(0.0);
+    let reservation_blocks_new_buys = persisted_buy_reservations.blocks_new_buys();
+    let available_buy_budget_dkk = if reservation_blocks_new_buys {
+        0.0
+    } else {
+        available_cash_above_buffer_dkk.min(remaining_deployment_capacity_dkk)
+    };
     let cash_pct = if total_market_value_dkk > 0.0 {
         cash_balance_dkk / total_market_value_dkk
     } else {
         0.0
     };
     let excess_cash_pct = (cash_pct - min_cash_buffer_pct).max(0.0);
-    let reinvestment_pressure_active =
-        excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
+    let reinvestment_pressure_active = !reservation_blocks_new_buys
+        && excess_cash_pct >= reinvestment_pressure_threshold_pct
+        && available_buy_budget_dkk > 0.0;
     CapitalBudget {
         cash_balance_dkk,
         total_market_value_dkk,
@@ -4928,6 +5188,10 @@ fn capital_budget_from_overview(
         remaining_deployment_capacity_dkk,
         excess_cash_pct,
         reinvestment_pressure_active,
+        persisted_buy_reservation_count,
+        persisted_buy_reservation_value_dkk,
+        unvalued_buy_reservation_count,
+        reservation_snapshot_available: persisted_buy_reservations.available,
     }
 }
 
@@ -4960,6 +5224,11 @@ impl CapitalBudget {
             "remaining_deployment_capacity_dkk": self.remaining_deployment_capacity_dkk,
             "excess_cash_pct": self.excess_cash_pct,
             "reinvestment_pressure_active": self.reinvestment_pressure_active,
+            "persisted_buy_reservation_count": self.persisted_buy_reservation_count,
+            "persisted_buy_reservation_value_dkk": self.persisted_buy_reservation_value_dkk,
+            "unvalued_buy_reservation_count": self.unvalued_buy_reservation_count,
+            "reservation_snapshot_available": self.reservation_snapshot_available,
+            "reservation_blocks_new_buys": !self.reservation_snapshot_available || self.unvalued_buy_reservation_count > 0,
         })
     }
 }
@@ -5236,6 +5505,11 @@ mod tests {
                 event_signature TEXT NOT NULL UNIQUE,
                 raw_payload_json TEXT NOT NULL
             )",
+            "CREATE TABLE execution_fills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_order_id INTEGER NOT NULL,
+                delta_quantity REAL NOT NULL
+            )",
             "CREATE TABLE trading_manager_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -5265,6 +5539,116 @@ mod tests {
             db_url: "sqlite::memory:".to_string(),
             pool,
         }
+    }
+
+    #[tokio::test]
+    async fn persisted_buy_reservations_keep_queued_and_partial_orders_in_next_cycle_budget() {
+        let state = manager_queue_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, created_at, report_id, symbol, action, order_type, mode, status, adapter,
+                quantity, estimated_value_dkk, approval_required, strategy_key, request_json
+             ) VALUES
+                (1, '2026-08-19T12:00:00Z', 1, 'AMD:xnas', 'BUY', 'Limit', 'live', 'pending_execution', 'saxo', 10, 10000, 0, 'reservation:amd', '{}'),
+                (2, '2026-08-19T12:01:00Z', 1, 'NVDA:xnas', 'BUY', 'Limit', 'live', 'broker_working', 'saxo', 8, 8000, 0, 'reservation:nvda', '{}'),
+                (3, '2026-08-19T12:02:00Z', 1, 'MSFT:xnas', 'BUY', 'Limit', 'live', 'broker_partially_filled', 'saxo', 10, 10000, 0, 'reservation:msft', '{}'),
+                (4, '2026-08-19T12:03:00Z', 1, 'GOOG:xnas', 'BUY', 'Limit', 'live', 'execution_failed', 'saxo', 10, 10000, 0, 'reservation:terminal', '{}'),
+                (5, '2026-08-19T12:04:00Z', 1, 'META:xnas', 'BUY', 'Limit', 'simulation', 'pending_execution', 'saxo', 10, 10000, 0, 'reservation:other-mode', '{}')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed active and terminal BUY orders");
+        sqlx::query(
+            "INSERT INTO execution_fills (execution_order_id, delta_quantity) VALUES (3, 3)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed partial fill");
+
+        let reservations = PersistedBuyReservations::load(&state)
+            .await
+            .expect("load active BUY reservations");
+        assert!(reservations.available);
+        assert_eq!(reservations.items.len(), 3);
+        assert!((reservations.total_value_dkk() - 25_000.0).abs() < f64::EPSILON);
+        assert_eq!(reservations.items[2].symbol, "MSFT:XNAS");
+        assert_eq!(reservations.items[2].remaining_quantity, 7.0);
+        assert_eq!(reservations.items[2].reserved_value_dkk, Some(7_000.0));
+
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 225000.0,
+                "cash_balance_dkk": 75000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            }
+        });
+        let budget = capital_budget_from_overview(&overview, None, &reservations);
+        assert_eq!(budget.persisted_buy_reservation_count, 3);
+        assert_eq!(budget.persisted_buy_reservation_value_dkk, 25_000.0);
+        assert_eq!(budget.available_cash_above_buffer_dkk, 20_000.0);
+        assert_eq!(budget.remaining_deployment_capacity_dkk, 20_000.0);
+        assert_eq!(budget.available_buy_budget_dkk, 20_000.0);
+
+        let mut exposure = position_exposure(&[]);
+        exposure.apply_persisted_buy_reservations(&reservations);
+        assert!(exposure.has_position("AMD:xnas"));
+        assert_eq!(exposure.value_for("MSFT:xnas"), Some(7_000.0));
+        assert_eq!(exposure.persisted_buy_reservation_count, 3);
+        assert_eq!(exposure.persisted_buy_reservation_value_dkk, 25_000.0);
+    }
+
+    #[tokio::test]
+    async fn unvalued_active_buy_reservation_fails_closed_for_new_buys() {
+        let state = manager_queue_test_state().await;
+        sqlx::query(
+            "INSERT INTO execution_orders (
+                id, created_at, report_id, symbol, action, order_type, mode, status, adapter,
+                quantity, estimated_value_dkk, approval_required, strategy_key, request_json
+             ) VALUES
+                (1, '2026-08-19T12:00:00Z', 1, 'AMD:xnas', 'BUY', 'Market', 'live', 'broker_working', 'saxo', 2, NULL, 0, 'reservation:unvalued', '{}')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed unvalued active BUY order");
+
+        let reservations = PersistedBuyReservations::load(&state)
+            .await
+            .expect("load unvalued active BUY reservation");
+        assert!(reservations.available);
+        assert_eq!(reservations.unvalued_count(), 1);
+        assert!(reservations.blocks_new_buys());
+
+        let overview = json!({
+            "portfolio_summary": {
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 225000.0,
+                "cash_balance_dkk": 75000.0
+            },
+            "settings": {
+                "cash_buffer": {
+                    "min_cash_buffer_pct": 0.10,
+                    "max_deployment_pct": 0.90,
+                    "reinvestment_pressure_threshold_pct": 0.05
+                }
+            }
+        });
+        let budget = capital_budget_from_overview(&overview, None, &reservations);
+        assert_eq!(budget.available_buy_budget_dkk, 0.0);
+        assert_eq!(budget.unvalued_buy_reservation_count, 1);
+        assert!(!budget.reinvestment_pressure_active);
+
+        let mut exposure = position_exposure(&[]);
+        exposure.apply_persisted_buy_reservations(&reservations);
+        assert!(exposure.has_position("AMD:xnas"));
+        assert!(exposure.has_invalid_value("AMD:xnas"));
+        assert_eq!(exposure.unvalued_buy_reservation_count, 1);
     }
 
     fn order(
@@ -6373,6 +6757,9 @@ mod tests {
                 .map(|(symbol, _)| normalize_symbol_key(symbol))
                 .collect(),
             available: true,
+            persisted_buy_reservation_count: 0,
+            persisted_buy_reservation_value_dkk: 0.0,
+            unvalued_buy_reservation_count: 0,
         }
     }
 
@@ -6681,6 +7068,9 @@ mod tests {
             invalid_symbols: HashSet::new(),
             held_symbols: HashSet::new(),
             available: false,
+            persisted_buy_reservation_count: 0,
+            persisted_buy_reservation_value_dkk: 0.0,
+            unvalued_buy_reservation_count: 0,
         };
         let gate = position_weight_gate(
             &mut order,
@@ -6731,6 +7121,9 @@ mod tests {
             invalid_symbols: HashSet::new(),
             held_symbols: HashSet::new(),
             available: false,
+            persisted_buy_reservation_count: 0,
+            persisted_buy_reservation_value_dkk: 0.0,
+            unvalued_buy_reservation_count: 0,
         };
         let gate = holding_limit_gate(&mut order, holding_limit_test_config(25), &exposure);
         assert!(!gate.approved);
@@ -7020,7 +7413,8 @@ mod tests {
                 }
             }
         });
-        let mut budget = capital_budget_from_overview(&overview, None);
+        let mut budget =
+            capital_budget_from_overview(&overview, None, &PersistedBuyReservations::empty());
         assert_eq!(budget.required_cash_buffer_dkk, 30000.0);
         assert_eq!(budget.available_buy_budget_dkk, 20000.0);
         assert!(budget.reinvestment_pressure_active);
@@ -7044,7 +7438,8 @@ mod tests {
                 }
             }
         });
-        let budget = capital_budget_from_overview(&overview, None);
+        let budget =
+            capital_budget_from_overview(&overview, None, &PersistedBuyReservations::empty());
         let diagnostics = reinvestment_diagnostics(&budget, 1, 0, 1, 0, 1, &[]);
         assert_eq!(
             diagnostics["status"],
@@ -7069,7 +7464,8 @@ mod tests {
                 }
             }
         });
-        let budget = capital_budget_from_overview(&overview, None);
+        let budget =
+            capital_budget_from_overview(&overview, None, &PersistedBuyReservations::empty());
         let diagnostics = reinvestment_diagnostics(
             &budget,
             4,
@@ -7110,7 +7506,8 @@ mod tests {
                 }
             }
         });
-        let budget = capital_budget_from_overview(&overview, Some(0.15));
+        let budget =
+            capital_budget_from_overview(&overview, Some(0.15), &PersistedBuyReservations::empty());
         assert_eq!(budget.required_cash_buffer_dkk, 45000.0);
         assert_eq!(budget.available_buy_budget_dkk, 5000.0);
     }
@@ -7157,7 +7554,8 @@ mod tests {
                 }
             }
         });
-        let mut budget = capital_budget_from_overview(&overview, None);
+        let mut budget =
+            capital_budget_from_overview(&overview, None, &PersistedBuyReservations::empty());
         budget.apply_buy_multiplier(0.5);
         assert_eq!(budget.unreduced_available_buy_budget_dkk, 20_000.0);
         assert_eq!(budget.available_buy_budget_dkk, 10_000.0);

@@ -3,7 +3,7 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-02
+updated: 2026-08-19
 ---
 
 # Wiki Log
@@ -1941,3 +1941,18 @@ broker mutation was added.
 - Corrected the prior environment gate: SIM is Saxo's simulated broker venue and is allowed when both `saxo.environment` and the durable session report SIM. LIVE remains allowed only when both sides report LIVE.
 - Unknown, missing, or mismatched environments fail closed; the overview distinguishes `simulated_broker`, `live_broker`, and disabled mismatch states so configured intent cannot be confused with broker venue.
 - Added focused queue-gate and status regressions. No credentials, broker payloads, account identifiers, or session data were added to the wiki.
+
+## [2026-08-19] planning | Shadow mid-session Decision Reports and tuning evidence
+
+- Recorded the operator-selected weekday shadow schedules: 14:15 Europe/Copenhagen for the configured European scope and 14:15 America/New_York for XNAS/XNYS, gated by Saxo exchange calendars/current regular-session state. The US pulse normally displays as 20:15 Copenhagen and automatically shifts to 19:15 during the short US/EU DST mismatch. The existing execution-eligible open +75-minute reports remain unchanged.
+- Defined shadow mode as server-owned and permanently queue-ineligible: it may persist a normalized report, pure deterministic evaluation, record-only Hermes advice, and priced outcomes, but cannot insert `execution_orders` or reach Saxo order precheck, placement, replacement, cancellation, or approval.
+- Sequenced authority/measurement prerequisites before cadence work: eliminate pending-experiment influence on Hermes, expire or revalidate discretionary queued orders, reserve pending BUY exposure across cycles, and make candidate reference pricing reliable.
+- Added a phased tuning-dashboard plan covering portfolio outcomes, pulse novelty, candidate funnels, signal calibration, Hermes policy provenance/counterfactuals, execution latency/cost/slippage, risk, and one-variable experiment maturity. Every metric must identify environment, sample/window, maturity, gross/net, executed/shadow, and timestamp.
+- Required at least 20 eligible days and 20 mature five-session candidate observations per pulse before a separate operator promotion decision. No runtime configuration, provider schedule, Hermes mode, experiment state, Trading Manager gate, or Saxo behavior changed in this documentation pass.
+- Added Nasdaq 23/5 compatibility: the SEC-approved venue structure currently targets 6 December 2026 subject to SIP/activation readiness, but the 14:15 America/New_York shadow pulse remains regular-session-only. The implementation must persist explicit US session identity and independently verify Saxo client, instrument, and order-session eligibility before any future extended-hours experiment.
+
+## [2026-08-19] implementation | Cross-cycle active BUY reservations
+
+- Landed the first revised-roadmap Phase 0 prerequisite in `src/trading_manager.rs`: active current-mode/current-adapter BUY orders now reserve cash, deployment capacity, symbol exposure, holding slots, exchange/currency concentration, and position-weight headroom before each new manager cycle.
+- Partial fills reserve only their unfilled fraction using recorded `execution_fills`; ambiguous submission/cancellation states stay reserved until terminal reconciliation. A reservation with missing DKK valuation blocks new BUYs rather than being treated as zero exposure. Terminal or different-environment orders are excluded.
+- Added hermetic SQLite regressions for pending, broker-working, partial, terminal, cross-environment, and unvalued reservations. No Saxo request, order placement, cancellation, approval, or Hermes behavior was added or changed.
