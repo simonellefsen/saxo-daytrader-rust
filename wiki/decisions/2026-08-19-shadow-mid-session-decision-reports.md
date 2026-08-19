@@ -22,9 +22,9 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0 and the first three Phase 1 contract items
-are landed; the two new shadow schedules remain disabled. This record does not
-create Decision Reports, activate an experiment, or alter Saxo execution.
+Implementation underway. Phase 0 and Phase 1 are landed; the two new shadow
+schedules remain disabled. This record does not create Decision Reports,
+activate an experiment, or alter Saxo execution.
 
 ## Context
 
@@ -94,7 +94,7 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 2. **Landed 2026-08-19:** persist `pulse_mode` and `queue_eligible` with each report; do not infer either value from labels. The manager and manual immediate pipeline both fail closed unless they receive the exact execution-eligible pair.
 3. **Landed 2026-08-19:** persist the server-owned pulse provenance used by scheduling: stable key from the pulse's configured local trading date, local and UTC due times, explicit schedule time zone, deterministic market-scope/calendar evidence, and a terminal per-cycle scheduler result (`not_due`, `due`, `missed_due_window`, or `invalid_schedule`). These result rows are scheduler history only, not Decision Reports, and have no execution authority.
 4. **Landed 2026-08-19:** add regression coverage for date idempotency across a scheduler restart, empty holiday calendars, shortened sessions that close before the pulse offset, the EU/US DST mismatch, and the existing explicit shadow no-queue/no-Saxo boundaries. A terminal report of any status consumes its local-date key, preventing a retry from duplicating a provider request.
-5. Add explicit US session classification and boundary tests for regular, pre-market, post-market, Night Session, the 20:00-21:00 ET pause, and broker/instrument extended-hours ineligibility.
+5. **Landed 2026-08-19:** classify every XNAS/XNYS pulse target as `regular`, `pre_market`, `post_market`, `night`, `pause`, or `closed` in America/New_York. Scheduled reports reject every non-regular target, including a calendar-provided continuous Night Session. The persisted pulse provenance records `target_session=regular` and documents extended-hours execution as not assessed. A pure capability check requires both a future Saxo client `AllowedTradingSessions` result and an instrument extended-hours flag; it has no execution effect and cannot alter shadow queue authority.
 
 ### Phase 2: Schedule And Generate The Reports
 

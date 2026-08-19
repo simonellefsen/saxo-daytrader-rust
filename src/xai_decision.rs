@@ -29,9 +29,48 @@ struct DecisionPulse {
     target_at_local: String,
     local_date: String,
     schedule_time_zone: String,
+    target_session: DecisionPulseSession,
     configured_exchange_codes: Vec<String>,
     exchange_codes: Vec<String>,
     source_markets: Vec<String>,
+}
+
+/// Explicit market-session classification used by Decision Pulse scheduling.
+/// It deliberately does not infer Saxo execution permission: extended hours
+/// need their own broker/client/instrument verification and a future SIM
+/// experiment. Scheduled decision reports are regular-session-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionPulseSession {
+    Regular,
+    PreMarket,
+    PostMarket,
+    Night,
+    Pause,
+    Closed,
+    Manual,
+}
+
+impl DecisionPulseSession {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::PreMarket => "pre_market",
+            Self::PostMarket => "post_market",
+            Self::Night => "night",
+            Self::Pause => "pause",
+            Self::Closed => "closed",
+            Self::Manual => "manual",
+        }
+    }
+
+    fn is_regular(self) -> bool {
+        self == Self::Regular
+    }
+
+    #[cfg(test)]
+    fn is_extended_hours(self) -> bool {
+        matches!(self, Self::PreMarket | Self::PostMarket | Self::Night)
+    }
 }
 
 /// Server-owned execution authority for a Decision Pulse. This is deliberately
@@ -174,6 +213,7 @@ async fn submit_manual_decision_report_with_mode(
         target_at_local: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         local_date: now.date_naive().to_string(),
         schedule_time_zone: "UTC".to_string(),
+        target_session: DecisionPulseSession::Manual,
         configured_exchange_codes: Vec::new(),
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
@@ -1864,6 +1904,13 @@ fn grouped_open_followup_pulse_candidates(
         if target >= tradable_close {
             continue;
         }
+        // Nasdaq's potential 23-hour venue must not move an existing report
+        // into pre/post-market, Night Session, or the daily pause. A future
+        // extended-hours experiment needs independent Saxo client and
+        // instrument eligibility before it can change this regular-only gate.
+        if !pulse_target_session(&code, target).is_regular() {
+            continue;
+        }
         if let Some((_, values)) = groups.iter_mut().find(|(existing, _)| *existing == target) {
             values.push(row.clone());
         } else {
@@ -1893,6 +1940,7 @@ fn grouped_open_followup_pulse_candidates(
                 target_at_local: local_target.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 local_date,
                 schedule_time_zone: schedule_time_zone.to_string(),
+                target_session: DecisionPulseSession::Regular,
                 configured_exchange_codes,
                 exchange_codes: sorted_strings(exchange_codes),
                 source_markets: sorted_strings(source_markets),
@@ -1945,6 +1993,57 @@ fn sorted_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort();
     values
+}
+
+fn pulse_target_session(exchange_code: &str, target_at_utc: DateTime<Utc>) -> DecisionPulseSession {
+    if matches!(exchange_code, "XNAS" | "XNYS") {
+        us_session_at(target_at_utc)
+    } else {
+        // Non-US targets are derived from the selected exchange's regular
+        // calendar session. Only XNAS/XNYS require explicit 23-hour boundary
+        // treatment in this phase.
+        DecisionPulseSession::Regular
+    }
+}
+
+fn us_session_at(target_at_utc: DateTime<Utc>) -> DecisionPulseSession {
+    use chrono::{Datelike, Timelike};
+
+    let local = target_at_utc.with_timezone(&chrono_tz::America::New_York);
+    if local.weekday().number_from_monday() >= 6 {
+        return DecisionPulseSession::Closed;
+    }
+    let minute = local.hour() * 60 + local.minute();
+    let pre_market_start = 4 * 60;
+    let regular_start = 9 * 60 + 30;
+    let regular_end = 16 * 60;
+    let post_market_end = 20 * 60;
+    let night_start = 21 * 60;
+
+    if (regular_start..regular_end).contains(&minute) {
+        DecisionPulseSession::Regular
+    } else if (pre_market_start..regular_start).contains(&minute) {
+        DecisionPulseSession::PreMarket
+    } else if (regular_end..post_market_end).contains(&minute) {
+        DecisionPulseSession::PostMarket
+    } else if (post_market_end..night_start).contains(&minute) {
+        DecisionPulseSession::Pause
+    } else if minute < pre_market_start || minute >= night_start {
+        DecisionPulseSession::Night
+    } else {
+        DecisionPulseSession::Closed
+    }
+}
+
+#[cfg(test)]
+fn extended_hours_is_independently_eligible(
+    session: DecisionPulseSession,
+    client_allows_extended_hours: Option<bool>,
+    instrument_extended_hours_enabled: Option<bool>,
+) -> bool {
+    session.is_extended_hours()
+        && client_allows_extended_hours == Some(true)
+        && instrument_extended_hours_enabled == Some(true)
 }
 
 fn configured_codes(state: &AppState, keys: &[&str], fallback: &[&str]) -> HashSet<String> {
@@ -2280,11 +2379,14 @@ fn pulse_to_json(pulse: &DecisionPulse) -> JsonValue {
         "target_at_local": pulse.target_at_local,
         "local_date": pulse.local_date,
         "schedule_time_zone": pulse.schedule_time_zone,
+        "target_session": pulse.target_session.as_str(),
         "exchange_codes": pulse.exchange_codes,
         "source_markets": pulse.source_markets,
         "market_scope": {
             "calendar_source": "saxo_exchange_calendar",
             "required_session": "regular",
+            "target_session": pulse.target_session.as_str(),
+            "extended_hours_execution": "not_assessed; regular-session-only",
             "configured_exchange_codes": pulse.configured_exchange_codes,
             "eligible_exchange_codes": pulse.exchange_codes,
             "source_markets": pulse.source_markets,
@@ -2521,6 +2623,7 @@ mod tests {
 
         let provenance = pulse_to_json(&pulse);
         assert_eq!(provenance["schedule_time_zone"], "America/New_York");
+        assert_eq!(provenance["target_session"], "regular");
         assert_eq!(provenance["market_scope"]["required_session"], "regular");
         assert_eq!(
             provenance["market_scope"]["configured_exchange_codes"],
@@ -2593,6 +2696,84 @@ mod tests {
         );
     }
 
+    #[test]
+    fn us_session_classification_covers_regular_and_23_hour_boundaries() {
+        let classify = |time| us_session_at(parse_rfc3339_text(time).unwrap());
+
+        assert_eq!(
+            classify("2026-06-02T07:59:00Z"),
+            DecisionPulseSession::Night
+        );
+        assert_eq!(
+            classify("2026-06-02T08:00:00Z"),
+            DecisionPulseSession::PreMarket
+        );
+        assert_eq!(
+            classify("2026-06-02T13:29:00Z"),
+            DecisionPulseSession::PreMarket
+        );
+        assert_eq!(
+            classify("2026-06-02T13:30:00Z"),
+            DecisionPulseSession::Regular
+        );
+        assert_eq!(
+            classify("2026-06-02T20:00:00Z"),
+            DecisionPulseSession::PostMarket
+        );
+        assert_eq!(
+            classify("2026-06-03T00:00:00Z"),
+            DecisionPulseSession::Pause
+        );
+        assert_eq!(
+            classify("2026-06-03T01:00:00Z"),
+            DecisionPulseSession::Night
+        );
+        assert_eq!(
+            classify("2026-06-06T14:00:00Z"),
+            DecisionPulseSession::Closed
+        );
+    }
+
+    #[test]
+    fn extended_hours_need_broker_and_instrument_eligibility_but_never_schedule_a_pulse() {
+        assert!(!extended_hours_is_independently_eligible(
+            DecisionPulseSession::Night,
+            None,
+            Some(true)
+        ));
+        assert!(!extended_hours_is_independently_eligible(
+            DecisionPulseSession::PreMarket,
+            Some(true),
+            Some(false)
+        ));
+        assert!(extended_hours_is_independently_eligible(
+            DecisionPulseSession::PostMarket,
+            Some(true),
+            Some(true)
+        ));
+        assert!(!extended_hours_is_independently_eligible(
+            DecisionPulseSession::Regular,
+            Some(true),
+            Some(true)
+        ));
+
+        let configured = ["XNAS".to_string()].into_iter().collect::<HashSet<_>>();
+        let night_session = grouped_open_followup_pulse_candidates(
+            &[json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-06-02T00:00:00Z",
+                "tradable_close_at_utc": "2026-06-02T10:00:00Z"
+            })],
+            &configured,
+            "us_open_followup",
+            "US Open follow-up",
+            75,
+            chrono_tz::America::New_York,
+        );
+        assert!(night_session.is_empty());
+    }
+
     #[tokio::test]
     async fn persisted_pulse_key_blocks_a_retry_after_scheduler_restart() {
         static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
@@ -2648,6 +2829,7 @@ mod tests {
             target_at_local: "2026-08-19T10:45:00-04:00".to_string(),
             local_date: "2026-08-19".to_string(),
             schedule_time_zone: "America/New_York".to_string(),
+            target_session: DecisionPulseSession::Regular,
             configured_exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
             exchange_codes: vec!["XNAS".to_string(), "XNYS".to_string()],
             source_markets: vec!["NASDAQ".to_string(), "NYSE".to_string()],

@@ -1990,3 +1990,9 @@ broker mutation was added.
 - Completed Phase 1's fourth prerequisite with hermetic calendar regressions: empty holiday calendars and sessions that close before the requested offset never create a due pulse, while the US pulse remains anchored to America/New_York during the Europe/US DST mismatch.
 - Added a SQLite persistence regression proving that a terminal report consumes its date-local pulse key across a scheduler restart, so a retry cannot duplicate the provider request. Existing manager/API tests retain the explicit shadow no-queue/no-Saxo boundary.
 - This is scheduler safety coverage only: no shadow schedule was enabled, no Decision Report was generated, and no Hermes, queue, or Saxo behavior changed.
+
+## [2026-08-19] implementation | Regular-session-only US Decision Pulses
+
+- Completed Phase 1's explicit US-session prerequisite. XNAS/XNYS pulse targets are now classified in America/New_York as regular, pre-market, post-market, Night Session, pause, or closed; only regular targets can be scheduled.
+- A calendar-provided continuous Night Session is rejected rather than changing the existing open-follow-up behavior. Pulse provenance persists the regular-session target and states that extended-hours execution is not assessed.
+- Tests cover all US session boundaries, weekend closure, and the requirement that future extended-hours capability needs both Saxo-client and instrument evidence. No extended-hours order path, queue authority, or Saxo mutation was enabled.
