@@ -2382,6 +2382,86 @@ fn compact_shadow_report_after_cost_outcome(
     })
 }
 
+/// Observed intraday excursion over the shadow-specific quote trail. This is
+/// intentionally not an exchange high/low: only sampled, persisted Saxo
+/// infoprices count, so gaps and monitor downtime remain visible in coverage.
+fn compact_shadow_report_observed_excursions(
+    action: &str,
+    reference_price_local: f64,
+    quotes: &[JsonValue],
+) -> JsonValue {
+    let action = action.trim().to_ascii_uppercase();
+    if !matches!(action.as_str(), "BUY" | "SELL")
+        || !reference_price_local.is_finite()
+        || reference_price_local <= 0.0
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "invalid_action_or_reference_price",
+        });
+    }
+    let mut observed = quotes
+        .iter()
+        .filter_map(|quote| {
+            let price_local = value_f64(quote, "price_local");
+            (price_local.is_finite() && price_local > 0.0).then(|| {
+                let market_return_pct = price_local / reference_price_local - 1.0;
+                let directional_return_pct = if action == "BUY" {
+                    market_return_pct
+                } else {
+                    -market_return_pct
+                };
+                json!({
+                    "observed_at": json_text(quote, "observed_at"),
+                    "price_local": price_local,
+                    "directional_return_pct": directional_return_pct,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if observed.is_empty() {
+        return json!({
+            "status": "unavailable",
+            "reason": "no_persisted_intraday_quotes",
+            "interpretation": "No excursion is inferred without persisted quote samples.",
+        });
+    }
+    observed.sort_by(|left, right| {
+        json_text(left, "observed_at").cmp(&json_text(right, "observed_at"))
+    });
+    let favourable = observed
+        .iter()
+        .max_by(|left, right| {
+            value_f64(left, "directional_return_pct")
+                .partial_cmp(&value_f64(right, "directional_return_pct"))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let adverse = observed
+        .iter()
+        .min_by(|left, right| {
+            value_f64(left, "directional_return_pct")
+                .partial_cmp(&value_f64(right, "directional_return_pct"))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    json!({
+        "status": if observed.len() >= 2 { "observed" } else { "collecting" },
+        "evidence_source": "persisted_shadow_saxo_infoprice_samples",
+        "action": action,
+        "reference_price_local": reference_price_local,
+        "sample_count": observed.len(),
+        "first_observed_at": json_text(observed.first().unwrap_or(&JsonValue::Null), "observed_at"),
+        "last_observed_at": json_text(observed.last().unwrap_or(&JsonValue::Null), "observed_at"),
+        "maximum_favourable_observed": favourable,
+        "maximum_adverse_observed": adverse,
+        "coverage": "sampled_quotes_only_not_continuous_intraday_high_low_coverage",
+        "interpretation": "Maximum favourable/adverse excursion is calculated only from the retained read-only Saxo quote samples after reference. It does not claim the market's true intraday high/low, a fill path, realised P/L, or execution quality."
+    })
+}
+
 fn compact_shadow_report_reference_cost_estimate(
     symbol: &str,
     currency: &str,
@@ -8369,7 +8449,7 @@ impl AppState {
     pub async fn active_shadow_report_outcome_symbols(&self) -> Result<Vec<String>> {
         let rows = self
             .select_json(
-                "SELECT DISTINCT symbol\n                 FROM shadow_report_outcomes\n                 WHERE status IN ('tracking', 'awaiting_reference')\n                 ORDER BY symbol",
+                "SELECT DISTINCT symbol\n                 FROM shadow_report_outcomes\n                 WHERE status IN ('tracking', 'awaiting_reference')\n                   AND (outcome_maturity_status IS NULL OR outcome_maturity_status <> 'mature')\n                 ORDER BY symbol",
             )
             .await?;
         Ok(rows
@@ -8394,7 +8474,7 @@ impl AppState {
         }
         let rows = self
             .select_json(&format!(
-                "SELECT id, status, currency, proposed_quantity\n                 FROM shadow_report_outcomes\n                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
+                "SELECT id, status, currency, proposed_quantity, action, reference_price_local\n                 FROM shadow_report_outcomes\n                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')\n                   AND (outcome_maturity_status IS NULL OR outcome_maturity_status <> 'mature')",
                 sql_escape(symbol)
             ))
             .await?;
@@ -8448,9 +8528,62 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("updating shadow report outcome quote")?;
-            updated += result.rows_affected() as usize;
+            if result.rows_affected() > 0 {
+                sqlx::query(&format!(
+                    "INSERT INTO shadow_report_outcome_quotes (outcome_id, observed_at, price_local, source)\n                     VALUES ('{}', '{}', {}, 'saxo_infoprices')\n                     ON CONFLICT(outcome_id, observed_at) DO NOTHING",
+                    sql_escape(&id),
+                    sql_escape(observed_at),
+                    latest_price_local,
+                ))
+                .execute(&self.pool)
+                .await
+                .context("persisting shadow report outcome quote sample")?;
+                self.refresh_shadow_report_outcome_observed_excursions(&id)
+                    .await?;
+                updated += 1;
+            }
         }
         Ok(updated)
+    }
+
+    /// Recomputes a shadow candidate's observed-price excursion entirely from
+    /// the small local quote trail retained for that candidate. No broker call
+    /// is possible here, and missing samples are exposed as limited coverage.
+    async fn refresh_shadow_report_outcome_observed_excursions(&self, id: &str) -> Result<()> {
+        if id.trim().is_empty() {
+            return Ok(());
+        }
+        let outcome = self
+            .first_json(&format!(
+                "SELECT action, reference_price_local\n                 FROM shadow_report_outcomes\n                 WHERE id = '{}'\n                 LIMIT 1",
+                sql_escape(id)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        let reference_price_local = value_f64(&outcome, "reference_price_local");
+        if outcome.is_null() || reference_price_local <= 0.0 {
+            return Ok(());
+        }
+        let quotes = self
+            .select_json(&format!(
+                "SELECT observed_at, price_local\n                 FROM shadow_report_outcome_quotes\n                 WHERE outcome_id = '{}'\n                 ORDER BY observed_at ASC",
+                sql_escape(id)
+            ))
+            .await?;
+        let excursion = compact_shadow_report_observed_excursions(
+            &json_text(&outcome, "action"),
+            reference_price_local,
+            &quotes,
+        );
+        sqlx::query(&format!(
+            "UPDATE shadow_report_outcomes\n             SET intraday_excursion_json = '{}'\n             WHERE id = '{}'",
+            sql_escape(&serde_json::to_string(&excursion)?),
+            sql_escape(id),
+        ))
+        .execute(&self.pool)
+        .await
+        .context("persisting shadow report observed intraday excursion")?;
+        Ok(())
     }
 
     /// Matures shadow-report observations from already persisted daily closes.
@@ -11086,6 +11219,7 @@ impl AppState {
                 one_session_after_cost_outcome_json TEXT,
                 five_session_after_cost_outcome_json TEXT,
                 twenty_session_after_cost_outcome_json TEXT,
+                intraday_excursion_json TEXT,
                 outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference',
                 UNIQUE(report_id, candidate_rank)
             )",
@@ -11093,6 +11227,25 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating shadow report outcomes table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS shadow_report_outcome_quotes (
+                outcome_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                price_local REAL NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (outcome_id, observed_at)
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating shadow report outcome quote samples table")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_shadow_report_outcome_quotes_outcome_at
+             ON shadow_report_outcome_quotes(outcome_id, observed_at)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating shadow report outcome quote samples index")?;
         for sql in crate::markov_method::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -11147,6 +11300,7 @@ impl AppState {
             "one_session_after_cost_outcome_json TEXT",
             "five_session_after_cost_outcome_json TEXT",
             "twenty_session_after_cost_outcome_json TEXT",
+            "intraday_excursion_json TEXT",
             "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
         ] {
             self.ensure_table_column("shadow_report_outcomes", column)
@@ -14874,6 +15028,7 @@ market_data:
             "one_session_after_cost_outcome_json TEXT",
             "five_session_after_cost_outcome_json TEXT",
             "twenty_session_after_cost_outcome_json TEXT",
+            "intraday_excursion_json TEXT",
             "outcome_maturity_status TEXT NOT NULL DEFAULT 'awaiting_reference'",
         ] {
             sqlx::query(&format!(
@@ -14889,9 +15044,29 @@ market_data:
         .execute(&state.pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE shadow_report_outcome_quotes (outcome_id TEXT NOT NULL, observed_at TEXT NOT NULL, price_local REAL NOT NULL, source TEXT NOT NULL, PRIMARY KEY (outcome_id, observed_at))",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
         assert_eq!(
             state
                 .refresh_shadow_report_outcome_price("AAA:xcse", 100.0, "2026-08-19T12:15:00Z")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state
+                .refresh_shadow_report_outcome_price("AAA:xcse", 110.0, "2026-08-19T12:20:00Z")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            state
+                .refresh_shadow_report_outcome_price("AAA:xcse", 90.0, "2026-08-19T12:25:00Z")
                 .await
                 .unwrap(),
             1
@@ -14910,7 +15085,7 @@ market_data:
             .await
             .unwrap();
         let matured = state
-            .first_json("SELECT reference_dkk_basis, reference_fx_json, estimated_cost_json, one_session_outcome_json, five_session_outcome_json, twenty_session_outcome_json, one_session_after_cost_outcome_json, five_session_after_cost_outcome_json, twenty_session_after_cost_outcome_json, outcome_maturity_status FROM shadow_report_outcomes WHERE report_id = 7")
+            .first_json("SELECT reference_dkk_basis, reference_fx_json, estimated_cost_json, intraday_excursion_json, one_session_outcome_json, five_session_outcome_json, twenty_session_outcome_json, one_session_after_cost_outcome_json, five_session_after_cost_outcome_json, twenty_session_after_cost_outcome_json, outcome_maturity_status FROM shadow_report_outcomes WHERE report_id = 7")
             .await
             .unwrap()
             .unwrap();
@@ -14919,6 +15094,26 @@ market_data:
         assert_eq!(matured["reference_dkk_basis"], json!("captured_fresh_fx"));
         assert_eq!(matured["reference_fx_json"]["source"], json!("native_dkk"));
         assert_eq!(matured["estimated_cost_json"]["status"], json!("available"));
+        assert_eq!(
+            matured["intraday_excursion_json"]["status"],
+            json!("observed")
+        );
+        assert!(
+            (value_f64(
+                &matured["intraday_excursion_json"]["maximum_favourable_observed"],
+                "directional_return_pct"
+            ) - 0.1)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (value_f64(
+                &matured["intraday_excursion_json"]["maximum_adverse_observed"],
+                "directional_return_pct"
+            ) + 0.1)
+                .abs()
+                < 1e-9
+        );
         assert_eq!(matured["outcome_maturity_status"], json!("mature"));
         assert_eq!(
             matured["one_session_outcome_json"]["as_of"],

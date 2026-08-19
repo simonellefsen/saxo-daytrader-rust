@@ -2044,3 +2044,9 @@ broker mutation was added.
 - New shadow candidates now receive an allowlisted projection of their exact persisted report-time prompt: symbol-matched daily technical and Support-Risk data, Markov and Quiver signal context, cash plan, market-scope concentration counts, and active approved-baseline identity.
 - The projection never re-reads current data, copies the raw prompt, or turns prompt context into a manager gate. Its concentration counts are explicitly scoped decision context rather than the full portfolio gate, and an execution-entry thesis stays `not_available_pre_trade` rather than being inferred.
 - This is local database provenance only. It adds no provider, Hermes, Saxo, queue, precheck, or order path.
+
+## [2026-08-19] trading-quality | Observe shadow intraday excursions
+
+- The price monitor now retains a time-bounded per-candidate trail from its existing read-only Saxo infoprice refresh while a shadow outcome is collecting. On each sample it recomputes the BUY/SELL-direction maximum favourable and adverse observed movement from the durable reference quote.
+- The record explicitly reports sample count and first/last observation time and calls its coverage sampled rather than continuous. It never claims the venue's high/low, a fill path, broker execution, realised P/L, or execution quality; collection stops once the 20-session result matures.
+- No Saxo call, provider request, Hermes request, gate, queue, precheck, or order mutation was added: the feature only persists and reads the quote already returned by the established monitor.

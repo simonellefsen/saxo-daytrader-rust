@@ -151,6 +151,14 @@ the record cannot acquire hindsight. The concentration projection is context
 only, not the Trading Manager's portfolio-wide gate; a pre-trade candidate
 entry thesis remains explicitly unavailable because no order/fill existed.
 
+**Observed intraday-excursion slice landed 2026-08-19:** each active shadow
+candidate now retains its own small trail of the existing read-only Saxo
+infoprice samples and derives the maximum favourable and adverse *observed*
+directional movement from the reference price. It stops collecting when the
+20-session outcome matures. Coverage identifies the number and time span of
+samples and explicitly does not claim continuous intraday high/low coverage,
+a fill path, realised P/L, or execution quality.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
@@ -159,7 +167,7 @@ Remaining Phase 3 work, for each suggested BUY or SELL:
 - report-time technical, Markov, Quiver, Support Risk, cash, scoped concentration, and strategy-baseline snapshot; **landed for newly recorded rows**. Candidate entry thesis remains explicitly unavailable before an approved order/fill;
 - deterministic gate result and stable gate code;
 - Hermes record-only effect and the approved-policy source it used;
-- maximum adverse and favourable excursion when intraday evidence is available;
+- maximum adverse and favourable observed excursion when retained intraday samples are available; **landed for new rows, with sampled-coverage limits**;
 - an estimated after-cost outcome, explicitly separated from realised P/L; **landed for rows with a captured fresh FX basis**.
 
 Shadow observations never alter holdings, cash, capacity, gates, experiments, or orders.
