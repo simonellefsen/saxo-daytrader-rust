@@ -84,12 +84,12 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 2. **Landed 2026-08-19:** expire unsubmitted discretionary live/Saxo queue rows after `execution.discretionary_queue_max_age_minutes` (360 minutes). The executor applies the guard before obtaining a Saxo session, quote, precheck, or placement; it records `expired_local`, a sanitized queue-expiry event, and a fresh-decision remediation. It never expires `protective_stop` GoodTillCancel rows, broker-submitted rows, or ambiguous broker states.
 3. **Landed 2026-08-19:** include current-mode/current-adapter pending and broker-working BUY reservations in symbol exposure and cash calculations across scheduler cycles. The remaining fraction of a partial fill reserves only its remaining DKK value; an active BUY without a reliable DKK value fails closed for new BUYs until reconciled. Terminal and different-execution-environment rows do not reserve the current runtime's budget.
 4. **Landed 2026-08-19:** record report-supplied prices only as labelled context, then establish every new Hermes or manager-gate shadow baseline from an immediate read-only Saxo info-price refresh (with background retry while `awaiting_reference`). Persist the Saxo source and timestamp, exclude pre-provenance rows from aggregate learning evidence, and keep legacy rows visible as `legacy_unverified_reference` audit data.
-5. Keep protective GoodTillCancel stops outside discretionary-order expiry rules.
+5. **Landed 2026-08-19:** keep protective GoodTillCancel stops outside discretionary-order expiry rules. The stale-discretionary query and its atomic terminal update both exclude `strategy_type=protective_stop`; a regression confirms a stale protective row stays under protective-stop reconciliation while an equivalent discretionary row expires locally.
 
 ### Phase 1: Typed Shadow Pulse Contract
 
-1. Add a typed server-owned pulse mode such as `ExecutionEligible` versus `Shadow`.
-2. Persist pulse mode and queue eligibility with each report; do not infer either value from labels.
+1. **Landed 2026-08-19:** add the typed server-owned pulse modes `ExecutionEligible` and `Shadow`.
+2. **Landed 2026-08-19:** persist `pulse_mode` and `queue_eligible` with each report; do not infer either value from labels. The manager and manual immediate pipeline both fail closed unless they receive the exact execution-eligible pair.
 3. Add stable pulse keys, local dates, local/UTC due times, market-scope evidence, and terminal scheduler results.
 4. Add regressions for date idempotency, holidays, DST changes, shortened sessions, restarts, and the no-queue/no-Saxo boundary.
 5. Add explicit US session classification and boundary tests for regular, pre-market, post-market, Night Session, the 20:00-21:00 ET pause, and broker/instrument extended-hours ineligibility.

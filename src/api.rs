@@ -2322,6 +2322,12 @@ fn decision_report_action_runs_immediate_pipeline(
 ) -> bool {
     mode == DecisionReportActionMode::Live
         && report.get("status").and_then(JsonValue::as_str) == Some("completed")
+        && report.get("pulse_mode").and_then(JsonValue::as_str) == Some("execution_eligible")
+        && report.get("queue_eligible").and_then(|value| {
+            value
+                .as_bool()
+                .or_else(|| value.as_i64().map(|value| value > 0))
+        }) == Some(true)
 }
 
 fn decision_report_action_skip_status(mode: DecisionReportActionMode) -> &'static str {
@@ -2955,7 +2961,12 @@ mod tests {
 
     #[test]
     fn live_completed_decision_report_runs_immediate_pipeline() {
-        let report = json!({"id": 42, "status": "completed"});
+        let report = json!({
+            "id": 42,
+            "status": "completed",
+            "pulse_mode": "execution_eligible",
+            "queue_eligible": true,
+        });
 
         assert!(decision_report_action_runs_immediate_pipeline(
             DecisionReportActionMode::Live,
@@ -2965,7 +2976,12 @@ mod tests {
 
     #[test]
     fn dry_run_completed_decision_report_does_not_run_immediate_pipeline() {
-        let report = json!({"id": 42, "status": "completed"});
+        let report = json!({
+            "id": 42,
+            "status": "completed",
+            "pulse_mode": "shadow",
+            "queue_eligible": false,
+        });
 
         assert!(!decision_report_action_runs_immediate_pipeline(
             DecisionReportActionMode::DryRun,
@@ -2980,13 +2996,32 @@ mod tests {
     #[test]
     fn live_non_completed_decision_report_does_not_run_immediate_pipeline() {
         for status in ["deferred", "xai_error", "provider_error", ""] {
-            let report = json!({"id": 42, "status": status});
+            let report = json!({
+                "id": 42,
+                "status": status,
+                "pulse_mode": "execution_eligible",
+                "queue_eligible": true,
+            });
 
             assert!(!decision_report_action_runs_immediate_pipeline(
                 DecisionReportActionMode::Live,
                 &report
             ));
         }
+    }
+
+    #[test]
+    fn completed_shadow_decision_report_never_runs_the_immediate_pipeline() {
+        let report = json!({
+            "id": 42,
+            "status": "completed",
+            "pulse_mode": "shadow",
+            "queue_eligible": false,
+        });
+        assert!(!decision_report_action_runs_immediate_pipeline(
+            DecisionReportActionMode::Live,
+            &report
+        ));
     }
 
     #[test]

@@ -2918,6 +2918,17 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let selected_count = selected_assets.len().max(candidate_assets.len());
     let selected_id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
     let error_text = text(&report, "error_text");
+    let pulse_authority = if text(&report, "pulse_mode") == "shadow"
+        || optional_json_number(&report, "queue_eligible") == Some(0.0)
+    {
+        "Shadow · no queue".to_string()
+    } else if text(&report, "pulse_mode") == "execution_eligible"
+        && optional_json_number(&report, "queue_eligible") == Some(1.0)
+    {
+        "Execution eligible".to_string()
+    } else {
+        "Authority unavailable · blocked".to_string()
+    };
     let strategy_status = fallback_text(
         &report_json,
         "strategy_status",
@@ -3054,6 +3065,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     MetricCard { label: "Selected Assets", value: selected_count.to_string(), tone: "" }
                     MetricCard { label: "Suggested Trades", value: suggested_trades.len().to_string(), tone: "" }
                     MetricCard { label: "Report Cadence", value: fallback_text(&report, "analysis_pulse_label", "Manual Decision Report"), tone: "" }
+                    MetricCard { label: "Pulse Authority", value: pulse_authority, tone: "" }
                     MetricCard { label: "Model", value: text(&report, "model"), tone: "" }
                 }
                 CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }

@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::{yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
-    db::{row_to_json, sql_escape, value_f64},
+    db::{row_to_json, sql_escape, value_f64, value_i64},
     drawdown_guard::{DrawdownGuard, DrawdownPolicy, evaluate_drawdown_guard},
     hermes_state::hermes_experiment_status_is_advisory_eligible,
     state::{AppState, SUPPORTED_EXPERIMENT_VARIABLES},
@@ -61,6 +61,8 @@ struct DecisionReport {
     status: String,
     pulse_key: String,
     pulse_label: String,
+    pulse_mode: String,
+    queue_eligible: bool,
     report_json: JsonValue,
 }
 
@@ -2518,6 +2520,8 @@ async fn hermes_decision_preflight_bundle(
             "status": &report.status,
             "pulse_key": &report.pulse_key,
             "pulse_label": &report.pulse_label,
+            "pulse_mode": &report.pulse_mode,
+            "queue_eligible": report.queue_eligible,
         },
         "portfolio": overview.get("portfolio_summary").cloned().unwrap_or(JsonValue::Null),
         "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
@@ -2891,7 +2895,8 @@ async fn fresh_unmanaged_reports(state: &AppState) -> Result<Vec<DecisionReport>
     .unwrap_or(DEFAULT_MAX_REPORT_AGE_HOURS);
     let cutoff = Utc::now() - Duration::hours(max_age_hours.max(1));
     let rows = sqlx::query(
-        "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, report_json
+        "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label,
+                pulse_mode, queue_eligible, report_json
          FROM decision_reports
          WHERE report_json IS NOT NULL
            AND COALESCE(analysis_pulse_key, '') <> ''
@@ -2924,6 +2929,8 @@ async fn fresh_unmanaged_reports(state: &AppState) -> Result<Vec<DecisionReport>
 fn is_fresh_scheduled_report(report: &DecisionReport, cutoff: DateTime<Utc>) -> bool {
     report.id > 0
         && matches!(report.status.as_str(), "completed" | "xai_fallback")
+        && report.pulse_mode == "execution_eligible"
+        && report.queue_eligible
         && !report.pulse_key.trim().is_empty()
         && parse_report_time(&report.created_at).is_some_and(|created| created >= cutoff)
 }
@@ -2941,6 +2948,8 @@ fn decode_report(row: &JsonValue) -> Result<DecisionReport> {
         status: text(row, "status"),
         pulse_key: text(row, "analysis_pulse_key"),
         pulse_label: text(row, "analysis_pulse_label"),
+        pulse_mode: text(row, "pulse_mode"),
+        queue_eligible: value_i64(row, "queue_eligible") > 0,
         report_json,
     })
 }
@@ -5735,6 +5744,8 @@ mod tests {
             status: status.to_string(),
             pulse_key: pulse_key.to_string(),
             pulse_label: "US open +1h15".to_string(),
+            pulse_mode: "execution_eligible".to_string(),
+            queue_eligible: true,
             report_json: json!({"strategy_plan": {"swing_orders": []}}),
         }
     }
@@ -5817,6 +5828,18 @@ mod tests {
                 report
             );
         }
+    }
+
+    #[test]
+    fn completed_shadow_report_is_never_eligible_for_queueing() {
+        let cutoff = DateTime::parse_from_rfc3339("2026-07-14T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut report = scheduled_report("completed", "2026-07-14T09:00:00Z", "eu_shadow");
+        report.pulse_mode = "shadow".to_string();
+        report.queue_eligible = false;
+
+        assert!(!is_fresh_scheduled_report(&report, cutoff));
     }
 
     #[tokio::test]

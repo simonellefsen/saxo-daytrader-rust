@@ -228,7 +228,7 @@ flowchart LR
 ```
 
 1. **Response validation:** malformed or non-JSON provider output is retained as an errored report, not an order. A normalized report is scope-filtered before the manager sees it.
-2. **Trading Manager gates:** only fresh eligible reports are considered. The manager re-checks order shape, exchange status, cash buffer, circuit breakers, exclusions/quarantine, technical and Markov evidence, ATR risk, concentration, position caps, costs, and minimum trade value from local/broker-aware data.
+2. **Pulse authority and Trading Manager gates:** a report carries server-owned `pulse_mode` and `queue_eligible` fields. Only the explicit `execution_eligible` / `true` pair can reach the manager; `shadow` is denied before any queue write, even if a provider response later reaches `completed`. The manager then re-checks order shape, exchange status, cash buffer, circuit breakers, exclusions/quarantine, technical and Markov evidence, ATR risk, concentration, position caps, costs, and minimum trade value from local/broker-aware data.
 3. **Execution queue gates:** only approved rows may reach the executor, which must be configured for Saxo execution. It claims a row once, validates session, market, whole-share quantity, sellable holdings, Saxo instrument/UIC, and permitted tick price before a request is built.
 4. **Broker enforcement:** Saxo `/trade/v2/orders/precheck` is required before placement. A broker rejection or ambiguous network outcome is recorded for reconciliation; it is not blindly retried.
 

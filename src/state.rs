@@ -104,8 +104,8 @@ pub(crate) fn cost_basis_is_plausible(cost_basis_dkk: f64, invested_market_value
     cost_basis_dkk / invested_market_value_dkk <= PERFORMANCE_COST_BASIS_MAX_RATIO
 }
 const DAY_ORDER_EXPIRY_SYNC_GRACE_MINUTES: i64 = 10;
-const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, error_text, analysis_pulse_key, analysis_pulse_label";
-const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label";
+const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible";
+const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible";
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
@@ -270,6 +270,8 @@ fn merge_report_symbol_decisions(report: &JsonValue, decisions: &mut HashMap<Str
             "status": report.get("status").cloned().unwrap_or(JsonValue::Null),
             "pulse_key": report.get("analysis_pulse_key").cloned().unwrap_or(JsonValue::Null),
             "pulse_label": report.get("analysis_pulse_label").cloned().unwrap_or(JsonValue::Null),
+            "pulse_mode": report.get("pulse_mode").cloned().unwrap_or(JsonValue::Null),
+            "queue_eligible": report.get("queue_eligible").cloned().unwrap_or(JsonValue::Null),
         })
     };
 
@@ -5018,7 +5020,7 @@ impl AppState {
     async fn latest_symbol_decisions(&self) -> Result<HashMap<String, JsonValue>> {
         let reports = self
             .select_json(&format!(
-                "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, report_json
+                "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, report_json
                  FROM decision_reports
                  WHERE report_json IS NOT NULL
                  ORDER BY id DESC
@@ -5657,7 +5659,7 @@ impl AppState {
 
         let report = if report_id > 0 {
             self.first_json(&format!(
-                "SELECT id, created_at, status, model, analysis_pulse_key, analysis_pulse_label
+                "SELECT id, created_at, status, model, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
                  FROM decision_reports WHERE id = {} LIMIT 1",
                 report_id
             ))
@@ -6376,7 +6378,7 @@ impl AppState {
         for (key, prefix, label) in pulses {
             let latest = self
                 .first_json(&format!(
-                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
                      FROM decision_reports
                      WHERE analysis_pulse_key LIKE '{}%'
                      ORDER BY created_at DESC, id DESC
@@ -6387,7 +6389,7 @@ impl AppState {
                 .unwrap_or(JsonValue::Null);
             let last_success = self
                 .first_json(&format!(
-                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
                      FROM decision_reports
                      WHERE analysis_pulse_key LIKE '{}%'
                        AND status IN ('completed', 'xai_fallback')
@@ -6399,7 +6401,7 @@ impl AppState {
                 .unwrap_or(JsonValue::Null);
             let last_failure = self
                 .first_json(&format!(
-                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label
+                    "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
                      FROM decision_reports
                      WHERE analysis_pulse_key LIKE '{}%'
                        AND status IN ('xai_error', 'error', 'failed', 'parse_error')
@@ -6648,11 +6650,11 @@ impl AppState {
             "INSERT INTO decision_reports (
                 created_at, report_date, batch_id, model, status, analysis_window_active,
                 response_id, prompt_text, request_json, response_json, report_json,
-                error_text, analysis_pulse_key, analysis_pulse_label
+                error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
             ) VALUES (
                 '{}', '{}', '{}', 'rust-deterministic-fallback', 'rust_fallback', 0,
                 NULL, '{}', '{}', NULL, '{}',
-                '{}', '{}', '{}'
+                '{}', '{}', '{}', 'execution_eligible', 1
             )",
             sql_escape(&created_at),
             sql_escape(&report_date),
@@ -6672,7 +6674,7 @@ impl AppState {
             .context("inserting manual Rust fallback decision report")?;
         let report = self
             .first_json(&format!(
-                "SELECT id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label FROM decision_reports WHERE created_at = '{}' ORDER BY id DESC LIMIT 1",
+                "SELECT id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible FROM decision_reports WHERE created_at = '{}' ORDER BY id DESC LIMIT 1",
                 sql_escape(&created_at)
             ))
             .await?
@@ -7206,7 +7208,7 @@ impl AppState {
 
     pub async fn hermes_decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label
+            "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
              FROM decision_reports
              ORDER BY created_at DESC, id DESC
              LIMIT {}",
@@ -10256,6 +10258,34 @@ impl AppState {
                 .await
                 .context("migrating daily indicator support-risk columns")?;
         }
+        for column in [
+            "pulse_mode TEXT NOT NULL DEFAULT 'execution_eligible'",
+            "queue_eligible INTEGER NOT NULL DEFAULT 1",
+        ] {
+            self.ensure_table_column("decision_reports", column)
+                .await
+                .context("migrating decision-report pulse authority")?;
+        }
+        // Reports created before the pulse-authority contract keep their
+        // historical execution eligibility. Dry-run reports are explicitly
+        // shadowed so a legacy status can never gain authority during the
+        // migration. New shadow reports must provide both fields at insert.
+        sqlx::query(
+            "UPDATE decision_reports
+             SET pulse_mode = CASE
+                    WHEN status LIKE 'dry_run_%' THEN 'shadow'
+                    WHEN pulse_mode IS NULL OR pulse_mode = '' THEN 'execution_eligible'
+                    ELSE pulse_mode
+                 END,
+                 queue_eligible = CASE
+                    WHEN status LIKE 'dry_run_%' OR pulse_mode = 'shadow' THEN 0
+                    WHEN queue_eligible IS NULL THEN 1
+                    ELSE queue_eligible
+                 END",
+        )
+        .execute(&self.pool)
+        .await
+        .context("backfilling decision-report pulse authority")?;
         for table in ["hermes_counterfactuals", "missed_trade_shadows"] {
             for column in [
                 "reference_price_at TEXT",

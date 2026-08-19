@@ -1366,6 +1366,11 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Replaced report/model price baselines for new Hermes counterfactuals and deterministic manager-gate shadows with captured Saxo read-only info-price references. The manager requests the existing quote refresh as soon as it persists a new shadow; the price monitor retries an `awaiting_reference` row when a market/session is temporarily unavailable.
 - Each baseline now records a source and timestamp, while any report-provided price is displayed only as labelled context. Historical pre-provenance rows are marked `legacy_unverified_reference` and excluded from aggregate missed-trade learning evidence so old model-derived prices cannot contaminate future tuning.
 
+## [2026-08-19] safety | Server-owned Decision Pulse authority
+
+- Added a typed `ExecutionEligible` versus `Shadow` pulse mode and persisted `pulse_mode` plus `queue_eligible` on every Decision Report. Existing dry runs are backfilled as shadow/non-queueable; historical non-dry-run reports preserve their prior execution eligibility for audit continuity.
+- The scheduled Trading Manager selector and the manual immediate pipeline both require `execution_eligible` plus `queue_eligible=true`, so a completed shadow report cannot write an execution queue row or reach a Saxo mutation path. The Decision Reports dashboard displays the recorded authority instead of inferring it from a label.
+
 ## [2026-07-10] improvement | Broker exposure integrity reconciliation
 
 - Continued the accounting-integrity roadmap by comparing dashboard unrealised P/L against the latest Saxo instrument exposure aggregate.

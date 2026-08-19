@@ -23,9 +23,33 @@ struct DecisionPulse {
     key: String,
     label: String,
     kind: String,
+    mode: DecisionPulseMode,
     target_at_utc: String,
     exchange_codes: Vec<String>,
     source_markets: Vec<String>,
+}
+
+/// Server-owned execution authority for a Decision Pulse. This is deliberately
+/// separate from provider output, labels, and the manual dry-run status: a
+/// future completed shadow report must still be incapable of entering the
+/// Trading Manager or Saxo queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecisionPulseMode {
+    ExecutionEligible,
+    Shadow,
+}
+
+impl DecisionPulseMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ExecutionEligible => "execution_eligible",
+            Self::Shadow => "shadow",
+        }
+    }
+
+    fn queue_eligible(self) -> bool {
+        self == Self::ExecutionEligible
+    }
 }
 
 /// A calendar-derived market-open target that read-only enrichment jobs can
@@ -132,6 +156,11 @@ async fn submit_manual_decision_report_with_mode(
             "manual_dry_run".to_string()
         } else {
             "manual".to_string()
+        },
+        mode: if mode.is_dry_run() {
+            DecisionPulseMode::Shadow
+        } else {
+            DecisionPulseMode::ExecutionEligible
         },
         target_at_utc: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         exchange_codes: Vec::new(),
@@ -369,7 +398,7 @@ async fn submit_deferred_report(
                 "The Trading Manager will only act after this report becomes completed."
             ])
         },
-        "execution_safety": report_execution_safety(mode)
+        "execution_safety": report_execution_safety(mode, pulse.mode)
     });
     let row = insert_decision_report(
         state,
@@ -568,6 +597,7 @@ fn completed_report_json_from_parts(
         .get("analysis_pulse")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let pulse_mode = pulse_mode_from_json(&pulse);
     let scope_enforcement = enforce_completed_report_scope(&mut parsed, &pulse);
     if let Some(obj) = parsed.as_object_mut() {
         obj.insert(
@@ -576,12 +606,15 @@ fn completed_report_json_from_parts(
         );
         obj.entry("created_at".to_string())
             .or_insert_with(|| JsonValue::from(created_at));
-        obj.entry("analysis_pulse".to_string()).or_insert(pulse);
+        // The provider may describe markets, but it never controls pulse
+        // authority. Replace any similarly named provider field with the
+        // server-created pulse metadata used for persistence and admission.
+        obj.insert("analysis_pulse".to_string(), pulse);
         obj.insert("market_scope_enforcement".to_string(), scope_enforcement);
         obj.insert(provider_key.to_string(), provider_metadata);
         obj.insert(
             "execution_safety".to_string(),
-            report_execution_safety(mode),
+            report_execution_safety(mode, pulse_mode),
         );
         if !obj.contains_key("strategy_plan") {
             let suggested = obj
@@ -632,19 +665,50 @@ fn request_capital_plan(request_json: &JsonValue) -> Option<JsonValue> {
         .or_else(|| request_json.get("capital_plan").cloned())
 }
 
-fn report_execution_safety(mode: DecisionReportSubmissionMode) -> JsonValue {
-    match mode {
-        DecisionReportSubmissionMode::Live => json!({
-            "mode": "live",
-            "trading_manager": "eligible_after_completion",
-            "execution_queue": "eligible_after_manager_approval"
-        }),
-        DecisionReportSubmissionMode::DryRun => json!({
+fn pulse_mode_from_json(pulse: &JsonValue) -> DecisionPulseMode {
+    match pulse.get("pulse_mode").and_then(JsonValue::as_str) {
+        Some("execution_eligible")
+            if pulse.get("queue_eligible").and_then(JsonValue::as_bool) == Some(true) =>
+        {
+            DecisionPulseMode::ExecutionEligible
+        }
+        _ => DecisionPulseMode::Shadow,
+    }
+}
+
+fn report_execution_safety(
+    submission_mode: DecisionReportSubmissionMode,
+    pulse_mode: DecisionPulseMode,
+) -> JsonValue {
+    if submission_mode == DecisionReportSubmissionMode::DryRun {
+        return json!({
             "mode": "dry_run",
+            "pulse_mode": pulse_mode.as_str(),
+            "queue_eligible": false,
             "trading_manager": "blocked",
             "execution_queue": "blocked",
             "reason": "Operator dry run validates the provider response and parser only."
+        });
+    }
+    if pulse_mode == DecisionPulseMode::Shadow {
+        return json!({
+            "mode": "shadow",
+            "pulse_mode": pulse_mode.as_str(),
+            "queue_eligible": false,
+            "trading_manager": "blocked",
+            "execution_queue": "blocked",
+            "reason": "Shadow pulse authority is server-owned and cannot be granted by provider output, labels, or a later status update."
+        });
+    }
+    match submission_mode {
+        DecisionReportSubmissionMode::Live => json!({
+            "mode": "live",
+            "pulse_mode": pulse_mode.as_str(),
+            "queue_eligible": true,
+            "trading_manager": "eligible_after_completion",
+            "execution_queue": "eligible_after_manager_approval"
         }),
+        DecisionReportSubmissionMode::DryRun => unreachable!("dry runs return above"),
     }
 }
 
@@ -1772,6 +1836,7 @@ fn grouped_open_followup_pulse_candidates(
                 key: format!("{kind}:{local_date}"),
                 label: label.to_string(),
                 kind: kind.to_string(),
+                mode: DecisionPulseMode::ExecutionEligible,
                 target_at_utc: target.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 exchange_codes,
                 source_markets,
@@ -1900,7 +1965,7 @@ async fn insert_xai_error_report_with_response(
         "strategy_plan": {"status": "xai_error", "swing_orders": [], "suggested_trades": []},
         "suggested_trades": [],
         "execution_notes": [error_text],
-        "execution_safety": report_execution_safety(mode)
+        "execution_safety": report_execution_safety(mode, pulse.mode)
     });
     insert_decision_report(
         state,
@@ -1965,15 +2030,15 @@ async fn insert_decision_report(
         "INSERT INTO decision_reports (
             created_at, report_date, batch_id, model, status, analysis_window_active,
             response_id, prompt_text, request_json, response_json, report_json,
-            error_text, analysis_pulse_key, analysis_pulse_label
+            error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
         ) VALUES (
             '{}', '{}', '{}', '{}', '{}', 1,
             {}, '{}', '{}', {}, '{}',
-            {}, '{}', '{}'
+            {}, '{}', '{}', '{}', {}
         )
         RETURNING id, created_at, report_date, model, status, analysis_window_active, response_id,
             prompt_text, request_json, response_json, report_json, error_text,
-            analysis_pulse_key, analysis_pulse_label",
+            analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible",
         sql_escape(created_at),
         sql_escape(&report_date),
         sql_escape(&batch_id),
@@ -1986,7 +2051,9 @@ async fn insert_decision_report(
         sql_escape(&serde_json::to_string(report_json)?),
         error_sql,
         sql_escape(&pulse.key),
-        sql_escape(&pulse.label)
+        sql_escape(&pulse.label),
+        sql_escape(pulse.mode.as_str()),
+        if pulse.mode.queue_eligible() { 1 } else { 0 }
     );
     let row = sqlx::query(&sql)
         .fetch_one(&state.pool)
@@ -2131,6 +2198,8 @@ fn pulse_to_json(pulse: &DecisionPulse) -> JsonValue {
         "key": pulse.key,
         "label": pulse.label,
         "kind": pulse.kind,
+        "pulse_mode": pulse.mode.as_str(),
+        "queue_eligible": pulse.mode.queue_eligible(),
         "target_at_utc": pulse.target_at_utc,
         "exchange_codes": pulse.exchange_codes,
         "source_markets": pulse.source_markets,
@@ -2601,7 +2670,9 @@ mod tests {
                 model_output: scoped_output,
                 pulse: json!({
                     "kind": "europe_open_followup",
-                    "exchange_codes": ["XCSE", "XLON"]
+                    "exchange_codes": ["XCSE", "XLON"],
+                    "pulse_mode": "execution_eligible",
+                    "queue_eligible": true,
                 }),
                 mode: DecisionReportSubmissionMode::Live,
                 expected_trade_count: 1,
@@ -2610,7 +2681,12 @@ mod tests {
                 name: "manual_dry_run_without_trade",
                 content: serde_json::to_string(&no_action_output).unwrap(),
                 model_output: no_action_output,
-                pulse: json!({"kind": "manual", "exchange_codes": []}),
+                pulse: json!({
+                    "kind": "manual",
+                    "exchange_codes": [],
+                    "pulse_mode": "shadow",
+                    "queue_eligible": false,
+                }),
                 mode: DecisionReportSubmissionMode::DryRun,
                 expected_trade_count: 0,
             },
@@ -2759,7 +2835,7 @@ mod tests {
             id: 1,
             request_id: "req-1".to_string(),
             request_json: json!({}),
-            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "europe_open_followup:2026-05-11"}}),
+            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "europe_open_followup:2026-05-11", "pulse_mode": "execution_eligible", "queue_eligible": true}}),
             mode: DecisionReportSubmissionMode::Live,
         };
         let response = json!({
@@ -2777,7 +2853,7 @@ mod tests {
             id: 1,
             request_id: "req-dry-run".to_string(),
             request_json: json!({}),
-            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "manual:2026-05-11T08:15:00Z"}}),
+            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "manual:2026-05-11T08:15:00Z", "pulse_mode": "shadow", "queue_eligible": false}}),
             mode: DecisionReportSubmissionMode::DryRun,
         };
         let response = json!({
@@ -2803,7 +2879,7 @@ mod tests {
                     {"role": "user", "content": "{\"capital_plan\":{\"cash_balance_dkk\":76000.0,\"available_buy_budget_dkk\":47000.0}}"}
                 ]
             }),
-            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "us_open_followup:2026-05-11"}}),
+            report_json: json!({"created_at": "2026-05-11T08:15:00Z", "analysis_pulse": {"key": "us_open_followup:2026-05-11", "pulse_mode": "execution_eligible", "queue_eligible": true}}),
             mode: DecisionReportSubmissionMode::Live,
         };
         let response = json!({
