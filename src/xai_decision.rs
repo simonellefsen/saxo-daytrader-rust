@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
 use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
-use sqlx::Row;
+use sqlx::{AnyPool, Row};
 use tracing::{info, warn};
 
 use crate::{
@@ -1985,11 +1985,15 @@ fn minutes_after_open(state: &AppState, key: &str) -> i64 {
 }
 
 async fn has_report_for_pulse(state: &AppState, pulse_key: &str) -> Result<bool> {
+    has_report_for_pulse_in_pool(&state.pool, pulse_key).await
+}
+
+async fn has_report_for_pulse_in_pool(pool: &AnyPool, pulse_key: &str) -> Result<bool> {
     let row = sqlx::query(&format!(
         "SELECT id, status FROM decision_reports WHERE analysis_pulse_key = '{}' ORDER BY created_at DESC, id DESC LIMIT 1",
         sql_escape(pulse_key)
     ))
-    .fetch_optional(&state.pool)
+    .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
 }
@@ -2525,6 +2529,111 @@ mod tests {
         assert_eq!(
             provenance["market_scope"]["eligible_exchange_codes"],
             json!(["XNAS", "XNYS"])
+        );
+    }
+
+    #[test]
+    fn calendar_holiday_and_shortened_session_never_create_a_due_pulse() {
+        let configured = ["XNAS".to_string(), "XNYS".to_string()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let holiday = grouped_open_followup_pulse_candidates(
+            &[],
+            &configured,
+            "us_open_followup",
+            "US Open follow-up",
+            75,
+            chrono_tz::America::New_York,
+        );
+        let shortened_session = grouped_open_followup_pulse_candidates(
+            &[json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-11-27T14:30:00Z",
+                "tradable_close_at_utc": "2026-11-27T18:00:00Z"
+            })],
+            &configured,
+            "us_open_followup",
+            "US Open follow-up",
+            240,
+            chrono_tz::America::New_York,
+        );
+
+        assert!(holiday.is_empty());
+        assert!(shortened_session.is_empty());
+    }
+
+    #[test]
+    fn us_pulse_keeps_new_york_time_across_the_eu_us_dst_mismatch() {
+        let configured = ["XNAS".to_string()].into_iter().collect::<HashSet<_>>();
+        let pulse = grouped_open_followup_pulse_candidates(
+            &[json!({
+                "code": "XNAS",
+                "market": "NASDAQ",
+                "session_open_at_utc": "2026-03-10T13:30:00Z",
+                "tradable_close_at_utc": "2026-03-10T20:00:00Z"
+            })],
+            &configured,
+            "us_open_followup",
+            "US Open follow-up",
+            75,
+            chrono_tz::America::New_York,
+        )
+        .pop()
+        .unwrap();
+
+        assert_eq!(pulse.target_at_utc, "2026-03-10T14:45:00Z");
+        assert_eq!(pulse.target_at_local, "2026-03-10T10:45:00-04:00");
+        assert_eq!(
+            parse_rfc3339_text(&pulse.target_at_utc)
+                .unwrap()
+                .with_timezone(&chrono_tz::Europe::Copenhagen)
+                .to_rfc3339(),
+            "2026-03-10T15:45:00+01:00"
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_pulse_key_blocks_a_retry_after_scheduler_restart() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE decision_reports (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                analysis_pulse_key TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let pulse_key = "us_mid_session_shadow:2026-08-19";
+
+        assert!(
+            !has_report_for_pulse_in_pool(&pool, pulse_key)
+                .await
+                .unwrap()
+        );
+        sqlx::query(
+            "INSERT INTO decision_reports (id, created_at, status, analysis_pulse_key)
+             VALUES (1, '2026-08-19T14:45:00Z', 'completed', 'us_mid_session_shadow:2026-08-19')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // The same database represents the scheduler's state after a restart:
+        // a terminal provider status still consumes the local trading-date key.
+        assert!(
+            has_report_for_pulse_in_pool(&pool, pulse_key)
+                .await
+                .unwrap()
         );
     }
 

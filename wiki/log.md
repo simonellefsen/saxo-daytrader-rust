@@ -1984,3 +1984,9 @@ broker mutation was added.
 - Completed Phase 1's third shadow-pulse contract prerequisite: scheduled pulse keys now use the explicitly configured local trading date, while every report retains local and UTC due times, schedule time zone, deterministic sorted market scope, and Saxo exchange-calendar provenance.
 - Scheduler-cycle history now records an explicit terminal scheduling result for each configured calendar pulse (`not_due`, `due`, `missed_due_window`, or `invalid_schedule`). These are read-only operational evidence, never Decision Reports, queue entries, or Saxo actions.
 - Added deterministic DST/provenance and scheduler-result regressions. The existing two execution-eligible open-follow-up pulses are unchanged; the new EU/US shadow schedules remain disabled and unconfigured.
+
+## [2026-08-19] implementation | Decision Pulse calendar and restart safety
+
+- Completed Phase 1's fourth prerequisite with hermetic calendar regressions: empty holiday calendars and sessions that close before the requested offset never create a due pulse, while the US pulse remains anchored to America/New_York during the Europe/US DST mismatch.
+- Added a SQLite persistence regression proving that a terminal report consumes its date-local pulse key across a scheduler restart, so a retry cannot duplicate the provider request. Existing manager/API tests retain the explicit shadow no-queue/no-Saxo boundary.
+- This is scheduler safety coverage only: no shadow schedule was enabled, no Decision Report was generated, and no Hermes, queue, or Saxo behavior changed.

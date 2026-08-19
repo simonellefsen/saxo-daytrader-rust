@@ -93,7 +93,7 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 1. **Landed 2026-08-19:** add the typed server-owned pulse modes `ExecutionEligible` and `Shadow`.
 2. **Landed 2026-08-19:** persist `pulse_mode` and `queue_eligible` with each report; do not infer either value from labels. The manager and manual immediate pipeline both fail closed unless they receive the exact execution-eligible pair.
 3. **Landed 2026-08-19:** persist the server-owned pulse provenance used by scheduling: stable key from the pulse's configured local trading date, local and UTC due times, explicit schedule time zone, deterministic market-scope/calendar evidence, and a terminal per-cycle scheduler result (`not_due`, `due`, `missed_due_window`, or `invalid_schedule`). These result rows are scheduler history only, not Decision Reports, and have no execution authority.
-4. Add regressions for date idempotency, holidays, DST changes, shortened sessions, restarts, and the no-queue/no-Saxo boundary.
+4. **Landed 2026-08-19:** add regression coverage for date idempotency across a scheduler restart, empty holiday calendars, shortened sessions that close before the pulse offset, the EU/US DST mismatch, and the existing explicit shadow no-queue/no-Saxo boundaries. A terminal report of any status consumes its local-date key, preventing a retry from duplicating a provider request.
 5. Add explicit US session classification and boundary tests for regular, pre-market, post-market, Night Session, the 20:00-21:00 ET pause, and broker/instrument extended-hours ineligibility.
 
 ### Phase 2: Schedule And Generate The Reports
