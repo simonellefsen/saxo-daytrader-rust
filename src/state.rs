@@ -2781,6 +2781,141 @@ fn canonical_symbol_key(symbol: &str) -> String {
     symbol.trim().to_ascii_uppercase()
 }
 
+/// Shadow outcome records are admitted only from a persisted server-owned
+/// shadow report. Provider text, a label, or a manual dry-run marker cannot
+/// grant this observational ledger any broader authority.
+fn shadow_report_outcome_report_is_eligible(report: &JsonValue) -> bool {
+    let queue_eligible = report.get("queue_eligible").and_then(|value| {
+        value
+            .as_bool()
+            .or_else(|| value.as_i64().map(|value| value != 0))
+            .or_else(|| {
+                value.as_str().and_then(|value| match value {
+                    "0" | "false" | "FALSE" => Some(false),
+                    "1" | "true" | "TRUE" => Some(true),
+                    _ => None,
+                })
+            })
+    });
+    json_text(report, "pulse_mode") == "shadow" && queue_eligible == Some(false)
+}
+
+fn shadow_opening_pulse_prefix(pulse_key: &str) -> Option<&'static str> {
+    if pulse_key.starts_with("europe_mid_session_shadow:") {
+        Some("europe_open_followup:")
+    } else if pulse_key.starts_with("us_mid_session_shadow:") {
+        Some("us_open_followup:")
+    } else {
+        None
+    }
+}
+
+fn shadow_report_suggested_symbol_keys(report: &JsonValue) -> HashSet<String> {
+    report
+        .get("suggested_trades")
+        .or_else(|| {
+            report
+                .get("strategy_plan")
+                .and_then(|plan| plan.get("suggested_trades"))
+        })
+        .and_then(JsonValue::as_array)
+        .map(|trades| {
+            trades
+                .iter()
+                .map(|trade| json_text(trade, "symbol"))
+                .filter(|symbol| !symbol.is_empty())
+                .map(|symbol| canonical_symbol_key(&symbol))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Compact, persisted-safe candidates for the first shadow-outcome ledger
+/// slice. Later phases add evaluated gate/Hermes data, FX, costs, and mature
+/// forward outcomes; those fields deliberately remain labelled unavailable
+/// instead of being inferred from a provider price or a local-currency P/L.
+fn shadow_report_outcome_candidates(
+    report: &JsonValue,
+    earlier_symbols: &HashSet<String>,
+) -> Vec<JsonValue> {
+    let suggested_trades = report
+        .get("suggested_trades")
+        .or_else(|| {
+            report
+                .get("strategy_plan")
+                .and_then(|plan| plan.get("suggested_trades"))
+        })
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let capital_plan = report
+        .get("capital_plan")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let change_status = report
+        .get("shadow_change_assessment")
+        .and_then(|assessment| assessment.get("status"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    suggested_trades
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, trade)| {
+            let symbol = json_text(&trade, "symbol");
+            let action = json_text(&trade, "action").to_ascii_uppercase();
+            let proposed_quantity = value_f64(&trade, "quantity");
+            if symbol.is_empty()
+                || !matches!(action.as_str(), "BUY" | "SELL")
+                || !proposed_quantity.is_finite()
+                || proposed_quantity <= 0.0
+            {
+                return None;
+            }
+            let currency = trade
+                .get("currency")
+                .and_then(JsonValue::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    symbol
+                        .split_once(':')
+                        .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange))
+                        .map(str::to_string)
+                });
+            let reported_reference_price_local = trade
+                .get("limit_price_local")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            let strategy_metadata = trade
+                .get("strategy_metadata")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            Some(json!({
+                "candidate_rank": index as i64 + 1,
+                "symbol": symbol,
+                "action": action,
+                "proposed_quantity": proposed_quantity,
+                "currency": currency,
+                "reported_reference_price_local": reported_reference_price_local,
+                "appeared_in_earlier_pulse": earlier_symbols.contains(&canonical_symbol_key(&symbol)),
+                "report_time_context": {
+                    "capture_version": "phase3_initial",
+                    "strategy_role": trade.get("strategy_role").cloned().unwrap_or(JsonValue::Null),
+                    "estimated_value_dkk": trade.get("estimated_value_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "technical": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
+                    "markov": strategy_metadata.get("markov").cloned().unwrap_or(JsonValue::Null),
+                    "cash_balance_dkk": capital_plan.get("cash_balance_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "available_buy_budget_dkk": capital_plan.get("available_buy_budget_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "shadow_change_status": change_status,
+                    "quiver": "not_captured_phase3_initial",
+                    "support_risk": "not_captured_phase3_initial",
+                    "fx_basis": "not_captured_phase3_initial",
+                }
+            }))
+        })
+        .collect()
+}
+
 fn effective_execution_mode(
     configured_mode: &str,
     adapter: &str,
@@ -7736,6 +7871,185 @@ impl AppState {
         Ok(updated)
     }
 
+    /// Persist the provider-selected candidates from a server-owned shadow
+    /// pulse as observations. This is intentionally narrower than the normal
+    /// Trading Manager path: it only records report context and waits for a
+    /// read-only Saxo quote; it neither evaluates a gate nor creates a queue
+    /// row, Hermes request, Saxo order precheck, or Saxo order mutation.
+    pub async fn record_shadow_report_outcomes(
+        &self,
+        report_id: i64,
+        report_json: &JsonValue,
+    ) -> Result<JsonValue> {
+        let report = self
+            .first_json(&format!(
+                "SELECT id, report_date, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible\n                 FROM decision_reports\n                 WHERE id = {}\n                 LIMIT 1",
+                report_id.max(0)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        if !shadow_report_outcome_report_is_eligible(&report) {
+            return Ok(json!({
+                "status": "not_shadow_report",
+                "created": 0,
+                "safety": "no_gate_hermes_queue_or_saxo_order_authority",
+            }));
+        }
+
+        let opening_prefix = shadow_opening_pulse_prefix(&json_text(&report, "analysis_pulse_key"));
+        let earlier_report = match opening_prefix {
+            Some(prefix) => self
+                .first_json(&format!(
+                    "SELECT id, report_json\n                     FROM decision_reports\n                     WHERE report_date = '{}'\n                       AND analysis_pulse_key LIKE '{}%'\n                       AND status IN ('completed', 'xai_fallback')\n                     ORDER BY created_at DESC, id DESC\n                     LIMIT 1",
+                    sql_escape(&json_text(&report, "report_date")),
+                    sql_escape(prefix),
+                ))
+                .await?
+                .unwrap_or(JsonValue::Null),
+            None => JsonValue::Null,
+        };
+        let earlier_symbols = shadow_report_suggested_symbol_keys(
+            earlier_report
+                .get("report_json")
+                .unwrap_or(&JsonValue::Null),
+        );
+        let earlier_report_id = (!earlier_report.is_null())
+            .then(|| value_i64(&earlier_report, "id"))
+            .filter(|id| *id > 0);
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut created = 0usize;
+        let mut skipped = 0usize;
+
+        for candidate in shadow_report_outcome_candidates(report_json, &earlier_symbols) {
+            let candidate_rank = value_i64(&candidate, "candidate_rank");
+            let symbol = json_text(&candidate, "symbol");
+            let action = json_text(&candidate, "action");
+            let proposed_quantity = value_f64(&candidate, "proposed_quantity");
+            if candidate_rank <= 0
+                || symbol.is_empty()
+                || !matches!(action.as_str(), "BUY" | "SELL")
+                || !proposed_quantity.is_finite()
+                || proposed_quantity <= 0.0
+            {
+                skipped += 1;
+                continue;
+            }
+            let reported_reference_sql = candidate
+                .get("reported_reference_price_local")
+                .and_then(JsonValue::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let context_json = candidate
+                .get("report_time_context")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let id = format!("shadow-report-outcome-{report_id}-{candidate_rank}");
+            let result = sqlx::query(&format!(
+                "INSERT INTO shadow_report_outcomes (\n                    id, created_at, updated_at, report_id, analysis_pulse_key, analysis_pulse_label,\n                    candidate_rank, symbol, action, proposed_quantity, currency,\n                    earlier_pulse_report_id, appeared_in_earlier_pulse,\n                    deterministic_gate_code, hermes_effect, approved_policy_source,\n                    report_time_context_json, reported_reference_price_local,\n                    reference_price_local, reference_price_at, reference_price_source, reference_dkk_basis,\n                    status, observation_count\n                ) VALUES (\n                    '{}', '{}', '{}', {}, '{}', '{}',\n                    {}, '{}', '{}', {}, {},\n                    {}, {},\n                    'not_evaluated_shadow', 'not_requested_shadow', {},\n                    '{}', {},\n                    NULL, NULL, 'awaiting_saxo_infoprice', 'not_captured_phase3_initial',\n                    'awaiting_reference', 0\n                ) ON CONFLICT (report_id, candidate_rank) DO NOTHING",
+                sql_escape(&id),
+                sql_escape(&now),
+                sql_escape(&now),
+                report_id,
+                sql_escape(&json_text(&report, "analysis_pulse_key")),
+                sql_escape(&json_text(&report, "analysis_pulse_label")),
+                candidate_rank,
+                sql_escape(&symbol),
+                sql_escape(&action),
+                proposed_quantity,
+                sql_optional_text(candidate.get("currency").and_then(JsonValue::as_str)),
+                earlier_report_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "NULL".to_string()),
+                if candidate
+                    .get("appeared_in_earlier_pulse")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+                {
+                    1
+                } else {
+                    0
+                },
+                sql_optional_text(candidate.get("policy_source").and_then(JsonValue::as_str)),
+                sql_escape(&serde_json::to_string(&context_json)?),
+                reported_reference_sql,
+            ))
+            .execute(&self.pool)
+            .await
+            .context("recording shadow report outcome")?;
+            created += result.rows_affected() as usize;
+        }
+
+        Ok(json!({
+            "status": "ok",
+            "created": created,
+            "skipped": skipped,
+            "earlier_pulse_report_id": earlier_report_id,
+            "safety": "observation_only_no_gate_hermes_queue_or_saxo_order_authority",
+        }))
+    }
+
+    pub async fn active_shadow_report_outcome_symbols(&self) -> Result<Vec<String>> {
+        let rows = self
+            .select_json(
+                "SELECT DISTINCT symbol\n                 FROM shadow_report_outcomes\n                 WHERE status IN ('tracking', 'awaiting_reference')\n                 ORDER BY symbol",
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| json_text(row, "symbol"))
+            .filter(|symbol| !symbol.trim().is_empty())
+            .collect())
+    }
+
+    /// The price monitor calls this only after its ordinary read-only Saxo
+    /// info-price refresh. Recording or updating a shadow outcome cannot reach
+    /// the execution queue or any Saxo trade endpoint.
+    pub async fn refresh_shadow_report_outcome_price(
+        &self,
+        symbol: &str,
+        latest_price_local: f64,
+        observed_at: &str,
+    ) -> Result<usize> {
+        if symbol.trim().is_empty() || !latest_price_local.is_finite() || latest_price_local <= 0.0
+        {
+            return Ok(0);
+        }
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, status\n                 FROM shadow_report_outcomes\n                 WHERE symbol = '{}' AND status IN ('tracking', 'awaiting_reference')",
+                sql_escape(symbol)
+            ))
+            .await?;
+        let mut updated = 0usize;
+        for row in rows {
+            let id = json_text(&row, "id");
+            let sql = if json_text(&row, "status") == "awaiting_reference" {
+                format!(
+                    "UPDATE shadow_report_outcomes\n                     SET updated_at = '{}', reference_price_local = {},\n                         reference_price_at = '{}', reference_price_source = 'saxo_infoprices',\n                         status = 'tracking'\n                     WHERE id = '{}' AND status = 'awaiting_reference'",
+                    sql_escape(observed_at),
+                    latest_price_local,
+                    sql_escape(observed_at),
+                    sql_escape(&id),
+                )
+            } else {
+                format!(
+                    "UPDATE shadow_report_outcomes\n                     SET updated_at = '{}', latest_price_local = {}, latest_price_at = '{}',\n                         observation_count = observation_count + 1\n                     WHERE id = '{}' AND status = 'tracking'",
+                    sql_escape(observed_at),
+                    latest_price_local,
+                    sql_escape(observed_at),
+                    sql_escape(&id),
+                )
+            };
+            let result = sqlx::query(&sql)
+                .execute(&self.pool)
+                .await
+                .context("updating shadow report outcome quote")?;
+            updated += result.rows_affected() as usize;
+        }
+        Ok(updated)
+    }
+
     pub async fn hermes_end_of_day_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, journal_date, cadence, status, summary, metrics_json, learnings_json, source_report_id, diary_json
@@ -10223,6 +10537,40 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating missed-trade shadows table")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS shadow_report_outcomes (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                report_id INTEGER NOT NULL,
+                analysis_pulse_key TEXT NOT NULL,
+                analysis_pulse_label TEXT NOT NULL,
+                candidate_rank INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                proposed_quantity REAL NOT NULL,
+                currency TEXT,
+                earlier_pulse_report_id INTEGER,
+                appeared_in_earlier_pulse INTEGER NOT NULL DEFAULT 0,
+                deterministic_gate_code TEXT NOT NULL,
+                hermes_effect TEXT NOT NULL,
+                approved_policy_source TEXT,
+                report_time_context_json TEXT NOT NULL,
+                reported_reference_price_local REAL,
+                reference_price_local REAL,
+                reference_price_at TEXT,
+                reference_price_source TEXT NOT NULL,
+                reference_dkk_basis TEXT NOT NULL,
+                status TEXT NOT NULL,
+                latest_price_local REAL,
+                latest_price_at TEXT,
+                observation_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(report_id, candidate_rank)
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating shadow report outcomes table")?;
         for sql in crate::markov_method::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)
@@ -13814,6 +14162,114 @@ market_data:
                 Some(&json!({"instrument_price_day_percent_change": -0.01})),
             ),
             -0.01
+        );
+    }
+
+    #[test]
+    fn shadow_report_outcome_candidates_preserve_context_without_claiming_maturity() {
+        let earlier_symbols = HashSet::from(["AAA:XCSE".to_string()]);
+        let candidates = shadow_report_outcome_candidates(
+            &json!({
+                "capital_plan": {
+                    "cash_balance_dkk": 120000.0,
+                    "available_buy_budget_dkk": 25000.0
+                },
+                "shadow_change_assessment": {"status": "material_change"},
+                "strategy_baseline_id": "baseline-approved-sim",
+                "suggested_trades": [
+                    {
+                        "symbol": "aaa:xcse",
+                        "action": "buy",
+                        "quantity": 4.0,
+                        "limit_price_local": 102.5,
+                        "estimated_value_dkk": 410.0,
+                        "strategy_role": "starter",
+                        "strategy_metadata": {
+                            "technical": {"confluence_count": 4},
+                            "markov": {"signed_signal": 0.42}
+                        }
+                    },
+                    {
+                        "symbol": "BBB:xnas",
+                        "action": "SELL",
+                        "quantity": 2.0,
+                        "limit_price_local": null,
+                        "strategy_metadata": {}
+                    },
+                    {"symbol": "", "action": "BUY", "quantity": 1.0}
+                ]
+            }),
+            &earlier_symbols,
+        );
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0]["candidate_rank"], json!(1));
+        assert_eq!(candidates[0]["action"], json!("BUY"));
+        assert_eq!(candidates[0]["currency"], json!("DKK"));
+        assert_eq!(candidates[0]["appeared_in_earlier_pulse"], json!(true));
+        assert_eq!(
+            candidates[0]["report_time_context"]["technical"]["confluence_count"],
+            json!(4)
+        );
+        assert_eq!(
+            candidates[0]["report_time_context"]["quiver"],
+            json!("not_captured_phase3_initial")
+        );
+        assert_eq!(candidates[1]["candidate_rank"], json!(2));
+        assert_eq!(candidates[1]["currency"], json!("USD"));
+    }
+
+    #[tokio::test]
+    async fn shadow_report_outcome_persistence_is_idempotent_and_never_needs_an_order_table() {
+        let state = runtime_settings_test_state("{}").await;
+        for sql in [
+            "CREATE TABLE decision_reports (id INTEGER PRIMARY KEY, report_date TEXT NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, pulse_mode TEXT NOT NULL, queue_eligible INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, report_json TEXT)",
+            "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, hermes_effect TEXT NOT NULL, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
+        ] {
+            sqlx::query(sql).execute(&state.pool).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO decision_reports (id, report_date, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, status, created_at, report_json) VALUES (7, '2026-08-19', 'europe_mid_session_shadow:2026-08-19', 'EU Shadow', 'shadow', 0, 'completed', '2026-08-19T12:15:00Z', '{}')",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let report_json = json!({
+            "suggested_trades": [{
+                "symbol": "AAA:xcse",
+                "action": "BUY",
+                "quantity": 3.0,
+                "limit_price_local": 101.0,
+                "strategy_metadata": {}
+            }]
+        });
+
+        let first = state
+            .record_shadow_report_outcomes(7, &report_json)
+            .await
+            .unwrap();
+        let second = state
+            .record_shadow_report_outcomes(7, &report_json)
+            .await
+            .unwrap();
+        let rows = state
+            .select_json("SELECT symbol, action, status, deterministic_gate_code, hermes_effect, reference_price_source FROM shadow_report_outcomes")
+            .await
+            .unwrap();
+
+        assert_eq!(first["created"], json!(1));
+        assert_eq!(second["created"], json!(0));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["symbol"], json!("AAA:xcse"));
+        assert_eq!(rows[0]["status"], json!("awaiting_reference"));
+        assert_eq!(
+            rows[0]["deterministic_gate_code"],
+            json!("not_evaluated_shadow")
+        );
+        assert_eq!(rows[0]["hermes_effect"], json!("not_requested_shadow"));
+        assert_eq!(
+            rows[0]["reference_price_source"],
+            json!("awaiting_saxo_infoprice")
         );
     }
 

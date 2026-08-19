@@ -22,7 +22,8 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0, Phase 1, and Phase 2 are landed.
+Implementation underway. Phase 0, Phase 1, Phase 2, and Phase 3's initial
+capture/reference slice are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -107,7 +108,19 @@ Pending-review Hermes experiments are excluded from decision authority. The tuni
 
 ### Phase 3: Shadow Outcome Ledger
 
-For each suggested BUY or SELL, persist:
+**Initial capture/reference slice landed 2026-08-19:** every valid BUY/SELL
+suggested by a persisted server-owned shadow report now creates one idempotent
+outcome-observation row. It records the report/pulse provenance, provider rank,
+same-date opening-pulse presence, proposed quantity, instrument currency,
+report-time technical/Markov/cash context, and the provider price as labelled
+context only. It immediately enters the existing read-only Saxo info-price loop
+as `awaiting_reference`; the first returned quote becomes the provenance-backed
+local reference. No Trading Manager gate, Hermes request, execution order,
+Saxo precheck, or Saxo order mutation is reachable. The initial record labels
+gate/Hermes/FX/Quiver/Support-Risk/cost/maturity fields as not yet evaluated or
+captured rather than inferring them.
+
+Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
 - candidate rank and whether the symbol appeared in the earlier pulse;

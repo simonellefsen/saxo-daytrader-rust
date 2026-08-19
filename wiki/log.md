@@ -2020,3 +2020,9 @@ broker mutation was added.
 - Completed Phase 2 prerequisite 5. The Decisions view and operations health strip now expose separate Nordic/EU and US 14:15 shadow-pulse rows, in addition to the existing opening and manual cadence rows.
 - An eligible shadow pulse that passes its due window without a report now creates a once-per-pulse/local-date medium operational alert. Existing reports consume the condition; closed/non-eligible scopes do not alert.
 - The alert is explicitly observational: it never retries a provider request, invokes Hermes, reaches the Trading Manager, inserts an execution order, or calls Saxo.
+
+## [2026-08-19] implementation | Capture shadow Decision Report outcome baselines
+
+- Landed Phase 3's initial outcome-ledger slice. Each valid BUY/SELL from a persisted server-owned shadow report receives an idempotent observation row with pulse/report provenance, candidate rank, same-date opening-pulse presence, proposed quantity/currency, compact technical/Markov/cash context, and any report-supplied price labelled as context only.
+- New observations enter the existing read-only Saxo info-price monitor as `awaiting_reference`; the first returned info price establishes the local reference. The baseline path has no Trading Manager gate, Hermes request, queue insertion, Saxo precheck, or Saxo order mutation.
+- Gate/Hermes/policy provenance, FX, Quiver, Support Risk, after-cost, excursions, and 1/5/20-session maturity remain explicitly uncollected in this first slice rather than being inferred from local-currency quote movement.

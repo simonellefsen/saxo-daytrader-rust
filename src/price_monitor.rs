@@ -284,6 +284,15 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
                                 "missed-trade shadow quote refresh degraded: {err:#}"
                             );
                         }
+                        if let Err(err) = state
+                            .refresh_shadow_report_outcome_price(&instrument.symbol, price, &now)
+                            .await
+                        {
+                            warn!(
+                                symbol = %instrument.symbol,
+                                "shadow report outcome quote refresh degraded: {err:#}"
+                            );
+                        }
                     }
                 }
                 Err(err) => errors.push(format!("{}: {err:#}", instrument.symbol)),
@@ -501,10 +510,10 @@ async fn append_extra_watch_instruments(
     }
 }
 
-/// Adds active Hermes and deterministic-manager shadow observations to the
-/// same read-only quote loop as holdings and configured watch symbols. Shadow
-/// ledgers remain non-mutating; resolving a symbol and requesting an info
-/// price cannot place or alter a Saxo order.
+/// Adds active Hermes, deterministic-manager, and shadow-report observations
+/// to the same read-only quote loop as holdings and configured watch symbols.
+/// Shadow ledgers remain non-mutating; resolving a symbol and requesting an
+/// info price cannot place or alter a Saxo order.
 async fn append_counterfactual_instruments(
     state: &AppState,
     session: &JsonValue,
@@ -514,14 +523,16 @@ async fn append_counterfactual_instruments(
     let symbols = match (
         state.active_hermes_counterfactual_symbols().await,
         state.active_missed_trade_shadow_symbols().await,
+        state.active_shadow_report_outcome_symbols().await,
     ) {
-        (Ok(hermes), Ok(missed)) => hermes
+        (Ok(hermes), Ok(missed), Ok(reports)) => hermes
             .into_iter()
             .chain(missed)
+            .chain(reports)
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>(),
-        (Err(err), _) | (_, Err(err)) => {
+        (Err(err), _, _) | (_, Err(err), _) | (_, _, Err(err)) => {
             warn!("loading active shadow-observation symbols degraded: {err:#}");
             return HashSet::new();
         }

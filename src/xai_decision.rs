@@ -623,6 +623,49 @@ async fn poll_one_deferred_report(
         &report_json,
     )
     .await?;
+    // Shadow reports get a separate observational candidate ledger as soon as
+    // their normalized result is durable. It is intentionally outside the
+    // Trading Manager: the only follow-up is the existing read-only Saxo
+    // infoprice refresh needed to establish an auditable baseline.
+    let shadow_outcome_ledger = match state
+        .record_shadow_report_outcomes(pending.id, &report_json)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(err) => {
+            warn!(
+                report_id = pending.id,
+                "shadow report outcome persistence degraded: {err:#}"
+            );
+            json!({
+                "status": "error",
+                "created": 0,
+                "error": "shadow outcome persistence unavailable",
+            })
+        }
+    };
+    let shadow_reference_capture = if shadow_outcome_ledger
+        .get("created")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0)
+        > 0
+    {
+        match crate::price_monitor::refresh_portfolio_prices(state).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!(
+                    report_id = pending.id,
+                    "shadow report reference quote capture degraded: {err:#}"
+                );
+                json!({
+                    "status": "error",
+                    "error": "read_only_saxo_reference_quote_capture_unavailable",
+                })
+            }
+        }
+    } else {
+        json!({"status": "not_required"})
+    };
     info!(
         report_id = pending.id,
         request_id = pending.request_id,
@@ -636,7 +679,9 @@ async fn poll_one_deferred_report(
         "status": pending.mode.completed_status(),
         "report_id": pending.id,
         "request_id": pending.request_id,
-        "response_id": response_json.get("id").cloned().unwrap_or(JsonValue::Null)
+        "response_id": response_json.get("id").cloned().unwrap_or(JsonValue::Null),
+        "shadow_outcome_ledger": shadow_outcome_ledger,
+        "shadow_reference_capture": shadow_reference_capture,
     }))
 }
 
