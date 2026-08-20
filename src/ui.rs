@@ -803,6 +803,32 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Hermes Record-Only Evidence" }
+                        p { class: "muted", "Candidate-level effect, context-self-check, and approved-policy-source coverage from persisted record-only Hermes advice. It is not a manager gate, queue result, or Saxo action." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Candidates" }
+                            th { "Effect: allow / reduce / stand down / review" }
+                            th { "Other: no match / unavailable / pending" }
+                            th { "Self-check: complete / incomplete / missing" }
+                            th { "Policy source: present / missing" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_hermes_evidence.iter() {
+                                TuningShadowHermesEvidenceRow { evidence: evidence.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Execution-Eligible Outcome Evidence" }
                         p { class: "muted", "Local execution, fill, ledger, and daily-close evidence for the same 30-day order window. BUY forward movement and reconciled SELL accounting are intentionally separate, and neither is mixed with the shadow table above." }
                     }
@@ -862,6 +888,60 @@ fn TuningShadowGateEvidenceRow(evidence: crate::models::TuningShadowGateEvidence
             td { "{source}" }
             td { "{result}" }
             td { "{evidence.unclassified_count}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowHermesEvidenceRow(evidence: crate::models::TuningShadowHermesEvidence) -> Element {
+    let effect = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {} / {} / {}",
+            evidence.allow_count,
+            evidence.reduce_count,
+            evidence.stand_down_count,
+            evidence.review_count,
+        )
+    };
+    let other = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {} / {}",
+            evidence.no_matching_advice_count,
+            evidence.unavailable_count,
+            evidence.not_requested_count,
+        )
+    };
+    let self_check = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {} / {}",
+            evidence.self_check_complete_count,
+            evidence.self_check_incomplete_count,
+            evidence.self_check_not_recorded_count,
+        )
+    };
+    let policy_source = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {}",
+            evidence.approved_policy_source_count, evidence.missing_policy_source_count,
+        )
+    };
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.candidate_count}" }
+            td { "{effect}" }
+            td { "{other}" }
+            td { "{self_check}" }
+            td { "{policy_source}" }
+            td { "{evidence.unclassified_effect_count}" }
         }
     }
 }

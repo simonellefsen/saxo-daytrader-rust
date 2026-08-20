@@ -34,6 +34,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The lane is a compact technical/Markov replay over saved prompt evidence, not a Trading Manager approval, queue state, broker precheck, or execution simulation.
 - It reads local persisted outcome rows only and adds no provider, Hermes, gate, queue, broker, or order authority.
 
+## [2026-08-20] observability | Add shadow Hermes record-only evidence to Tuning
+
+- Added a separate shadow-only Tuning lane for persisted record-only Hermes effects, context-self-check coverage, approved-policy-source coverage, and unknown legacy effects.
+- `allow`, `reduce`, `stand_down`, and `review` remain advisory labels only; they do not describe a manager result, prevented quantity, broker action, or simulated execution.
+- The lane reads local persisted outcome rows only and adds no provider, Hermes, gate, queue, broker, or order authority.
+
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
 - Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.

@@ -39,7 +39,7 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
-        TuningPulseComparison, TuningShadowGateEvidence,
+        TuningPulseComparison, TuningShadowGateEvidence, TuningShadowHermesEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3093,6 +3093,83 @@ fn tuning_shadow_gate_evidence_from_rows(
     pulses.into()
 }
 
+fn tuning_shadow_hermes_evidence_from_rows(
+    shadow_rows: &[JsonValue],
+) -> Vec<TuningShadowHermesEvidence> {
+    let mut pulses = [
+        TuningShadowHermesEvidence {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            allow_count: 0,
+            reduce_count: 0,
+            stand_down_count: 0,
+            review_count: 0,
+            no_matching_advice_count: 0,
+            unavailable_count: 0,
+            not_requested_count: 0,
+            self_check_complete_count: 0,
+            self_check_incomplete_count: 0,
+            self_check_not_recorded_count: 0,
+            approved_policy_source_count: 0,
+            missing_policy_source_count: 0,
+            unclassified_effect_count: 0,
+        },
+        TuningShadowHermesEvidence {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            allow_count: 0,
+            reduce_count: 0,
+            stand_down_count: 0,
+            review_count: 0,
+            no_matching_advice_count: 0,
+            unavailable_count: 0,
+            not_requested_count: 0,
+            self_check_complete_count: 0,
+            self_check_incomplete_count: 0,
+            self_check_not_recorded_count: 0,
+            approved_policy_source_count: 0,
+            missing_policy_source_count: 0,
+            unclassified_effect_count: 0,
+        },
+    ];
+    for row in shadow_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        pulse.candidate_count += 1;
+        match json_text(row, "hermes_effect").as_str() {
+            "record_only_allow" => pulse.allow_count += 1,
+            "record_only_reduce" => pulse.reduce_count += 1,
+            "record_only_stand_down" => pulse.stand_down_count += 1,
+            "record_only_review" => pulse.review_count += 1,
+            "record_only_no_matching_advice" => pulse.no_matching_advice_count += 1,
+            "record_only_unavailable" => pulse.unavailable_count += 1,
+            "not_requested_shadow" => pulse.not_requested_count += 1,
+            _ => pulse.unclassified_effect_count += 1,
+        }
+        let advice = decode_shadow_json_field(row.get("hermes_advice_snapshot_json"));
+        match advice
+            .get("context_self_check_complete")
+            .and_then(JsonValue::as_bool)
+        {
+            Some(true) => pulse.self_check_complete_count += 1,
+            Some(false) => pulse.self_check_incomplete_count += 1,
+            None => pulse.self_check_not_recorded_count += 1,
+        }
+        if json_text(row, "approved_policy_source").is_empty() {
+            pulse.missing_policy_source_count += 1;
+        } else {
+            pulse.approved_policy_source_count += 1;
+        }
+    }
+    pulses.into()
+}
+
 fn tuning_optional_number(value: &JsonValue, key: &str) -> Option<f64> {
     value
         .get(key)
@@ -4560,6 +4637,7 @@ impl AppState {
                     status: "unavailable".to_string(),
                     pulse_comparison: Vec::new(),
                     shadow_gate_evidence: Vec::new(),
+                    shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
@@ -4573,6 +4651,7 @@ impl AppState {
                 status: "not_loaded".to_string(),
                 pulse_comparison: Vec::new(),
                 shadow_gate_evidence: Vec::new(),
+                shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
@@ -4750,6 +4829,7 @@ impl AppState {
             .select_json(&format!(
                 "SELECT analysis_pulse_key, earlier_pulse_report_id, appeared_in_earlier_pulse,
                         deterministic_gate_code, deterministic_gate_json,
+                        hermes_effect, hermes_advice_snapshot_json, approved_policy_source,
                         reference_price_source,
                         one_session_outcome_json, five_session_outcome_json,
                         twenty_session_outcome_json, five_session_after_cost_outcome_json
@@ -4760,6 +4840,7 @@ impl AppState {
             .await?;
         let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
         let shadow_gate_evidence = tuning_shadow_gate_evidence_from_rows(&shadow_rows);
+        let shadow_hermes_evidence = tuning_shadow_hermes_evidence_from_rows(&shadow_rows);
         let execution_evidence = self
             .decision_pulse_outcome_evidence_since(Some(&window_start_text))
             .await?;
@@ -4786,9 +4867,10 @@ impl AppState {
             status: status.to_string(),
             pulse_comparison,
             shadow_gate_evidence,
+            shadow_hermes_evidence,
             execution_pulse_outcomes,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, not a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -18072,12 +18154,32 @@ market_data:
                 } else {
                     ("not_evaluated_shadow", "insufficient_decision_time_evidence")
                 };
+                let hermes_effect = match index {
+                    0..=3 => "record_only_allow",
+                    4..=7 => "record_only_reduce",
+                    8..=9 => "record_only_stand_down",
+                    10 => "record_only_review",
+                    11..=13 => "record_only_no_matching_advice",
+                    14..=15 => "record_only_unavailable",
+                    16..=17 => "not_requested_shadow",
+                    _ => "legacy_unknown_effect",
+                };
+                let self_check = if index < 8 {
+                    json!(true)
+                } else if index < 12 {
+                    json!(false)
+                } else {
+                    JsonValue::Null
+                };
                 json!({
                     "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
                     "earlier_pulse_report_id": 41,
                     "appeared_in_earlier_pulse": index < 5,
                     "deterministic_gate_code": gate_code,
                     "deterministic_gate_json": serde_json::to_string(&json!({ "status": gate_status })).unwrap(),
+                    "hermes_effect": hermes_effect,
+                    "hermes_advice_snapshot_json": serde_json::to_string(&json!({ "context_self_check_complete": self_check })).unwrap(),
+                    "approved_policy_source": if index < 16 { json!("active_strategy_baseline:baseline-1") } else { JsonValue::Null },
                     "reference_price_source": "saxo_infoprices",
                     "one_session_outcome_json": "{\"status\":\"observed\"}",
                     "five_session_outcome_json": "{\"status\":\"observed\"}",
@@ -18138,6 +18240,26 @@ market_data:
         assert_eq!(us_gates.blocked_signal_count, 5);
         assert_eq!(us_gates.insufficient_evidence_count, 3);
         assert_eq!(us_gates.unclassified_count, 0);
+
+        let hermes = tuning_shadow_hermes_evidence_from_rows(&shadows);
+        let us_hermes = hermes
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow Hermes evidence");
+        assert_eq!(us_hermes.candidate_count, 20);
+        assert_eq!(us_hermes.allow_count, 4);
+        assert_eq!(us_hermes.reduce_count, 4);
+        assert_eq!(us_hermes.stand_down_count, 2);
+        assert_eq!(us_hermes.review_count, 1);
+        assert_eq!(us_hermes.no_matching_advice_count, 3);
+        assert_eq!(us_hermes.unavailable_count, 2);
+        assert_eq!(us_hermes.not_requested_count, 2);
+        assert_eq!(us_hermes.self_check_complete_count, 8);
+        assert_eq!(us_hermes.self_check_incomplete_count, 4);
+        assert_eq!(us_hermes.self_check_not_recorded_count, 8);
+        assert_eq!(us_hermes.approved_policy_source_count, 16);
+        assert_eq!(us_hermes.missing_policy_source_count, 4);
+        assert_eq!(us_hermes.unclassified_effect_count, 2);
     }
 
     #[test]

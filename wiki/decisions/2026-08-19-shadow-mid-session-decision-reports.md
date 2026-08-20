@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first four Phase 4 tuning slices are landed.
+and the first five Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -232,6 +232,13 @@ each shadow pulse. It deliberately exposes unclassified historical records
 rather than assigning them a result. These compact replay fields are not a
 Trading Manager decision, queue result, broker precheck, execution simulation,
 or Saxo action.
+
+**Landed 2026-08-20 (fifth slice):** a separate shadow-only Tuning lane now
+counts the persisted record-only Hermes effect, context-self-check coverage,
+approved-policy-source coverage, and unknown legacy effects. No category is
+treated as approval or prevented quantity, and unavailable/not-requested
+evidence remains visible. The lane cannot change a manager gate, queue,
+broker precheck, execution simulation, or Saxo action.
 
 The first version should contain:
 

@@ -107,6 +107,7 @@ pub struct TuningPayload {
     pub status: String,
     pub pulse_comparison: Vec<TuningPulseComparison>,
     pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
+    pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
     pub safety: String,
     pub interpretation: String,
@@ -149,6 +150,28 @@ pub struct TuningShadowGateEvidence {
     pub blocked_signal_count: i64,
     pub insufficient_evidence_count: i64,
     pub unclassified_count: i64,
+}
+
+/// Record-only Hermes evidence for shadow candidates. These values never fed
+/// a manager gate, queue, broker precheck, or order mutation.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningShadowHermesEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub candidate_count: i64,
+    pub allow_count: i64,
+    pub reduce_count: i64,
+    pub stand_down_count: i64,
+    pub review_count: i64,
+    pub no_matching_advice_count: i64,
+    pub unavailable_count: i64,
+    pub not_requested_count: i64,
+    pub self_check_complete_count: i64,
+    pub self_check_incomplete_count: i64,
+    pub self_check_not_recorded_count: i64,
+    pub approved_policy_source_count: i64,
+    pub missing_policy_source_count: i64,
+    pub unclassified_effect_count: i64,
 }
 
 /// Execution-attributed outcome evidence for one execution-eligible pulse.
