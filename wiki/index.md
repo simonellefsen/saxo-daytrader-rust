@@ -3,7 +3,7 @@ type: wiki-index
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # Daytrader Knowledge Wiki

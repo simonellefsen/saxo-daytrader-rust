@@ -44,6 +44,10 @@ spec:
               value: conservative
             - name: HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS
               value: "90"
+            - name: HERMES_SHADOW_ADVISORY_ENABLED
+              value: "true"
+            - name: HERMES_SHADOW_ADVISORY_WAIT_SECONDS
+              value: "30"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

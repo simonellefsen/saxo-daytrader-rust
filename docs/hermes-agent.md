@@ -510,11 +510,15 @@ HERMES_GATEWAY_URL=http://hermes-gateway.saxo:8642
 HERMES_TRADING_MANAGER_ADVISORY_ENABLED=true
 HERMES_TRADING_MANAGER_ADVISORY_MODE=conservative
 HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS=90
+HERMES_SHADOW_ADVISORY_ENABLED=true
+HERMES_SHADOW_ADVISORY_WAIT_SECONDS=30
 ```
 
 `record_only` asks Hermes, audits the response, and includes the advice in `trading_manager_runs.manager_json`, but it does not alter queued orders. It is useful for bring-up and regression checks.
 
 Kubernetes runs `conservative` mode. It can only make queue creation safer: block a candidate, reduce quantity, or require review. It cannot add trades, increase size, bypass technical/Markov/cash gates, approve live orders, or call Saxo mutation endpoints. If Hermes is not configured, fails, times out, or records an incomplete required-context self-check in conservative mode, the Trading Manager blocks automatic queueing and records the review gate.
+
+The independent shadow cadence uses a distinct `shadow-decision-advice-<report-id>` session id and hard-codes `record_only_shadow`, irrespective of the Trading Manager setting. Its compact report/candidate context is persisted locally; the returned `allow`, `reduce`, `stand_down`, or `review` is recorded only as an observation against the shadow candidate. It is never supplied to the Trading Manager, a queue writer, a gate, or a Saxo endpoint. A disabled, unavailable, failed, or timed-out request is likewise recorded as missing evidence rather than interpreted as no-op advice.
 
 ## Reflection Jobs
 

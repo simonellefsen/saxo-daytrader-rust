@@ -666,6 +666,46 @@ async fn poll_one_deferred_report(
     } else {
         json!({"status": "not_required"})
     };
+    // Hermes may audit a shadow report through its constrained MCP surface,
+    // but this is a permanently record-only path. Its compact effect is stored
+    // on the shadow rows and is never passed to the Trading Manager, queue, or
+    // Saxo adapter.
+    let shadow_hermes_advice = if shadow_outcome_ledger
+        .get("created")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0)
+        > 0
+    {
+        let request =
+            crate::trading_manager::request_hermes_shadow_decision_advice(state, pending.id)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!(
+                        report_id = pending.id,
+                        "shadow Hermes advisory degraded: {err:#}"
+                    );
+                    json!({
+                        "status": "error",
+                        "source_session_id": format!("shadow-decision-advice-{}", pending.id),
+                        "safety": "shadow_record_only_no_queue_gate_or_saxo_authority",
+                    })
+                });
+        match state
+            .record_shadow_report_hermes_effects(pending.id, &request)
+            .await
+        {
+            Ok(effect) => json!({"request": request, "effect": effect}),
+            Err(err) => {
+                warn!(
+                    report_id = pending.id,
+                    "shadow Hermes effect persistence degraded: {err:#}"
+                );
+                json!({"request": request, "effect": {"status": "error"}})
+            }
+        }
+    } else {
+        json!({"status": "not_required"})
+    };
     info!(
         report_id = pending.id,
         request_id = pending.request_id,
@@ -682,6 +722,7 @@ async fn poll_one_deferred_report(
         "response_id": response_json.get("id").cloned().unwrap_or(JsonValue::Null),
         "shadow_outcome_ledger": shadow_outcome_ledger,
         "shadow_reference_capture": shadow_reference_capture,
+        "shadow_hermes_advice": shadow_hermes_advice,
     }))
 }
 

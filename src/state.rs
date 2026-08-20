@@ -3276,6 +3276,126 @@ fn compact_shadow_prompt_thesis_snapshot(context: &JsonValue, report: &JsonValue
     })
 }
 
+fn shadow_report_approved_policy_source(context: &JsonValue) -> Option<String> {
+    let thesis = context.get("thesis_snapshot").unwrap_or(&JsonValue::Null);
+    let baseline = thesis.get("active_baseline").unwrap_or(&JsonValue::Null);
+    let baseline_id = json_text(baseline, "id");
+    if !baseline_id.is_empty() {
+        return Some(format!("active_strategy_baseline:{baseline_id}"));
+    }
+    let report_baseline_id = json_text(thesis, "strategy_baseline_id");
+    (!report_baseline_id.is_empty())
+        .then(|| format!("report_strategy_baseline:{report_baseline_id}"))
+}
+
+fn shadow_report_context_strategy_key(context: &JsonValue) -> String {
+    json_text(context, "strategy_key")
+}
+
+fn decode_shadow_json_field(value: Option<&JsonValue>) -> JsonValue {
+    match value {
+        Some(value) if value.is_object() || value.is_array() => value.clone(),
+        Some(JsonValue::String(raw)) => serde_json::from_str(raw).unwrap_or(JsonValue::Null),
+        _ => JsonValue::Null,
+    }
+}
+
+fn shadow_report_hermes_advice_match(
+    strategy_key: &str,
+    symbol: &str,
+    action: &str,
+    advice: &[JsonValue],
+) -> (String, String) {
+    let symbol_key = canonical_symbol_key(symbol);
+    let action = action.trim().to_ascii_uppercase();
+    let matches = |item: &&JsonValue| {
+        let advice_action = json_text(item, "action").to_ascii_lowercase();
+        matches!(
+            advice_action.as_str(),
+            "allow" | "reduce" | "stand_down" | "review"
+        )
+    };
+    if !strategy_key.trim().is_empty() {
+        if let Some(item) = advice
+            .iter()
+            .find(|item| matches(item) && json_text(item, "strategy_key") == strategy_key)
+        {
+            return (
+                json_text(item, "action").to_ascii_lowercase(),
+                "strategy_key".to_string(),
+            );
+        }
+    }
+    if let Some(item) = advice.iter().find(|item| {
+        matches(item)
+            && canonical_symbol_key(&json_text(item, "symbol")) == symbol_key
+            && json_text(item, "side").to_ascii_uppercase() == action
+    }) {
+        return (
+            json_text(item, "action").to_ascii_lowercase(),
+            "symbol_side".to_string(),
+        );
+    }
+    if let Some(item) = advice.iter().find(|item| {
+        matches(item) && canonical_symbol_key(&json_text(item, "symbol")) == symbol_key
+    }) {
+        return (
+            json_text(item, "action").to_ascii_lowercase(),
+            "symbol".to_string(),
+        );
+    }
+    ("none".to_string(), "none".to_string())
+}
+
+fn compact_shadow_report_hermes_effect(
+    outcome: &JsonValue,
+    advice_row: Option<&JsonValue>,
+    request_status: &str,
+    source_session_id: &str,
+) -> JsonValue {
+    let context = decode_shadow_json_field(outcome.get("report_time_context_json"));
+    let strategy_key = shadow_report_context_strategy_key(&context);
+    let symbol = json_text(outcome, "symbol");
+    let action = json_text(outcome, "action");
+    let Some(advice_row) = advice_row else {
+        return json!({
+            "status": request_status,
+            "mode": "record_only_shadow",
+            "source_session_id": source_session_id,
+            "effect": "record_only_unavailable",
+            "advice_action": "not_recorded",
+            "match_source": "none",
+            "safety": "record_only_shadow_advice_cannot_change_queue_gate_or_saxo_authority",
+        });
+    };
+    let order_advice = decode_shadow_json_field(advice_row.get("order_advice_json"));
+    let order_advice = order_advice.as_array().cloned().unwrap_or_default();
+    let (advice_action, match_source) =
+        shadow_report_hermes_advice_match(&strategy_key, &symbol, &action, &order_advice);
+    let effect = if advice_action == "none" {
+        "record_only_no_matching_advice".to_string()
+    } else {
+        format!("record_only_{advice_action}")
+    };
+    let raw_payload = decode_shadow_json_field(advice_row.get("raw_payload_json"));
+    let context_self_check = raw_payload
+        .get("context_self_check")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    json!({
+        "status": json_text(advice_row, "status"),
+        "mode": "record_only_shadow",
+        "advice_id": json_text(advice_row, "id"),
+        "source_session_id": source_session_id,
+        "overall_recommendation": json_text(advice_row, "overall_recommendation"),
+        "effect": effect,
+        "advice_action": advice_action,
+        "match_source": match_source,
+        "context_self_check_complete": context_self_check.get("complete").and_then(JsonValue::as_bool),
+        "safety": "record_only_shadow_advice_cannot_change_queue_gate_or_saxo_authority",
+    })
+}
+
 /// A deliberately bounded, decision-time-only signal-gate projection for a
 /// shadow candidate. It shares the technical/Markov rule shape with the
 /// manager, but cannot honestly recreate its current market, cash, position,
@@ -3487,6 +3607,7 @@ fn shadow_report_outcome_candidates(
             let currency_text = currency.as_deref().unwrap_or_default();
             let report_time_context = json!({
                 "capture_version": "phase3_decision_time_prompt_projection_v2",
+                "strategy_key": trade.get("strategy_key").cloned().unwrap_or(JsonValue::Null),
                 "strategy_role": trade.get("strategy_role").cloned().unwrap_or(JsonValue::Null),
                 "estimated_value_dkk": trade.get("estimated_value_dkk").cloned().unwrap_or(JsonValue::Null),
                 "technical_reported": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
@@ -8572,9 +8693,10 @@ impl AppState {
                         )
                     });
             let deterministic_gate_code = json_text(&deterministic_gate, "gate_code");
+            let approved_policy_source = shadow_report_approved_policy_source(&context_json);
             let id = format!("shadow-report-outcome-{report_id}-{candidate_rank}");
             let result = sqlx::query(&format!(
-                "INSERT INTO shadow_report_outcomes (\n                    id, created_at, updated_at, report_id, analysis_pulse_key, analysis_pulse_label,\n                    candidate_rank, symbol, action, proposed_quantity, currency,\n                    earlier_pulse_report_id, appeared_in_earlier_pulse,\n                    deterministic_gate_code, deterministic_gate_json, hermes_effect, approved_policy_source,\n                    report_time_context_json, reported_reference_price_local,\n                    reference_price_local, reference_price_at, reference_price_source, reference_dkk_basis,\n                    status, observation_count\n                ) VALUES (\n                    '{}', '{}', '{}', {}, '{}', '{}',\n                    {}, '{}', '{}', {}, {},\n                    {}, {},\n                    '{}', '{}', 'not_requested_shadow', {},\n                    '{}', {},\n                    NULL, NULL, 'awaiting_saxo_infoprice', 'not_captured_phase3_initial',\n                    'awaiting_reference', 0\n                ) ON CONFLICT (report_id, candidate_rank) DO NOTHING",
+                "INSERT INTO shadow_report_outcomes (\n                    id, created_at, updated_at, report_id, analysis_pulse_key, analysis_pulse_label,\n                    candidate_rank, symbol, action, proposed_quantity, currency,\n                    earlier_pulse_report_id, appeared_in_earlier_pulse,\n                    deterministic_gate_code, deterministic_gate_json, hermes_effect, hermes_advice_snapshot_json, approved_policy_source,\n                    report_time_context_json, reported_reference_price_local,\n                    reference_price_local, reference_price_at, reference_price_source, reference_dkk_basis,\n                    status, observation_count\n                ) VALUES (\n                    '{}', '{}', '{}', {}, '{}', '{}',\n                    {}, '{}', '{}', {}, {},\n                    {}, {},\n                    '{}', '{}', 'not_requested_shadow', NULL, {},\n                    '{}', {},\n                    NULL, NULL, 'awaiting_saxo_infoprice', 'not_captured_phase3_initial',\n                    'awaiting_reference', 0\n                ) ON CONFLICT (report_id, candidate_rank) DO NOTHING",
                 sql_escape(&id),
                 sql_escape(&now),
                 sql_escape(&now),
@@ -8604,7 +8726,7 @@ impl AppState {
                     &deterministic_gate_code
                 }),
                 sql_escape(&serde_json::to_string(&deterministic_gate)?),
-                sql_optional_text(candidate.get("policy_source").and_then(JsonValue::as_str)),
+                sql_optional_text(approved_policy_source.as_deref()),
                 sql_escape(&serde_json::to_string(&context_json)?),
                 reported_reference_sql,
             ))
@@ -8620,6 +8742,140 @@ impl AppState {
             "skipped": skipped,
             "earlier_pulse_report_id": earlier_report_id,
             "safety": "observation_only_no_gate_hermes_queue_or_saxo_order_authority",
+        }))
+    }
+
+    /// Builds the only advisory context a shadow report may send to Hermes.
+    /// It is a compact local projection of durable rows; raw prompts, provider
+    /// content, broker payloads, sessions, and every execution surface remain
+    /// outside this method.
+    pub async fn shadow_report_hermes_advisory_context(&self, report_id: i64) -> Result<JsonValue> {
+        let report = self
+            .first_json(&format!(
+                "SELECT id, report_date, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, status\n                 FROM decision_reports WHERE id = {} LIMIT 1",
+                report_id.max(0)
+            ))
+            .await?
+            .unwrap_or(JsonValue::Null);
+        if !shadow_report_outcome_report_is_eligible(&report) {
+            return Ok(json!({
+                "status": "not_shadow_report",
+                "report_id": report_id,
+                "safety": "no_hermes_queue_or_saxo_authority",
+            }));
+        }
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, candidate_rank, symbol, action, proposed_quantity, deterministic_gate_code, deterministic_gate_json, approved_policy_source, report_time_context_json\n                 FROM shadow_report_outcomes\n                 WHERE report_id = {}\n                 ORDER BY candidate_rank ASC, id ASC",
+                report_id
+            ))
+            .await?;
+        let candidates = rows
+            .iter()
+            .map(|row| {
+                let context = decode_shadow_json_field(row.get("report_time_context_json"));
+                json!({
+                    "candidate_rank": value_i64(row, "candidate_rank"),
+                    "symbol": json_text(row, "symbol"),
+                    "action": json_text(row, "action"),
+                    "proposed_quantity": value_f64(row, "proposed_quantity"),
+                    "strategy_key": shadow_report_context_strategy_key(&context),
+                    "decision_time_signal_gate": decode_shadow_json_field(row.get("deterministic_gate_json")),
+                    "approved_policy_source": row.get("approved_policy_source").cloned().unwrap_or(JsonValue::Null),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({
+            "status": if candidates.is_empty() { "no_shadow_candidates" } else { "eligible" },
+            "report_id": report_id,
+            "pulse_key": json_text(&report, "analysis_pulse_key"),
+            "pulse_label": json_text(&report, "analysis_pulse_label"),
+            "report_date": json_text(&report, "report_date"),
+            "candidates": candidates,
+            "mode": "record_only_shadow",
+            "safety": "compact_local_shadow_context_no_queue_manager_gate_or_saxo_authority",
+        }))
+    }
+
+    /// Applies a compact Hermes record-only audit to persisted shadow rows.
+    /// It never reads a broker surface, invokes a manager, changes a gate, or
+    /// creates an execution order. A missing/timeout advisory is persisted as
+    /// unavailable evidence rather than being treated as no-op advice.
+    pub async fn record_shadow_report_hermes_effects(
+        &self,
+        report_id: i64,
+        request_summary: &JsonValue,
+    ) -> Result<JsonValue> {
+        let source_session_id = json_text(request_summary, "source_session_id");
+        let expected_session_id = format!("shadow-decision-advice-{}", report_id.max(0));
+        if source_session_id != expected_session_id {
+            return Ok(json!({
+                "status": "invalid_shadow_advice_session",
+                "updated": 0,
+                "safety": "no_queue_gate_or_saxo_authority",
+            }));
+        }
+        let context = self
+            .shadow_report_hermes_advisory_context(report_id)
+            .await?;
+        if json_text(&context, "status") != "eligible" {
+            return Ok(json!({
+                "status": json_text(&context, "status"),
+                "updated": 0,
+                "safety": "no_queue_gate_or_saxo_authority",
+            }));
+        }
+        let advice = self
+            .hermes_decision_advice_by_session(&source_session_id)
+            .await?;
+        let rows = self
+            .select_json(&format!(
+                "SELECT id, symbol, action, approved_policy_source, report_time_context_json\n                 FROM shadow_report_outcomes\n                 WHERE report_id = {}\n                 ORDER BY candidate_rank ASC, id ASC",
+                report_id
+            ))
+            .await?;
+        let request_status = json_text(request_summary, "status");
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let mut updated = 0usize;
+        let mut effect_counts = BTreeMap::<String, usize>::new();
+        for row in rows {
+            let snapshot = compact_shadow_report_hermes_effect(
+                &row,
+                advice.as_ref(),
+                if request_status.is_empty() {
+                    "unavailable"
+                } else {
+                    &request_status
+                },
+                &source_session_id,
+            );
+            let effect = json_text(&snapshot, "effect");
+            let context = decode_shadow_json_field(row.get("report_time_context_json"));
+            let policy_source = if json_text(&row, "approved_policy_source").is_empty() {
+                shadow_report_approved_policy_source(&context)
+            } else {
+                None
+            };
+            let result = sqlx::query(&format!(
+                "UPDATE shadow_report_outcomes\n                 SET updated_at = '{}', hermes_effect = '{}', hermes_advice_snapshot_json = '{}',\n                     approved_policy_source = COALESCE(approved_policy_source, {})\n                 WHERE id = '{}'",
+                sql_escape(&now),
+                sql_escape(&effect),
+                sql_escape(&serde_json::to_string(&snapshot)?),
+                sql_optional_text(policy_source.as_deref()),
+                sql_escape(&json_text(&row, "id")),
+            ))
+            .execute(&self.pool)
+            .await
+            .context("recording shadow Hermes advisory effect")?;
+            updated += result.rows_affected() as usize;
+            *effect_counts.entry(effect).or_default() += 1;
+        }
+        Ok(json!({
+            "status": if advice.is_some() { "recorded" } else { "unavailable_recorded" },
+            "updated": updated,
+            "source_session_id": source_session_id,
+            "effect_counts": effect_counts,
+            "safety": "record_only_shadow_advice_no_queue_manager_gate_or_saxo_authority",
         }))
     }
 
@@ -11378,6 +11634,7 @@ impl AppState {
                 deterministic_gate_code TEXT NOT NULL,
                 deterministic_gate_json TEXT,
                 hermes_effect TEXT NOT NULL,
+                hermes_advice_snapshot_json TEXT,
                 approved_policy_source TEXT,
                 report_time_context_json TEXT NOT NULL,
                 reported_reference_price_local REAL,
@@ -11471,6 +11728,7 @@ impl AppState {
         }
         for column in [
             "deterministic_gate_json TEXT",
+            "hermes_advice_snapshot_json TEXT",
             "reference_fx_json TEXT",
             "estimated_cost_json TEXT",
             "one_session_outcome_json TEXT",
@@ -15195,7 +15453,7 @@ market_data:
         let state = runtime_settings_test_state("{}").await;
         for sql in [
             "CREATE TABLE decision_reports (id INTEGER PRIMARY KEY, report_date TEXT NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, pulse_mode TEXT NOT NULL, queue_eligible INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, prompt_text TEXT, report_json TEXT)",
-            "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, deterministic_gate_json TEXT, hermes_effect TEXT NOT NULL, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
+            "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, deterministic_gate_json TEXT, hermes_effect TEXT NOT NULL, hermes_advice_snapshot_json TEXT, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
         ] {
             sqlx::query(sql).execute(&state.pool).await.unwrap();
         }
@@ -15246,6 +15504,41 @@ market_data:
         assert_eq!(
             rows[0]["reference_price_source"],
             json!("awaiting_saxo_infoprice")
+        );
+
+        sqlx::query(
+            "CREATE TABLE hermes_decision_advice (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, decision_report_id INTEGER NOT NULL, status TEXT NOT NULL, source_session_id TEXT, overall_recommendation TEXT NOT NULL, summary TEXT NOT NULL, order_advice_json TEXT NOT NULL, learning_notes_json TEXT NOT NULL, raw_payload_json TEXT NOT NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hermes_decision_advice (id, created_at, decision_report_id, status, source_session_id, overall_recommendation, summary, order_advice_json, learning_notes_json, raw_payload_json) VALUES ('shadow-advice', '2026-08-19T12:16:00Z', 7, 'received', 'shadow-decision-advice-7', 'review', 'not rendered', '[{\"symbol\":\"AAA:xcse\",\"side\":\"BUY\",\"action\":\"reduce\"}]', '[]', '{\"context_self_check\":{\"complete\":true}}')",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let hermes = state
+            .record_shadow_report_hermes_effects(
+                7,
+                &json!({"status": "received", "source_session_id": "shadow-decision-advice-7"}),
+            )
+            .await
+            .unwrap();
+        let hermes_row = state
+            .first_json("SELECT hermes_effect, hermes_advice_snapshot_json FROM shadow_report_outcomes WHERE report_id = 7")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hermes["status"], json!("recorded"));
+        assert_eq!(hermes_row["hermes_effect"], json!("record_only_reduce"));
+        assert_eq!(
+            hermes_row["hermes_advice_snapshot_json"]["mode"],
+            json!("record_only_shadow")
+        );
+        assert_eq!(
+            hermes_row["hermes_advice_snapshot_json"]["match_source"],
+            json!("symbol_side")
         );
 
         for column in [

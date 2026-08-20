@@ -2056,3 +2056,8 @@ broker mutation was added.
 - Shadow outcome rows now preserve a compact technical/Markov signal-gate projection from the server-generated prompt snapshots plus the server-owned policy values supplied at report creation. The projection records a stable technical, Markov, or explicit not-evaluated code alongside its limited result.
 - The projection is intentionally narrower than the Trading Manager. It names every omitted current-state gate, including market, cash, risk, holdings, cost, sellability, concentration, selection, and Hermes; a signal clear is not queue approval or execution authority.
 - The implementation reads only the durable report/prompt data while creating the outcome row. It adds no Saxo request, provider request, Hermes request, manager run, queue row, precheck, or broker mutation.
+
+## [2026-08-20] trading-quality | Audit shadow Hermes advice without authority
+
+- New shadow reports with candidates now use a distinct server-owned Hermes session and a compact read-only report/candidate projection. The per-candidate ledger retains only a record-only action/effect match, self-check completion, and approved strategy-policy provenance; raw prompts, rationale, broker data, sessions, and secrets stay outside this view.
+- Shadow Hermes advice is hard-coded record-only and never flows to a Trading Manager gate, execution queue, Saxo precheck, or broker mutation. Disabled, unavailable, failed, and timed-out advice is persisted as missing evidence rather than silently treated as no-op advice.

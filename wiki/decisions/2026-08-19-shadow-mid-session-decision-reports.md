@@ -169,6 +169,15 @@ concentration, cost, selection, and Hermes are deliberately omitted and named
 in every result. A signal clear is therefore not a Trading Manager evaluation,
 queue approval, broker precheck, execution simulation, or Saxo action.
 
+**Hermes record-only slice landed 2026-08-20:** each new shadow report with
+candidate rows now submits a separate, server-owned
+`shadow-decision-advice-<report-id>` Hermes session. The compact input is
+limited to durable report/candidate evidence and report-time approved-policy provenance;
+the stored result records only matching/action/effect and self-check state.
+The mode is hard-coded record-only even where the normal Trading Manager uses
+conservative advice. Neither successful advice nor a timeout can reach a
+manager gate, execution queue, broker precheck, or Saxo mutation.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
@@ -176,7 +185,7 @@ Remaining Phase 3 work, for each suggested BUY or SELL:
 - reference timestamp, local price, currency, DKK conversion basis, and proposed quantity; **landed for newly referenced rows**;
 - report-time technical, Markov, Quiver, Support Risk, cash, scoped concentration, and strategy-baseline snapshot; **landed for newly recorded rows**. Candidate entry thesis remains explicitly unavailable before an approved order/fill;
 - bounded decision-time technical/Markov signal-gate result and stable gate code; **landed for new rows, with all current-state manager gates explicitly omitted**;
-- Hermes record-only effect and the approved-policy source it used;
+- Hermes record-only effect and report-time approved-policy provenance; **landed for new rows, with unavailable advice retained as missing evidence**;
 - maximum adverse and favourable observed excursion when retained intraday samples are available; **landed for new rows, with sampled-coverage limits**;
 - an estimated after-cost outcome, explicitly separated from realised P/L; **landed for rows with a captured fresh FX basis**.
 
