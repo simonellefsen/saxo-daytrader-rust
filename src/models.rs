@@ -106,6 +106,7 @@ pub struct TuningPayload {
     pub window_days: i64,
     pub status: String,
     pub pulse_comparison: Vec<TuningPulseComparison>,
+    pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
     pub safety: String,
     pub interpretation: String,
 }
@@ -127,6 +128,32 @@ pub struct TuningPulseComparison {
     pub five_session_after_cost_positive_rate: Option<f64>,
     pub maturity: String,
     pub outcome_status: String,
+}
+
+/// Execution-attributed outcome evidence for one execution-eligible pulse.
+/// BUY forward movement and reconciled SELL accounting remain separate fields;
+/// neither is comparable to the shadow quote-to-close observation ledger.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningExecutionPulseOutcome {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub attributed_order_count: i64,
+    pub filled_buy_order_count: i64,
+    pub one_session: TuningDirectionalOutcome,
+    pub five_session: TuningDirectionalOutcome,
+    pub reconciled_sell_order_count: i64,
+    pub realised_sell_gain_dkk: f64,
+    pub realised_sell_commission_dkk: f64,
+    pub realised_sell_tax_dkk: f64,
+    pub maturity: String,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningDirectionalOutcome {
+    pub sample_count: i64,
+    pub average_directional_return_pct: Option<f64>,
+    pub positive_return_rate: Option<f64>,
 }
 
 /// Bounded and redacted diagnostic payload for a Decision Report.

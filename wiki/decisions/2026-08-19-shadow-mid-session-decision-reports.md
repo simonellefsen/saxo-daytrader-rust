@@ -206,6 +206,17 @@ window, denominator counts, `collecting`/`preliminary`/`mature` status, and
 read-only safety statement. It creates no composite score and does not invoke
 provider, Hermes, broker, gate, or order paths.
 
+**Landed 2026-08-20 (second slice):** the same payload now adds a distinct
+execution-evidence lane for the two execution-eligible opening pulses. It uses
+only local execution orders, reconciled fills, ledger rows, and persisted daily
+closes created within the identical 30-day window. BUY fields show
+equal-weighted one/five-session directional movement after reconciled fills;
+SELL fields show reconciled local-ledger gain, commission, and tax. Those are
+separate evidence types, explicitly not shadow results, not realised BUY P/L,
+and not a causal performance claim. The existing bounded Execution-tab query
+keeps its original recent-history behaviour; the Tuning call applies its own
+window cutoff.
+
 The first version should contain:
 
 1. **Outcome strip:** 30-day net return versus target, benchmark-relative return, current/max drawdown, after-cost expectancy, evidence completeness, and active experiment progress.

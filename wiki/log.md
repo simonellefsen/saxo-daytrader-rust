@@ -16,6 +16,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The first slice reports report reliability and durable shadow-ledger coverage: candidates, captured reference quotes, 1/5/20-session outcomes, and five-session estimated-after-cost positive rate. It labels execution-eligible rows as outside this initial shadow-ledger outcome join rather than mixing them with simulated results.
 - All maturity, window, denominator, as-of, and safety context are surfaced. The path reads local decision/shadow tables only; it has no provider, Hermes, gate, broker, or order authority. Remaining Phase 4 joins stay explicitly scoped by evidence type.
 
+## [2026-08-20] observability | Add separate execution evidence to Tuning
+
+- Extended the typed Tuning payload with a same-window execution-attribution lane for the EU and US opening pulses, reusing the existing bounded local order/fill/ledger/daily-close evidence builder with an explicit 30-day order cutoff.
+- The UI shows attributed orders, reconciled BUY fill movement at one/five sessions, and reconciled SELL gain/commission/tax separately. It does not call either result shadow performance, combine currencies, or imply causal impact.
+- This is a local read-only projection; it does not invoke Saxo, OpenRouter, Hermes, deterministic gates, or any order mutation. The existing Execution tab keeps its previous recent-history semantics.
+
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
 - Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.

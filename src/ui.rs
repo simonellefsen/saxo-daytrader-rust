@@ -9,7 +9,7 @@ use crate::{
         LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
         format_timestamp,
     },
-    models::{DashboardView, TuningPulseComparison},
+    models::{DashboardView, TuningExecutionPulseOutcome, TuningPulseComparison},
 };
 
 pub const CSS: &str = include_str!("../assets/app.css");
@@ -775,10 +775,82 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Execution-Eligible Outcome Evidence" }
+                        p { class: "muted", "Local execution, fill, ledger, and daily-close evidence for the same 30-day order window. BUY forward movement and reconciled SELL accounting are intentionally separate, and neither is mixed with the shadow table above." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Attributed orders" }
+                            th { "Filled BUYs" }
+                            th { "1-session BUY movement" }
+                            th { "5-session BUY movement" }
+                            th { "Reconciled SELLs" }
+                            th { "SELL gain / commission" }
+                            th { "Maturity" }
+                        } }
+                        tbody {
+                            for outcome in tuning.execution_pulse_outcomes.iter() {
+                                TuningExecutionPulseOutcomeRow { outcome: outcome.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
     }
+}
+
+#[component]
+fn TuningExecutionPulseOutcomeRow(
+    outcome: TuningExecutionPulseOutcome,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let one_session = tuning_directional_outcome_label(&outcome.one_session, &prefs);
+    let five_session = tuning_directional_outcome_label(&outcome.five_session, &prefs);
+    let realised_sell = format!(
+        "{} / {}",
+        format_signed_dkk(outcome.realised_sell_gain_dkk, &prefs),
+        format_dkk(outcome.realised_sell_commission_dkk, &prefs),
+    );
+    let realised_sell_tax = format_dkk(outcome.realised_sell_tax_dkk, &prefs);
+    rsx! {
+        tr {
+            td { strong { "{outcome.pulse_label}" } small { class: "muted block", "{outcome.pulse_key}" } }
+            td { "{outcome.attributed_order_count}" }
+            td { "{outcome.filled_buy_order_count}" }
+            td { "{one_session}" }
+            td { "{five_session}" }
+            td { "{outcome.reconciled_sell_order_count}" }
+            td { title: "Tax: {realised_sell_tax}", "{realised_sell}" }
+            td { span { class: "status {tuning_status_tone(&outcome.maturity)}", title: "{outcome.interpretation}", "{outcome.maturity}" } }
+        }
+    }
+}
+
+fn tuning_directional_outcome_label(
+    outcome: &crate::models::TuningDirectionalOutcome,
+    prefs: &LocalizationPrefs,
+) -> String {
+    if outcome.sample_count == 0 {
+        return "n/a".to_string();
+    }
+    let average = outcome
+        .average_directional_return_pct
+        .map(|value| format_percent(value, prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let positive_rate = outcome
+        .positive_return_rate
+        .map(|value| format_percent(value, prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    format!("{} · {} ({})", outcome.sample_count, average, positive_rate)
 }
 
 #[component]

@@ -38,7 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        TuningPayload, TuningPulseComparison,
+        TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
+        TuningPulseComparison,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3000,6 +3001,75 @@ fn tuning_pulse_comparison_from_rows(
     pulses.into()
 }
 
+fn tuning_optional_number(value: &JsonValue, key: &str) -> Option<f64> {
+    value
+        .get(key)
+        .and_then(JsonValue::as_f64)
+        .filter(|number| number.is_finite())
+}
+
+fn tuning_directional_outcome(value: &JsonValue) -> TuningDirectionalOutcome {
+    TuningDirectionalOutcome {
+        sample_count: value_i64(value, "sample_count"),
+        average_directional_return_pct: tuning_optional_number(
+            value,
+            "average_directional_return_pct",
+        ),
+        positive_return_rate: tuning_optional_number(value, "positive_return_rate"),
+    }
+}
+
+fn tuning_execution_pulse_outcomes_from_evidence(
+    evidence: &JsonValue,
+) -> Vec<TuningExecutionPulseOutcome> {
+    ["europe_open_followup", "us_open_followup"]
+        .into_iter()
+        .map(|pulse_key| {
+            let row = evidence
+                .get("pulses")
+                .and_then(JsonValue::as_array)
+                .and_then(|rows| {
+                    rows.iter().find(|row| json_text(row, "pulse_key") == pulse_key)
+                })
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let outcome = row.get("outcome").unwrap_or(&JsonValue::Null);
+            let one_session = tuning_directional_outcome(
+                outcome.get("one_session").unwrap_or(&JsonValue::Null),
+            );
+            let five_session = tuning_directional_outcome(
+                outcome.get("five_session").unwrap_or(&JsonValue::Null),
+            );
+            let maturity = if value_i64(outcome, "attributed_order_count") == 0 {
+                "no_attributable_orders"
+            } else if five_session.sample_count < TUNING_MATURE_OUTCOME_MINIMUM {
+                "collecting"
+            } else {
+                "preliminary"
+            };
+            let realised_sell = outcome.get("realised_sell").unwrap_or(&JsonValue::Null);
+            TuningExecutionPulseOutcome {
+                pulse_key: pulse_key.to_string(),
+                pulse_label: match pulse_key {
+                    "europe_open_followup" => "Nordic/EU Open +1h15",
+                    _ => "US Open +1h15",
+                }
+                .to_string(),
+                attributed_order_count: value_i64(outcome, "attributed_order_count"),
+                filled_buy_order_count: value_i64(outcome, "filled_buy_order_count"),
+                one_session,
+                five_session,
+                reconciled_sell_order_count: value_i64(outcome, "reconciled_sell_order_count"),
+                realised_sell_gain_dkk: value_f64(realised_sell, "realised_gain_dkk"),
+                realised_sell_commission_dkk: value_f64(realised_sell, "commission_dkk"),
+                realised_sell_tax_dkk: value_f64(realised_sell, "tax_dkk"),
+                maturity: maturity.to_string(),
+                interpretation: "BUY fields are equal-weighted directional price movement after reconciled fills. SELL fields are local-ledger realised accounting after reconciliation. These evidence types remain separate from each other and from shadow observations.".to_string(),
+            }
+        })
+        .collect()
+}
+
 /// One independently-refreshed data source the dashboard displays.
 ///
 /// `stale_after_minutes` is derived from each source's own cadence rather than
@@ -4397,6 +4467,7 @@ impl AppState {
                     window_days: TUNING_PULSE_WINDOW_DAYS,
                     status: "unavailable".to_string(),
                     pulse_comparison: Vec::new(),
+                    execution_pulse_outcomes: Vec::new(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -4408,6 +4479,7 @@ impl AppState {
                 window_days: TUNING_PULSE_WINDOW_DAYS,
                 status: "not_loaded".to_string(),
                 pulse_comparison: Vec::new(),
+                execution_pulse_outcomes: Vec::new(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -4591,6 +4663,11 @@ impl AppState {
             ))
             .await?;
         let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
+        let execution_evidence = self
+            .decision_pulse_outcome_evidence_since(Some(&window_start_text))
+            .await?;
+        let execution_pulse_outcomes =
+            tuning_execution_pulse_outcomes_from_evidence(&execution_evidence);
         let shadow_pulses = pulse_comparison
             .iter()
             .filter(|pulse| pulse.authority == "shadow_observation_only")
@@ -4611,8 +4688,9 @@ impl AppState {
             window_days: TUNING_PULSE_WINDOW_DAYS,
             status: status.to_string(),
             pulse_comparison,
-            safety: "read_only_local_decision_reports_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This first slice compares report reliability with shadow-observation coverage. Shadow 1/5/20-session and after-cost fields are equal-weighted observational quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution-eligible reports remain separate because their comparable outcome attribution is not joined into this initial slice.".to_string(),
+            execution_pulse_outcomes,
+            safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -7195,6 +7273,21 @@ impl AppState {
     }
 
     async fn decision_pulse_outcome_evidence(&self) -> Result<JsonValue> {
+        self.decision_pulse_outcome_evidence_since(None).await
+    }
+
+    /// Builds execution-attributed evidence from local orders, fills, ledger,
+    /// and persisted daily closes. An optional order-created cutoff lets the
+    /// Tuning view use the same explicit observation window as its report and
+    /// shadow lanes without changing the Execution tab's bounded recent view.
+    async fn decision_pulse_outcome_evidence_since(
+        &self,
+        created_since: Option<&str>,
+    ) -> Result<JsonValue> {
+        let created_filter = created_since
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(" AND eo.created_at >= '{}'", sql_escape(value)))
+            .unwrap_or_default();
         let rows = self
             .select_json(&format!(
                 "SELECT eo.id, eo.created_at, eo.report_id, eo.symbol, eo.action, eo.quantity,
@@ -7216,6 +7309,7 @@ impl AppState {
                  LEFT JOIN decision_reports dr ON dr.id = eo.report_id
                  WHERE eo.action IN ('BUY', 'SELL')
                    AND (eo.report_id IS NOT NULL OR eo.strategy_type = 'portfolio_sync')
+                   {created_filter}
                  ORDER BY eo.created_at DESC, eo.id DESC
                  LIMIT {}",
                 DECISION_PULSE_OUTCOME_EVIDENCE_LIMIT
@@ -17915,6 +18009,59 @@ market_data:
         assert_eq!(us_shadow.five_session_after_cost_positive_rate, Some(0.6));
         assert_eq!(us_shadow.maturity, "mature");
         assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
+    }
+
+    #[test]
+    fn tuning_execution_outcomes_keep_buy_movement_and_sell_accounting_separate() {
+        let evidence = json!({
+            "pulses": [{
+                "pulse_key": "europe_open_followup",
+                "pulse_label": "EU Open",
+                "outcome": {
+                    "attributed_order_count": 3,
+                    "filled_buy_order_count": 2,
+                    "reconciled_sell_order_count": 1,
+                    "one_session": {
+                        "sample_count": 2,
+                        "average_directional_return_pct": 0.015,
+                        "positive_return_rate": 0.5,
+                    },
+                    "five_session": {
+                        "sample_count": 20,
+                        "average_directional_return_pct": 0.02,
+                        "positive_return_rate": 0.6,
+                    },
+                    "realised_sell": {
+                        "realised_gain_dkk": 125.0,
+                        "commission_dkk": 3.0,
+                        "tax_dkk": 0.0,
+                    },
+                }
+            }]
+        });
+
+        let outcomes = tuning_execution_pulse_outcomes_from_evidence(&evidence);
+        assert_eq!(outcomes.len(), 2);
+        let eu = outcomes
+            .iter()
+            .find(|outcome| outcome.pulse_key == "europe_open_followup")
+            .expect("EU execution evidence");
+        assert_eq!(eu.attributed_order_count, 3);
+        assert_eq!(eu.filled_buy_order_count, 2);
+        assert_eq!(eu.one_session.sample_count, 2);
+        assert_eq!(eu.five_session.positive_return_rate, Some(0.6));
+        assert_eq!(eu.reconciled_sell_order_count, 1);
+        assert_eq!(eu.realised_sell_gain_dkk, 125.0);
+        assert_eq!(eu.realised_sell_commission_dkk, 3.0);
+        assert_eq!(eu.maturity, "preliminary");
+
+        let us = outcomes
+            .iter()
+            .find(|outcome| outcome.pulse_key == "us_open_followup")
+            .expect("US execution evidence");
+        assert_eq!(us.attributed_order_count, 0);
+        assert_eq!(us.one_session.sample_count, 0);
+        assert_eq!(us.maturity, "no_attributable_orders");
     }
 
     #[test]
