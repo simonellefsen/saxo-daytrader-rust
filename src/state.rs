@@ -38,6 +38,7 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        TuningPayload, TuningPulseComparison,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -109,6 +110,8 @@ const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
+const TUNING_PULSE_WINDOW_DAYS: i64 = 30;
+const TUNING_MATURE_OUTCOME_MINIMUM: i64 = 20;
 const RETIRED_RUNTIME_SETTING_KEYS: &[&str] = &[
     "strategy.capital.cash_buffer",
     "strategy.swing.cash_buffer_pct",
@@ -2830,6 +2833,173 @@ fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
 
+fn tuning_pulse_kind(value: &str) -> Option<&'static str> {
+    value.split(':').next().and_then(|kind| match kind {
+        "europe_open_followup" => Some("europe_open_followup"),
+        "europe_mid_session_shadow" => Some("europe_mid_session_shadow"),
+        "us_open_followup" => Some("us_open_followup"),
+        "us_mid_session_shadow" => Some("us_mid_session_shadow"),
+        _ => None,
+    })
+}
+
+fn tuning_pulse_comparison_from_rows(
+    report_rows: &[JsonValue],
+    shadow_rows: &[JsonValue],
+) -> Vec<TuningPulseComparison> {
+    let mut pulses = [
+        TuningPulseComparison {
+            pulse_key: "europe_open_followup".to_string(),
+            pulse_label: "Nordic/EU Open +1h15".to_string(),
+            authority: "execution_eligible".to_string(),
+            report_count: 0,
+            terminal_success_count: 0,
+            terminal_success_rate: None,
+            shadow_candidate_count: 0,
+            shadow_reference_captured_count: 0,
+            one_session_outcome_count: 0,
+            five_session_outcome_count: 0,
+            twenty_session_outcome_count: 0,
+            five_session_after_cost_count: 0,
+            five_session_after_cost_positive_rate: None,
+            maturity: "not_applicable".to_string(),
+            outcome_status: "execution_outcomes_not_in_initial_shadow_slice".to_string(),
+        },
+        TuningPulseComparison {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            authority: "shadow_observation_only".to_string(),
+            report_count: 0,
+            terminal_success_count: 0,
+            terminal_success_rate: None,
+            shadow_candidate_count: 0,
+            shadow_reference_captured_count: 0,
+            one_session_outcome_count: 0,
+            five_session_outcome_count: 0,
+            twenty_session_outcome_count: 0,
+            five_session_after_cost_count: 0,
+            five_session_after_cost_positive_rate: None,
+            maturity: "collecting".to_string(),
+            outcome_status: "awaiting_shadow_candidates".to_string(),
+        },
+        TuningPulseComparison {
+            pulse_key: "us_open_followup".to_string(),
+            pulse_label: "US Open +1h15".to_string(),
+            authority: "execution_eligible".to_string(),
+            report_count: 0,
+            terminal_success_count: 0,
+            terminal_success_rate: None,
+            shadow_candidate_count: 0,
+            shadow_reference_captured_count: 0,
+            one_session_outcome_count: 0,
+            five_session_outcome_count: 0,
+            twenty_session_outcome_count: 0,
+            five_session_after_cost_count: 0,
+            five_session_after_cost_positive_rate: None,
+            maturity: "not_applicable".to_string(),
+            outcome_status: "execution_outcomes_not_in_initial_shadow_slice".to_string(),
+        },
+        TuningPulseComparison {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            authority: "shadow_observation_only".to_string(),
+            report_count: 0,
+            terminal_success_count: 0,
+            terminal_success_rate: None,
+            shadow_candidate_count: 0,
+            shadow_reference_captured_count: 0,
+            one_session_outcome_count: 0,
+            five_session_outcome_count: 0,
+            twenty_session_outcome_count: 0,
+            five_session_after_cost_count: 0,
+            five_session_after_cost_positive_rate: None,
+            maturity: "collecting".to_string(),
+            outcome_status: "awaiting_shadow_candidates".to_string(),
+        },
+    ];
+    for row in report_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        pulse.report_count += 1;
+        if matches!(
+            json_text(row, "status").as_str(),
+            "completed" | "xai_fallback"
+        ) {
+            pulse.terminal_success_count += 1;
+        }
+    }
+    for pulse in &mut pulses {
+        if pulse.report_count > 0 {
+            pulse.terminal_success_rate =
+                Some(pulse.terminal_success_count as f64 / pulse.report_count as f64);
+        }
+    }
+
+    let mut after_cost_positive_counts = [0_i64; 4];
+    for row in shadow_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(index) = pulses.iter().position(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        let pulse = &mut pulses[index];
+        if pulse.authority != "shadow_observation_only" {
+            continue;
+        }
+        pulse.shadow_candidate_count += 1;
+        if json_text(row, "reference_price_source") == "saxo_infoprices" {
+            pulse.shadow_reference_captured_count += 1;
+        }
+        if !decode_shadow_json_field(row.get("one_session_outcome_json")).is_null() {
+            pulse.one_session_outcome_count += 1;
+        }
+        if !decode_shadow_json_field(row.get("five_session_outcome_json")).is_null() {
+            pulse.five_session_outcome_count += 1;
+        }
+        if !decode_shadow_json_field(row.get("twenty_session_outcome_json")).is_null() {
+            pulse.twenty_session_outcome_count += 1;
+        }
+        let after_cost = decode_shadow_json_field(row.get("five_session_after_cost_outcome_json"));
+        if json_text(&after_cost, "status") == "estimated" {
+            pulse.five_session_after_cost_count += 1;
+            if value_f64(&after_cost, "estimated_after_cost_return_pct") > 0.0 {
+                after_cost_positive_counts[index] += 1;
+            }
+        }
+    }
+    for (index, pulse) in pulses.iter_mut().enumerate() {
+        if pulse.authority != "shadow_observation_only" {
+            continue;
+        }
+        if pulse.shadow_candidate_count == 0 {
+            pulse.outcome_status = "awaiting_shadow_candidates".to_string();
+        } else if pulse.shadow_reference_captured_count == 0 {
+            pulse.outcome_status = "awaiting_saxo_reference_quote".to_string();
+        } else {
+            pulse.outcome_status = "observational_shadow_outcomes".to_string();
+        }
+        if pulse.five_session_after_cost_count > 0 {
+            pulse.five_session_after_cost_positive_rate = Some(
+                after_cost_positive_counts[index] as f64
+                    / pulse.five_session_after_cost_count as f64,
+            );
+        }
+        pulse.maturity = if pulse.twenty_session_outcome_count >= TUNING_MATURE_OUTCOME_MINIMUM {
+            "mature".to_string()
+        } else if pulse.five_session_outcome_count >= TUNING_MATURE_OUTCOME_MINIMUM {
+            "preliminary".to_string()
+        } else {
+            "collecting".to_string()
+        };
+    }
+    pulses.into()
+}
+
 /// One independently-refreshed data source the dashboard displays.
 ///
 /// `stale_after_minutes` is derived from each source's own cadence rather than
@@ -4218,6 +4388,30 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let tuning = if dashboard_loads_tab_exclusive_data(&active_view, "tuning") {
+            self.tuning_payload().await.unwrap_or_else(|err| {
+                warn!("dashboard tuning evidence degraded: {err:#}");
+                TuningPayload {
+                    generated_at: Utc::now().to_rfc3339(),
+                    window_start: String::new(),
+                    window_days: TUNING_PULSE_WINDOW_DAYS,
+                    status: "unavailable".to_string(),
+                    pulse_comparison: Vec::new(),
+                    safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
+                    interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
+                }
+            })
+        } else {
+            TuningPayload {
+                generated_at: String::new(),
+                window_start: String::new(),
+                window_days: TUNING_PULSE_WINDOW_DAYS,
+                status: "not_loaded".to_string(),
+                pulse_comparison: Vec::new(),
+                safety: "not_loaded_outside_tuning_tab".to_string(),
+                interpretation: String::new(),
+            }
+        };
         let latest_decision = if active_view == "prompts" {
             selected_decision.clone()
         } else {
@@ -4366,7 +4560,60 @@ impl AppState {
             latest_decision,
             selected_decision,
             decision_gate_replay,
+            tuning,
         }
+    }
+
+    async fn tuning_payload(&self) -> Result<TuningPayload> {
+        let generated_at = Utc::now();
+        let window_start = generated_at - Duration::days(TUNING_PULSE_WINDOW_DAYS);
+        let window_start_text = window_start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let pulse_filter = "(analysis_pulse_key LIKE 'europe_open_followup:%' \
+            OR analysis_pulse_key LIKE 'europe_mid_session_shadow:%' \
+            OR analysis_pulse_key LIKE 'us_open_followup:%' \
+            OR analysis_pulse_key LIKE 'us_mid_session_shadow:%')";
+        let report_rows = self
+            .select_json(&format!(
+                "SELECT analysis_pulse_key, status
+                 FROM decision_reports
+                 WHERE created_at >= '{}' AND {pulse_filter}",
+                sql_escape(&window_start_text),
+            ))
+            .await?;
+        let shadow_rows = self
+            .select_json(&format!(
+                "SELECT analysis_pulse_key, reference_price_source,
+                        one_session_outcome_json, five_session_outcome_json,
+                        twenty_session_outcome_json, five_session_after_cost_outcome_json
+                 FROM shadow_report_outcomes
+                 WHERE created_at >= '{}' AND {pulse_filter}",
+                sql_escape(&window_start_text),
+            ))
+            .await?;
+        let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
+        let shadow_pulses = pulse_comparison
+            .iter()
+            .filter(|pulse| pulse.authority == "shadow_observation_only")
+            .collect::<Vec<_>>();
+        let status = if shadow_pulses.iter().any(|pulse| pulse.maturity == "mature") {
+            "mature"
+        } else if shadow_pulses
+            .iter()
+            .any(|pulse| pulse.maturity == "preliminary")
+        {
+            "preliminary"
+        } else {
+            "collecting"
+        };
+        Ok(TuningPayload {
+            generated_at: generated_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            window_start: window_start_text,
+            window_days: TUNING_PULSE_WINDOW_DAYS,
+            status: status.to_string(),
+            pulse_comparison,
+            safety: "read_only_local_decision_reports_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
+            interpretation: "This first slice compares report reliability with shadow-observation coverage. Shadow 1/5/20-session and after-cost fields are equal-weighted observational quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution-eligible reports remain separate because their comparable outcome attribution is not joined into this initial slice.".to_string(),
+        })
     }
 
     pub async fn overview_payload(&self) -> Result<JsonValue> {
@@ -17607,6 +17854,70 @@ market_data:
     }
 
     #[test]
+    fn tuning_pulse_comparison_separates_execution_reports_from_mature_shadow_evidence() {
+        let reports = vec![
+            json!({
+                "analysis_pulse_key": "europe_open_followup:2026-08-19",
+                "status": "completed",
+            }),
+            json!({
+                "analysis_pulse_key": "europe_open_followup:2026-08-20",
+                "status": "xai_error",
+            }),
+            json!({
+                "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
+                "status": "completed",
+            }),
+        ];
+        let shadows = (0..20)
+            .map(|index| {
+                json!({
+                    "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
+                    "reference_price_source": "saxo_infoprices",
+                    "one_session_outcome_json": "{\"status\":\"observed\"}",
+                    "five_session_outcome_json": "{\"status\":\"observed\"}",
+                    "twenty_session_outcome_json": "{\"status\":\"observed\"}",
+                    "five_session_after_cost_outcome_json": serde_json::to_string(&json!({
+                        "status": "estimated",
+                        "estimated_after_cost_return_pct": if index < 12 { 0.01 } else { -0.01 },
+                    })).unwrap(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let pulses = tuning_pulse_comparison_from_rows(&reports, &shadows);
+        let eu_open = pulses
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_open_followup")
+            .expect("EU opening pulse");
+        assert_eq!(eu_open.authority, "execution_eligible");
+        assert_eq!(eu_open.report_count, 2);
+        assert_eq!(eu_open.terminal_success_count, 1);
+        assert_eq!(eu_open.terminal_success_rate, Some(0.5));
+        assert_eq!(eu_open.shadow_candidate_count, 0);
+        assert_eq!(
+            eu_open.outcome_status,
+            "execution_outcomes_not_in_initial_shadow_slice"
+        );
+
+        let us_shadow = pulses
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow pulse");
+        assert_eq!(us_shadow.authority, "shadow_observation_only");
+        assert_eq!(us_shadow.report_count, 1);
+        assert_eq!(us_shadow.shadow_candidate_count, 20);
+        assert_eq!(us_shadow.shadow_reference_captured_count, 20);
+        assert_eq!(us_shadow.one_session_outcome_count, 20);
+        assert_eq!(us_shadow.five_session_outcome_count, 20);
+        assert_eq!(us_shadow.twenty_session_outcome_count, 20);
+        assert_eq!(us_shadow.five_session_after_cost_count, 20);
+        assert_eq!(us_shadow.five_session_after_cost_positive_rate, Some(0.6));
+        assert_eq!(us_shadow.maturity, "mature");
+        assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
+    }
+
+    #[test]
     fn decision_pulse_outcome_evidence_keeps_buy_price_movement_and_sell_ledger_gains_separate() {
         let evidence = decision_pulse_outcome_evidence_from_observations(&[
             json!({
@@ -19229,6 +19540,7 @@ analysis_windows:
             "hermes",
             "markov",
             "quiver",
+            "tuning",
             "watchlists",
         ] {
             assert!(dashboard_loads_tab_exclusive_data(tab, tab));

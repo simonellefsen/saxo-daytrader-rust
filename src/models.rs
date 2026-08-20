@@ -91,6 +91,42 @@ pub struct DashboardView {
     pub latest_decision: JsonValue,
     pub selected_decision: JsonValue,
     pub decision_gate_replay: JsonValue,
+    pub tuning: TuningPayload,
+}
+
+/// Read-only evidence used to compare the scheduled decision pulses.
+///
+/// The first Tuning-tab slice deliberately gives execution-eligible reports
+/// and observation-only shadow reports separate outcome fields. It is not an
+/// execution score, a recommendation, or a composite strategy rating.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningPayload {
+    pub generated_at: String,
+    pub window_start: String,
+    pub window_days: i64,
+    pub status: String,
+    pub pulse_comparison: Vec<TuningPulseComparison>,
+    pub safety: String,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningPulseComparison {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub authority: String,
+    pub report_count: i64,
+    pub terminal_success_count: i64,
+    pub terminal_success_rate: Option<f64>,
+    pub shadow_candidate_count: i64,
+    pub shadow_reference_captured_count: i64,
+    pub one_session_outcome_count: i64,
+    pub five_session_outcome_count: i64,
+    pub twenty_session_outcome_count: i64,
+    pub five_session_after_cost_count: i64,
+    pub five_session_after_cost_positive_rate: Option<f64>,
+    pub maturity: String,
+    pub outcome_status: String,
 }
 
 /// Bounded and redacted diagnostic payload for a Decision Report.

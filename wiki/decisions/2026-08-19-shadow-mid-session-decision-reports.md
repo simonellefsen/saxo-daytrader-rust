@@ -6,7 +6,7 @@ tags:
   - decision-reports
   - hermes
   - observability
-updated: 2026-08-19
+updated: 2026-08-20
 sources:
   - /Users/lindau/codex/rust_daytrader/deploy/k8s/base/config.k8s.yaml
   - /Users/lindau/codex/rust_daytrader/src/xai_decision.rs
@@ -22,9 +22,9 @@ sources:
 
 ## Status
 
-Implementation underway. Phase 0, Phase 1, Phase 2, and Phase 3's
-capture/reference, daily-close maturity, and fixed-reference FX/cost estimate
-slices are landed.
+Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
+capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
+and the first Phase 4 pulse-comparison slice are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -194,6 +194,17 @@ Shadow observations never alter holdings, cash, capacity, gates, experiments, or
 ### Phase 4: Tuning Dashboard
 
 Add a typed, read-only tuning payload and a lazily loaded Tuning tab. Reuse existing evidence builders rather than recomputing incompatible versions in the UI.
+
+**Landed 2026-08-20 (first slice):** a 30-day, typed pulse comparison covers
+EU open, EU shadow, US open, and US shadow. It reports per-pulse report count,
+terminal report success, shadow candidate/reference coverage, 1/5/20-session
+observation counts, and the five-session estimated-after-cost positive rate.
+Execution-eligible rows explicitly show that comparable outcome attribution is
+not part of this initial shadow-ledger slice; their figures are never blended
+with observation-only results. The payload carries its as-of timestamp,
+window, denominator counts, `collecting`/`preliminary`/`mature` status, and
+read-only safety statement. It creates no composite score and does not invoke
+provider, Hermes, broker, gate, or order paths.
 
 The first version should contain:
 

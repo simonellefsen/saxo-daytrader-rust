@@ -9,7 +9,7 @@ use crate::{
         LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
         format_timestamp,
     },
-    models::DashboardView,
+    models::{DashboardView, TuningPulseComparison},
 };
 
 pub const CSS: &str = include_str!("../assets/app.css");
@@ -619,6 +619,7 @@ fn TabNav(active_view: String) -> Element {
             TabLink { href: "/?view=decisions", label: "Decision Reports", active: active_view == "decisions" }
             TabLink { href: "/?view=prompts", label: "AI Prompts", active: active_view == "prompts" }
             TabLink { href: "/?view=hermes", label: "Hermes", active: active_view == "hermes" }
+            TabLink { href: "/?view=tuning", label: "Tuning", active: active_view == "tuning" }
             TabLink { href: "/?view=eod", label: "End-Of-Day", active: active_view == "eod" }
             TabLink { href: "/?view=execution", label: "Execution", active: active_view == "execution" }
         }
@@ -718,6 +719,7 @@ fn DashboardBody(
         "decisions" => rsx! { DecisionsView { data, prefs } },
         "prompts" => rsx! { PromptsView { data, prefs } },
         "hermes" => rsx! { HermesView { data, prefs } },
+        "tuning" => rsx! { TuningView { data, prefs } },
         "eod" => rsx! { EndOfDayView { data, prefs } },
         "execution" => rsx! { ExecutionView { data, prefs } },
         _ => rsx! {
@@ -730,6 +732,90 @@ fn DashboardBody(
                 hour_cycle
             }
         },
+    }
+}
+
+#[component]
+fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let tuning = data.tuning.clone();
+    let generated_at = format_timestamp(&tuning.generated_at, &prefs);
+    let window_start = format_timestamp(&tuning.window_start, &prefs);
+    rsx! {
+        section { class: "section stack loose",
+            div { class: "section-title-row",
+                div {
+                    h2 { "Tuning Evidence" }
+                    p { class: "muted", "Read-only pulse comparison. It intentionally keeps execution-eligible reports separate from observation-only shadow outcomes." }
+                }
+                span { class: "status {tuning_status_tone(&tuning.status)}", "{tuning.status}" }
+            }
+            div { class: "mini-grid",
+                MetricCard { label: "Evidence window", value: format!("{} days", tuning.window_days), tone: "" }
+                MetricCard { label: "Window start", value: window_start, tone: "" }
+                MetricCard { label: "Generated", value: generated_at, tone: "" }
+                MetricCard { label: "Mature threshold", value: "20 shadow outcomes", tone: "" }
+            }
+            div { class: "table-wrap",
+                table {
+                    thead { tr {
+                        th { "Pulse" }
+                        th { "Authority" }
+                        th { "Reports" }
+                        th { "Terminal success" }
+                        th { "Shadow candidates" }
+                        th { "Reference quotes" }
+                        th { "1 / 5 / 20 sessions" }
+                        th { "5-session after-cost" }
+                        th { "Maturity" }
+                    } }
+                    tbody {
+                        for pulse in tuning.pulse_comparison.iter() {
+                            TuningPulseComparisonRow { pulse: pulse.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
+            p { class: "muted", "{tuning.interpretation}" }
+            p { class: "muted", "Safety: {tuning.safety}" }
+        }
+    }
+}
+
+#[component]
+fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPrefs) -> Element {
+    let success_rate = pulse
+        .terminal_success_rate
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let after_cost_positive_rate = pulse
+        .five_session_after_cost_positive_rate
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let authority = pulse.authority.replace('_', " ");
+    let outcome_status = pulse.outcome_status.replace('_', " ");
+    rsx! {
+        tr {
+            td { strong { "{pulse.pulse_label}" } small { class: "muted block", "{pulse.pulse_key}" } }
+            td { "{authority}" }
+            td { "{pulse.report_count}" }
+            td { "{pulse.terminal_success_count} · {success_rate}" }
+            td { "{pulse.shadow_candidate_count}" }
+            td { "{pulse.shadow_reference_captured_count}" }
+            td { "{pulse.one_session_outcome_count} / {pulse.five_session_outcome_count} / {pulse.twenty_session_outcome_count}" }
+            td { "{pulse.five_session_after_cost_count} · {after_cost_positive_rate}" }
+            td {
+                span { class: "status {tuning_status_tone(&pulse.maturity)}", title: "{outcome_status}", "{pulse.maturity}" }
+            }
+        }
+    }
+}
+
+fn tuning_status_tone(status: &str) -> &'static str {
+    match status {
+        "mature" => "good-status",
+        "collecting" | "preliminary" => "warn-status",
+        "unavailable" => "bad-status",
+        _ => "",
     }
 }
 

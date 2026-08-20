@@ -2520,7 +2520,9 @@ fn normalize_view(value: Option<&str>) -> String {
         "overview" | "portfolio" => "overview".to_string(),
         "eod" | "end-of-day" => "eod".to_string(),
         "performance" | "market" | "watchlists" | "markov" | "quiver" | "decisions"
-        | "execution" | "prompts" | "hermes" => value.unwrap_or("overview").to_lowercase(),
+        | "execution" | "prompts" | "hermes" | "tuning" => {
+            value.unwrap_or("overview").to_lowercase()
+        }
         _ => "overview".to_string(),
     }
 }

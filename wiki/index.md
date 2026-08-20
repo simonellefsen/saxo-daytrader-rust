@@ -45,7 +45,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 ## Decisions
 
 - [decisions/README](decisions/README.md) - Landing page for architecture and workflow decision records.
-- [Shadow mid-session Decision Reports and tuning evidence](decisions/2026-08-19-shadow-mid-session-decision-reports.md) - Plan for a 14:15 Copenhagen EU pulse and 14:15 New York US pulse (normally 20:15 Copenhagen), non-execution guarantees, tuning metrics, EOD/Hermes integration, and promotion evidence.
+- [Shadow mid-session Decision Reports and tuning evidence](decisions/2026-08-19-shadow-mid-session-decision-reports.md) - Implemented 14:15 Copenhagen EU and 14:15 New York US shadow pulses, non-execution guarantees, initial typed tuning pulse comparison, and remaining EOD/Hermes/promotion evidence plan.
 
 ## Experiments
 

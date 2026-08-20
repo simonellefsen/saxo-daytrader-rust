@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-20] observability | Add the first typed Tuning pulse comparison
+
+- Added a lazily loaded, read-only Tuning tab with a typed 30-day pulse-comparison payload for EU open, EU shadow, US open, and US shadow reports.
+- The first slice reports report reliability and durable shadow-ledger coverage: candidates, captured reference quotes, 1/5/20-session outcomes, and five-session estimated-after-cost positive rate. It labels execution-eligible rows as outside this initial shadow-ledger outcome join rather than mixing them with simulated results.
+- All maturity, window, denominator, as-of, and safety context are surfaced. The path reads local decision/shadow tables only; it has no provider, Hermes, gate, broker, or order authority. Remaining Phase 4 joins stay explicitly scoped by evidence type.
 
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
