@@ -930,6 +930,28 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Current Protective-Stop Coverage" }
+                        p { class: "muted", "Current local broker-position and stop-record audit, intentionally separate from the 30-day pulse window. It counts only broker-confirmed stop evidence; planned or uncertain stops do not count as coverage." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Broker positions" }
+                            th { "Protected / partial / planned / unprotected" }
+                            th { "Confirmed quantity coverage" }
+                            th { "Exceptions" }
+                        } }
+                        tbody {
+                            TuningProtectiveStopCoverageRow { coverage: tuning.protective_stop_coverage.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
@@ -1158,6 +1180,33 @@ fn TuningExecutionLifecycleEvidenceRow(
     }
 }
 
+#[component]
+fn TuningProtectiveStopCoverageRow(
+    coverage: crate::models::TuningProtectiveStopCoverage,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let states = format!(
+        "{} / {} / {} / {}",
+        coverage.protected_count,
+        coverage.partial_count,
+        coverage.planned_count,
+        coverage.unprotected_count,
+    );
+    let ratio = coverage
+        .confirmed_coverage_ratio
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    rsx! {
+        tr {
+            td { span { class: "status {protective_stop_coverage_tone(&coverage.status)}", "{coverage.status}" } }
+            td { "{coverage.position_count}" }
+            td { "{states}" }
+            td { "{ratio}" }
+            td { "{coverage.exception_count}" }
+        }
+    }
+}
+
 fn tuning_directional_outcome_label(
     outcome: &crate::models::TuningDirectionalOutcome,
     prefs: &LocalizationPrefs,
@@ -1227,6 +1276,15 @@ fn tuning_status_tone(status: &str) -> &'static str {
     match status {
         "mature" => "good-status",
         "collecting" | "preliminary" => "warn-status",
+        "unavailable" => "bad-status",
+        _ => "",
+    }
+}
+
+fn protective_stop_coverage_tone(status: &str) -> &'static str {
+    match status {
+        "covered" => "good-status",
+        "attention_required" | "planned_only" => "warn-status",
         "unavailable" => "bad-status",
         _ => "",
     }

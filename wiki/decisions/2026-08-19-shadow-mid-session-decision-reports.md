@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first eight Phase 4 tuning slices are landed.
+and the first nine Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -262,6 +262,15 @@ coverage for the EU/US opening pulses. It consumes the same bounded local
 evidence window as execution outcomes; it never polls Saxo, infers elapsed
 time, asserts a current broker state, or changes a manager, queue, precheck,
 or broker action.
+
+**Landed 2026-08-20 (ninth slice):** the Tuning view now includes the existing
+typed protective-stop audit as a separate current local snapshot: broker
+positions; protected, partial, planned, and unprotected counts; confirmed
+quantity coverage; and exceptions. It counts only persisted broker-confirmed
+stop evidence, leaves planned/uncertain records non-protective, and is never
+presented as a 30-day pulse outcome, a current Saxo poll, or an instruction to
+place/cancel a stop. The audit has no provider, Hermes, manager, queue,
+precheck, or broker mutation path.
 
 The first version should contain:
 

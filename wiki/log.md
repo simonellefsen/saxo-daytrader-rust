@@ -2108,3 +2108,8 @@ broker mutation was added.
 
 - Added a typed Tuning read model for bounded, persisted local execution-order status coverage for the EU/US execution-eligible pulses. Queued, broker-active, broker-state-unknown, terminal, and unclassified counts remain distinct.
 - The view reuses existing local execution evidence only. It neither polls Saxo nor replays the manager, and it makes no latency, fill-quality, or current broker-state claim.
+
+## [2026-08-20] observability | Expose current protective-stop coverage in Tuning
+
+- Added a typed Tuning projection of the existing local protective-stop audit: position states, confirmed quantity coverage, and exceptions remain separately labelled from 30-day decision-pulse evidence.
+- The snapshot only counts broker-confirmed stop evidence. It neither polls Saxo nor makes a stop-placement, cancellation, queue, manager, or Hermes call.

@@ -39,8 +39,9 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome,
-        TuningPayload, TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
-        TuningShadowHermesEvidence, TuningShadowSupportRiskEvidence,
+        TuningPayload, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowSupportRiskEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3472,6 +3473,30 @@ fn tuning_execution_lifecycle_evidence_from_evidence(
         .collect()
 }
 
+/// Projects the existing broker-confirmation-aware protection audit into the
+/// typed Tuning payload. The source is a current local snapshot, not an
+/// execution-pulse outcome or a fresh Saxo request.
+fn tuning_protective_stop_coverage_from_payload(
+    coverage: &JsonValue,
+) -> TuningProtectiveStopCoverage {
+    let summary = coverage.get("summary").unwrap_or(&JsonValue::Null);
+    let total_quantity = value_f64(summary, "total_quantity");
+    let confirmed_covered_quantity = value_f64(summary, "confirmed_covered_quantity");
+    TuningProtectiveStopCoverage {
+        status: json_text(coverage, "status"),
+        position_count: value_i64(summary, "position_count"),
+        protected_count: value_i64(summary, "protected_count"),
+        partial_count: value_i64(summary, "partial_count"),
+        planned_count: value_i64(summary, "planned_count"),
+        unprotected_count: value_i64(summary, "unprotected_count"),
+        exception_count: value_i64(summary, "exception_count"),
+        confirmed_coverage_ratio: (total_quantity.is_finite()
+            && total_quantity > 0.0
+            && confirmed_covered_quantity.is_finite())
+        .then(|| (confirmed_covered_quantity / total_quantity).clamp(0.0, 1.0)),
+    }
+}
+
 /// One independently-refreshed data source the dashboard displays.
 ///
 /// `stale_after_minutes` is derived from each source's own cadence rather than
@@ -4875,6 +4900,16 @@ impl AppState {
                     shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
                     execution_lifecycle_evidence: Vec::new(),
+                    protective_stop_coverage: TuningProtectiveStopCoverage {
+                        status: "unavailable".to_string(),
+                        position_count: 0,
+                        protected_count: 0,
+                        partial_count: 0,
+                        planned_count: 0,
+                        unprotected_count: 0,
+                        exception_count: 0,
+                        confirmed_coverage_ratio: None,
+                    },
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -4892,6 +4927,16 @@ impl AppState {
                 shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
                 execution_lifecycle_evidence: Vec::new(),
+                protective_stop_coverage: TuningProtectiveStopCoverage {
+                    status: "not_loaded".to_string(),
+                    position_count: 0,
+                    protected_count: 0,
+                    partial_count: 0,
+                    planned_count: 0,
+                    unprotected_count: 0,
+                    exception_count: 0,
+                    confirmed_coverage_ratio: None,
+                },
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5091,6 +5136,12 @@ impl AppState {
             tuning_execution_pulse_outcomes_from_evidence(&execution_evidence);
         let execution_lifecycle_evidence =
             tuning_execution_lifecycle_evidence_from_evidence(&execution_evidence);
+        let protective_stop_coverage = tuning_protective_stop_coverage_from_payload(
+            &self.protective_stop_coverage().await.unwrap_or_else(|err| {
+                warn!("tuning protective-stop coverage degraded: {err:#}");
+                json!({"status": "unavailable", "summary": {}})
+            }),
+        );
         let shadow_pulses = pulse_comparison
             .iter()
             .filter(|pulse| pulse.authority == "shadow_observation_only")
@@ -5117,8 +5168,9 @@ impl AppState {
             shadow_hermes_evidence,
             execution_pulse_outcomes,
             execution_lifecycle_evidence,
+            protective_stop_coverage,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, and persisted local lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, and persisted local lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -18764,6 +18816,38 @@ market_data:
         assert_eq!(us.attributed_order_count, 0);
         assert_eq!(us.locally_queued_count, 0);
         assert_eq!(us.unclassified_count, 0);
+    }
+
+    #[test]
+    fn tuning_protection_coverage_keeps_planned_and_unprotected_positions_distinct() {
+        let coverage = tuning_protective_stop_coverage_from_payload(&json!({
+            "status": "attention_required",
+            "summary": {
+                "position_count": 4,
+                "protected_count": 1,
+                "partial_count": 1,
+                "planned_count": 1,
+                "unprotected_count": 1,
+                "exception_count": 3,
+                "total_quantity": 20.0,
+                "confirmed_covered_quantity": 12.0,
+            }
+        }));
+        assert_eq!(coverage.status, "attention_required");
+        assert_eq!(coverage.position_count, 4);
+        assert_eq!(coverage.protected_count, 1);
+        assert_eq!(coverage.partial_count, 1);
+        assert_eq!(coverage.planned_count, 1);
+        assert_eq!(coverage.unprotected_count, 1);
+        assert_eq!(coverage.exception_count, 3);
+        assert_eq!(coverage.confirmed_coverage_ratio, Some(0.6));
+
+        let unavailable = tuning_protective_stop_coverage_from_payload(&json!({
+            "status": "unavailable",
+            "summary": {"total_quantity": 0.0}
+        }));
+        assert_eq!(unavailable.confirmed_coverage_ratio, None);
+        assert_eq!(unavailable.unprotected_count, 0);
     }
 
     #[test]

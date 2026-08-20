@@ -112,6 +112,7 @@ pub struct TuningPayload {
     pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
     pub execution_lifecycle_evidence: Vec<TuningExecutionLifecycleEvidence>,
+    pub protective_stop_coverage: TuningProtectiveStopCoverage,
     pub safety: String,
     pub interpretation: String,
 }
@@ -248,6 +249,20 @@ pub struct TuningExecutionLifecycleEvidence {
     pub expired_count: i64,
     pub cancelled_count: i64,
     pub unclassified_count: i64,
+}
+
+/// Current local protective-stop coverage, kept distinct from time-windowed
+/// pulse outcome evidence. Only broker-confirmed stop states count as covered.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningProtectiveStopCoverage {
+    pub status: String,
+    pub position_count: i64,
+    pub protected_count: i64,
+    pub partial_count: i64,
+    pub planned_count: i64,
+    pub unprotected_count: i64,
+    pub exception_count: i64,
+    pub confirmed_coverage_ratio: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
