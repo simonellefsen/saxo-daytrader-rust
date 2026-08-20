@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first six Phase 4 tuning slices are landed.
+and the first seven Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -247,6 +247,13 @@ Its `no_new_information` rate uses only reports with an available opening
 comparison; candidate absence is never used to infer the status. This is local
 report evidence only and cannot affect a manager gate, queue, broker precheck,
 execution simulation, or Saxo action.
+
+**Landed 2026-08-20 (seventh slice):** a shadow-only Support/Risk lane reports
+the candidate's saved decision-time snapshot coverage, low/moderate/high
+break-risk bucket, and complete-context average break risk, confidence, and
+history coverage. Missing and unknown snapshots remain visible. It is
+observational context rather than a forecast, manager risk gate, queue result,
+broker precheck, execution simulation, or Saxo action.
 
 The first version should contain:
 

@@ -804,6 +804,31 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Support/Risk Context" }
+                        p { class: "muted", "Decision-time Support/Risk buckets saved with shadow candidates. This is observational context and coverage only, not a Trading Manager risk gate, forecast, or execution signal." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Candidates" }
+                            th { "Saved / missing snapshot" }
+                            th { "Break risk: low / moderate / high / unavailable" }
+                            th { "Average break risk / confidence / history" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_support_risk_evidence.iter() {
+                                TuningShadowSupportRiskEvidenceRow { evidence: evidence.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Shadow Decision-Time Signal Gates" }
                         p { class: "muted", "Candidate-level source and result counts from the persisted decision-time technical/Markov replay. This is not a Trading Manager approval, queue result, broker precheck, or execution simulation." }
                     }
@@ -952,6 +977,55 @@ fn TuningShadowChangeEvidenceRow(
             td { "{no_new_comparison}" }
             td { "{reference}" }
             td { "{invalid}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowSupportRiskEvidenceRow(
+    evidence: crate::models::TuningShadowSupportRiskEvidence,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let snapshot = format!(
+        "{} / {}",
+        evidence.snapshot_available_count,
+        evidence.candidate_count - evidence.snapshot_available_count,
+    );
+    let break_risk = format!(
+        "{} / {} / {} / {}",
+        evidence.low_break_risk_count,
+        evidence.moderate_break_risk_count,
+        evidence.high_break_risk_count,
+        evidence.unavailable_count,
+    );
+    let averages = if evidence.complete_context_count == 0 {
+        "n/a".to_string()
+    } else {
+        let break_risk = evidence
+            .average_break_risk
+            .map(|value| format_percent(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        let confidence = evidence
+            .average_confidence
+            .map(|value| format_percent(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        let history = evidence
+            .average_history_coverage
+            .map(|value| format_percent(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        format!(
+            "{} / {} / {} ({} complete)",
+            break_risk, confidence, history, evidence.complete_context_count,
+        )
+    };
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.candidate_count}" }
+            td { "{snapshot}" }
+            td { "{break_risk}" }
+            td { "{averages}" }
+            td { "{evidence.unclassified_count}" }
         }
     }
 }

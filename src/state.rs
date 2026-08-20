@@ -40,7 +40,7 @@ use crate::{
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
         TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
-        TuningShadowHermesEvidence,
+        TuningShadowHermesEvidence, TuningShadowSupportRiskEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3111,6 +3111,92 @@ fn tuning_shadow_change_evidence_from_rows(
     pulses.into()
 }
 
+fn tuning_shadow_support_risk_evidence_from_rows(
+    shadow_rows: &[JsonValue],
+) -> Vec<TuningShadowSupportRiskEvidence> {
+    let mut pulses = [
+        TuningShadowSupportRiskEvidence {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            snapshot_available_count: 0,
+            low_break_risk_count: 0,
+            moderate_break_risk_count: 0,
+            high_break_risk_count: 0,
+            unavailable_count: 0,
+            complete_context_count: 0,
+            average_break_risk: None,
+            average_confidence: None,
+            average_history_coverage: None,
+            unclassified_count: 0,
+        },
+        TuningShadowSupportRiskEvidence {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            snapshot_available_count: 0,
+            low_break_risk_count: 0,
+            moderate_break_risk_count: 0,
+            high_break_risk_count: 0,
+            unavailable_count: 0,
+            complete_context_count: 0,
+            average_break_risk: None,
+            average_confidence: None,
+            average_history_coverage: None,
+            unclassified_count: 0,
+        },
+    ];
+    let mut break_risk_sums = [0.0_f64; 2];
+    let mut confidence_sums = [0.0_f64; 2];
+    let mut history_coverage_sums = [0.0_f64; 2];
+    for row in shadow_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(index) = pulses.iter().position(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        let pulse = &mut pulses[index];
+        pulse.candidate_count += 1;
+        let context = decode_shadow_json_field(row.get("report_time_context_json"));
+        let support = context
+            .get("support_risk_snapshot")
+            .filter(|value| value.is_object());
+        let Some(support) = support else {
+            pulse.unavailable_count += 1;
+            continue;
+        };
+        pulse.snapshot_available_count += 1;
+        match json_text(support, "break_risk_label").as_str() {
+            "low" => pulse.low_break_risk_count += 1,
+            "moderate" => pulse.moderate_break_risk_count += 1,
+            "high" => pulse.high_break_risk_count += 1,
+            "" | "unavailable" | "not_available_at_report_time" => pulse.unavailable_count += 1,
+            _ => pulse.unclassified_count += 1,
+        }
+        let (Some(break_risk), Some(confidence), Some(history_coverage)) = (
+            tuning_optional_number(support, "break_risk"),
+            tuning_optional_number(support, "confidence"),
+            tuning_optional_number(support, "history_coverage"),
+        ) else {
+            continue;
+        };
+        pulse.complete_context_count += 1;
+        break_risk_sums[index] += break_risk.clamp(0.0, 1.0);
+        confidence_sums[index] += confidence.clamp(0.0, 1.0);
+        history_coverage_sums[index] += history_coverage.clamp(0.0, 1.0);
+    }
+    for (index, pulse) in pulses.iter_mut().enumerate() {
+        if pulse.complete_context_count > 0 {
+            let denominator = pulse.complete_context_count as f64;
+            pulse.average_break_risk = Some(break_risk_sums[index] / denominator);
+            pulse.average_confidence = Some(confidence_sums[index] / denominator);
+            pulse.average_history_coverage = Some(history_coverage_sums[index] / denominator);
+        }
+    }
+    pulses.into()
+}
+
 fn tuning_shadow_gate_evidence_from_rows(
     shadow_rows: &[JsonValue],
 ) -> Vec<TuningShadowGateEvidence> {
@@ -4713,6 +4799,7 @@ impl AppState {
                     status: "unavailable".to_string(),
                     pulse_comparison: Vec::new(),
                     shadow_change_evidence: Vec::new(),
+                    shadow_support_risk_evidence: Vec::new(),
                     shadow_gate_evidence: Vec::new(),
                     shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
@@ -4728,6 +4815,7 @@ impl AppState {
                 status: "not_loaded".to_string(),
                 pulse_comparison: Vec::new(),
                 shadow_change_evidence: Vec::new(),
+                shadow_support_risk_evidence: Vec::new(),
                 shadow_gate_evidence: Vec::new(),
                 shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
@@ -4908,6 +4996,7 @@ impl AppState {
                 "SELECT analysis_pulse_key, earlier_pulse_report_id, appeared_in_earlier_pulse,
                         deterministic_gate_code, deterministic_gate_json,
                         hermes_effect, hermes_advice_snapshot_json, approved_policy_source,
+                        report_time_context_json,
                         reference_price_source,
                         one_session_outcome_json, five_session_outcome_json,
                         twenty_session_outcome_json, five_session_after_cost_outcome_json
@@ -4918,6 +5007,8 @@ impl AppState {
             .await?;
         let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
         let shadow_change_evidence = tuning_shadow_change_evidence_from_rows(&report_rows);
+        let shadow_support_risk_evidence =
+            tuning_shadow_support_risk_evidence_from_rows(&shadow_rows);
         let shadow_gate_evidence = tuning_shadow_gate_evidence_from_rows(&shadow_rows);
         let shadow_hermes_evidence = tuning_shadow_hermes_evidence_from_rows(&shadow_rows);
         let execution_evidence = self
@@ -4946,11 +5037,12 @@ impl AppState {
             status: status.to_string(),
             pulse_comparison,
             shadow_change_evidence,
+            shadow_support_risk_evidence,
             shadow_gate_evidence,
             shadow_hermes_evidence,
             execution_pulse_outcomes,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -18424,6 +18516,59 @@ market_data:
         assert_eq!(eu_shadow.comparison_invalid_count, 1);
         assert_eq!(eu_shadow.missing_assessment_count, 1);
         assert_eq!(eu_shadow.unclassified_assessment_count, 1);
+    }
+
+    #[test]
+    fn tuning_shadow_support_risk_evidence_uses_saved_candidate_context_only() {
+        let rows = [
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+                "report_time_context_json": {"support_risk_snapshot": {"break_risk_label": "low", "break_risk": 0.2, "confidence": 0.8, "history_coverage": 0.9}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-21",
+                "report_time_context_json": {"support_risk_snapshot": {"break_risk_label": "moderate", "break_risk": 0.5, "confidence": 0.6, "history_coverage": 0.7}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-22",
+                "report_time_context_json": {"support_risk_snapshot": {"break_risk_label": "high", "break_risk": 0.8, "confidence": 0.4, "history_coverage": 0.5}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-23",
+                "report_time_context_json": {"support_risk_snapshot": null},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-24",
+                "report_time_context_json": {"support_risk_snapshot": {"break_risk_label": "unavailable"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-25",
+                "report_time_context_json": {"support_risk_snapshot": {"break_risk_label": "legacy_unknown"}},
+            }),
+        ];
+        let evidence = tuning_shadow_support_risk_evidence_from_rows(&rows);
+        let eu_shadow = evidence
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_mid_session_shadow")
+            .expect("EU shadow Support/Risk evidence");
+        assert_eq!(eu_shadow.candidate_count, 6);
+        assert_eq!(eu_shadow.snapshot_available_count, 5);
+        assert_eq!(eu_shadow.low_break_risk_count, 1);
+        assert_eq!(eu_shadow.moderate_break_risk_count, 1);
+        assert_eq!(eu_shadow.high_break_risk_count, 1);
+        assert_eq!(eu_shadow.unavailable_count, 2);
+        assert_eq!(eu_shadow.complete_context_count, 3);
+        assert_eq!(eu_shadow.average_break_risk, Some(0.5));
+        assert_eq!(eu_shadow.average_confidence, Some(0.6));
+        assert!(
+            (eu_shadow
+                .average_history_coverage
+                .expect("average history coverage")
+                - 0.7)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(eu_shadow.unclassified_count, 1);
     }
 
     #[test]

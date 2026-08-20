@@ -107,6 +107,7 @@ pub struct TuningPayload {
     pub status: String,
     pub pulse_comparison: Vec<TuningPulseComparison>,
     pub shadow_change_evidence: Vec<TuningShadowChangeEvidence>,
+    pub shadow_support_risk_evidence: Vec<TuningShadowSupportRiskEvidence>,
     pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
     pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
@@ -153,6 +154,25 @@ pub struct TuningShadowChangeEvidence {
     pub comparison_invalid_count: i64,
     pub missing_assessment_count: i64,
     pub unclassified_assessment_count: i64,
+}
+
+/// Support-risk context captured with a shadow candidate at report time.
+/// It is observational metadata, not an automatic risk gate or a forecast.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningShadowSupportRiskEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub candidate_count: i64,
+    pub snapshot_available_count: i64,
+    pub low_break_risk_count: i64,
+    pub moderate_break_risk_count: i64,
+    pub high_break_risk_count: i64,
+    pub unavailable_count: i64,
+    pub complete_context_count: i64,
+    pub average_break_risk: Option<f64>,
+    pub average_confidence: Option<f64>,
+    pub average_history_coverage: Option<f64>,
+    pub unclassified_count: i64,
 }
 
 /// A bounded, decision-time-only signal-gate summary for shadow candidates.

@@ -46,6 +46,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The no-new-information rate has an explicit available-comparison denominator; candidate count or absence cannot manufacture an assessment state.
 - The lane reads local persisted Decision Reports only and adds no provider, Hermes, gate, queue, broker, or order authority.
 
+## [2026-08-20] observability | Add shadow Support/Risk context to Tuning
+
+- Added a shadow-only Tuning lane for saved decision-time Support/Risk snapshot coverage, low/moderate/high break-risk buckets, and complete-context average break risk, confidence, and history coverage.
+- Missing and unknown snapshots remain visible, and the table is labelled observational context rather than a forecast, gate, or execution signal.
+- The lane reads local persisted shadow outcomes only and adds no provider, Hermes, gate, queue, broker, or order authority.
+
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
 - Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.
