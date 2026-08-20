@@ -2050,3 +2050,9 @@ broker mutation was added.
 - The price monitor now retains a time-bounded per-candidate trail from its existing read-only Saxo infoprice refresh while a shadow outcome is collecting. On each sample it recomputes the BUY/SELL-direction maximum favourable and adverse observed movement from the durable reference quote.
 - The record explicitly reports sample count and first/last observation time and calls its coverage sampled rather than continuous. It never claims the venue's high/low, a fill path, broker execution, realised P/L, or execution quality; collection stops once the 20-session result matures.
 - No Saxo call, provider request, Hermes request, gate, queue, precheck, or order mutation was added: the feature only persists and reads the quote already returned by the established monitor.
+
+## [2026-08-20] trading-quality | Project shadow decision-time signal gates
+
+- Shadow outcome rows now preserve a compact technical/Markov signal-gate projection from the server-generated prompt snapshots plus the server-owned policy values supplied at report creation. The projection records a stable technical, Markov, or explicit not-evaluated code alongside its limited result.
+- The projection is intentionally narrower than the Trading Manager. It names every omitted current-state gate, including market, cash, risk, holdings, cost, sellability, concentration, selection, and Hermes; a signal clear is not queue approval or execution authority.
+- The implementation reads only the durable report/prompt data while creating the outcome row. It adds no Saxo request, provider request, Hermes request, manager run, queue row, precheck, or broker mutation.

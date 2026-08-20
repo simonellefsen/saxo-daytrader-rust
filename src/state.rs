@@ -3276,6 +3276,153 @@ fn compact_shadow_prompt_thesis_snapshot(context: &JsonValue, report: &JsonValue
     })
 }
 
+/// A deliberately bounded, decision-time-only signal-gate projection for a
+/// shadow candidate. It shares the technical/Markov rule shape with the
+/// manager, but cannot honestly recreate its current market, cash, position,
+/// risk, concentration, cost, sellability, or Hermes gates from a saved
+/// prompt. Those omitted checks remain explicit so a signal clear is never
+/// mistaken for a queue approval.
+fn compact_shadow_report_decision_time_signal_gate(
+    action: &str,
+    report_date: &str,
+    context: &JsonValue,
+) -> JsonValue {
+    let action = action.trim().to_ascii_uppercase();
+    let technical = context
+        .get("technical_snapshot")
+        .unwrap_or(&JsonValue::Null);
+    let technical_available = json_text(technical, "status") == "available";
+    let signal_result = |status: &str, gate_code: &str, stage: &str, reason: &str| {
+        json!({
+            "status": status,
+            "gate_code": gate_code,
+            "stage": stage,
+            "reason": reason,
+            "evidence_source": "persisted_decision_time_prompt_projection",
+            "coverage": "technical_and_markov_signal_rules_only",
+            "omitted_manager_gates": [
+                "market_open", "risk_exclusion", "instrument_quarantine",
+                "order_shape", "monthly_loss_breaker", "drawdown_guardrail",
+                "cash_budget", "minimum_trade_value", "sellable_quantity",
+                "risk_per_trade", "max_holdings", "concentration",
+                "position_weight", "cost_guard", "max_selected_assets",
+                "hermes_advice"
+            ],
+            "interpretation": "This is a bounded replay over server-generated decision-time technical and Markov prompt snapshots. It is not a full Trading Manager evaluation, queue approval, broker precheck, execution simulation, Hermes effect, or Saxo action."
+        })
+    };
+    if !matches!(action.as_str(), "BUY" | "SELL") {
+        return signal_result(
+            "insufficient_decision_time_evidence",
+            "not_evaluated_shadow",
+            "not_evaluated",
+            "The candidate action is not a supported BUY or SELL.",
+        );
+    }
+
+    if technical_available {
+        let sentiment = json_text(technical, "sentiment").to_ascii_uppercase();
+        let trend_bias = json_text(technical, "trend_bias").to_ascii_lowercase();
+        let confluences = value_i64(technical, "confluence_count");
+        let minimum = value_i64(technical, "min_confluences").max(1);
+        let technical_clear = match action.as_str() {
+            "BUY" => {
+                matches!(sentiment.as_str(), "BUY" | "OVERWEIGHT")
+                    && trend_bias == "bullish"
+                    && confluences >= minimum
+            }
+            "SELL" => {
+                matches!(sentiment.as_str(), "SELL" | "UNDERWEIGHT") || trend_bias == "bearish"
+            }
+            _ => false,
+        };
+        if technical_clear {
+            return signal_result(
+                "clear_signal_gate_only",
+                "technical",
+                "technical",
+                "The saved daily-indicator snapshot supports the candidate direction.",
+            );
+        }
+        if action == "SELL" {
+            return signal_result(
+                "blocked_signal_gate",
+                "technical",
+                "technical",
+                "The saved daily-indicator snapshot does not support the SELL direction; flatten risk-off fallback evidence is not reconstructed from the prompt.",
+            );
+        }
+    }
+
+    if action == "BUY" {
+        let policy = context
+            .get("signal_gate_policy")
+            .and_then(|value| value.get("markov_starter"))
+            .unwrap_or(&JsonValue::Null);
+        let markov = context.get("markov_snapshot").unwrap_or(&JsonValue::Null);
+        if policy.get("enabled").and_then(JsonValue::as_bool) != Some(true)
+            || json_text(markov, "status") != "available"
+        {
+            return signal_result(
+                "insufficient_decision_time_evidence",
+                "not_evaluated_shadow",
+                "markov",
+                "The saved prompt does not contain an enabled Markov starter-policy snapshot and an available signal needed to evaluate the technical fallback.",
+            );
+        }
+        let Some(report_date) = NaiveDate::parse_from_str(report_date, "%Y-%m-%d").ok() else {
+            return signal_result(
+                "insufficient_decision_time_evidence",
+                "not_evaluated_shadow",
+                "markov",
+                "The shadow report has no parsable local report date for Markov freshness.",
+            );
+        };
+        let Some(run_date) = json_text(markov, "run_date")
+            .split('T')
+            .next()
+            .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        else {
+            return signal_result(
+                "insufficient_decision_time_evidence",
+                "not_evaluated_shadow",
+                "markov",
+                "The saved Markov signal has no parsable run date.",
+            );
+        };
+        let max_age_days = value_i64(policy, "max_signal_age_days").max(1);
+        let age_days = (report_date - run_date).num_days();
+        let min_signed_signal = value_f64(policy, "min_signed_signal");
+        let signed_signal = value_f64(markov, "signed_signal");
+        let direction = json_text(markov, "direction");
+        if age_days >= 0
+            && age_days <= max_age_days
+            && direction == "long"
+            && signed_signal >= min_signed_signal
+        {
+            return signal_result(
+                "clear_signal_gate_only",
+                "markov",
+                "markov_starter_fallback",
+                "The saved fresh Markov long signal clears the technical-fallback signal rule; current manager starter, value, position, and risk checks remain omitted.",
+            );
+        }
+        return signal_result(
+            "blocked_signal_gate",
+            "markov",
+            "markov_starter_fallback",
+            "The saved Markov signal does not satisfy the decision-time starter fallback rule.",
+        );
+    }
+
+    signal_result(
+        "insufficient_decision_time_evidence",
+        "not_evaluated_shadow",
+        "technical",
+        "No saved daily-indicator snapshot is available to evaluate this SELL candidate.",
+    )
+}
+
 /// Compact, persisted-safe shadow candidates. All context comes from the
 /// report's saved decision-time prompt or normalized report, never from a
 /// later live query; this prevents hindsight from leaking into learning data.
@@ -3283,6 +3430,7 @@ fn shadow_report_outcome_candidates(
     report: &JsonValue,
     earlier_symbols: &HashSet<String>,
     prompt_context: &JsonValue,
+    report_date: &str,
 ) -> Vec<JsonValue> {
     let suggested_trades = report
         .get("suggested_trades")
@@ -3337,6 +3485,32 @@ fn shadow_report_outcome_candidates(
                 .cloned()
                 .unwrap_or(JsonValue::Null);
             let currency_text = currency.as_deref().unwrap_or_default();
+            let report_time_context = json!({
+                "capture_version": "phase3_decision_time_prompt_projection_v2",
+                "strategy_role": trade.get("strategy_role").cloned().unwrap_or(JsonValue::Null),
+                "estimated_value_dkk": trade.get("estimated_value_dkk").cloned().unwrap_or(JsonValue::Null),
+                "technical_reported": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
+                "technical_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol),
+                "markov_reported": strategy_metadata.get("markov").cloned().unwrap_or(JsonValue::Null),
+                "markov_snapshot": compact_shadow_prompt_markov_snapshot(prompt_context, &symbol),
+                "signal_gate_policy": prompt_context.get("decision_time_gate_policy").cloned().unwrap_or(JsonValue::Null),
+                "quiver_snapshot": compact_shadow_prompt_quiver_snapshot(prompt_context, &symbol),
+                "support_risk_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol).get("support_risk").cloned().unwrap_or(JsonValue::Null),
+                "cash_snapshot": {
+                    "reported_cash_balance_dkk": capital_plan.get("cash_balance_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "reported_available_buy_budget_dkk": capital_plan.get("available_buy_budget_dkk").cloned().unwrap_or(JsonValue::Null),
+                    "decision_time_capital_plan": prompt_context.get("capital_plan").cloned().unwrap_or(JsonValue::Null),
+                },
+                "concentration_snapshot": compact_shadow_prompt_concentration_snapshot(prompt_context, &symbol, Some(currency_text)),
+                "thesis_snapshot": compact_shadow_prompt_thesis_snapshot(prompt_context, report),
+                "shadow_change_status": change_status,
+                "prompt_context_status": prompt_context.get("status").cloned().unwrap_or(JsonValue::String("available".to_string())),
+            });
+            let deterministic_gate = compact_shadow_report_decision_time_signal_gate(
+                &action,
+                report_date,
+                &report_time_context,
+            );
             Some(json!({
                 "candidate_rank": index as i64 + 1,
                 "symbol": symbol,
@@ -3345,26 +3519,8 @@ fn shadow_report_outcome_candidates(
                 "currency": currency,
                 "reported_reference_price_local": reported_reference_price_local,
                 "appeared_in_earlier_pulse": earlier_symbols.contains(&canonical_symbol_key(&symbol)),
-                "report_time_context": {
-                    "capture_version": "phase3_decision_time_prompt_projection_v1",
-                    "strategy_role": trade.get("strategy_role").cloned().unwrap_or(JsonValue::Null),
-                    "estimated_value_dkk": trade.get("estimated_value_dkk").cloned().unwrap_or(JsonValue::Null),
-                    "technical_reported": strategy_metadata.get("technical").cloned().unwrap_or(JsonValue::Null),
-                    "technical_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol),
-                    "markov_reported": strategy_metadata.get("markov").cloned().unwrap_or(JsonValue::Null),
-                    "markov_snapshot": compact_shadow_prompt_markov_snapshot(prompt_context, &symbol),
-                    "quiver_snapshot": compact_shadow_prompt_quiver_snapshot(prompt_context, &symbol),
-                    "support_risk_snapshot": compact_shadow_prompt_indicator_snapshot(prompt_context, &symbol).get("support_risk").cloned().unwrap_or(JsonValue::Null),
-                    "cash_snapshot": {
-                        "reported_cash_balance_dkk": capital_plan.get("cash_balance_dkk").cloned().unwrap_or(JsonValue::Null),
-                        "reported_available_buy_budget_dkk": capital_plan.get("available_buy_budget_dkk").cloned().unwrap_or(JsonValue::Null),
-                        "decision_time_capital_plan": prompt_context.get("capital_plan").cloned().unwrap_or(JsonValue::Null),
-                    },
-                    "concentration_snapshot": compact_shadow_prompt_concentration_snapshot(prompt_context, &symbol, Some(currency_text)),
-                    "thesis_snapshot": compact_shadow_prompt_thesis_snapshot(prompt_context, report),
-                    "shadow_change_status": change_status,
-                    "prompt_context_status": prompt_context.get("status").cloned().unwrap_or(JsonValue::String("available".to_string())),
-                }
+                "report_time_context": report_time_context,
+                "deterministic_gate": deterministic_gate,
             }))
         })
         .collect()
@@ -8375,9 +8531,12 @@ impl AppState {
         let mut created = 0usize;
         let mut skipped = 0usize;
 
-        for candidate in
-            shadow_report_outcome_candidates(report_json, &earlier_symbols, &prompt_context)
-        {
+        for candidate in shadow_report_outcome_candidates(
+            report_json,
+            &earlier_symbols,
+            &prompt_context,
+            &json_text(&report, "report_date"),
+        ) {
             let candidate_rank = value_i64(&candidate, "candidate_rank");
             let symbol = json_text(&candidate, "symbol");
             let action = json_text(&candidate, "action");
@@ -8401,9 +8560,21 @@ impl AppState {
                 .get("report_time_context")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let deterministic_gate =
+                candidate
+                    .get("deterministic_gate")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        compact_shadow_report_decision_time_signal_gate(
+                            &action,
+                            &json_text(&report, "report_date"),
+                            &context_json,
+                        )
+                    });
+            let deterministic_gate_code = json_text(&deterministic_gate, "gate_code");
             let id = format!("shadow-report-outcome-{report_id}-{candidate_rank}");
             let result = sqlx::query(&format!(
-                "INSERT INTO shadow_report_outcomes (\n                    id, created_at, updated_at, report_id, analysis_pulse_key, analysis_pulse_label,\n                    candidate_rank, symbol, action, proposed_quantity, currency,\n                    earlier_pulse_report_id, appeared_in_earlier_pulse,\n                    deterministic_gate_code, hermes_effect, approved_policy_source,\n                    report_time_context_json, reported_reference_price_local,\n                    reference_price_local, reference_price_at, reference_price_source, reference_dkk_basis,\n                    status, observation_count\n                ) VALUES (\n                    '{}', '{}', '{}', {}, '{}', '{}',\n                    {}, '{}', '{}', {}, {},\n                    {}, {},\n                    'not_evaluated_shadow', 'not_requested_shadow', {},\n                    '{}', {},\n                    NULL, NULL, 'awaiting_saxo_infoprice', 'not_captured_phase3_initial',\n                    'awaiting_reference', 0\n                ) ON CONFLICT (report_id, candidate_rank) DO NOTHING",
+                "INSERT INTO shadow_report_outcomes (\n                    id, created_at, updated_at, report_id, analysis_pulse_key, analysis_pulse_label,\n                    candidate_rank, symbol, action, proposed_quantity, currency,\n                    earlier_pulse_report_id, appeared_in_earlier_pulse,\n                    deterministic_gate_code, deterministic_gate_json, hermes_effect, approved_policy_source,\n                    report_time_context_json, reported_reference_price_local,\n                    reference_price_local, reference_price_at, reference_price_source, reference_dkk_basis,\n                    status, observation_count\n                ) VALUES (\n                    '{}', '{}', '{}', {}, '{}', '{}',\n                    {}, '{}', '{}', {}, {},\n                    {}, {},\n                    '{}', '{}', 'not_requested_shadow', {},\n                    '{}', {},\n                    NULL, NULL, 'awaiting_saxo_infoprice', 'not_captured_phase3_initial',\n                    'awaiting_reference', 0\n                ) ON CONFLICT (report_id, candidate_rank) DO NOTHING",
                 sql_escape(&id),
                 sql_escape(&now),
                 sql_escape(&now),
@@ -8427,6 +8598,12 @@ impl AppState {
                 } else {
                     0
                 },
+                sql_escape(if deterministic_gate_code.is_empty() {
+                    "not_evaluated_shadow"
+                } else {
+                    &deterministic_gate_code
+                }),
+                sql_escape(&serde_json::to_string(&deterministic_gate)?),
                 sql_optional_text(candidate.get("policy_source").and_then(JsonValue::as_str)),
                 sql_escape(&serde_json::to_string(&context_json)?),
                 reported_reference_sql,
@@ -11199,6 +11376,7 @@ impl AppState {
                 earlier_pulse_report_id INTEGER,
                 appeared_in_earlier_pulse INTEGER NOT NULL DEFAULT 0,
                 deterministic_gate_code TEXT NOT NULL,
+                deterministic_gate_json TEXT,
                 hermes_effect TEXT NOT NULL,
                 approved_policy_source TEXT,
                 report_time_context_json TEXT NOT NULL,
@@ -11292,6 +11470,7 @@ impl AppState {
                 .context("migrating daily indicator support-risk columns")?;
         }
         for column in [
+            "deterministic_gate_json TEXT",
             "reference_fx_json TEXT",
             "estimated_cost_json TEXT",
             "one_session_outcome_json TEXT",
@@ -14909,8 +15088,12 @@ market_data:
                 "quiver_signals": {
                     "freshness": {"status": "fresh"},
                     "signals": [{"symbol": "AAA:xcse", "run_date": "2026-08-19", "signal": 0.5, "direction": "bullish", "confidence": 0.7, "event_count": 2, "latest_event_date": "2026-08-18"}]
+                },
+                "decision_time_gate_policy": {
+                    "markov_starter": {"enabled": true, "min_signed_signal": 0.15, "max_signal_age_days": 5}
                 }
             }),
+            "2026-08-19",
         );
 
         assert_eq!(candidates.len(), 2);
@@ -14938,8 +15121,50 @@ market_data:
             candidates[0]["report_time_context"]["thesis_snapshot"]["candidate_entry_thesis"],
             json!("not_available_pre_trade")
         );
+        assert_eq!(
+            candidates[0]["deterministic_gate"]["gate_code"],
+            json!("technical")
+        );
+        assert_eq!(
+            candidates[0]["deterministic_gate"]["status"],
+            json!("clear_signal_gate_only")
+        );
         assert_eq!(candidates[1]["candidate_rank"], json!(2));
         assert_eq!(candidates[1]["currency"], json!("USD"));
+    }
+
+    #[test]
+    fn shadow_decision_time_signal_gate_marks_its_coverage_and_markov_fallback() {
+        let markov = compact_shadow_report_decision_time_signal_gate(
+            "BUY",
+            "2026-08-19",
+            &json!({
+                "technical_snapshot": {"status": "not_available_at_report_time"},
+                "markov_snapshot": {"status": "available", "run_date": "2026-08-18", "direction": "long", "signed_signal": 0.42},
+                "signal_gate_policy": {"markov_starter": {"enabled": true, "min_signed_signal": 0.15, "max_signal_age_days": 5}}
+            }),
+        );
+        assert_eq!(markov["status"], json!("clear_signal_gate_only"));
+        assert_eq!(markov["gate_code"], json!("markov"));
+        assert_eq!(
+            markov["coverage"],
+            json!("technical_and_markov_signal_rules_only")
+        );
+        assert!(
+            markov["omitted_manager_gates"]
+                .as_array()
+                .is_some_and(|gates| gates.contains(&json!("cash_budget")))
+        );
+
+        let sell = compact_shadow_report_decision_time_signal_gate(
+            "SELL",
+            "2026-08-19",
+            &json!({
+                "technical_snapshot": {"status": "available", "sentiment": "HOLD", "trend_bias": "neutral", "confluence_count": 0, "min_confluences": 3}
+            }),
+        );
+        assert_eq!(sell["status"], json!("blocked_signal_gate"));
+        assert_eq!(sell["gate_code"], json!("technical"));
     }
 
     #[test]
@@ -14970,7 +15195,7 @@ market_data:
         let state = runtime_settings_test_state("{}").await;
         for sql in [
             "CREATE TABLE decision_reports (id INTEGER PRIMARY KEY, report_date TEXT NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, pulse_mode TEXT NOT NULL, queue_eligible INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, prompt_text TEXT, report_json TEXT)",
-            "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, hermes_effect TEXT NOT NULL, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
+            "CREATE TABLE shadow_report_outcomes (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, report_id INTEGER NOT NULL, analysis_pulse_key TEXT NOT NULL, analysis_pulse_label TEXT NOT NULL, candidate_rank INTEGER NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL, proposed_quantity REAL NOT NULL, currency TEXT, earlier_pulse_report_id INTEGER, appeared_in_earlier_pulse INTEGER NOT NULL, deterministic_gate_code TEXT NOT NULL, deterministic_gate_json TEXT, hermes_effect TEXT NOT NULL, approved_policy_source TEXT, report_time_context_json TEXT NOT NULL, reported_reference_price_local REAL, reference_price_local REAL, reference_price_at TEXT, reference_price_source TEXT NOT NULL, reference_dkk_basis TEXT NOT NULL, status TEXT NOT NULL, latest_price_local REAL, latest_price_at TEXT, observation_count INTEGER NOT NULL DEFAULT 0, UNIQUE(report_id, candidate_rank))",
         ] {
             sqlx::query(sql).execute(&state.pool).await.unwrap();
         }
@@ -15000,7 +15225,7 @@ market_data:
             .await
             .unwrap();
         let rows = state
-            .select_json("SELECT symbol, action, status, deterministic_gate_code, hermes_effect, reference_price_source FROM shadow_report_outcomes")
+            .select_json("SELECT symbol, action, status, deterministic_gate_code, deterministic_gate_json, hermes_effect, reference_price_source FROM shadow_report_outcomes")
             .await
             .unwrap();
 
@@ -15012,6 +15237,10 @@ market_data:
         assert_eq!(
             rows[0]["deterministic_gate_code"],
             json!("not_evaluated_shadow")
+        );
+        assert_eq!(
+            rows[0]["deterministic_gate_json"]["status"],
+            json!("insufficient_decision_time_evidence")
         );
         assert_eq!(rows[0]["hermes_effect"], json!("not_requested_shadow"));
         assert_eq!(

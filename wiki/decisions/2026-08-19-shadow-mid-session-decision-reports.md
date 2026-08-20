@@ -159,13 +159,23 @@ directional movement from the reference price. It stops collecting when the
 samples and explicitly does not claim continuous intraday high/low coverage,
 a fill path, realised P/L, or execution quality.
 
+**Decision-time signal-gate slice landed 2026-08-20:** each new candidate now
+stores a stable `technical`, `markov`, or explicit not-evaluated code and a
+bounded replay over the server-generated technical/Markov prompt snapshots
+saved with that report. It can show whether the saved technical direction or
+the configured Markov-starter fallback signal would clear its own signal rule.
+Market/session, exclusions, order shape, cash, sellability, risk, holdings,
+concentration, cost, selection, and Hermes are deliberately omitted and named
+in every result. A signal clear is therefore not a Trading Manager evaluation,
+queue approval, broker precheck, execution simulation, or Saxo action.
+
 Remaining Phase 3 work, for each suggested BUY or SELL:
 
 - pulse and report provenance;
 - candidate rank and whether the symbol appeared in the earlier pulse;
 - reference timestamp, local price, currency, DKK conversion basis, and proposed quantity; **landed for newly referenced rows**;
 - report-time technical, Markov, Quiver, Support Risk, cash, scoped concentration, and strategy-baseline snapshot; **landed for newly recorded rows**. Candidate entry thesis remains explicitly unavailable before an approved order/fill;
-- deterministic gate result and stable gate code;
+- bounded decision-time technical/Markov signal-gate result and stable gate code; **landed for new rows, with all current-state manager gates explicitly omitted**;
 - Hermes record-only effect and the approved-policy source it used;
 - maximum adverse and favourable observed excursion when retained intraday samples are available; **landed for new rows, with sampled-coverage limits**;
 - an estimated after-cost outcome, explicitly separated from realised P/L; **landed for rows with a captured fresh FX basis**.

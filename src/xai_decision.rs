@@ -1164,6 +1164,7 @@ async fn build_decision_prompt(
         .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
     let capital_context = capital_planning_context(state, &overview);
     let markov_gate = crate::trading_manager::markov_gate_config(state);
+    let daily_indicator_policy = crate::daily_indicators::indicator_config_json_for_state(state);
     let markov_buy_instruction = format!(
         "When daily technical indicator data is unavailable for a BUY candidate, you may still propose a starter BUY backed by the supplied markov_method signals: the symbol must have a fresh signal with direction long and signed_signal at or above {:.2}. Set strategy_role to \"starter\" and reference the signal in strategy_metadata.markov. The manager re-verifies the signal against its own database and caps starter positions at {:.0}% of total portfolio value, so prefer several smaller starters over one large order.",
         markov_gate.min_signed_signal,
@@ -1219,6 +1220,21 @@ async fn build_decision_prompt(
         "goal_tracking": overview.get("goal_tracking").cloned().unwrap_or(JsonValue::Null),
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
         "capital_plan": capital_context,
+        "decision_time_gate_policy": {
+            "daily_technical": {
+                "enabled": daily_indicator_policy.get("enabled").cloned().unwrap_or(JsonValue::Null),
+                "min_confluences": daily_indicator_policy.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
+                "source": "persisted_daily_indicator_prompt_snapshot",
+            },
+            "markov_starter": {
+                "enabled": markov_gate.enabled,
+                "min_signed_signal": markov_gate.min_signed_signal,
+                "max_position_pct": markov_gate.max_position_pct,
+                "max_signal_age_days": markov_gate.max_signal_age_days,
+                "source": "server_owned_prompt_policy_snapshot",
+            },
+            "safety": "decision_time_policy_context_only_not_a_queue_or_execution_authority",
+        },
         "reinvestment_pressure": capital_context.get("reinvestment_pressure").cloned().unwrap_or(JsonValue::Null),
         "active_strategy_baseline": active_strategy_baseline.clone(),
         "active_approved_policy": active_strategy_baseline,
