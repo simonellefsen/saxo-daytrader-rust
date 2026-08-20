@@ -779,6 +779,30 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Decision-Time Signal Gates" }
+                        p { class: "muted", "Candidate-level source and result counts from the persisted decision-time technical/Markov replay. This is not a Trading Manager approval, queue result, broker precheck, or execution simulation." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Candidates" }
+                            th { "Source: technical / Markov / not evaluated" }
+                            th { "Result: clear / blocked / insufficient" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_gate_evidence.iter() {
+                                TuningShadowGateEvidenceRow { evidence: evidence.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Execution-Eligible Outcome Evidence" }
                         p { class: "muted", "Local execution, fill, ledger, and daily-close evidence for the same 30-day order window. BUY forward movement and reconciled SELL accounting are intentionally separate, and neither is mixed with the shadow table above." }
                     }
@@ -805,6 +829,39 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowGateEvidenceRow(evidence: crate::models::TuningShadowGateEvidence) -> Element {
+    let source = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {} / {}",
+            evidence.technical_source_count,
+            evidence.markov_fallback_source_count,
+            evidence.not_evaluated_source_count,
+        )
+    };
+    let result = if evidence.candidate_count == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {} / {}",
+            evidence.clear_signal_count,
+            evidence.blocked_signal_count,
+            evidence.insufficient_evidence_count,
+        )
+    };
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.candidate_count}" }
+            td { "{source}" }
+            td { "{result}" }
+            td { "{evidence.unclassified_count}" }
         }
     }
 }

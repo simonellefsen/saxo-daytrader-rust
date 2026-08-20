@@ -39,7 +39,7 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
-        TuningPulseComparison,
+        TuningPulseComparison, TuningShadowGateEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3035,6 +3035,64 @@ fn tuning_pulse_comparison_from_rows(
     pulses.into()
 }
 
+fn tuning_shadow_gate_evidence_from_rows(
+    shadow_rows: &[JsonValue],
+) -> Vec<TuningShadowGateEvidence> {
+    let mut pulses = [
+        TuningShadowGateEvidence {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            technical_source_count: 0,
+            markov_fallback_source_count: 0,
+            not_evaluated_source_count: 0,
+            clear_signal_count: 0,
+            blocked_signal_count: 0,
+            insufficient_evidence_count: 0,
+            unclassified_count: 0,
+        },
+        TuningShadowGateEvidence {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            technical_source_count: 0,
+            markov_fallback_source_count: 0,
+            not_evaluated_source_count: 0,
+            clear_signal_count: 0,
+            blocked_signal_count: 0,
+            insufficient_evidence_count: 0,
+            unclassified_count: 0,
+        },
+    ];
+    for row in shadow_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        pulse.candidate_count += 1;
+        let mut classified = true;
+        match json_text(row, "deterministic_gate_code").as_str() {
+            "technical" => pulse.technical_source_count += 1,
+            "markov" => pulse.markov_fallback_source_count += 1,
+            "not_evaluated_shadow" => pulse.not_evaluated_source_count += 1,
+            _ => classified = false,
+        }
+        let gate = decode_shadow_json_field(row.get("deterministic_gate_json"));
+        match json_text(&gate, "status").as_str() {
+            "clear_signal_gate_only" => pulse.clear_signal_count += 1,
+            "blocked_signal_gate" => pulse.blocked_signal_count += 1,
+            "insufficient_decision_time_evidence" => pulse.insufficient_evidence_count += 1,
+            _ => classified = false,
+        }
+        if !classified {
+            pulse.unclassified_count += 1;
+        }
+    }
+    pulses.into()
+}
+
 fn tuning_optional_number(value: &JsonValue, key: &str) -> Option<f64> {
     value
         .get(key)
@@ -4501,6 +4559,7 @@ impl AppState {
                     window_days: TUNING_PULSE_WINDOW_DAYS,
                     status: "unavailable".to_string(),
                     pulse_comparison: Vec::new(),
+                    shadow_gate_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
@@ -4513,6 +4572,7 @@ impl AppState {
                 window_days: TUNING_PULSE_WINDOW_DAYS,
                 status: "not_loaded".to_string(),
                 pulse_comparison: Vec::new(),
+                shadow_gate_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
@@ -4689,6 +4749,7 @@ impl AppState {
         let shadow_rows = self
             .select_json(&format!(
                 "SELECT analysis_pulse_key, earlier_pulse_report_id, appeared_in_earlier_pulse,
+                        deterministic_gate_code, deterministic_gate_json,
                         reference_price_source,
                         one_session_outcome_json, five_session_outcome_json,
                         twenty_session_outcome_json, five_session_after_cost_outcome_json
@@ -4698,6 +4759,7 @@ impl AppState {
             ))
             .await?;
         let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
+        let shadow_gate_evidence = tuning_shadow_gate_evidence_from_rows(&shadow_rows);
         let execution_evidence = self
             .decision_pulse_outcome_evidence_since(Some(&window_start_text))
             .await?;
@@ -4723,9 +4785,10 @@ impl AppState {
             window_days: TUNING_PULSE_WINDOW_DAYS,
             status: status.to_string(),
             pulse_comparison,
+            shadow_gate_evidence,
             execution_pulse_outcomes,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, not a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -18000,10 +18063,21 @@ market_data:
         ];
         let shadows = (0..20)
             .map(|index| {
+                let (gate_code, gate_status) = if index < 8 {
+                    ("technical", "clear_signal_gate_only")
+                } else if index < 12 {
+                    ("markov", "clear_signal_gate_only")
+                } else if index < 17 {
+                    ("technical", "blocked_signal_gate")
+                } else {
+                    ("not_evaluated_shadow", "insufficient_decision_time_evidence")
+                };
                 json!({
                     "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
                     "earlier_pulse_report_id": 41,
                     "appeared_in_earlier_pulse": index < 5,
+                    "deterministic_gate_code": gate_code,
+                    "deterministic_gate_json": serde_json::to_string(&json!({ "status": gate_status })).unwrap(),
                     "reference_price_source": "saxo_infoprices",
                     "one_session_outcome_json": "{\"status\":\"observed\"}",
                     "five_session_outcome_json": "{\"status\":\"observed\"}",
@@ -18050,6 +18124,20 @@ market_data:
         assert_eq!(us_shadow.five_session_after_cost_positive_rate, Some(0.6));
         assert_eq!(us_shadow.maturity, "mature");
         assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
+
+        let gates = tuning_shadow_gate_evidence_from_rows(&shadows);
+        let us_gates = gates
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow gate evidence");
+        assert_eq!(us_gates.candidate_count, 20);
+        assert_eq!(us_gates.technical_source_count, 13);
+        assert_eq!(us_gates.markov_fallback_source_count, 4);
+        assert_eq!(us_gates.not_evaluated_source_count, 3);
+        assert_eq!(us_gates.clear_signal_count, 12);
+        assert_eq!(us_gates.blocked_signal_count, 5);
+        assert_eq!(us_gates.insufficient_evidence_count, 3);
+        assert_eq!(us_gates.unclassified_count, 0);
     }
 
     #[test]
@@ -18072,6 +18160,24 @@ market_data:
         assert_eq!(eu_shadow.shadow_new_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_repeated_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_candidate_novelty_rate, None);
+    }
+
+    #[test]
+    fn tuning_shadow_gate_evidence_keeps_unknown_legacy_records_visible() {
+        let evidence = tuning_shadow_gate_evidence_from_rows(&[json!({
+            "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+            "deterministic_gate_code": "legacy_unknown_gate",
+            "deterministic_gate_json": "{\"status\":\"legacy_unknown_result\"}",
+        })]);
+        let eu_shadow = evidence
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_mid_session_shadow")
+            .expect("EU shadow gate evidence");
+        assert_eq!(eu_shadow.candidate_count, 1);
+        assert_eq!(eu_shadow.unclassified_count, 1);
+        assert_eq!(eu_shadow.clear_signal_count, 0);
+        assert_eq!(eu_shadow.blocked_signal_count, 0);
+        assert_eq!(eu_shadow.insufficient_evidence_count, 0);
     }
 
     #[test]

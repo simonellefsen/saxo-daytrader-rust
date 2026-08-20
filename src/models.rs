@@ -106,6 +106,7 @@ pub struct TuningPayload {
     pub window_days: i64,
     pub status: String,
     pub pulse_comparison: Vec<TuningPulseComparison>,
+    pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
     pub safety: String,
     pub interpretation: String,
@@ -132,6 +133,22 @@ pub struct TuningPulseComparison {
     pub five_session_after_cost_positive_rate: Option<f64>,
     pub maturity: String,
     pub outcome_status: String,
+}
+
+/// A bounded, decision-time-only signal-gate summary for shadow candidates.
+/// It deliberately does not recreate the Trading Manager or broker path.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningShadowGateEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub candidate_count: i64,
+    pub technical_source_count: i64,
+    pub markov_fallback_source_count: i64,
+    pub not_evaluated_source_count: i64,
+    pub clear_signal_count: i64,
+    pub blocked_signal_count: i64,
+    pub insufficient_evidence_count: i64,
+    pub unclassified_count: i64,
 }
 
 /// Execution-attributed outcome evidence for one execution-eligible pulse.

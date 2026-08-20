@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first three Phase 4 tuning slices are landed.
+and the first four Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -224,6 +224,14 @@ denominator rather than presumed new. This is candidate overlap evidence, not
 a judgement that a zero-candidate report contained no new market information,
 and it remains local read-only data with no provider, Hermes, gate, queue, or
 Saxo authority.
+
+**Landed 2026-08-20 (fourth slice):** the Tuning payload separately counts the
+persisted decision-time gate source (`technical`, Markov fallback, or not
+evaluated) and result (clear, blocked, insufficient, or unclassified) for
+each shadow pulse. It deliberately exposes unclassified historical records
+rather than assigning them a result. These compact replay fields are not a
+Trading Manager decision, queue result, broker precheck, execution simulation,
+or Saxo action.
 
 The first version should contain:
 
