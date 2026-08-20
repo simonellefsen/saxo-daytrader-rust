@@ -779,6 +779,31 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Change Assessments" }
+                        p { class: "muted", "Server-normalized report comparisons. Candidate count is not used to infer the status; the no-new-information rate includes only reports with an available same-market opening comparison." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Reports" }
+                            th { "Material / no new" }
+                            th { "No-new rate (available comparison)" }
+                            th { "Reference unavailable / not applicable" }
+                            th { "Invalid / missing / unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_change_evidence.iter() {
+                                TuningShadowChangeEvidenceRow { evidence: evidence.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Shadow Decision-Time Signal Gates" }
                         p { class: "muted", "Candidate-level source and result counts from the persisted decision-time technical/Markov replay. This is not a Trading Manager approval, queue result, broker precheck, or execution simulation." }
                     }
@@ -888,6 +913,45 @@ fn TuningShadowGateEvidenceRow(evidence: crate::models::TuningShadowGateEvidence
             td { "{source}" }
             td { "{result}" }
             td { "{evidence.unclassified_count}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowChangeEvidenceRow(
+    evidence: crate::models::TuningShadowChangeEvidence,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let no_new_rate = evidence
+        .no_new_information_rate
+        .map(|value| format_percent(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let change = format!(
+        "{} / {}",
+        evidence.material_change_count, evidence.no_new_information_count,
+    );
+    let no_new_comparison = format!(
+        "{} ({} compared)",
+        no_new_rate, evidence.comparison_available_assessment_count,
+    );
+    let reference = format!(
+        "{} / {}",
+        evidence.opening_reference_not_available_count, evidence.not_applicable_count,
+    );
+    let invalid = format!(
+        "{} / {} / {}",
+        evidence.comparison_invalid_count,
+        evidence.missing_assessment_count,
+        evidence.unclassified_assessment_count,
+    );
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.report_count}" }
+            td { "{change}" }
+            td { "{no_new_comparison}" }
+            td { "{reference}" }
+            td { "{invalid}" }
         }
     }
 }

@@ -40,6 +40,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - `allow`, `reduce`, `stand_down`, and `review` remain advisory labels only; they do not describe a manager result, prevented quantity, broker action, or simulated execution.
 - The lane reads local persisted outcome rows only and adds no provider, Hermes, gate, queue, broker, or order authority.
 
+## [2026-08-20] observability | Add normalized shadow-change evidence to Tuning
+
+- Added a shadow-only Tuning lane for the server-normalized change assessment: material change, explicit no new information, unavailable opening reference, not applicable, invalid, missing, and unknown states.
+- The no-new-information rate has an explicit available-comparison denominator; candidate count or absence cannot manufacture an assessment state.
+- The lane reads local persisted Decision Reports only and adds no provider, Hermes, gate, queue, broker, or order authority.
+
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
 - Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.

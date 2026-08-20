@@ -39,7 +39,8 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
-        TuningPulseComparison, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
+        TuningShadowHermesEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3035,6 +3036,81 @@ fn tuning_pulse_comparison_from_rows(
     pulses.into()
 }
 
+fn tuning_shadow_change_evidence_from_rows(
+    report_rows: &[JsonValue],
+) -> Vec<TuningShadowChangeEvidence> {
+    let mut pulses = [
+        TuningShadowChangeEvidence {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            report_count: 0,
+            comparison_available_assessment_count: 0,
+            material_change_count: 0,
+            no_new_information_count: 0,
+            no_new_information_rate: None,
+            opening_reference_not_available_count: 0,
+            not_applicable_count: 0,
+            comparison_invalid_count: 0,
+            missing_assessment_count: 0,
+            unclassified_assessment_count: 0,
+        },
+        TuningShadowChangeEvidence {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            report_count: 0,
+            comparison_available_assessment_count: 0,
+            material_change_count: 0,
+            no_new_information_count: 0,
+            no_new_information_rate: None,
+            opening_reference_not_available_count: 0,
+            not_applicable_count: 0,
+            comparison_invalid_count: 0,
+            missing_assessment_count: 0,
+            unclassified_assessment_count: 0,
+        },
+    ];
+    for row in report_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        pulse.report_count += 1;
+        let report = decode_shadow_json_field(row.get("report_json"));
+        let Some(assessment) = report.get("shadow_change_assessment") else {
+            pulse.missing_assessment_count += 1;
+            continue;
+        };
+        match json_text(assessment, "status").as_str() {
+            "material_change" => {
+                pulse.comparison_available_assessment_count += 1;
+                pulse.material_change_count += 1;
+            }
+            "no_new_information" => {
+                pulse.comparison_available_assessment_count += 1;
+                pulse.no_new_information_count += 1;
+            }
+            "not_available" => pulse.opening_reference_not_available_count += 1,
+            "not_applicable" => pulse.not_applicable_count += 1,
+            "comparison_invalid" => {
+                pulse.comparison_available_assessment_count += 1;
+                pulse.comparison_invalid_count += 1;
+            }
+            _ => pulse.unclassified_assessment_count += 1,
+        }
+    }
+    for pulse in &mut pulses {
+        if pulse.comparison_available_assessment_count > 0 {
+            pulse.no_new_information_rate = Some(
+                pulse.no_new_information_count as f64
+                    / pulse.comparison_available_assessment_count as f64,
+            );
+        }
+    }
+    pulses.into()
+}
+
 fn tuning_shadow_gate_evidence_from_rows(
     shadow_rows: &[JsonValue],
 ) -> Vec<TuningShadowGateEvidence> {
@@ -4636,6 +4712,7 @@ impl AppState {
                     window_days: TUNING_PULSE_WINDOW_DAYS,
                     status: "unavailable".to_string(),
                     pulse_comparison: Vec::new(),
+                    shadow_change_evidence: Vec::new(),
                     shadow_gate_evidence: Vec::new(),
                     shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
@@ -4650,6 +4727,7 @@ impl AppState {
                 window_days: TUNING_PULSE_WINDOW_DAYS,
                 status: "not_loaded".to_string(),
                 pulse_comparison: Vec::new(),
+                shadow_change_evidence: Vec::new(),
                 shadow_gate_evidence: Vec::new(),
                 shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
@@ -4819,7 +4897,7 @@ impl AppState {
             OR analysis_pulse_key LIKE 'us_mid_session_shadow:%')";
         let report_rows = self
             .select_json(&format!(
-                "SELECT analysis_pulse_key, status
+                "SELECT analysis_pulse_key, status, report_json
                  FROM decision_reports
                  WHERE created_at >= '{}' AND {pulse_filter}",
                 sql_escape(&window_start_text),
@@ -4839,6 +4917,7 @@ impl AppState {
             ))
             .await?;
         let pulse_comparison = tuning_pulse_comparison_from_rows(&report_rows, &shadow_rows);
+        let shadow_change_evidence = tuning_shadow_change_evidence_from_rows(&report_rows);
         let shadow_gate_evidence = tuning_shadow_gate_evidence_from_rows(&shadow_rows);
         let shadow_hermes_evidence = tuning_shadow_hermes_evidence_from_rows(&shadow_rows);
         let execution_evidence = self
@@ -4866,11 +4945,12 @@ impl AppState {
             window_days: TUNING_PULSE_WINDOW_DAYS,
             status: status.to_string(),
             pulse_comparison,
+            shadow_change_evidence,
             shadow_gate_evidence,
             shadow_hermes_evidence,
             execution_pulse_outcomes,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -18141,6 +18221,9 @@ market_data:
             json!({
                 "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
                 "status": "completed",
+                "report_json": serde_json::to_string(&json!({
+                    "shadow_change_assessment": {"status": "no_new_information"},
+                })).unwrap(),
             }),
         ];
         let shadows = (0..20)
@@ -18227,6 +18310,16 @@ market_data:
         assert_eq!(us_shadow.maturity, "mature");
         assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
 
+        let changes = tuning_shadow_change_evidence_from_rows(&reports);
+        let us_changes = changes
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow change evidence");
+        assert_eq!(us_changes.report_count, 1);
+        assert_eq!(us_changes.comparison_available_assessment_count, 1);
+        assert_eq!(us_changes.no_new_information_count, 1);
+        assert_eq!(us_changes.no_new_information_rate, Some(1.0));
+
         let gates = tuning_shadow_gate_evidence_from_rows(&shadows);
         let us_gates = gates
             .iter()
@@ -18282,6 +18375,55 @@ market_data:
         assert_eq!(eu_shadow.shadow_new_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_repeated_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_candidate_novelty_rate, None);
+    }
+
+    #[test]
+    fn tuning_shadow_change_evidence_keeps_assessment_states_separate() {
+        let reports = [
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+                "report_json": {"shadow_change_assessment": {"status": "material_change"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-21",
+                "report_json": {"shadow_change_assessment": {"status": "no_new_information"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-22",
+                "report_json": {"shadow_change_assessment": {"status": "not_available"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-23",
+                "report_json": {"shadow_change_assessment": {"status": "comparison_invalid"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-24",
+                "report_json": {"shadow_change_assessment": {"status": "not_applicable"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-25",
+                "report_json": {},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-26",
+                "report_json": {"shadow_change_assessment": {"status": "legacy_unknown"}},
+            }),
+        ];
+        let evidence = tuning_shadow_change_evidence_from_rows(&reports);
+        let eu_shadow = evidence
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_mid_session_shadow")
+            .expect("EU shadow change evidence");
+        assert_eq!(eu_shadow.report_count, 7);
+        assert_eq!(eu_shadow.comparison_available_assessment_count, 3);
+        assert_eq!(eu_shadow.material_change_count, 1);
+        assert_eq!(eu_shadow.no_new_information_count, 1);
+        assert_eq!(eu_shadow.no_new_information_rate, Some(1.0 / 3.0));
+        assert_eq!(eu_shadow.opening_reference_not_available_count, 1);
+        assert_eq!(eu_shadow.not_applicable_count, 1);
+        assert_eq!(eu_shadow.comparison_invalid_count, 1);
+        assert_eq!(eu_shadow.missing_assessment_count, 1);
+        assert_eq!(eu_shadow.unclassified_assessment_count, 1);
     }
 
     #[test]

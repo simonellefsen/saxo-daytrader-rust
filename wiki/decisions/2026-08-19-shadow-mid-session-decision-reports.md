@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first five Phase 4 tuning slices are landed.
+and the first six Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -239,6 +239,14 @@ approved-policy-source coverage, and unknown legacy effects. No category is
 treated as approval or prevented quantity, and unavailable/not-requested
 evidence remains visible. The lane cannot change a manager gate, queue,
 broker precheck, execution simulation, or Saxo action.
+
+**Landed 2026-08-20 (sixth slice):** a shadow-change lane reports only the
+server-normalized material-change, `no_new_information`, opening-reference
+unavailable, not-applicable, invalid, missing, and unknown assessment states.
+Its `no_new_information` rate uses only reports with an available opening
+comparison; candidate absence is never used to infer the status. This is local
+report evidence only and cannot affect a manager gate, queue, broker precheck,
+execution simulation, or Saxo action.
 
 The first version should contain:
 

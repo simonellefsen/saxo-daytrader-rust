@@ -106,6 +106,7 @@ pub struct TuningPayload {
     pub window_days: i64,
     pub status: String,
     pub pulse_comparison: Vec<TuningPulseComparison>,
+    pub shadow_change_evidence: Vec<TuningShadowChangeEvidence>,
     pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
     pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
@@ -134,6 +135,24 @@ pub struct TuningPulseComparison {
     pub five_session_after_cost_positive_rate: Option<f64>,
     pub maturity: String,
     pub outcome_status: String,
+}
+
+/// Server-normalized comparison evidence for a midpoint shadow report.
+/// Candidate counts are deliberately not used to derive these statuses.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningShadowChangeEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub report_count: i64,
+    pub comparison_available_assessment_count: i64,
+    pub material_change_count: i64,
+    pub no_new_information_count: i64,
+    pub no_new_information_rate: Option<f64>,
+    pub opening_reference_not_available_count: i64,
+    pub not_applicable_count: i64,
+    pub comparison_invalid_count: i64,
+    pub missing_assessment_count: i64,
+    pub unclassified_assessment_count: i64,
 }
 
 /// A bounded, decision-time-only signal-gate summary for shadow candidates.
