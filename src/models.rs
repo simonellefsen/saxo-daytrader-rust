@@ -111,6 +111,7 @@ pub struct TuningPayload {
     pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
     pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
+    pub execution_lifecycle_evidence: Vec<TuningExecutionLifecycleEvidence>,
     pub safety: String,
     pub interpretation: String,
 }
@@ -230,6 +231,23 @@ pub struct TuningExecutionPulseOutcome {
     pub realised_sell_tax_dkk: f64,
     pub maturity: String,
     pub interpretation: String,
+}
+
+/// Persisted local execution-order lifecycle counts for an execution-eligible
+/// pulse. This is status coverage, not a latency or broker-quality claim.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningExecutionLifecycleEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub attributed_order_count: i64,
+    pub locally_queued_count: i64,
+    pub broker_active_count: i64,
+    pub broker_state_unknown_count: i64,
+    pub executed_count: i64,
+    pub failed_count: i64,
+    pub expired_count: i64,
+    pub cancelled_count: i64,
+    pub unclassified_count: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

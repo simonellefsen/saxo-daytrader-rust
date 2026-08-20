@@ -903,6 +903,33 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Execution-Eligible Lifecycle Evidence" }
+                        p { class: "muted", "Persisted local order-status coverage for the same 30-day window. It does not poll Saxo, estimate latency, or assert current broker state; unknown broker state stays separate and visible." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Attributed orders" }
+                            th { "Locally queued" }
+                            th { "Broker active" }
+                            th { "Broker state unknown" }
+                            th { "Executed / failed" }
+                            th { "Expired / cancelled" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.execution_lifecycle_evidence.iter() {
+                                TuningExecutionLifecycleEvidenceRow { evidence: evidence.clone() }
+                            }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
@@ -1107,6 +1134,26 @@ fn TuningExecutionPulseOutcomeRow(
             td { "{outcome.reconciled_sell_order_count}" }
             td { title: "Tax: {realised_sell_tax}", "{realised_sell}" }
             td { span { class: "status {tuning_status_tone(&outcome.maturity)}", title: "{outcome.interpretation}", "{outcome.maturity}" } }
+        }
+    }
+}
+
+#[component]
+fn TuningExecutionLifecycleEvidenceRow(
+    evidence: crate::models::TuningExecutionLifecycleEvidence,
+) -> Element {
+    let terminal = format!("{} / {}", evidence.executed_count, evidence.failed_count);
+    let closed = format!("{} / {}", evidence.expired_count, evidence.cancelled_count);
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.attributed_order_count}" }
+            td { "{evidence.locally_queued_count}" }
+            td { "{evidence.broker_active_count}" }
+            td { "{evidence.broker_state_unknown_count}" }
+            td { "{terminal}" }
+            td { "{closed}" }
+            td { "{evidence.unclassified_count}" }
         }
     }
 }

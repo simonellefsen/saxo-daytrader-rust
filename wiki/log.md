@@ -2103,3 +2103,8 @@ broker mutation was added.
 
 - New shadow reports with candidates now use a distinct server-owned Hermes session and a compact read-only report/candidate projection. The per-candidate ledger retains only a record-only action/effect match, self-check completion, and approved strategy-policy provenance; raw prompts, rationale, broker data, sessions, and secrets stay outside this view.
 - Shadow Hermes advice is hard-coded record-only and never flows to a Trading Manager gate, execution queue, Saxo precheck, or broker mutation. Disabled, unavailable, failed, and timed-out advice is persisted as missing evidence rather than silently treated as no-op advice.
+
+## [2026-08-20] observability | Expose execution-pulse lifecycle coverage
+
+- Added a typed Tuning read model for bounded, persisted local execution-order status coverage for the EU/US execution-eligible pulses. Queued, broker-active, broker-state-unknown, terminal, and unclassified counts remain distinct.
+- The view reuses existing local execution evidence only. It neither polls Saxo nor replays the manager, and it makes no latency, fill-quality, or current broker-state claim.

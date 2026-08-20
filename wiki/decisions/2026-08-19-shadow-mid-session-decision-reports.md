@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first seven Phase 4 tuning slices are landed.
+and the first eight Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -254,6 +254,14 @@ break-risk bucket, and complete-context average break risk, confidence, and
 history coverage. Missing and unknown snapshots remain visible. It is
 observational context rather than a forecast, manager risk gate, queue result,
 broker precheck, execution simulation, or Saxo action.
+
+**Landed 2026-08-20 (eighth slice):** the execution-eligible Tuning lane now
+groups persisted local order statuses into locally queued, broker-active,
+broker-state-unknown, executed, failed, expired, cancelled, and unclassified
+coverage for the EU/US opening pulses. It consumes the same bounded local
+evidence window as execution outcomes; it never polls Saxo, infers elapsed
+time, asserts a current broker state, or changes a manager, queue, precheck,
+or broker action.
 
 The first version should contain:
 

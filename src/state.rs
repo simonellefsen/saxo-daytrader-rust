@@ -38,8 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        TuningDirectionalOutcome, TuningExecutionPulseOutcome, TuningPayload,
-        TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
+        TuningDirectionalOutcome, TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome,
+        TuningPayload, TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
         TuningShadowHermesEvidence, TuningShadowSupportRiskEvidence,
     },
     performance_state::performance_summary_from_history,
@@ -3401,6 +3401,77 @@ fn tuning_execution_pulse_outcomes_from_evidence(
         .collect()
 }
 
+/// Summarizes the persisted local status of orders produced by the two
+/// execution-eligible pulses. It consumes the same bounded evidence envelope
+/// as the outcome table, so it neither replays the manager nor asks Saxo for
+/// a current broker status.
+fn tuning_execution_lifecycle_evidence_from_evidence(
+    evidence: &JsonValue,
+) -> Vec<TuningExecutionLifecycleEvidence> {
+    ["europe_open_followup", "us_open_followup"]
+        .into_iter()
+        .map(|pulse_key| {
+            let outcome = evidence
+                .get("pulses")
+                .and_then(JsonValue::as_array)
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|row| json_text(row, "pulse_key") == pulse_key)
+                })
+                .and_then(|row| row.get("outcome"))
+                .unwrap_or(&JsonValue::Null);
+            let mut lifecycle = TuningExecutionLifecycleEvidence {
+                pulse_key: pulse_key.to_string(),
+                pulse_label: match pulse_key {
+                    "europe_open_followup" => "Nordic/EU Open +1h15",
+                    _ => "US Open +1h15",
+                }
+                .to_string(),
+                attributed_order_count: value_i64(outcome, "attributed_order_count"),
+                locally_queued_count: 0,
+                broker_active_count: 0,
+                broker_state_unknown_count: 0,
+                executed_count: 0,
+                failed_count: 0,
+                expired_count: 0,
+                cancelled_count: 0,
+                unclassified_count: 0,
+            };
+            for (status, count) in outcome
+                .get("execution_status_counts")
+                .and_then(JsonValue::as_object)
+                .into_iter()
+                .flatten()
+            {
+                let count = count.as_i64().unwrap_or_default();
+                match status.trim().to_ascii_lowercase().as_str() {
+                    "pending_execution"
+                    | "pending_approval"
+                    | "waiting_for_market_open"
+                    | "waiting_for_cash_settlement"
+                    | "waiting_for_virtual_cash_budget"
+                    | "submitting_to_broker" => lifecycle.locally_queued_count += count,
+                    "submitted_to_broker"
+                    | "broker_working"
+                    | "broker_amended"
+                    | "broker_partially_filled"
+                    | "broker_replace_requested"
+                    | "broker_cancel_requested"
+                    | "broker_fill_unreconciled"
+                    | "reconciliation_pending" => lifecycle.broker_active_count += count,
+                    "broker_state_unknown" => lifecycle.broker_state_unknown_count += count,
+                    "executed" => lifecycle.executed_count += count,
+                    "execution_failed" | "failed" => lifecycle.failed_count += count,
+                    "expired_local" | "broker_expired" => lifecycle.expired_count += count,
+                    "broker_cancelled" | "cancelled" => lifecycle.cancelled_count += count,
+                    _ => lifecycle.unclassified_count += count,
+                }
+            }
+            lifecycle
+        })
+        .collect()
+}
+
 /// One independently-refreshed data source the dashboard displays.
 ///
 /// `stale_after_minutes` is derived from each source's own cadence rather than
@@ -4803,6 +4874,7 @@ impl AppState {
                     shadow_gate_evidence: Vec::new(),
                     shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
+                    execution_lifecycle_evidence: Vec::new(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -4819,6 +4891,7 @@ impl AppState {
                 shadow_gate_evidence: Vec::new(),
                 shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
+                execution_lifecycle_evidence: Vec::new(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5016,6 +5089,8 @@ impl AppState {
             .await?;
         let execution_pulse_outcomes =
             tuning_execution_pulse_outcomes_from_evidence(&execution_evidence);
+        let execution_lifecycle_evidence =
+            tuning_execution_lifecycle_evidence_from_evidence(&execution_evidence);
         let shadow_pulses = pulse_comparison
             .iter()
             .filter(|pulse| pulse.authority == "shadow_observation_only")
@@ -5041,8 +5116,9 @@ impl AppState {
             shadow_gate_evidence,
             shadow_hermes_evidence,
             execution_pulse_outcomes,
+            execution_lifecycle_evidence,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, and persisted local lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll.".to_string(),
         })
     }
 
@@ -18640,6 +18716,54 @@ market_data:
         assert_eq!(us.attributed_order_count, 0);
         assert_eq!(us.one_session.sample_count, 0);
         assert_eq!(us.maturity, "no_attributable_orders");
+    }
+
+    #[test]
+    fn tuning_execution_lifecycle_evidence_preserves_pending_and_unknown_statuses() {
+        let evidence = json!({
+            "pulses": [{
+                "pulse_key": "europe_open_followup",
+                "outcome": {
+                    "attributed_order_count": 14,
+                    "execution_status_counts": {
+                        "pending_execution": 1,
+                        "waiting_for_market_open": 2,
+                        "submitted_to_broker": 3,
+                        "broker_partially_filled": 1,
+                        "broker_state_unknown": 1,
+                        "executed": 2,
+                        "execution_failed": 1,
+                        "expired_local": 1,
+                        "broker_cancelled": 1,
+                        "legacy_unknown": 1
+                    }
+                }
+            }]
+        });
+
+        let lifecycle = tuning_execution_lifecycle_evidence_from_evidence(&evidence);
+        assert_eq!(lifecycle.len(), 2);
+        let eu = lifecycle
+            .iter()
+            .find(|row| row.pulse_key == "europe_open_followup")
+            .expect("EU lifecycle evidence");
+        assert_eq!(eu.attributed_order_count, 14);
+        assert_eq!(eu.locally_queued_count, 3);
+        assert_eq!(eu.broker_active_count, 4);
+        assert_eq!(eu.broker_state_unknown_count, 1);
+        assert_eq!(eu.executed_count, 2);
+        assert_eq!(eu.failed_count, 1);
+        assert_eq!(eu.expired_count, 1);
+        assert_eq!(eu.cancelled_count, 1);
+        assert_eq!(eu.unclassified_count, 1);
+
+        let us = lifecycle
+            .iter()
+            .find(|row| row.pulse_key == "us_open_followup")
+            .expect("US lifecycle evidence");
+        assert_eq!(us.attributed_order_count, 0);
+        assert_eq!(us.locally_queued_count, 0);
+        assert_eq!(us.unclassified_count, 0);
     }
 
     #[test]
