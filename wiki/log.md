@@ -22,6 +22,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - The UI shows attributed orders, reconciled BUY fill movement at one/five sessions, and reconciled SELL gain/commission/tax separately. It does not call either result shadow performance, combine currencies, or imply causal impact.
 - This is a local read-only projection; it does not invoke Saxo, OpenRouter, Hermes, deterministic gates, or any order mutation. The existing Execution tab keeps its previous recent-history semantics.
 
+## [2026-08-20] observability | Add shadow candidate novelty evidence to Tuning
+
+- Extended the same typed, 30-day shadow pulse rows with canonical-symbol new-versus-repeat counts against the persisted same-market opening report.
+- Candidates with no earlier opening reference are excluded from the novelty denominator, and a zero-candidate shadow report remains distinct from a `no_new_information` assessment.
+- The dashboard reads only local persisted shadow evidence; it adds no provider, Hermes, gate, queue, broker, or order authority.
+
 ## [2026-08-19] safety | Exclude pending Hermes experiments from advisory context
 
 - Closed Phase 0 prerequisite 1 from the shadow-report decision record. `pending_review` proposals remain visible to operators through the dashboard/API and continue to block duplicate proposals, but their changed variable and proposed values are no longer supplied to Hermes advisory context.

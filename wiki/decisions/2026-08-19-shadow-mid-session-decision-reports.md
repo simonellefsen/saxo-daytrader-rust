@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first Phase 4 pulse-comparison slice are landed.
+and the first three Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -216,6 +216,14 @@ separate evidence types, explicitly not shadow results, not realised BUY P/L,
 and not a causal performance claim. The existing bounded Execution-tab query
 keeps its original recent-history behaviour; the Tuning call applies its own
 window cutoff.
+
+**Landed 2026-08-20 (third slice):** shadow candidates now expose a canonical
+symbol novelty/repeat breakdown only when their same-market opening report was
+persisted. Candidates without that reference are excluded from the novelty
+denominator rather than presumed new. This is candidate overlap evidence, not
+a judgement that a zero-candidate report contained no new market information,
+and it remains local read-only data with no provider, Hermes, gate, queue, or
+Saxo authority.
 
 The first version should contain:
 

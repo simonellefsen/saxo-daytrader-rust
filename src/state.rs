@@ -2857,6 +2857,10 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_comparable_candidate_count: 0,
+            shadow_new_candidate_count: 0,
+            shadow_repeated_candidate_count: 0,
+            shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
@@ -2874,6 +2878,10 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_comparable_candidate_count: 0,
+            shadow_new_candidate_count: 0,
+            shadow_repeated_candidate_count: 0,
+            shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
@@ -2891,6 +2899,10 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_comparable_candidate_count: 0,
+            shadow_new_candidate_count: 0,
+            shadow_repeated_candidate_count: 0,
+            shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
@@ -2908,6 +2920,10 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_comparable_candidate_count: 0,
+            shadow_new_candidate_count: 0,
+            shadow_repeated_candidate_count: 0,
+            shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
@@ -2953,6 +2969,18 @@ fn tuning_pulse_comparison_from_rows(
             continue;
         }
         pulse.shadow_candidate_count += 1;
+        if value_i64(row, "earlier_pulse_report_id") > 0 {
+            pulse.shadow_comparable_candidate_count += 1;
+            if row
+                .get("appeared_in_earlier_pulse")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                pulse.shadow_repeated_candidate_count += 1;
+            } else {
+                pulse.shadow_new_candidate_count += 1;
+            }
+        }
         if json_text(row, "reference_price_source") == "saxo_infoprices" {
             pulse.shadow_reference_captured_count += 1;
         }
@@ -2988,6 +3016,12 @@ fn tuning_pulse_comparison_from_rows(
             pulse.five_session_after_cost_positive_rate = Some(
                 after_cost_positive_counts[index] as f64
                     / pulse.five_session_after_cost_count as f64,
+            );
+        }
+        if pulse.shadow_comparable_candidate_count > 0 {
+            pulse.shadow_candidate_novelty_rate = Some(
+                pulse.shadow_new_candidate_count as f64
+                    / pulse.shadow_comparable_candidate_count as f64,
             );
         }
         pulse.maturity = if pulse.twenty_session_outcome_count >= TUNING_MATURE_OUTCOME_MINIMUM {
@@ -4654,7 +4688,8 @@ impl AppState {
             .await?;
         let shadow_rows = self
             .select_json(&format!(
-                "SELECT analysis_pulse_key, reference_price_source,
+                "SELECT analysis_pulse_key, earlier_pulse_report_id, appeared_in_earlier_pulse,
+                        reference_price_source,
                         one_session_outcome_json, five_session_outcome_json,
                         twenty_session_outcome_json, five_session_after_cost_outcome_json
                  FROM shadow_report_outcomes
@@ -4690,7 +4725,7 @@ impl AppState {
             pulse_comparison,
             execution_pulse_outcomes,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. Shadow novelty compares canonical candidate symbols only when the same-market opening report was persisted; it does not decide whether a zero-candidate report contained no new market information. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement and reconciled SELL accounting are separately labelled, and neither is blended with shadow observations.".to_string(),
         })
     }
 
@@ -17967,6 +18002,8 @@ market_data:
             .map(|index| {
                 json!({
                     "analysis_pulse_key": "us_mid_session_shadow:2026-08-19",
+                    "earlier_pulse_report_id": 41,
+                    "appeared_in_earlier_pulse": index < 5,
                     "reference_price_source": "saxo_infoprices",
                     "one_session_outcome_json": "{\"status\":\"observed\"}",
                     "five_session_outcome_json": "{\"status\":\"observed\"}",
@@ -18001,6 +18038,10 @@ market_data:
         assert_eq!(us_shadow.authority, "shadow_observation_only");
         assert_eq!(us_shadow.report_count, 1);
         assert_eq!(us_shadow.shadow_candidate_count, 20);
+        assert_eq!(us_shadow.shadow_comparable_candidate_count, 20);
+        assert_eq!(us_shadow.shadow_new_candidate_count, 15);
+        assert_eq!(us_shadow.shadow_repeated_candidate_count, 5);
+        assert_eq!(us_shadow.shadow_candidate_novelty_rate, Some(0.75));
         assert_eq!(us_shadow.shadow_reference_captured_count, 20);
         assert_eq!(us_shadow.one_session_outcome_count, 20);
         assert_eq!(us_shadow.five_session_outcome_count, 20);
@@ -18009,6 +18050,28 @@ market_data:
         assert_eq!(us_shadow.five_session_after_cost_positive_rate, Some(0.6));
         assert_eq!(us_shadow.maturity, "mature");
         assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
+    }
+
+    #[test]
+    fn tuning_candidate_novelty_requires_an_earlier_opening_report() {
+        let pulses = tuning_pulse_comparison_from_rows(
+            &[],
+            &[json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+                "earlier_pulse_report_id": null,
+                "appeared_in_earlier_pulse": false,
+                "reference_price_source": "awaiting_saxo_infoprice",
+            })],
+        );
+        let eu_shadow = pulses
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_mid_session_shadow")
+            .expect("EU shadow pulse");
+        assert_eq!(eu_shadow.shadow_candidate_count, 1);
+        assert_eq!(eu_shadow.shadow_comparable_candidate_count, 0);
+        assert_eq!(eu_shadow.shadow_new_candidate_count, 0);
+        assert_eq!(eu_shadow.shadow_repeated_candidate_count, 0);
+        assert_eq!(eu_shadow.shadow_candidate_novelty_rate, None);
     }
 
     #[test]

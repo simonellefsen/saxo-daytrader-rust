@@ -763,6 +763,7 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         th { "Reports" }
                         th { "Terminal success" }
                         th { "Shadow candidates" }
+                        th { "Novel vs opening" }
                         th { "Reference quotes" }
                         th { "1 / 5 / 20 sessions" }
                         th { "5-session after-cost" }
@@ -865,6 +866,23 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
         .unwrap_or_else(|| "n/a".to_string());
     let authority = pulse.authority.replace('_', " ");
     let outcome_status = pulse.outcome_status.replace('_', " ");
+    let novelty = if pulse.authority != "shadow_observation_only"
+        || pulse.shadow_comparable_candidate_count == 0
+    {
+        "n/a".to_string()
+    } else {
+        let rate = pulse
+            .shadow_candidate_novelty_rate
+            .map(|value| format_percent(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string());
+        format!(
+            "{} new / {} repeat · {} ({} compared)",
+            pulse.shadow_new_candidate_count,
+            pulse.shadow_repeated_candidate_count,
+            rate,
+            pulse.shadow_comparable_candidate_count,
+        )
+    };
     rsx! {
         tr {
             td { strong { "{pulse.pulse_label}" } small { class: "muted block", "{pulse.pulse_key}" } }
@@ -872,6 +890,7 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
             td { "{pulse.report_count}" }
             td { "{pulse.terminal_success_count} · {success_rate}" }
             td { "{pulse.shadow_candidate_count}" }
+            td { "{novelty}" }
             td { "{pulse.shadow_reference_captured_count}" }
             td { "{pulse.one_session_outcome_count} / {pulse.five_session_outcome_count} / {pulse.twenty_session_outcome_count}" }
             td { "{pulse.five_session_after_cost_count} · {after_cost_positive_rate}" }
