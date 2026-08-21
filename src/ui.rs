@@ -1053,6 +1053,33 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Experiment Governance" }
+                        p { class: "muted", "Retained one-variable experiment lifecycle counts. This is governance metadata only, not performance evidence or activation control; pending proposals cannot activate themselves and proposed values remain outside this view." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Retained" }
+                            th { "Pending review" }
+                            th { "Approved: paper / SIM" }
+                            th { "Active: paper / SIM" }
+                            th { "Ready" }
+                            th { "Promoted" }
+                            th { "Terminal" }
+                            th { "Unclassified" }
+                            th { "Scope" }
+                        } }
+                        tbody {
+                            TuningExperimentGovernanceRow { evidence: tuning.experiment_governance.clone() }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
@@ -1112,6 +1139,38 @@ fn TuningTradeThesisEvidenceRow(
             td { "{maturity}" }
             td { "{scope}" }
             td { "{gross_net_label}" }
+        }
+    }
+}
+
+#[component]
+fn TuningExperimentGovernanceRow(evidence: crate::models::TuningExperimentGovernance) -> Element {
+    let status = evidence.status.replace('_', " ");
+    let approved = format!(
+        "{} / {}",
+        evidence.approved_paper_count, evidence.approved_sim_count,
+    );
+    let active = format!(
+        "{} / {}",
+        evidence.active_paper_count, evidence.active_sim_count,
+    );
+    let scope = if evidence.scope == "all_retained_strategy_experiment_lifecycle_rows" {
+        "All retained lifecycle rows".to_string()
+    } else {
+        "scope unavailable".to_string()
+    };
+    rsx! {
+        tr {
+            td { span { class: "status", "{status}" } }
+            td { "{evidence.total_experiment_count}" }
+            td { "{evidence.pending_review_count}" }
+            td { "{approved}" }
+            td { "{active}" }
+            td { "{evidence.ready_for_promotion_count}" }
+            td { "{evidence.promoted_count}" }
+            td { "{evidence.terminal_count}" }
+            td { "{evidence.unclassified_count}" }
+            td { "{scope}" }
         }
     }
 }

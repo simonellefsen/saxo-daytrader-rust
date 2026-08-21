@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first thirteen Phase 4 tuning slices are landed.
+and the first fourteen Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -305,6 +305,16 @@ BUY theses. It carries its own scan-limit, maturity threshold, and explicit
 gross-directional-return label, rather than inheriting the Tuning tab's
 30-day pulse window or being presented as realised P/L. It reads local
 execution/fill/daily-close evidence only; it cannot refresh a provider,
+change Hermes, replay a manager decision, create a queue row, precheck, or
+reach Saxo.
+
+**Landed 2026-08-21 (fourteenth slice):** a separate experiment-governance
+lane reports retained lifecycle status counts only: pending review, approved,
+active, ready, promoted, terminal, and legacy-unknown records. It is not an
+experiment score, performance measurement, experiment-card replacement, or
+activation control. Proposed values, metrics, rationale, and raw Hermes
+material remain outside the Tuning payload; pending proposals cannot activate
+themselves. The lane reads grouped local database metadata only and cannot
 change Hermes, replay a manager decision, create a queue row, precheck, or
 reach Saxo.
 

@@ -39,10 +39,10 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningPayload, TuningProtectiveStopCoverage,
-        TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
-        TuningShadowHermesEvidence, TuningShadowMarkovEvidence, TuningShadowQuiverEvidence,
-        TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningPayload,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3556,6 +3556,60 @@ fn tuning_trade_thesis_evidence_from_payload(value: &JsonValue) -> TuningTradeTh
     }
 }
 
+fn tuning_experiment_governance_from_rows(rows: &[JsonValue]) -> TuningExperimentGovernance {
+    let mut evidence = TuningExperimentGovernance {
+        status: "available".to_string(),
+        total_experiment_count: 0,
+        pending_review_count: 0,
+        approved_paper_count: 0,
+        approved_sim_count: 0,
+        active_paper_count: 0,
+        active_sim_count: 0,
+        ready_for_promotion_count: 0,
+        promoted_count: 0,
+        terminal_count: 0,
+        unclassified_count: 0,
+        scope: "all_retained_strategy_experiment_lifecycle_rows".to_string(),
+        interpretation: "Lifecycle inventory only. Pending proposals never activate themselves, and this summary does not expose proposed values, assess performance, or change Hermes, a manager gate, queue, broker precheck, or Saxo execution.".to_string(),
+    };
+    for row in rows {
+        let count = value_i64(row, "count").max(0);
+        evidence.total_experiment_count += count;
+        match json_text(row, "status").as_str() {
+            "pending_review" => evidence.pending_review_count += count,
+            "approved_paper" => evidence.approved_paper_count += count,
+            "approved_sim" => evidence.approved_sim_count += count,
+            "active_paper" => evidence.active_paper_count += count,
+            "active_sim" => evidence.active_sim_count += count,
+            "ready_for_promotion" => evidence.ready_for_promotion_count += count,
+            "promoted" => evidence.promoted_count += count,
+            "rejected" | "paper_failed" | "sim_failed" | "failed" | "expired_stale" => {
+                evidence.terminal_count += count
+            }
+            _ => evidence.unclassified_count += count,
+        }
+    }
+    evidence
+}
+
+fn tuning_experiment_governance_unavailable() -> TuningExperimentGovernance {
+    TuningExperimentGovernance {
+        status: "unavailable".to_string(),
+        total_experiment_count: 0,
+        pending_review_count: 0,
+        approved_paper_count: 0,
+        approved_sim_count: 0,
+        active_paper_count: 0,
+        active_sim_count: 0,
+        ready_for_promotion_count: 0,
+        promoted_count: 0,
+        terminal_count: 0,
+        unclassified_count: 0,
+        scope: "unavailable".to_string(),
+        interpretation: "Experiment lifecycle inventory could not be loaded. It does not affect Hermes, a manager gate, queue, broker precheck, or Saxo execution.".to_string(),
+    }
+}
+
 fn tuning_execution_pulse_outcomes_from_evidence(
     evidence: &JsonValue,
 ) -> Vec<TuningExecutionPulseOutcome> {
@@ -5188,6 +5242,7 @@ impl AppState {
                     trade_thesis_evidence: tuning_trade_thesis_evidence_from_payload(&json!({
                         "status": "unavailable"
                     })),
+                    experiment_governance: tuning_experiment_governance_unavailable(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -5221,6 +5276,7 @@ impl AppState {
                 trade_thesis_evidence: tuning_trade_thesis_evidence_from_payload(&json!({
                     "status": "not_loaded"
                 })),
+                experiment_governance: tuning_experiment_governance_unavailable(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5455,6 +5511,20 @@ impl AppState {
                     })
                 }),
         );
+        let experiment_governance = match self
+            .select_json(
+                "SELECT status, COUNT(*) AS count
+                 FROM strategy_experiments
+                 GROUP BY status",
+            )
+            .await
+        {
+            Ok(rows) => tuning_experiment_governance_from_rows(&rows),
+            Err(err) => {
+                warn!("tuning experiment governance degraded: {err:#}");
+                tuning_experiment_governance_unavailable()
+            }
+        };
         let protective_stop_coverage = tuning_protective_stop_coverage_from_payload(
             &self.protective_stop_coverage().await.unwrap_or_else(|err| {
                 warn!("tuning protective-stop coverage degraded: {err:#}");
@@ -5492,8 +5562,9 @@ impl AppState {
             protective_stop_coverage,
             execution_candidate_funnel,
             trade_thesis_evidence,
+            experiment_governance,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -19059,6 +19130,36 @@ market_data:
         assert_eq!(
             evidence.gross_net_label,
             "gross_directional_return_excludes_fx_commission_tax_slippage_and_realised_p_l"
+        );
+    }
+
+    #[test]
+    fn tuning_experiment_governance_exposes_statuses_without_proposal_values() {
+        let evidence = tuning_experiment_governance_from_rows(&[
+            json!({"status": "pending_review", "count": 2}),
+            json!({"status": "approved_paper", "count": 1}),
+            json!({"status": "approved_sim", "count": 3}),
+            json!({"status": "active_paper", "count": 4}),
+            json!({"status": "active_sim", "count": 5}),
+            json!({"status": "ready_for_promotion", "count": 1}),
+            json!({"status": "promoted", "count": 2}),
+            json!({"status": "expired_stale", "count": 3}),
+            json!({"status": "legacy_unknown", "count": 1}),
+        ]);
+        assert_eq!(evidence.status, "available");
+        assert_eq!(evidence.total_experiment_count, 22);
+        assert_eq!(evidence.pending_review_count, 2);
+        assert_eq!(evidence.approved_paper_count, 1);
+        assert_eq!(evidence.approved_sim_count, 3);
+        assert_eq!(evidence.active_paper_count, 4);
+        assert_eq!(evidence.active_sim_count, 5);
+        assert_eq!(evidence.ready_for_promotion_count, 1);
+        assert_eq!(evidence.promoted_count, 2);
+        assert_eq!(evidence.terminal_count, 3);
+        assert_eq!(evidence.unclassified_count, 1);
+        assert_eq!(
+            evidence.scope,
+            "all_retained_strategy_experiment_lifecycle_rows"
         );
     }
 

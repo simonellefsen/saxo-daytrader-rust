@@ -117,6 +117,7 @@ pub struct TuningPayload {
     pub protective_stop_coverage: TuningProtectiveStopCoverage,
     pub execution_candidate_funnel: Vec<TuningExecutionCandidateFunnel>,
     pub trade_thesis_evidence: TuningTradeThesisEvidence,
+    pub experiment_governance: TuningExperimentGovernance,
     pub safety: String,
     pub interpretation: String,
 }
@@ -348,6 +349,26 @@ pub struct TuningTradeThesisEvidence {
     pub scan_limit: i64,
     pub scope: String,
     pub gross_net_label: String,
+    pub interpretation: String,
+}
+
+/// Lifecycle inventory for retained one-variable strategy experiments. It is
+/// governance metadata only, not evidence of performance or an activation
+/// control; experiment values and rationale remain outside this summary.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningExperimentGovernance {
+    pub status: String,
+    pub total_experiment_count: i64,
+    pub pending_review_count: i64,
+    pub approved_paper_count: i64,
+    pub approved_sim_count: i64,
+    pub active_paper_count: i64,
+    pub active_sim_count: i64,
+    pub ready_for_promotion_count: i64,
+    pub promoted_count: i64,
+    pub terminal_count: i64,
+    pub unclassified_count: i64,
+    pub scope: String,
     pub interpretation: String,
 }
 

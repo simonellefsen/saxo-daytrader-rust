@@ -2133,3 +2133,8 @@ broker mutation was added.
 
 - Added a typed Tuning projection of the existing newest-recorded BUY-thesis outcome aggregate, preserving reconciled-fill counts, 1/5-session directional observations, scan limit, and maturity threshold.
 - Its newest-thesis scope, gross-only return label, and exclusion of realised P/L remain explicit and separate from the tab's 30-day pulse window. It uses only local execution/fill/daily-close evidence and cannot affect Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose experiment governance in Tuning
+
+- Added a typed retained-lifecycle inventory for strategy experiments: pending review, approved/active paper and SIM, ready, promoted, terminal, and legacy-unknown counts remain separate.
+- The inventory contains no proposal values, rationale, raw Hermes material, or performance claim. It cannot activate an experiment or affect Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
