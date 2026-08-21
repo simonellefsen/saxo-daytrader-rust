@@ -2138,3 +2138,8 @@ broker mutation was added.
 
 - Added a typed retained-lifecycle inventory for strategy experiments: pending review, approved/active paper and SIM, ready, promoted, terminal, and legacy-unknown counts remain separate.
 - The inventory contains no proposal values, rationale, raw Hermes material, or performance claim. It cannot activate an experiment or affect Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose one-month benchmark comparison in Tuning
+
+- Added a typed Tuning projection of the existing one-month local account-value comparison against stored native-currency ETF proxy price returns, retaining per-reference status, alignment, freshness, proxy return, and portfolio excess.
+- The view keeps cash inclusion and every comparison limit explicit: it is not time-weighted or total return and does not normalize FX, dividends, fees, tax, or external cash flows. It reads local history and stored closes only, without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.

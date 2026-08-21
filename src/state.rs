@@ -38,7 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningPayload,
         TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
         TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
@@ -3610,6 +3611,47 @@ fn tuning_experiment_governance_unavailable() -> TuningExperimentGovernance {
     }
 }
 
+fn tuning_benchmark_comparison_from_payload(value: &JsonValue) -> TuningBenchmarkComparison {
+    let references = value
+        .get("references")
+        .and_then(JsonValue::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| TuningBenchmarkReference {
+                    key: json_text(row, "key"),
+                    label: json_text(row, "label"),
+                    symbol: json_text(row, "symbol"),
+                    status: json_text(row, "status"),
+                    benchmark_return_pct: tuning_optional_number(row, "benchmark_return_pct"),
+                    excess_return_pct: tuning_optional_number(row, "excess_return_pct"),
+                    freshness: json_text(row, "freshness"),
+                    baseline_at: json_text(row, "baseline_at"),
+                    latest_at: json_text(row, "latest_at"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    TuningBenchmarkComparison {
+        status: json_text(value, "status"),
+        portfolio_return_pct: tuning_optional_number(value, "portfolio_return_pct"),
+        ready_count: value_i64(value, "ready_count"),
+        reference_count: value_i64(value, "reference_count"),
+        aligned_count: value_i64(value, "aligned_count"),
+        prior_close_count: value_i64(value, "prior_close_count"),
+        stale_close_count: value_i64(value, "stale_close_count"),
+        freshness: json_text(value, "freshness"),
+        references,
+        scope: "one_month_local_account_value_vs_stored_native_currency_proxy_price_returns"
+            .to_string(),
+        return_kind: "not_time_weighted_or_total_return_not_normalized_for_fx_dividends_fees_tax_or_external_cash_flows".to_string(),
+        caveat: json_text(value, "caveat"),
+    }
+}
+
+fn tuning_benchmark_comparison_unavailable() -> TuningBenchmarkComparison {
+    tuning_benchmark_comparison_from_payload(&json!({"status": "unavailable"}))
+}
+
 fn tuning_execution_pulse_outcomes_from_evidence(
     evidence: &JsonValue,
 ) -> Vec<TuningExecutionPulseOutcome> {
@@ -5243,6 +5285,7 @@ impl AppState {
                         "status": "unavailable"
                     })),
                     experiment_governance: tuning_experiment_governance_unavailable(),
+                    benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -5277,6 +5320,7 @@ impl AppState {
                     "status": "not_loaded"
                 })),
                 experiment_governance: tuning_experiment_governance_unavailable(),
+                benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5525,6 +5569,26 @@ impl AppState {
                 tuning_experiment_governance_unavailable()
             }
         };
+        let benchmark_comparison = match self
+            .performance_history_with_current("1M", performance_range_limit("1M"))
+            .await
+        {
+            Ok(history) => {
+                match crate::performance_benchmarks::performance_benchmark_payload(self, &history)
+                    .await
+                {
+                    Ok(payload) => tuning_benchmark_comparison_from_payload(&payload),
+                    Err(err) => {
+                        warn!("tuning benchmark comparison degraded: {err:#}");
+                        tuning_benchmark_comparison_unavailable()
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("tuning benchmark history degraded: {err:#}");
+                tuning_benchmark_comparison_unavailable()
+            }
+        };
         let protective_stop_coverage = tuning_protective_stop_coverage_from_payload(
             &self.protective_stop_coverage().await.unwrap_or_else(|err| {
                 warn!("tuning protective-stop coverage degraded: {err:#}");
@@ -5563,8 +5627,9 @@ impl AppState {
             execution_candidate_funnel,
             trade_thesis_evidence,
             experiment_governance,
+            benchmark_comparison,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -19160,6 +19225,51 @@ market_data:
         assert_eq!(
             evidence.scope,
             "all_retained_strategy_experiment_lifecycle_rows"
+        );
+    }
+
+    #[test]
+    fn tuning_benchmark_comparison_keeps_proxy_return_and_freshness_labels() {
+        let evidence = tuning_benchmark_comparison_from_payload(&json!({
+            "status": "partial",
+            "portfolio_return_pct": 0.03,
+            "ready_count": 1,
+            "reference_count": 2,
+            "aligned_count": 1,
+            "prior_close_count": 0,
+            "stale_close_count": 0,
+            "freshness": "aligned_close",
+            "references": [{
+                "key": "world",
+                "label": "World ETF",
+                "symbol": "IWRD:xlon",
+                "status": "ready",
+                "benchmark_return_pct": 0.02,
+                "excess_return_pct": 0.01,
+                "freshness": "aligned_close",
+                "baseline_at": "2026-08-01T00:00:00Z",
+                "latest_at": "2026-08-21T00:00:00Z",
+            }],
+            "caveat": "Not a total-return comparison.",
+        }));
+        assert_eq!(evidence.status, "partial");
+        assert_eq!(evidence.portfolio_return_pct, Some(0.03));
+        assert_eq!(evidence.ready_count, 1);
+        assert_eq!(evidence.reference_count, 2);
+        assert_eq!(evidence.freshness, "aligned_close");
+        assert_eq!(evidence.references.len(), 1);
+        assert_eq!(evidence.references[0].label, "World ETF");
+        assert_eq!(evidence.references[0].benchmark_return_pct, Some(0.02));
+        assert_eq!(evidence.references[0].excess_return_pct, Some(0.01));
+        assert_eq!(evidence.references[0].freshness, "aligned_close");
+        assert_eq!(
+            evidence.scope,
+            "one_month_local_account_value_vs_stored_native_currency_proxy_price_returns"
+        );
+        assert!(
+            evidence
+                .return_kind
+                .contains("not_time_weighted_or_total_return")
         );
     }
 

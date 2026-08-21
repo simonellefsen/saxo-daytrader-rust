@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first fourteen Phase 4 tuning slices are landed.
+and the first fifteen Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -317,6 +317,16 @@ material remain outside the Tuning payload; pending proposals cannot activate
 themselves. The lane reads grouped local database metadata only and cannot
 change Hermes, replay a manager decision, create a queue row, precheck, or
 reach Saxo.
+
+**Landed 2026-08-21 (fifteenth slice):** a separate one-month benchmark lane
+reuses the existing local account-value history/current aggregate and stored
+benchmark-proxy closes. It reports the local account-value return including
+cash alongside each native-currency ETF proxy price return and excess return,
+while retaining reference status, baseline/latest alignment, and freshness.
+It explicitly labels the comparison as neither time-weighted nor total return
+and as not normalized for FX, dividends, fees, tax, or external cash flows.
+The lane never refreshes benchmarks or reads Saxo; it cannot change Hermes,
+replay a manager decision, create a queue row, precheck, or reach Saxo.
 
 The first version should contain:
 

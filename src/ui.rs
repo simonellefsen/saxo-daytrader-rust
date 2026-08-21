@@ -1080,6 +1080,51 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "One-Month Benchmark Comparison" }
+                        p { class: "muted", "Current local account-value history, including cash, compared with stored native-currency ETF proxy price returns. This is read-only and does not refresh benchmark data; it is not a total-return or performance-attribution measure." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Portfolio return" }
+                            th { "Ready / references" }
+                            th { "Alignment: aligned / prior / stale" }
+                            th { "Freshness" }
+                            th { "Scope" }
+                            th { "Return definition" }
+                        } }
+                        tbody {
+                            TuningBenchmarkComparisonSummaryRow { evidence: tuning.benchmark_comparison.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+                if !tuning.benchmark_comparison.references.is_empty() {
+                    div { class: "table-wrap",
+                        table {
+                            thead { tr {
+                                th { "Reference" }
+                                th { "Proxy return" }
+                                th { "Portfolio excess" }
+                                th { "Status / freshness" }
+                                th { "Baseline / latest close" }
+                            } }
+                            tbody {
+                                for reference in tuning.benchmark_comparison.references.iter() {
+                                    TuningBenchmarkReferenceRow { reference: reference.clone(), prefs: prefs.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !tuning.benchmark_comparison.caveat.is_empty() {
+                    p { class: "muted benchmark-caveat", "{tuning.benchmark_comparison.caveat}" }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
@@ -1171,6 +1216,90 @@ fn TuningExperimentGovernanceRow(evidence: crate::models::TuningExperimentGovern
             td { "{evidence.terminal_count}" }
             td { "{evidence.unclassified_count}" }
             td { "{scope}" }
+        }
+    }
+}
+
+#[component]
+fn TuningBenchmarkComparisonSummaryRow(
+    evidence: crate::models::TuningBenchmarkComparison,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = evidence.status.replace('_', " ");
+    let portfolio_return = evidence
+        .portfolio_return_pct
+        .map(|value| format_signed_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let ready = format!("{} / {}", evidence.ready_count, evidence.reference_count);
+    let alignment = format!(
+        "{} / {} / {}",
+        evidence.aligned_count, evidence.prior_close_count, evidence.stale_close_count,
+    );
+    let freshness = if evidence.freshness.is_empty() {
+        "n/a".to_string()
+    } else {
+        evidence.freshness.replace('_', " ")
+    };
+    let scope = if evidence.scope.contains("one_month_local_account_value") {
+        "1M local account value vs stored proxy closes".to_string()
+    } else {
+        "scope unavailable".to_string()
+    };
+    let return_kind = evidence.return_kind.replace('_', " ");
+    rsx! {
+        tr {
+            td { span { class: "status", "{status}" } }
+            td { "{portfolio_return}" }
+            td { "{ready}" }
+            td { "{alignment}" }
+            td { "{freshness}" }
+            td { "{scope}" }
+            td { "{return_kind}" }
+        }
+    }
+}
+
+#[component]
+fn TuningBenchmarkReferenceRow(
+    reference: crate::models::TuningBenchmarkReference,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let benchmark_return = reference
+        .benchmark_return_pct
+        .map(|value| format_signed_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let excess_return = reference
+        .excess_return_pct
+        .map(|value| format_signed_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let status_and_freshness = match (reference.status.trim(), reference.freshness.trim()) {
+        ("", "") => "n/a".to_string(),
+        (status, "") => status.replace('_', " "),
+        ("", freshness) => freshness.replace('_', " "),
+        (status, freshness) => format!(
+            "{} / {}",
+            status.replace('_', " "),
+            freshness.replace('_', " ")
+        ),
+    };
+    let close_dates = match (
+        reference.baseline_at.is_empty(),
+        reference.latest_at.is_empty(),
+    ) {
+        (false, false) => format!(
+            "{} / {}",
+            format_timestamp(&reference.baseline_at, &prefs),
+            format_timestamp(&reference.latest_at, &prefs),
+        ),
+        _ => "n/a".to_string(),
+    };
+    rsx! {
+        tr {
+            td { strong { "{reference.label}" } small { class: "muted block", "{reference.symbol}" } }
+            td { "{benchmark_return}" }
+            td { "{excess_return}" }
+            td { "{status_and_freshness}" }
+            td { "{close_dates}" }
         }
     }
 }

@@ -118,6 +118,7 @@ pub struct TuningPayload {
     pub execution_candidate_funnel: Vec<TuningExecutionCandidateFunnel>,
     pub trade_thesis_evidence: TuningTradeThesisEvidence,
     pub experiment_governance: TuningExperimentGovernance,
+    pub benchmark_comparison: TuningBenchmarkComparison,
     pub safety: String,
     pub interpretation: String,
 }
@@ -370,6 +371,38 @@ pub struct TuningExperimentGovernance {
     pub unclassified_count: i64,
     pub scope: String,
     pub interpretation: String,
+}
+
+/// Read-only one-month account-value comparison against stored native-currency
+/// ETF proxy price returns. It is deliberately not a normalized total-return
+/// or performance-attribution measure.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningBenchmarkComparison {
+    pub status: String,
+    pub portfolio_return_pct: Option<f64>,
+    pub ready_count: i64,
+    pub reference_count: i64,
+    pub aligned_count: i64,
+    pub prior_close_count: i64,
+    pub stale_close_count: i64,
+    pub freshness: String,
+    pub references: Vec<TuningBenchmarkReference>,
+    pub scope: String,
+    pub return_kind: String,
+    pub caveat: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningBenchmarkReference {
+    pub key: String,
+    pub label: String,
+    pub symbol: String,
+    pub status: String,
+    pub benchmark_return_pct: Option<f64>,
+    pub excess_return_pct: Option<f64>,
+    pub freshness: String,
+    pub baseline_at: String,
+    pub latest_at: String,
 }
 
 /// Bounded and redacted diagnostic payload for a Decision Report.
