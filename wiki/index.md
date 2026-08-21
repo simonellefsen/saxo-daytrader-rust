@@ -16,6 +16,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [log](log.md) - Append-only timeline of wiki operations.
 - [roadmap](roadmap.md) - Potential improvements across reliability, Hermes, strategy, execution, UX, and architecture.
 - [urgent-todo](urgent-todo.md) - Short ranked list of verified exposures that should not wait for roadmap sequencing.
+- [todo](todo.md) - Open items that are not defects: decided-in-principle work and decisions that are the operator's to make.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
 - [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current Rust runtime, advisory inputs, deterministic execution boundary, broker authority, and ownership model.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, expiring read-only memory, audits, baseline evidence, and strategy experiments connect to the wiki.

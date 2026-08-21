@@ -3385,9 +3385,13 @@ fn PerformanceBenchmarkRow(reference: JsonValue, prefs: LocalizationPrefs) -> El
         if portfolio_return.is_some() { 1 } else { 0 },
         1,
     );
+    // `return_pct` in `performance_benchmarks.rs` already returns percentage
+    // points -- 0.5068 means 0.5068%, not 50.68%. Formatting it with
+    // `format_signed_pct`, which multiplies by 100, rendered a +0.51% day as
+    // "+50.7%" and put the Dow at "+87.8%" in a single session.
     let percent = |value: Option<f64>| {
         value
-            .map(|value| format_signed_pct(value, &prefs))
+            .map(|value| format_signed_percentage_points(value, &prefs))
             .unwrap_or_else(|| "n/a".to_string())
     };
     rsx! {
@@ -11297,6 +11301,38 @@ mod tests {
             "broker_state_unknown",
         ] {
             assert!(!execution_status_is_healthy(status), "{status}");
+        }
+    }
+
+    /// `return_pct` in `performance_benchmarks.rs` yields percentage points,
+    /// so a 243,172 -> 244,405 day is 0.5068, meaning 0.51%. Formatting it as a
+    /// fraction multiplied it by 100 and reported "+50.7%", with the Dow at
+    /// "+87.8%" in one session. These are the live values from 2026-08-21.
+    #[test]
+    fn benchmark_returns_render_as_percentage_points_not_fractions() {
+        let prefs = default_prefs();
+        for value in [
+            0.506_828_261_595_249_1,
+            0.385_424_538_311_518_46,
+            0.121_403_723_283_730_61,
+        ] {
+            let rendered = format_signed_percentage_points(value, &prefs);
+            // Precision-independent: whatever the formatter rounds to, the
+            // magnitude must still be the input, not the input times 100.
+            let parsed = rendered
+                .trim_start_matches('+')
+                .trim_end_matches('%')
+                .replace(',', ".")
+                .parse::<f64>()
+                .unwrap_or_else(|_| panic!("unparseable render {rendered}"));
+            assert!(
+                (parsed - value).abs() < 0.05,
+                "{value} should render near itself, got {rendered}"
+            );
+            assert!(
+                parsed < 1.0,
+                "a sub-1% day must never render as double digits: {rendered}"
+            );
         }
     }
 
