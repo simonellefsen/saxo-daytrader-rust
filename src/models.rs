@@ -119,6 +119,7 @@ pub struct TuningPayload {
     pub trade_thesis_evidence: TuningTradeThesisEvidence,
     pub experiment_governance: TuningExperimentGovernance,
     pub portfolio_outcome: TuningPortfolioOutcome,
+    pub monthly_goal_progress: TuningMonthlyGoalProgress,
     pub benchmark_comparison: TuningBenchmarkComparison,
     pub safety: String,
     pub interpretation: String,
@@ -394,6 +395,21 @@ pub struct TuningPortfolioOutcome {
     pub unreliable_cost_basis_points: i64,
     pub scope: String,
     pub return_kind: String,
+    pub caveat: String,
+}
+
+/// Read-only calendar-month progress against the configured DKK portfolio
+/// target. This is a local account-value comparison, not realised P/L or a
+/// risk, sizing, or execution control.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningMonthlyGoalProgress {
+    pub status: String,
+    pub target_dkk: Option<f64>,
+    pub value_change_dkk: Option<f64>,
+    pub target_progress: Option<f64>,
+    pub baseline_value_dkk: Option<f64>,
+    pub period_start: String,
+    pub scope: String,
     pub caveat: String,
 }
 

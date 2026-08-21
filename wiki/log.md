@@ -2153,3 +2153,8 @@ broker mutation was added.
 
 - Added typed benchmark-source audit fields beside the one-month proxy comparison: last run status, created-at/run-date, configured reference count, and successful/error refresh counts.
 - Collector provenance remains distinct from portfolio/proxy close alignment and is local stored evidence only. The panel neither refreshes a benchmark nor affects Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose calendar-month goal context in Tuning
+
+- Added a typed projection of the existing configured monthly DKK planning target against the active import batch's calendar-month account-value baseline, preserving pending-baseline status, target, value change, target ratio, and period start.
+- This is local planning context rather than realised P/L, time-weighted/total return, or cash-flow/FX/dividend/fee/tax-normalized attribution. It does not create a risk, sizing, manager, queue, broker-precheck, Hermes, or Saxo-execution input.

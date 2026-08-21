@@ -40,8 +40,8 @@ use crate::{
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
         TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningPayload,
-        TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
         TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
         TuningTradeThesisEvidence,
@@ -3652,6 +3652,29 @@ fn tuning_portfolio_outcome_unavailable() -> TuningPortfolioOutcome {
     }))
 }
 
+fn tuning_monthly_goal_progress_from_payload(value: &JsonValue) -> TuningMonthlyGoalProgress {
+    let month = value
+        .get("periods")
+        .and_then(|periods| periods.get("month"))
+        .unwrap_or(&JsonValue::Null);
+    TuningMonthlyGoalProgress {
+        status: json_text(month, "status"),
+        target_dkk: tuning_optional_number(month, "target_dkk"),
+        value_change_dkk: tuning_optional_number(month, "pnl_dkk"),
+        target_progress: tuning_optional_number(month, "progress_pct"),
+        baseline_value_dkk: tuning_optional_number(month, "baseline_value_dkk"),
+        period_start: json_text(month, "period_start_utc"),
+        scope: "configured_calendar_month_portfolio_value_change_against_dkk_target".to_string(),
+        caveat: "The configured monthly DKK target is a planning reference and must be reviewed when portfolio value changes materially. Progress is local portfolio-value change from the active-batch calendar-month baseline, not realised P/L, time-weighted or total return, and is not normalized for deposits, withdrawals, FX, dividends, fees, or tax.".to_string(),
+    }
+}
+
+fn tuning_monthly_goal_progress_unavailable() -> TuningMonthlyGoalProgress {
+    tuning_monthly_goal_progress_from_payload(&json!({
+        "periods": {"month": {"status": "unavailable"}}
+    }))
+}
+
 fn tuning_benchmark_comparison_from_payload(value: &JsonValue) -> TuningBenchmarkComparison {
     let latest_run = value.get("latest_run").unwrap_or(&JsonValue::Null);
     let references = value
@@ -5341,6 +5364,7 @@ impl AppState {
                     })),
                     experiment_governance: tuning_experiment_governance_unavailable(),
                     portfolio_outcome: tuning_portfolio_outcome_unavailable(),
+                    monthly_goal_progress: tuning_monthly_goal_progress_unavailable(),
                     benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
@@ -5377,6 +5401,7 @@ impl AppState {
                 })),
                 experiment_governance: tuning_experiment_governance_unavailable(),
                 portfolio_outcome: tuning_portfolio_outcome_unavailable(),
+                monthly_goal_progress: tuning_monthly_goal_progress_unavailable(),
                 benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
@@ -5638,6 +5663,19 @@ impl AppState {
                 tuning_portfolio_outcome_unavailable()
             }
         };
+        let monthly_goal_progress = match &one_month_performance_history {
+            Ok(history) => match history
+                .last()
+                .and_then(|row| tuning_optional_number(row, "total_market_value_dkk"))
+                .filter(|total| *total > 0.0)
+            {
+                Some(total) => {
+                    tuning_monthly_goal_progress_from_payload(&self.goal_tracking(total).await)
+                }
+                None => tuning_monthly_goal_progress_unavailable(),
+            },
+            Err(_) => tuning_monthly_goal_progress_unavailable(),
+        };
         let benchmark_comparison = match &one_month_performance_history {
             Ok(history) => {
                 match crate::performance_benchmarks::performance_benchmark_payload(self, &history)
@@ -5694,9 +5732,10 @@ impl AppState {
             trade_thesis_evidence,
             experiment_governance,
             portfolio_outcome,
+            monthly_goal_progress,
             benchmark_comparison,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The one-month account-value outcome lane is simple local snapshot movement including cash, with visible freshness and no realised-P/L, time-weighted-return, or total-return claim. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The one-month account-value outcome lane is simple local snapshot movement including cash, with visible freshness and no realised-P/L, time-weighted-return, or total-return claim. Its calendar-month target context is a separately labelled configured DKK planning reference, with an active-batch baseline and the same non-realised/non-normalized limits. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -19394,6 +19433,37 @@ market_data:
         assert_eq!(unavailable.status, "unavailable");
         assert_eq!(unavailable.latest_value_dkk, None);
         assert_eq!(unavailable.change_dkk, None);
+    }
+
+    #[test]
+    fn tuning_monthly_goal_progress_keeps_calendar_baseline_and_target_labels() {
+        let progress = tuning_monthly_goal_progress_from_payload(&json!({
+            "periods": {
+                "month": {
+                    "status": "ready",
+                    "target_dkk": 3_800.0,
+                    "pnl_dkk": 1_140.0,
+                    "progress_pct": 0.3,
+                    "baseline_value_dkk": 240_000.0,
+                    "period_start_utc": "2026-08-01T00:00:00Z",
+                }
+            }
+        }));
+        assert_eq!(progress.status, "ready");
+        assert_eq!(progress.target_dkk, Some(3_800.0));
+        assert_eq!(progress.value_change_dkk, Some(1_140.0));
+        assert_eq!(progress.target_progress, Some(0.3));
+        assert_eq!(progress.baseline_value_dkk, Some(240_000.0));
+        assert_eq!(progress.period_start, "2026-08-01T00:00:00Z");
+        assert!(
+            progress
+                .scope
+                .contains("configured_calendar_month_portfolio_value_change")
+        );
+        assert_eq!(
+            tuning_monthly_goal_progress_unavailable().status,
+            "unavailable"
+        );
     }
 
     #[test]

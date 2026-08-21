@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first seventeen Phase 4 tuning slices are landed.
+and the first eighteen Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -345,6 +345,15 @@ The source audit is displayed separately from proxy-close alignment, so a
 recent collector run does not imply intraday proxy freshness or a normalized
 portfolio comparison. It reads the existing local run record only and cannot
 refresh benchmarks, change Hermes, replay a manager decision, create a queue
+row, precheck, or reach Saxo.
+
+**Landed 2026-08-21 (eighteenth slice):** a separate calendar-month goal
+context lane reuses the existing configured monthly DKK planning target and
+active-import-batch account-value baseline. It preserves target, local value
+change, target-progress ratio, baseline, and pending-baseline state without
+claiming realised P/L, time-weighted or total return, or cash-flow/FX/dividend/
+fee/tax normalization. It is not a risk limit, sizing input, or execution
+target; it cannot change Hermes, replay a manager decision, create a queue
 row, precheck, or reach Saxo.
 
 The first version should contain:

@@ -784,6 +784,31 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 p { class: "muted benchmark-caveat", "{tuning.portfolio_outcome.caveat}" }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Calendar-Month Goal Context" }
+                        p { class: "muted", "Configured monthly DKK planning target against the active-batch calendar-month account-value baseline. It is read-only context, not a performance attribution, risk limit, or execution target." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Period start" }
+                            th { "Value change" }
+                            th { "Configured target" }
+                            th { "Target progress" }
+                            th { "Baseline value" }
+                            th { "Scope" }
+                        } }
+                        tbody {
+                            TuningMonthlyGoalProgressRow { progress: tuning.monthly_goal_progress.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+                p { class: "muted benchmark-caveat", "{tuning.monthly_goal_progress.caveat}" }
+            }
             div { class: "table-wrap",
                 table {
                     thead { tr {
@@ -1322,6 +1347,54 @@ fn TuningPortfolioOutcomeRow(
             td { "{outcome.unreliable_cost_basis_points}" }
             td { "{scope}" }
             td { "{return_kind}" }
+        }
+    }
+}
+
+#[component]
+fn TuningMonthlyGoalProgressRow(
+    progress: crate::models::TuningMonthlyGoalProgress,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = progress.status.replace('_', " ");
+    let period_start = if progress.period_start.is_empty() {
+        "n/a".to_string()
+    } else {
+        format_timestamp(&progress.period_start, &prefs)
+    };
+    let value_change = progress
+        .value_change_dkk
+        .map(|value| format_signed_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let target = progress
+        .target_dkk
+        .map(|value| format_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let target_progress = progress
+        .target_progress
+        .map(|value| format_signed_pct(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let baseline = progress
+        .baseline_value_dkk
+        .map(|value| format_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let scope = if progress
+        .scope
+        .contains("configured_calendar_month_portfolio_value_change")
+    {
+        "Calendar-month account-value change vs configured DKK target".to_string()
+    } else {
+        "scope unavailable".to_string()
+    };
+    rsx! {
+        tr {
+            td { span { class: "status", "{status}" } }
+            td { "{period_start}" }
+            td { "{value_change}" }
+            td { "{target}" }
+            td { "{target_progress}" }
+            td { "{baseline}" }
+            td { "{scope}" }
         }
     }
 }
