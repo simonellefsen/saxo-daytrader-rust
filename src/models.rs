@@ -108,6 +108,7 @@ pub struct TuningPayload {
     pub pulse_comparison: Vec<TuningPulseComparison>,
     pub shadow_change_evidence: Vec<TuningShadowChangeEvidence>,
     pub shadow_support_risk_evidence: Vec<TuningShadowSupportRiskEvidence>,
+    pub shadow_markov_evidence: Vec<TuningShadowMarkovEvidence>,
     pub shadow_gate_evidence: Vec<TuningShadowGateEvidence>,
     pub shadow_hermes_evidence: Vec<TuningShadowHermesEvidence>,
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
@@ -175,6 +176,24 @@ pub struct TuningShadowSupportRiskEvidence {
     pub average_break_risk: Option<f64>,
     pub average_confidence: Option<f64>,
     pub average_history_coverage: Option<f64>,
+    pub unclassified_count: i64,
+}
+
+/// Markov context captured with a shadow candidate at report time. It is a
+/// saved-signal coverage summary only; it neither reruns Markov nor becomes a
+/// Trading Manager gate, forecast, or execution signal.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningShadowMarkovEvidence {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub candidate_count: i64,
+    pub snapshot_available_count: i64,
+    pub long_direction_count: i64,
+    pub short_direction_count: i64,
+    pub neutral_direction_count: i64,
+    pub unavailable_count: i64,
+    pub complete_signal_count: i64,
+    pub average_signed_signal: Option<f64>,
     pub unclassified_count: i64,
 }
 

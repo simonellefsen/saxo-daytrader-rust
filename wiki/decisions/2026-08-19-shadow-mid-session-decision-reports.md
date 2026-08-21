@@ -6,7 +6,7 @@ tags:
   - decision-reports
   - hermes
   - observability
-updated: 2026-08-20
+updated: 2026-08-21
 sources:
   - /Users/lindau/codex/rust_daytrader/deploy/k8s/base/config.k8s.yaml
   - /Users/lindau/codex/rust_daytrader/src/xai_decision.rs
@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first ten Phase 4 tuning slices are landed.
+and the first eleven Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -280,6 +280,14 @@ snapshot is absent remain explicit rather than being treated as zero-candidate
 runs. A local execution row is not broker submission, a fill, or a currently
 pending order. This is local audit data only: it does not invoke Hermes, replay
 a manager decision, create a queue row, precheck, or reach Saxo.
+
+**Landed 2026-08-21 (eleventh slice):** a shadow-only Markov context lane
+reports candidate-level saved-snapshot coverage, long/short/neutral direction
+buckets, unavailable and legacy-unknown records, and an average signed signal
+only where the saved snapshot was available and complete. It reads the compact
+decision-time snapshot already persisted with each candidate; it does not
+rerun Markov, derive freshness from current data, forecast, replay a manager
+decision, create a queue row, precheck, or reach Saxo.
 
 The first version should contain:
 

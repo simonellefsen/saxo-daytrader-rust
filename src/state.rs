@@ -41,7 +41,7 @@ use crate::{
         TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningPayload, TuningProtectiveStopCoverage,
         TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
-        TuningShadowHermesEvidence, TuningShadowSupportRiskEvidence,
+        TuningShadowHermesEvidence, TuningShadowMarkovEvidence, TuningShadowSupportRiskEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3198,6 +3198,86 @@ fn tuning_shadow_support_risk_evidence_from_rows(
     pulses.into()
 }
 
+fn tuning_shadow_markov_evidence_from_rows(
+    shadow_rows: &[JsonValue],
+) -> Vec<TuningShadowMarkovEvidence> {
+    let mut pulses = [
+        TuningShadowMarkovEvidence {
+            pulse_key: "europe_mid_session_shadow".to_string(),
+            pulse_label: "Nordic/EU 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            snapshot_available_count: 0,
+            long_direction_count: 0,
+            short_direction_count: 0,
+            neutral_direction_count: 0,
+            unavailable_count: 0,
+            complete_signal_count: 0,
+            average_signed_signal: None,
+            unclassified_count: 0,
+        },
+        TuningShadowMarkovEvidence {
+            pulse_key: "us_mid_session_shadow".to_string(),
+            pulse_label: "US 14:15 Shadow".to_string(),
+            candidate_count: 0,
+            snapshot_available_count: 0,
+            long_direction_count: 0,
+            short_direction_count: 0,
+            neutral_direction_count: 0,
+            unavailable_count: 0,
+            complete_signal_count: 0,
+            average_signed_signal: None,
+            unclassified_count: 0,
+        },
+    ];
+    let mut signed_signal_sums = [0.0_f64; 2];
+    for row in shadow_rows {
+        let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
+            continue;
+        };
+        let Some(index) = pulses.iter().position(|pulse| pulse.pulse_key == kind) else {
+            continue;
+        };
+        let pulse = &mut pulses[index];
+        pulse.candidate_count += 1;
+        let context = decode_shadow_json_field(row.get("report_time_context_json"));
+        let markov = context
+            .get("markov_snapshot")
+            .filter(|value| value.is_object());
+        let Some(markov) = markov else {
+            pulse.unavailable_count += 1;
+            continue;
+        };
+        pulse.snapshot_available_count += 1;
+        let status = json_text(markov, "status");
+        match status.as_str() {
+            "available" => match json_text(markov, "direction").as_str() {
+                "long" => pulse.long_direction_count += 1,
+                "short" => pulse.short_direction_count += 1,
+                "neutral" => pulse.neutral_direction_count += 1,
+                "" | "unavailable" | "not_available_at_report_time" => pulse.unavailable_count += 1,
+                _ => pulse.unclassified_count += 1,
+            },
+            "" | "unavailable" | "not_available_at_report_time" => pulse.unavailable_count += 1,
+            _ => pulse.unclassified_count += 1,
+        }
+        if status != "available" {
+            continue;
+        }
+        let Some(signed_signal) = tuning_optional_number(markov, "signed_signal") else {
+            continue;
+        };
+        pulse.complete_signal_count += 1;
+        signed_signal_sums[index] += signed_signal;
+    }
+    for (index, pulse) in pulses.iter_mut().enumerate() {
+        if pulse.complete_signal_count > 0 {
+            pulse.average_signed_signal =
+                Some(signed_signal_sums[index] / pulse.complete_signal_count as f64);
+        }
+    }
+    pulses.into()
+}
+
 fn tuning_shadow_gate_evidence_from_rows(
     shadow_rows: &[JsonValue],
 ) -> Vec<TuningShadowGateEvidence> {
@@ -4963,6 +5043,7 @@ impl AppState {
                     pulse_comparison: Vec::new(),
                     shadow_change_evidence: Vec::new(),
                     shadow_support_risk_evidence: Vec::new(),
+                    shadow_markov_evidence: Vec::new(),
                     shadow_gate_evidence: Vec::new(),
                     shadow_hermes_evidence: Vec::new(),
                     execution_pulse_outcomes: Vec::new(),
@@ -4991,6 +5072,7 @@ impl AppState {
                 pulse_comparison: Vec::new(),
                 shadow_change_evidence: Vec::new(),
                 shadow_support_risk_evidence: Vec::new(),
+                shadow_markov_evidence: Vec::new(),
                 shadow_gate_evidence: Vec::new(),
                 shadow_hermes_evidence: Vec::new(),
                 execution_pulse_outcomes: Vec::new(),
@@ -5196,6 +5278,7 @@ impl AppState {
         let shadow_change_evidence = tuning_shadow_change_evidence_from_rows(&report_rows);
         let shadow_support_risk_evidence =
             tuning_shadow_support_risk_evidence_from_rows(&shadow_rows);
+        let shadow_markov_evidence = tuning_shadow_markov_evidence_from_rows(&shadow_rows);
         let shadow_gate_evidence = tuning_shadow_gate_evidence_from_rows(&shadow_rows);
         let shadow_hermes_evidence = tuning_shadow_hermes_evidence_from_rows(&shadow_rows);
         let execution_evidence = self
@@ -5254,6 +5337,7 @@ impl AppState {
             pulse_comparison,
             shadow_change_evidence,
             shadow_support_risk_evidence,
+            shadow_markov_evidence,
             shadow_gate_evidence,
             shadow_hermes_evidence,
             execution_pulse_outcomes,
@@ -5261,7 +5345,7 @@ impl AppState {
             protective_stop_coverage,
             execution_candidate_funnel,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk and Markov are saved decision-time context and coverage summaries, not forecasts or gates; Markov is never rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -18784,6 +18868,57 @@ market_data:
                 .average_history_coverage
                 .expect("average history coverage")
                 - 0.7)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(eu_shadow.unclassified_count, 1);
+    }
+
+    #[test]
+    fn tuning_shadow_markov_evidence_uses_saved_candidate_context_only() {
+        let rows = [
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+                "report_time_context_json": {"markov_snapshot": {"status": "available", "direction": "long", "signed_signal": 0.4}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-21",
+                "report_time_context_json": {"markov_snapshot": {"status": "available", "direction": "short", "signed_signal": -0.2}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-22",
+                "report_time_context_json": {"markov_snapshot": {"status": "available", "direction": "neutral"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-23",
+                "report_time_context_json": {"markov_snapshot": {"status": "not_available_at_report_time"}},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-24",
+                "report_time_context_json": {},
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-25",
+                "report_time_context_json": {"markov_snapshot": {"status": "legacy_unknown", "signed_signal": 0.9}},
+            }),
+        ];
+        let evidence = tuning_shadow_markov_evidence_from_rows(&rows);
+        let eu_shadow = evidence
+            .iter()
+            .find(|pulse| pulse.pulse_key == "europe_mid_session_shadow")
+            .expect("EU shadow Markov evidence");
+        assert_eq!(eu_shadow.candidate_count, 6);
+        assert_eq!(eu_shadow.snapshot_available_count, 5);
+        assert_eq!(eu_shadow.long_direction_count, 1);
+        assert_eq!(eu_shadow.short_direction_count, 1);
+        assert_eq!(eu_shadow.neutral_direction_count, 1);
+        assert_eq!(eu_shadow.unavailable_count, 2);
+        assert_eq!(eu_shadow.complete_signal_count, 2);
+        assert!(
+            (eu_shadow
+                .average_signed_signal
+                .expect("average signed signal")
+                - 0.1)
                 .abs()
                 < 1e-9
         );

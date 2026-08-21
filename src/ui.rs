@@ -829,6 +829,31 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Markov Context" }
+                        p { class: "muted", "Decision-time Markov snapshots saved with shadow candidates. This is signal coverage only: it never reruns Markov and is not a Trading Manager gate, forecast, or execution signal." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Candidates" }
+                            th { "Saved / missing snapshot" }
+                            th { "Direction: long / short / neutral / unavailable" }
+                            th { "Average signed signal" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_markov_evidence.iter() {
+                                TuningShadowMarkovEvidenceRow { evidence: evidence.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Shadow Decision-Time Signal Gates" }
                         p { class: "muted", "Candidate-level source and result counts from the persisted decision-time technical/Markov replay. This is not a Trading Manager approval, queue result, broker precheck, or execution simulation." }
                     }
@@ -1100,6 +1125,40 @@ fn TuningShadowSupportRiskEvidenceRow(
             td { "{snapshot}" }
             td { "{break_risk}" }
             td { "{averages}" }
+            td { "{evidence.unclassified_count}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowMarkovEvidenceRow(
+    evidence: crate::models::TuningShadowMarkovEvidence,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let snapshot = format!(
+        "{} / {}",
+        evidence.snapshot_available_count,
+        evidence.candidate_count - evidence.snapshot_available_count,
+    );
+    let direction = format!(
+        "{} / {} / {} / {}",
+        evidence.long_direction_count,
+        evidence.short_direction_count,
+        evidence.neutral_direction_count,
+        evidence.unavailable_count,
+    );
+    let average_signal = evidence
+        .average_signed_signal
+        .map(|value| format_percent(value, &prefs))
+        .map(|value| format!("{} ({} complete)", value, evidence.complete_signal_count))
+        .unwrap_or_else(|| "n/a".to_string());
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.candidate_count}" }
+            td { "{snapshot}" }
+            td { "{direction}" }
+            td { "{average_signal}" }
             td { "{evidence.unclassified_count}" }
         }
     }

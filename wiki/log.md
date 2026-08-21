@@ -2118,3 +2118,8 @@ broker mutation was added.
 
 - Added a typed, bounded report-to-manager funnel for EU/US execution-eligible pulses: report candidates, eligible candidates, Hermes matches, deterministic outcomes, local execution rows, and missing manager snapshots remain distinct.
 - The final count records locally persisted execution rows only. The view neither replays decisioning nor makes a provider, Hermes, queue, precheck, or Saxo call.
+
+## [2026-08-21] observability | Expose shadow Markov context in Tuning
+
+- Added a typed, bounded shadow-candidate summary of persisted decision-time Markov snapshot coverage, direction buckets, missing/legacy records, and complete-signal average.
+- The view never reruns Markov or consults current data. It remains observational only and cannot affect a manager gate, queue, broker precheck, execution simulation, or Saxo action.
