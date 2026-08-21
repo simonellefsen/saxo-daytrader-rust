@@ -38,10 +38,10 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        TuningDirectionalOutcome, TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome,
-        TuningPayload, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowSupportRiskEvidence,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningPayload, TuningProtectiveStopCoverage,
+        TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
+        TuningShadowHermesEvidence, TuningShadowSupportRiskEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3497,6 +3497,73 @@ fn tuning_protective_stop_coverage_from_payload(
     }
 }
 
+/// Aggregates only persisted manager-run counts for the execution-eligible
+/// pulses. It deliberately stops at local execution-row creation: broker
+/// submission, fills, and current order state belong to their separate lanes.
+fn tuning_execution_candidate_funnel_from_rows(
+    rows: &[JsonValue],
+) -> Vec<TuningExecutionCandidateFunnel> {
+    let mut pulses = [
+        TuningExecutionCandidateFunnel {
+            pulse_key: "europe_open_followup".to_string(),
+            pulse_label: "Nordic/EU Open +1h15".to_string(),
+            report_count: 0,
+            manager_run_count: 0,
+            manager_snapshot_missing_count: 0,
+            candidate_order_count: 0,
+            eligible_candidate_order_count: 0,
+            hermes_matched_candidate_count: 0,
+            approved_order_count: 0,
+            skipped_order_count: 0,
+            local_execution_row_count: 0,
+        },
+        TuningExecutionCandidateFunnel {
+            pulse_key: "us_open_followup".to_string(),
+            pulse_label: "US Open +1h15".to_string(),
+            report_count: 0,
+            manager_run_count: 0,
+            manager_snapshot_missing_count: 0,
+            candidate_order_count: 0,
+            eligible_candidate_order_count: 0,
+            hermes_matched_candidate_count: 0,
+            approved_order_count: 0,
+            skipped_order_count: 0,
+            local_execution_row_count: 0,
+        },
+    ];
+    for row in rows {
+        let pulse_key = json_text(row, "analysis_pulse_key");
+        let index = if pulse_key.starts_with("europe_open_followup:") {
+            0
+        } else if pulse_key.starts_with("us_open_followup:") {
+            1
+        } else {
+            continue;
+        };
+        let pulse = &mut pulses[index];
+        pulse.report_count += 1;
+        pulse.local_execution_row_count += value_i64(row, "local_execution_row_count");
+        if value_i64(row, "manager_run_id") > 0 {
+            pulse.manager_run_count += 1;
+        }
+        let manager = decode_shadow_json_field(row.get("manager_json"));
+        if !manager.is_object() {
+            pulse.manager_snapshot_missing_count += 1;
+            continue;
+        }
+        pulse.candidate_order_count += value_i64(&manager, "candidate_order_count");
+        pulse.eligible_candidate_order_count +=
+            value_i64(&manager, "eligible_candidate_order_count");
+        pulse.approved_order_count += value_i64(&manager, "approved_order_count");
+        pulse.skipped_order_count += value_i64(&manager, "skipped_order_count");
+        pulse.hermes_matched_candidate_count += manager
+            .get("hermes_advice_delta")
+            .map(|delta| value_i64(delta, "matched_candidate_count"))
+            .unwrap_or_default();
+    }
+    pulses.into()
+}
+
 /// One independently-refreshed data source the dashboard displays.
 ///
 /// `stale_after_minutes` is derived from each source's own cadence rather than
@@ -4910,6 +4977,7 @@ impl AppState {
                         exception_count: 0,
                         confirmed_coverage_ratio: None,
                     },
+                    execution_candidate_funnel: Vec::new(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -4937,6 +5005,7 @@ impl AppState {
                     exception_count: 0,
                     confirmed_coverage_ratio: None,
                 },
+                execution_candidate_funnel: Vec::new(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5136,6 +5205,27 @@ impl AppState {
             tuning_execution_pulse_outcomes_from_evidence(&execution_evidence);
         let execution_lifecycle_evidence =
             tuning_execution_lifecycle_evidence_from_evidence(&execution_evidence);
+        let execution_candidate_funnel_rows = self
+            .select_json(&format!(
+                "SELECT dr.analysis_pulse_key, tm.id AS manager_run_id, tm.manager_json,
+                        (SELECT COUNT(*) FROM execution_orders eo WHERE eo.report_id = dr.id)
+                            AS local_execution_row_count
+                 FROM decision_reports dr
+                 LEFT JOIN trading_manager_runs tm ON tm.id = (
+                    SELECT latest.id
+                    FROM trading_manager_runs latest
+                    WHERE latest.report_id = dr.id
+                    ORDER BY latest.created_at DESC, latest.id DESC
+                    LIMIT 1
+                 )
+                 WHERE dr.created_at >= '{}'
+                   AND (dr.analysis_pulse_key LIKE 'europe_open_followup:%'
+                        OR dr.analysis_pulse_key LIKE 'us_open_followup:%')",
+                sql_escape(&window_start_text),
+            ))
+            .await?;
+        let execution_candidate_funnel =
+            tuning_execution_candidate_funnel_from_rows(&execution_candidate_funnel_rows);
         let protective_stop_coverage = tuning_protective_stop_coverage_from_payload(
             &self.protective_stop_coverage().await.unwrap_or_else(|err| {
                 warn!("tuning protective-stop coverage degraded: {err:#}");
@@ -5169,8 +5259,9 @@ impl AppState {
             execution_pulse_outcomes,
             execution_lifecycle_evidence,
             protective_stop_coverage,
+            execution_candidate_funnel,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, and persisted local lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk is a saved decision-time context bucket and coverage summary, not a forecast or gate. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -18848,6 +18939,66 @@ market_data:
         }));
         assert_eq!(unavailable.confirmed_coverage_ratio, None);
         assert_eq!(unavailable.unprotected_count, 0);
+    }
+
+    #[test]
+    fn tuning_candidate_funnel_uses_latest_persisted_manager_counts_only() {
+        let funnel = tuning_execution_candidate_funnel_from_rows(&[
+            json!({
+                "analysis_pulse_key": "europe_open_followup:2026-08-20",
+                "manager_run_id": 41,
+                "manager_json": {
+                    "candidate_order_count": 4,
+                    "eligible_candidate_order_count": 3,
+                    "approved_order_count": 1,
+                    "skipped_order_count": 2,
+                    "hermes_advice_delta": {"matched_candidate_count": 2}
+                },
+                "local_execution_row_count": 1
+            }),
+            json!({
+                "analysis_pulse_key": "europe_open_followup:2026-08-21",
+                "manager_run_id": null,
+                "manager_json": null,
+                "local_execution_row_count": 0
+            }),
+            json!({
+                "analysis_pulse_key": "us_open_followup:2026-08-20",
+                "manager_run_id": 42,
+                "manager_json": "{\"candidate_order_count\":2,\"eligible_candidate_order_count\":2,\"approved_order_count\":1,\"skipped_order_count\":1,\"hermes_advice_delta\":{\"matched_candidate_count\":1}}",
+                "local_execution_row_count": 1
+            }),
+            json!({
+                "analysis_pulse_key": "europe_mid_session_shadow:2026-08-20",
+                "manager_run_id": 43,
+                "manager_json": {"candidate_order_count": 99},
+                "local_execution_row_count": 99
+            }),
+        ]);
+        assert_eq!(funnel.len(), 2);
+        let eu = funnel
+            .iter()
+            .find(|row| row.pulse_key == "europe_open_followup")
+            .expect("EU candidate funnel");
+        assert_eq!(eu.report_count, 2);
+        assert_eq!(eu.manager_run_count, 1);
+        assert_eq!(eu.manager_snapshot_missing_count, 1);
+        assert_eq!(eu.candidate_order_count, 4);
+        assert_eq!(eu.eligible_candidate_order_count, 3);
+        assert_eq!(eu.hermes_matched_candidate_count, 2);
+        assert_eq!(eu.approved_order_count, 1);
+        assert_eq!(eu.skipped_order_count, 2);
+        assert_eq!(eu.local_execution_row_count, 1);
+
+        let us = funnel
+            .iter()
+            .find(|row| row.pulse_key == "us_open_followup")
+            .expect("US candidate funnel");
+        assert_eq!(us.report_count, 1);
+        assert_eq!(us.manager_run_count, 1);
+        assert_eq!(us.candidate_order_count, 2);
+        assert_eq!(us.hermes_matched_candidate_count, 1);
+        assert_eq!(us.local_execution_row_count, 1);
     }
 
     #[test]

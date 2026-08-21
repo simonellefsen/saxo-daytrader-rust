@@ -2113,3 +2113,8 @@ broker mutation was added.
 
 - Added a typed Tuning projection of the existing local protective-stop audit: position states, confirmed quantity coverage, and exceptions remain separately labelled from 30-day decision-pulse evidence.
 - The snapshot only counts broker-confirmed stop evidence. It neither polls Saxo nor makes a stop-placement, cancellation, queue, manager, or Hermes call.
+
+## [2026-08-21] observability | Expose execution-pulse candidate funnel in Tuning
+
+- Added a typed, bounded report-to-manager funnel for EU/US execution-eligible pulses: report candidates, eligible candidates, Hermes matches, deterministic outcomes, local execution rows, and missing manager snapshots remain distinct.
+- The final count records locally persisted execution rows only. The view neither replays decisioning nor makes a provider, Hermes, queue, precheck, or Saxo call.

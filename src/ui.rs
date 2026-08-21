@@ -952,6 +952,32 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Execution-Eligible Candidate Funnel" }
+                        p { class: "muted", "Persisted Trading Manager counts for the same 30-day report window. The final stage is a local execution row, not proof of broker submission, a fill, or a currently pending order." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Reports / manager runs" }
+                            th { "Report candidates / eligible" }
+                            th { "Hermes matched" }
+                            th { "Approved / skipped" }
+                            th { "Local execution rows" }
+                            th { "Manager snapshot missing" }
+                        } }
+                        tbody {
+                            for funnel in tuning.execution_candidate_funnel.iter() {
+                                TuningExecutionCandidateFunnelRow { funnel: funnel.clone() }
+                            }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
         }
@@ -1203,6 +1229,32 @@ fn TuningProtectiveStopCoverageRow(
             td { "{states}" }
             td { "{ratio}" }
             td { "{coverage.exception_count}" }
+        }
+    }
+}
+
+#[component]
+fn TuningExecutionCandidateFunnelRow(
+    funnel: crate::models::TuningExecutionCandidateFunnel,
+) -> Element {
+    let reports = format!("{} / {}", funnel.report_count, funnel.manager_run_count);
+    let candidates = format!(
+        "{} / {}",
+        funnel.candidate_order_count, funnel.eligible_candidate_order_count,
+    );
+    let outcome = format!(
+        "{} / {}",
+        funnel.approved_order_count, funnel.skipped_order_count
+    );
+    rsx! {
+        tr {
+            td { strong { "{funnel.pulse_label}" } small { class: "muted block", "{funnel.pulse_key}" } }
+            td { "{reports}" }
+            td { "{candidates}" }
+            td { "{funnel.hermes_matched_candidate_count}" }
+            td { "{outcome}" }
+            td { "{funnel.local_execution_row_count}" }
+            td { "{funnel.manager_snapshot_missing_count}" }
         }
     }
 }

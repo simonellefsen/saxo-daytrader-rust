@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first nine Phase 4 tuning slices are landed.
+and the first ten Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -271,6 +271,15 @@ stop evidence, leaves planned/uncertain records non-protective, and is never
 presented as a 30-day pulse outcome, a current Saxo poll, or an instruction to
 place/cancel a stop. The audit has no provider, Hermes, manager, queue,
 precheck, or broker mutation path.
+
+**Landed 2026-08-21 (tenth slice):** a bounded execution-eligible candidate
+funnel reports the persisted manager counts for report candidates, eligible
+candidates, Hermes matches, deterministic approvals/skips, and the local
+execution rows recorded for the same report window. Reports whose manager
+snapshot is absent remain explicit rather than being treated as zero-candidate
+runs. A local execution row is not broker submission, a fill, or a currently
+pending order. This is local audit data only: it does not invoke Hermes, replay
+a manager decision, create a queue row, precheck, or reach Saxo.
 
 The first version should contain:
 

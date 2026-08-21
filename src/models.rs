@@ -113,6 +113,7 @@ pub struct TuningPayload {
     pub execution_pulse_outcomes: Vec<TuningExecutionPulseOutcome>,
     pub execution_lifecycle_evidence: Vec<TuningExecutionLifecycleEvidence>,
     pub protective_stop_coverage: TuningProtectiveStopCoverage,
+    pub execution_candidate_funnel: Vec<TuningExecutionCandidateFunnel>,
     pub safety: String,
     pub interpretation: String,
 }
@@ -263,6 +264,24 @@ pub struct TuningProtectiveStopCoverage {
     pub unprotected_count: i64,
     pub exception_count: i64,
     pub confirmed_coverage_ratio: Option<f64>,
+}
+
+/// Bounded, persisted manager-path counts for an execution-eligible pulse.
+/// The final stage is a local execution row, not a claim of broker submission
+/// or a currently pending order.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningExecutionCandidateFunnel {
+    pub pulse_key: String,
+    pub pulse_label: String,
+    pub report_count: i64,
+    pub manager_run_count: i64,
+    pub manager_snapshot_missing_count: i64,
+    pub candidate_order_count: i64,
+    pub eligible_candidate_order_count: i64,
+    pub hermes_matched_candidate_count: i64,
+    pub approved_order_count: i64,
+    pub skipped_order_count: i64,
+    pub local_execution_row_count: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
