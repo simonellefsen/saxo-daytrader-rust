@@ -2143,3 +2143,8 @@ broker mutation was added.
 
 - Added a typed Tuning projection of the existing one-month local account-value comparison against stored native-currency ETF proxy price returns, retaining per-reference status, alignment, freshness, proxy return, and portfolio excess.
 - The view keeps cash inclusion and every comparison limit explicit: it is not time-weighted or total return and does not normalize FX, dividends, fees, tax, or external cash flows. It reads local history and stored closes only, without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose one-month account-value outcome in Tuning
+
+- Added a typed local account-value outcome projection for the same one-month history used by the benchmark comparison: snapshot confidence/freshness, latest DKK value including cash, simple change/return, maximum drawdown, and cost-basis warning count remain explicit.
+- This is account-value snapshot movement only, not realised P/L, time-weighted return, total return, or a normalized cash-flow/FX/dividend/fee/tax attribution. It reuses local evidence without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.

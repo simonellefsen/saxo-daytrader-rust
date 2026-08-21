@@ -755,6 +755,35 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Generated", value: generated_at, tone: "" }
                 MetricCard { label: "Mature threshold", value: "20 shadow outcomes", tone: "" }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "One-Month Account-Value Outcome" }
+                        p { class: "muted", "Local account-value snapshots, including cash. This is simple snapshot movement, not realised P/L, time-weighted return, total return, or a Trading Manager input." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Latest value" }
+                            th { "Change" }
+                            th { "Simple return" }
+                            th { "Max drawdown" }
+                            th { "Snapshots: valid / total" }
+                            th { "As of / age" }
+                            th { "Snapshot source" }
+                            th { "Cost-basis warnings" }
+                            th { "Scope" }
+                            th { "Return definition" }
+                        } }
+                        tbody {
+                            TuningPortfolioOutcomeRow { outcome: tuning.portfolio_outcome.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+                p { class: "muted benchmark-caveat", "{tuning.portfolio_outcome.caveat}" }
+            }
             div { class: "table-wrap",
                 table {
                     thead { tr {
@@ -1221,6 +1250,81 @@ fn TuningExperimentGovernanceRow(evidence: crate::models::TuningExperimentGovern
 }
 
 #[component]
+fn TuningPortfolioOutcomeRow(
+    outcome: crate::models::TuningPortfolioOutcome,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = outcome.status.replace('_', " ");
+    let latest_value = outcome
+        .latest_value_dkk
+        .map(|value| format_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let change = outcome
+        .change_dkk
+        .map(|value| format_signed_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let simple_return = outcome
+        .simple_return_pct
+        .map(|value| format_signed_percentage_points(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let max_drawdown = format_optional_percentage_points(outcome.max_drawdown_pct, &prefs);
+    let snapshots = format!(
+        "{} / {}",
+        outcome.valid_snapshot_count, outcome.snapshot_count
+    );
+    let age = outcome
+        .age_minutes
+        .map(|minutes| format!("{minutes} min"))
+        .unwrap_or_else(|| "age unavailable".to_string());
+    let as_of = if outcome.latest_recorded_at.is_empty() {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} / {}",
+            format_timestamp(&outcome.latest_recorded_at, &prefs),
+            age
+        )
+    };
+    let snapshot_source = match (
+        outcome.latest_snapshot_type.trim(),
+        outcome.latest_source.trim(),
+    ) {
+        ("", "") => "n/a".to_string(),
+        (snapshot_type, "") => snapshot_type.replace('_', " "),
+        ("", source) => source.replace('_', " "),
+        (snapshot_type, source) => format!(
+            "{} / {}",
+            snapshot_type.replace('_', " "),
+            source.replace('_', " ")
+        ),
+    };
+    let scope = if outcome
+        .scope
+        .contains("one_month_local_account_value_history")
+    {
+        "1M local account value including cash".to_string()
+    } else {
+        "scope unavailable".to_string()
+    };
+    let return_kind = outcome.return_kind.replace('_', " ");
+    rsx! {
+        tr {
+            td { span { class: "status", "{status}" } }
+            td { "{latest_value}" }
+            td { "{change}" }
+            td { "{simple_return}" }
+            td { "{max_drawdown}" }
+            td { "{snapshots}" }
+            td { "{as_of}" }
+            td { "{snapshot_source}" }
+            td { "{outcome.unreliable_cost_basis_points}" }
+            td { "{scope}" }
+            td { "{return_kind}" }
+        }
+    }
+}
+
+#[component]
 fn TuningBenchmarkComparisonSummaryRow(
     evidence: crate::models::TuningBenchmarkComparison,
     prefs: LocalizationPrefs,
@@ -1228,7 +1332,7 @@ fn TuningBenchmarkComparisonSummaryRow(
     let status = evidence.status.replace('_', " ");
     let portfolio_return = evidence
         .portfolio_return_pct
-        .map(|value| format_signed_pct(value, &prefs))
+        .map(|value| format_signed_percentage_points(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let ready = format!("{} / {}", evidence.ready_count, evidence.reference_count);
     let alignment = format!(
@@ -1266,11 +1370,11 @@ fn TuningBenchmarkReferenceRow(
 ) -> Element {
     let benchmark_return = reference
         .benchmark_return_pct
-        .map(|value| format_signed_pct(value, &prefs))
+        .map(|value| format_signed_percentage_points(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let excess_return = reference
         .excess_return_pct
-        .map(|value| format_signed_pct(value, &prefs))
+        .map(|value| format_signed_percentage_points(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let status_and_freshness = match (reference.status.trim(), reference.freshness.trim()) {
         ("", "") => "n/a".to_string(),
@@ -10081,6 +10185,16 @@ fn format_signed_pct(value: f64, prefs: &LocalizationPrefs) -> String {
     format!("{sign}{}", format_pct(value, prefs))
 }
 
+/// Formats an already-percent-valued quantity (for example `0.42` meaning
+/// 0.42%), unlike `format_signed_pct`, which accepts a fractional return.
+fn format_signed_percentage_points(value: f64, prefs: &LocalizationPrefs) -> String {
+    let sign = if value > 0.0 { "+" } else { "" };
+    format!(
+        "{sign}{}",
+        format_optional_percentage_points(Some(value), prefs)
+    )
+}
+
 fn short_date(value: &str) -> String {
     value.chars().take(10).collect()
 }
@@ -10649,6 +10763,7 @@ mod tests {
         assert_eq!(format_dkk(1234.4, &prefs), "1,234 DKK");
         assert_eq!(format_pct(0.125, &prefs), "12.5%");
         assert_eq!(format_pct(12.5, &prefs), "12.5%");
+        assert_eq!(format_signed_percentage_points(0.42, &prefs), "+0.4%");
     }
 
     #[test]

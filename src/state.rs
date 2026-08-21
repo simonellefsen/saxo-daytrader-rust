@@ -41,9 +41,10 @@ use crate::{
         TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
         TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningPayload,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3611,6 +3612,46 @@ fn tuning_experiment_governance_unavailable() -> TuningExperimentGovernance {
     }
 }
 
+fn tuning_portfolio_outcome_from_summary(summary: &JsonValue) -> TuningPortfolioOutcome {
+    let confidence = summary.get("confidence").unwrap_or(&JsonValue::Null);
+    let status = json_text(confidence, "status");
+    let latest_available = !status.is_empty() && status != "unavailable";
+    let comparable_range = latest_available && value_i64(confidence, "valid_points") >= 2;
+    TuningPortfolioOutcome {
+        status,
+        range_key: "1M".to_string(),
+        snapshot_count: value_i64(summary, "points"),
+        valid_snapshot_count: value_i64(confidence, "valid_points"),
+        latest_value_dkk: latest_available
+            .then(|| tuning_optional_number(summary, "latest_total_market_value_dkk"))
+            .flatten(),
+        change_dkk: comparable_range
+            .then(|| tuning_optional_number(summary, "change_dkk"))
+            .flatten(),
+        simple_return_pct: comparable_range
+            .then(|| tuning_optional_number(summary, "range_return_pct"))
+            .flatten(),
+        max_drawdown_pct: comparable_range
+            .then(|| tuning_optional_number(summary, "range_max_drawdown_pct"))
+            .flatten(),
+        latest_recorded_at: json_text(confidence, "latest_recorded_at"),
+        latest_snapshot_type: json_text(confidence, "latest_snapshot_type"),
+        latest_source: json_text(confidence, "latest_source"),
+        age_minutes: confidence.get("age_minutes").and_then(JsonValue::as_i64),
+        unreliable_cost_basis_points: value_i64(summary, "unreliable_cost_basis_points"),
+        scope: "one_month_local_account_value_history_including_cash".to_string(),
+        return_kind:
+            "simple_snapshot_movement_not_realised_pnl_time_weighted_or_total_return".to_string(),
+        caveat: "Account-value snapshots include cash. Change and return are simple local snapshot movement, not realised P/L, time-weighted or total return, and are not normalized for deposits, withdrawals, FX, dividends, fees, or tax.".to_string(),
+    }
+}
+
+fn tuning_portfolio_outcome_unavailable() -> TuningPortfolioOutcome {
+    tuning_portfolio_outcome_from_summary(&json!({
+        "confidence": {"status": "unavailable"}
+    }))
+}
+
 fn tuning_benchmark_comparison_from_payload(value: &JsonValue) -> TuningBenchmarkComparison {
     let references = value
         .get("references")
@@ -5285,6 +5326,7 @@ impl AppState {
                         "status": "unavailable"
                     })),
                     experiment_governance: tuning_experiment_governance_unavailable(),
+                    portfolio_outcome: tuning_portfolio_outcome_unavailable(),
                     benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
@@ -5320,6 +5362,7 @@ impl AppState {
                     "status": "not_loaded"
                 })),
                 experiment_governance: tuning_experiment_governance_unavailable(),
+                portfolio_outcome: tuning_portfolio_outcome_unavailable(),
                 benchmark_comparison: tuning_benchmark_comparison_unavailable(),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
@@ -5569,10 +5612,19 @@ impl AppState {
                 tuning_experiment_governance_unavailable()
             }
         };
-        let benchmark_comparison = match self
+        let one_month_performance_history = self
             .performance_history_with_current("1M", performance_range_limit("1M"))
-            .await
-        {
+            .await;
+        let portfolio_outcome = match &one_month_performance_history {
+            Ok(history) => tuning_portfolio_outcome_from_summary(
+                &performance_summary_from_history(history, Utc::now()),
+            ),
+            Err(err) => {
+                warn!("tuning portfolio outcome degraded: {err:#}");
+                tuning_portfolio_outcome_unavailable()
+            }
+        };
+        let benchmark_comparison = match &one_month_performance_history {
             Ok(history) => {
                 match crate::performance_benchmarks::performance_benchmark_payload(self, &history)
                     .await
@@ -5627,9 +5679,10 @@ impl AppState {
             execution_candidate_funnel,
             trade_thesis_evidence,
             experiment_governance,
+            portfolio_outcome,
             benchmark_comparison,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The one-month account-value outcome lane is simple local snapshot movement including cash, with visible freshness and no realised-P/L, time-weighted-return, or total-return claim. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -19271,6 +19324,44 @@ market_data:
                 .return_kind
                 .contains("not_time_weighted_or_total_return")
         );
+    }
+
+    #[test]
+    fn tuning_portfolio_outcome_keeps_snapshot_confidence_and_return_limits() {
+        let outcome = tuning_portfolio_outcome_from_summary(&json!({
+            "points": 4,
+            "latest_total_market_value_dkk": 125_000.0,
+            "change_dkk": 5_000.0,
+            "range_return_pct": 4.17,
+            "range_max_drawdown_pct": -1.25,
+            "unreliable_cost_basis_points": 0,
+            "confidence": {
+                "status": "current",
+                "valid_points": 4,
+                "latest_recorded_at": "2026-08-21T12:00:00Z",
+                "latest_snapshot_type": "runtime_current",
+                "latest_source": "local_aggregate",
+                "age_minutes": 3,
+            }
+        }));
+        assert_eq!(outcome.status, "current");
+        assert_eq!(outcome.snapshot_count, 4);
+        assert_eq!(outcome.valid_snapshot_count, 4);
+        assert_eq!(outcome.latest_value_dkk, Some(125_000.0));
+        assert_eq!(outcome.change_dkk, Some(5_000.0));
+        assert_eq!(outcome.simple_return_pct, Some(4.17));
+        assert_eq!(outcome.max_drawdown_pct, Some(-1.25));
+        assert_eq!(outcome.age_minutes, Some(3));
+        assert!(
+            outcome
+                .return_kind
+                .contains("not_realised_pnl_time_weighted_or_total_return")
+        );
+
+        let unavailable = tuning_portfolio_outcome_unavailable();
+        assert_eq!(unavailable.status, "unavailable");
+        assert_eq!(unavailable.latest_value_dkk, None);
+        assert_eq!(unavailable.change_dkk, None);
     }
 
     #[test]

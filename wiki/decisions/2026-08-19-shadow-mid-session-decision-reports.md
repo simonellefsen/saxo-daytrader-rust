@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first fifteen Phase 4 tuning slices are landed.
+and the first sixteen Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -327,6 +327,16 @@ It explicitly labels the comparison as neither time-weighted nor total return
 and as not normalized for FX, dividends, fees, tax, or external cash flows.
 The lane never refreshes benchmarks or reads Saxo; it cannot change Hermes,
 replay a manager decision, create a queue row, precheck, or reach Saxo.
+
+**Landed 2026-08-21 (sixteenth slice):** a separate one-month account-value
+outcome lane reuses the same local history/current aggregate as the benchmark
+lane. It preserves snapshot confidence, as-of/source/age, latest DKK value
+including cash, simple change/return, and maximum account-value drawdown.
+Those values are explicitly neither realised P/L, time-weighted return, nor
+total return, and make no deposit/withdrawal, FX, dividend, fee, or tax
+normalization claim. It reads only local account-value evidence and cannot
+refresh benchmarks, change Hermes, replay a manager decision, create a queue
+row, precheck, or reach Saxo.
 
 The first version should contain:
 

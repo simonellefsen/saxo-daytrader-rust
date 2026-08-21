@@ -118,6 +118,7 @@ pub struct TuningPayload {
     pub execution_candidate_funnel: Vec<TuningExecutionCandidateFunnel>,
     pub trade_thesis_evidence: TuningTradeThesisEvidence,
     pub experiment_governance: TuningExperimentGovernance,
+    pub portfolio_outcome: TuningPortfolioOutcome,
     pub benchmark_comparison: TuningBenchmarkComparison,
     pub safety: String,
     pub interpretation: String,
@@ -371,6 +372,29 @@ pub struct TuningExperimentGovernance {
     pub unclassified_count: i64,
     pub scope: String,
     pub interpretation: String,
+}
+
+/// Read-only, one-month local account-value context. It intentionally reports
+/// simple snapshot movement rather than realised P/L, time-weighted return, or
+/// a portfolio-performance attribution result.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningPortfolioOutcome {
+    pub status: String,
+    pub range_key: String,
+    pub snapshot_count: i64,
+    pub valid_snapshot_count: i64,
+    pub latest_value_dkk: Option<f64>,
+    pub change_dkk: Option<f64>,
+    pub simple_return_pct: Option<f64>,
+    pub max_drawdown_pct: Option<f64>,
+    pub latest_recorded_at: String,
+    pub latest_snapshot_type: String,
+    pub latest_source: String,
+    pub age_minutes: Option<i64>,
+    pub unreliable_cost_basis_points: i64,
+    pub scope: String,
+    pub return_kind: String,
+    pub caveat: String,
 }
 
 /// Read-only one-month account-value comparison against stored native-currency
