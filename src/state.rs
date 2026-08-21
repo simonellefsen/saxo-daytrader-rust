@@ -3653,6 +3653,7 @@ fn tuning_portfolio_outcome_unavailable() -> TuningPortfolioOutcome {
 }
 
 fn tuning_benchmark_comparison_from_payload(value: &JsonValue) -> TuningBenchmarkComparison {
+    let latest_run = value.get("latest_run").unwrap_or(&JsonValue::Null);
     let references = value
         .get("references")
         .and_then(JsonValue::as_array)
@@ -3681,6 +3682,19 @@ fn tuning_benchmark_comparison_from_payload(value: &JsonValue) -> TuningBenchmar
         prior_close_count: value_i64(value, "prior_close_count"),
         stale_close_count: value_i64(value, "stale_close_count"),
         freshness: json_text(value, "freshness"),
+        collector_status: {
+            let status = json_text(latest_run, "status");
+            if status.is_empty() {
+                "not_run".to_string()
+            } else {
+                status
+            }
+        },
+        collector_run_at: json_text(latest_run, "created_at"),
+        collector_run_date: json_text(latest_run, "run_date"),
+        collector_reference_count: value_i64(latest_run, "reference_count"),
+        collector_success_count: value_i64(latest_run, "success_count"),
+        collector_error_count: value_i64(latest_run, "error_count"),
         references,
         scope: "one_month_local_account_value_vs_stored_native_currency_proxy_price_returns"
             .to_string(),
@@ -19292,6 +19306,14 @@ market_data:
             "prior_close_count": 0,
             "stale_close_count": 0,
             "freshness": "aligned_close",
+            "latest_run": {
+                "created_at": "2026-08-21T23:55:00Z",
+                "run_date": "2026-08-21",
+                "status": "partial",
+                "reference_count": 6,
+                "success_count": 5,
+                "error_count": 1,
+            },
             "references": [{
                 "key": "world",
                 "label": "World ETF",
@@ -19310,6 +19332,12 @@ market_data:
         assert_eq!(evidence.ready_count, 1);
         assert_eq!(evidence.reference_count, 2);
         assert_eq!(evidence.freshness, "aligned_close");
+        assert_eq!(evidence.collector_status, "partial");
+        assert_eq!(evidence.collector_run_at, "2026-08-21T23:55:00Z");
+        assert_eq!(evidence.collector_run_date, "2026-08-21");
+        assert_eq!(evidence.collector_reference_count, 6);
+        assert_eq!(evidence.collector_success_count, 5);
+        assert_eq!(evidence.collector_error_count, 1);
         assert_eq!(evidence.references.len(), 1);
         assert_eq!(evidence.references[0].label, "World ETF");
         assert_eq!(evidence.references[0].benchmark_return_pct, Some(0.02));
@@ -19323,6 +19351,10 @@ market_data:
             evidence
                 .return_kind
                 .contains("not_time_weighted_or_total_return")
+        );
+        assert_eq!(
+            tuning_benchmark_comparison_unavailable().collector_status,
+            "not_run"
         );
     }
 

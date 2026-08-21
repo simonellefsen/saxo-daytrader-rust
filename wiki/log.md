@@ -2148,3 +2148,8 @@ broker mutation was added.
 
 - Added a typed local account-value outcome projection for the same one-month history used by the benchmark comparison: snapshot confidence/freshness, latest DKK value including cash, simple change/return, maximum drawdown, and cost-basis warning count remain explicit.
 - This is account-value snapshot movement only, not realised P/L, time-weighted return, total return, or a normalized cash-flow/FX/dividend/fee/tax attribution. It reuses local evidence without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose benchmark collector provenance in Tuning
+
+- Added typed benchmark-source audit fields beside the one-month proxy comparison: last run status, created-at/run-date, configured reference count, and successful/error refresh counts.
+- Collector provenance remains distinct from portfolio/proxy close alignment and is local stored evidence only. The panel neither refreshes a benchmark nor affects Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.

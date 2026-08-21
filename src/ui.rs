@@ -1124,6 +1124,8 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             th { "Ready / references" }
                             th { "Alignment: aligned / prior / stale" }
                             th { "Freshness" }
+                            th { "Source refresh" }
+                            th { "Run coverage: success / error / references" }
                             th { "Scope" }
                             th { "Return definition" }
                         } }
@@ -1344,6 +1346,31 @@ fn TuningBenchmarkComparisonSummaryRow(
     } else {
         evidence.freshness.replace('_', " ")
     };
+    let collector_status = evidence.collector_status.replace('_', " ");
+    let collector_run = match (
+        evidence.collector_run_at.is_empty(),
+        evidence.collector_run_date.is_empty(),
+    ) {
+        (false, false) => format!(
+            "{} / {}",
+            format_timestamp(&evidence.collector_run_at, &prefs),
+            evidence.collector_run_date
+        ),
+        (false, true) => format_timestamp(&evidence.collector_run_at, &prefs),
+        (true, false) => evidence.collector_run_date.clone(),
+        (true, true) => "no recorded run".to_string(),
+    };
+    let source_refresh = format!("{} / {}", collector_status, collector_run);
+    let run_coverage = if evidence.collector_reference_count > 0 {
+        format!(
+            "{} / {} / {}",
+            evidence.collector_success_count,
+            evidence.collector_error_count,
+            evidence.collector_reference_count
+        )
+    } else {
+        "n/a".to_string()
+    };
     let scope = if evidence.scope.contains("one_month_local_account_value") {
         "1M local account value vs stored proxy closes".to_string()
     } else {
@@ -1357,6 +1384,8 @@ fn TuningBenchmarkComparisonSummaryRow(
             td { "{ready}" }
             td { "{alignment}" }
             td { "{freshness}" }
+            td { "{source_refresh}" }
+            td { "{run_coverage}" }
             td { "{scope}" }
             td { "{return_kind}" }
         }
