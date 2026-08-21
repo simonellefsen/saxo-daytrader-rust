@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first eleven Phase 4 tuning slices are landed.
+and the first twelve Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -288,6 +288,16 @@ only where the saved snapshot was available and complete. It reads the compact
 decision-time snapshot already persisted with each candidate; it does not
 rerun Markov, derive freshness from current data, forecast, replay a manager
 decision, create a queue row, precheck, or reach Saxo.
+
+**Landed 2026-08-21 (twelfth slice):** a shadow-only Quiver context lane
+reports candidate-level saved-snapshot coverage, the source freshness captured
+at decision time, bullish/bearish/neutral direction buckets, and complete
+signal/confidence averages. Source freshness and a matching candidate snapshot
+remain separate, so a healthy source is not misrepresented as candidate-level
+evidence. Missing and legacy-unknown values remain visible. The lane reads the
+compact persisted snapshot only: it does not refresh Quiver, use current data,
+forecast, replay a manager decision, create a queue row, precheck, or reach
+Saxo.
 
 The first version should contain:
 

@@ -854,6 +854,32 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             section { class: "section benchmark-panel",
                 div { class: "section-title-row compact",
                     div {
+                        h3 { "Shadow Quiver Context" }
+                        p { class: "muted", "Decision-time Quiver snapshots saved with shadow candidates. This is advisory-signal coverage only: it never refreshes Quiver and is not a Trading Manager gate, forecast, or execution signal." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Pulse" }
+                            th { "Candidates" }
+                            th { "Saved / missing snapshot" }
+                            th { "Source: fresh / partial / stale / unavailable" }
+                            th { "Direction: bullish / bearish / neutral" }
+                            th { "Average signal / confidence" }
+                            th { "Unclassified" }
+                        } }
+                        tbody {
+                            for evidence in tuning.shadow_quiver_evidence.iter() {
+                                TuningShadowQuiverEvidenceRow { evidence: evidence.clone(), prefs: prefs.clone() }
+                            }
+                        }
+                    }
+                }
+            }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
                         h3 { "Shadow Decision-Time Signal Gates" }
                         p { class: "muted", "Candidate-level source and result counts from the persisted decision-time technical/Markov replay. This is not a Trading Manager approval, queue result, broker precheck, or execution simulation." }
                     }
@@ -1159,6 +1185,51 @@ fn TuningShadowMarkovEvidenceRow(
             td { "{snapshot}" }
             td { "{direction}" }
             td { "{average_signal}" }
+            td { "{evidence.unclassified_count}" }
+        }
+    }
+}
+
+#[component]
+fn TuningShadowQuiverEvidenceRow(
+    evidence: crate::models::TuningShadowQuiverEvidence,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let snapshot = format!(
+        "{} / {}",
+        evidence.snapshot_available_count,
+        evidence.candidate_count - evidence.snapshot_available_count,
+    );
+    let source = format!(
+        "{} / {} / {} / {}",
+        evidence.fresh_source_count,
+        evidence.partial_source_count,
+        evidence.stale_source_count,
+        evidence.unavailable_source_count,
+    );
+    let direction = format!(
+        "{} / {} / {}",
+        evidence.bullish_direction_count,
+        evidence.bearish_direction_count,
+        evidence.neutral_direction_count,
+    );
+    let averages = match (evidence.average_signal, evidence.average_confidence) {
+        (Some(signal), Some(confidence)) => format!(
+            "{} / {} ({} complete)",
+            format_signed_pct(signal, &prefs),
+            format_percent(confidence, &prefs),
+            evidence.complete_signal_count,
+        ),
+        _ => "n/a".to_string(),
+    };
+    rsx! {
+        tr {
+            td { strong { "{evidence.pulse_label}" } small { class: "muted block", "{evidence.pulse_key}" } }
+            td { "{evidence.candidate_count}" }
+            td { "{snapshot}" }
+            td { "{source}" }
+            td { "{direction}" }
+            td { "{averages}" }
             td { "{evidence.unclassified_count}" }
         }
     }

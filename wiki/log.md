@@ -2123,3 +2123,8 @@ broker mutation was added.
 
 - Added a typed, bounded shadow-candidate summary of persisted decision-time Markov snapshot coverage, direction buckets, missing/legacy records, and complete-signal average.
 - The view never reruns Markov or consults current data. It remains observational only and cannot affect a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose shadow Quiver context in Tuning
+
+- Added a typed, bounded shadow-candidate summary of persisted decision-time Quiver snapshot coverage, source freshness, direction buckets, missing/legacy records, and complete signal/confidence averages.
+- Source freshness remains distinct from a symbol-matched candidate snapshot. The view never refreshes Quiver or consults current data, and cannot affect a manager gate, queue, broker precheck, execution simulation, or Saxo action.
