@@ -9707,10 +9707,28 @@ fn execution_reason_class(reason: &str) -> &'static str {
     }
 }
 
+/// True for statuses that represent an order behaving normally.
+///
+/// A resting `GoodTillCancel` protective stop sits in `broker_working` for the
+/// life of the position; that is success, not a pending problem.
+fn execution_status_is_healthy(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "executed" | "submitted_to_broker" | "broker_working" | "placement_submitted"
+    )
+}
+
 fn execution_status_detail(row: &JsonValue) -> String {
     let error = text(row, "error_text");
     if !error.is_empty() {
         return error;
+    }
+    // A healthy order has no error to find, so do not go looking for one. The
+    // generic key walk below matched Saxo's `DisplayAndFormat.Description` --
+    // the instrument name -- and every resting protective stop rendered
+    // "error: ConocoPhillips" with `error_text` actually NULL in the database.
+    if execution_status_is_healthy(&text(row, "status")) {
+        return String::new();
     }
     diagnostic_payload(row, "execution_result_json")
         .and_then(|payload| diagnostic_detail_from_json(&payload))
@@ -10059,15 +10077,22 @@ fn diagnostic_detail_from_json_inner(
             (allow_direct_string && !text.trim().is_empty()).then(|| text.clone())
         }
         JsonValue::Object(map) => {
+            // `Description` is deliberately absent. In Saxo payloads that key
+            // is display metadata -- `DisplayAndFormat.Description` is the
+            // instrument name, `Exchange.Description` the venue -- never error
+            // text, and matching it made a failed order report "ConocoPhillips"
+            // in place of the reason it failed. Saxo reports real errors under
+            // `Message`/`ErrorInfo`. Lowercase `description` is kept because it
+            // comes from our own payloads, not the broker's.
             for key in [
                 "error_text",
                 "error",
                 "message",
                 "Message",
+                "ErrorInfo",
                 "reason",
                 "Reason",
                 "description",
-                "Description",
             ] {
                 if let Some(value) = map.get(key) {
                     if let Some(text) = diagnostic_detail_from_json_inner(value, true) {
@@ -11174,6 +11199,105 @@ mod tests {
             hermes_experiment_age_status("approved_paper", "2026-06-16T12:00:00Z", now, 14),
             ("23d".to_string(), "muted")
         );
+    }
+
+    /// The real COP:xnys row from 2026-08-21: a resting protective stop with
+    /// `error_text` NULL in the database and `Status: "Working"` at the broker,
+    /// which the Execution view nonetheless rendered as
+    /// "error: ConocoPhillips" -- the instrument's own name, lifted out of
+    /// Saxo's `DisplayAndFormat.Description`.
+    fn resting_stop_row() -> JsonValue {
+        json!({
+            "id": 368,
+            "symbol": "COP:xnys",
+            "status": "broker_working",
+            "strategy_type": "protective_stop",
+            "error_text": JsonValue::Null,
+            "execution_result_json": {
+                "broker_sync": {
+                    "activity_lookup": "skipped",
+                    "broker_visibility": "open_order",
+                    "open_order_lookup": "found",
+                    "price_changed": false,
+                    "quantity_changed": false,
+                    "broker_payload": {
+                        "Amount": 10.0,
+                        "BuySell": "Sell",
+                        "DisplayAndFormat": {
+                            "Currency": "USD",
+                            "Description": "ConocoPhillips",
+                            "Symbol": "COP:xnys"
+                        },
+                        "Exchange": {
+                            "Description": "New York Stock Exchange",
+                            "ExchangeId": "NYSE"
+                        },
+                        "OpenOrderType": "StopIfTraded",
+                        "Status": "Working"
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_healthy_resting_stop_reports_no_error() {
+        let row = resting_stop_row();
+        assert_eq!(
+            execution_status_detail(&row),
+            "",
+            "a broker_working stop has no error to report"
+        );
+        let block = execution_detail_block(&row, &execution_status_detail(&row));
+        assert!(
+            !block.contains("error:"),
+            "the detail block must not fabricate an error line: {block}"
+        );
+        // Diagnostics themselves stay available for inspection.
+        assert!(block.contains("broker_sync"), "got {block}");
+    }
+
+    /// The narrower half of the fix: even on a genuinely failed order, Saxo's
+    /// `Description` keys are display metadata and must never stand in for the
+    /// reason it failed.
+    #[test]
+    fn a_failed_order_reports_its_reason_not_the_instrument_name() {
+        let mut row = resting_stop_row();
+        row["status"] = json!("execution_failed");
+        assert_eq!(
+            execution_status_detail(&row),
+            "",
+            "no real error present, so nothing should be invented from Description"
+        );
+
+        // With an actual broker error message, that is what surfaces.
+        row["execution_result_json"]["broker_sync"]["broker_payload"]["Message"] =
+            json!("Order rejected: insufficient collateral");
+        assert_eq!(
+            execution_status_detail(&row),
+            "Order rejected: insufficient collateral"
+        );
+    }
+
+    #[test]
+    fn healthy_statuses_cover_the_resting_and_in_flight_cases() {
+        for status in [
+            "broker_working",
+            "executed",
+            "submitted_to_broker",
+            "placement_submitted",
+            "BROKER_WORKING",
+        ] {
+            assert!(execution_status_is_healthy(status), "{status}");
+        }
+        for status in [
+            "execution_failed",
+            "broker_rejected",
+            "broker_cancelled",
+            "broker_state_unknown",
+        ] {
+            assert!(!execution_status_is_healthy(status), "{status}");
+        }
     }
 
     #[test]
