@@ -116,6 +116,7 @@ pub struct TuningPayload {
     pub execution_lifecycle_evidence: Vec<TuningExecutionLifecycleEvidence>,
     pub protective_stop_coverage: TuningProtectiveStopCoverage,
     pub execution_candidate_funnel: Vec<TuningExecutionCandidateFunnel>,
+    pub trade_thesis_evidence: TuningTradeThesisEvidence,
     pub safety: String,
     pub interpretation: String,
 }
@@ -331,6 +332,23 @@ pub struct TuningDirectionalOutcome {
     pub sample_count: i64,
     pub average_directional_return_pct: Option<f64>,
     pub positive_return_rate: Option<f64>,
+}
+
+/// Bounded post-fill evidence for recorded BUY theses. Its newest-recorded
+/// thesis scope is intentionally separate from the Tuning pulse window and it
+/// remains a gross directional observation, not realised P/L.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TuningTradeThesisEvidence {
+    pub status: String,
+    pub recorded_thesis_count: i64,
+    pub filled_thesis_count: i64,
+    pub one_session: TuningDirectionalOutcome,
+    pub five_session: TuningDirectionalOutcome,
+    pub minimum_complete_observations: i64,
+    pub scan_limit: i64,
+    pub scope: String,
+    pub gross_net_label: String,
+    pub interpretation: String,
 }
 
 /// Bounded and redacted diagnostic payload for a Decision Report.

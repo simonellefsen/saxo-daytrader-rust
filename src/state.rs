@@ -42,7 +42,7 @@ use crate::{
         TuningExecutionPulseOutcome, TuningPayload, TuningProtectiveStopCoverage,
         TuningPulseComparison, TuningShadowChangeEvidence, TuningShadowGateEvidence,
         TuningShadowHermesEvidence, TuningShadowMarkovEvidence, TuningShadowQuiverEvidence,
-        TuningShadowSupportRiskEvidence,
+        TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3535,6 +3535,27 @@ fn tuning_directional_outcome(value: &JsonValue) -> TuningDirectionalOutcome {
     }
 }
 
+fn tuning_trade_thesis_evidence_from_payload(value: &JsonValue) -> TuningTradeThesisEvidence {
+    TuningTradeThesisEvidence {
+        status: json_text(value, "status"),
+        recorded_thesis_count: value_i64(value, "recorded_thesis_count"),
+        filled_thesis_count: value_i64(value, "filled_thesis_count"),
+        one_session: tuning_directional_outcome(
+            value.get("one_session").unwrap_or(&JsonValue::Null),
+        ),
+        five_session: tuning_directional_outcome(
+            value.get("five_session").unwrap_or(&JsonValue::Null),
+        ),
+        minimum_complete_observations: value_i64(value, "minimum_complete_observations"),
+        scan_limit: value_i64(value, "scan_limit"),
+        scope: "newest_recorded_buy_theses_independent_of_30_day_tuning_window".to_string(),
+        gross_net_label:
+            "gross_directional_return_excludes_fx_commission_tax_slippage_and_realised_p_l"
+                .to_string(),
+        interpretation: json_text(value, "interpretation"),
+    }
+}
+
 fn tuning_execution_pulse_outcomes_from_evidence(
     evidence: &JsonValue,
 ) -> Vec<TuningExecutionPulseOutcome> {
@@ -5164,6 +5185,9 @@ impl AppState {
                         confirmed_coverage_ratio: None,
                     },
                     execution_candidate_funnel: Vec::new(),
+                    trade_thesis_evidence: tuning_trade_thesis_evidence_from_payload(&json!({
+                        "status": "unavailable"
+                    })),
                     safety: "read_only_local_decision_and_shadow_outcome_evidence_no_provider_hermes_broker_or_order_mutation".to_string(),
                     interpretation: "Tuning evidence could not be loaded. It does not affect report scheduling, gates, Hermes, configuration, or Saxo orders.".to_string(),
                 }
@@ -5194,6 +5218,9 @@ impl AppState {
                     confirmed_coverage_ratio: None,
                 },
                 execution_candidate_funnel: Vec::new(),
+                trade_thesis_evidence: tuning_trade_thesis_evidence_from_payload(&json!({
+                    "status": "not_loaded"
+                })),
                 safety: "not_loaded_outside_tuning_tab".to_string(),
                 interpretation: String::new(),
             }
@@ -5416,6 +5443,18 @@ impl AppState {
             .await?;
         let execution_candidate_funnel =
             tuning_execution_candidate_funnel_from_rows(&execution_candidate_funnel_rows);
+        let trade_thesis_evidence = tuning_trade_thesis_evidence_from_payload(
+            &self
+                .trade_thesis_outcome_evidence()
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("tuning trade-thesis evidence degraded: {err:#}");
+                    json!({
+                        "status": "unavailable",
+                        "interpretation": "Trade-thesis outcome evidence could not be loaded."
+                    })
+                }),
+        );
         let protective_stop_coverage = tuning_protective_stop_coverage_from_payload(
             &self.protective_stop_coverage().await.unwrap_or_else(|err| {
                 warn!("tuning protective-stop coverage degraded: {err:#}");
@@ -5452,8 +5491,9 @@ impl AppState {
             execution_lifecycle_evidence,
             protective_stop_coverage,
             execution_candidate_funnel,
+            trade_thesis_evidence,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -18980,6 +19020,46 @@ market_data:
                 < 1e-9
         );
         assert_eq!(eu_shadow.unclassified_count, 1);
+    }
+
+    #[test]
+    fn tuning_trade_thesis_evidence_keeps_its_independent_bounded_scope() {
+        let evidence = tuning_trade_thesis_evidence_from_payload(&json!({
+            "status": "collecting",
+            "recorded_thesis_count": 8,
+            "filled_thesis_count": 5,
+            "one_session": {
+                "sample_count": 3,
+                "average_directional_return_pct": 0.02,
+                "positive_return_rate": 0.67,
+            },
+            "five_session": {
+                "sample_count": 2,
+                "average_directional_return_pct": -0.01,
+                "positive_return_rate": 0.5,
+            },
+            "minimum_complete_observations": 20,
+            "scan_limit": 50,
+            "interpretation": "Recorded fill-to-close evidence only.",
+        }));
+        assert_eq!(evidence.status, "collecting");
+        assert_eq!(evidence.recorded_thesis_count, 8);
+        assert_eq!(evidence.filled_thesis_count, 5);
+        assert_eq!(evidence.one_session.sample_count, 3);
+        assert_eq!(
+            evidence.five_session.average_directional_return_pct,
+            Some(-0.01)
+        );
+        assert_eq!(evidence.minimum_complete_observations, 20);
+        assert_eq!(evidence.scan_limit, 50);
+        assert_eq!(
+            evidence.scope,
+            "newest_recorded_buy_theses_independent_of_30_day_tuning_window"
+        );
+        assert_eq!(
+            evidence.gross_net_label,
+            "gross_directional_return_excludes_fx_commission_tax_slippage_and_realised_p_l"
+        );
     }
 
     #[test]

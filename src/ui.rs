@@ -1029,8 +1029,89 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Recorded BUY Thesis Outcomes" }
+                        p { class: "muted", "Newest recorded BUY theses with reconciled-fill and later stored-close evidence. This bounded scope is separate from the 30-day pulse window; returns are gross directional observations, not realised P/L or a thesis-causality claim." }
+                    }
+                }
+                div { class: "table-wrap",
+                    table {
+                        thead { tr {
+                            th { "Status" }
+                            th { "Recorded / reconciled fills" }
+                            th { "1-session movement" }
+                            th { "5-session movement" }
+                            th { "Maturity" }
+                            th { "Scope" }
+                            th { "Gross / net" }
+                        } }
+                        tbody {
+                            TuningTradeThesisEvidenceRow { evidence: tuning.trade_thesis_evidence.clone(), prefs: prefs.clone() }
+                        }
+                    }
+                }
+            }
             p { class: "muted", "{tuning.interpretation}" }
             p { class: "muted", "Safety: {tuning.safety}" }
+        }
+    }
+}
+
+#[component]
+fn TuningTradeThesisEvidenceRow(
+    evidence: crate::models::TuningTradeThesisEvidence,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let outcome = |outcome: &crate::models::TuningDirectionalOutcome| {
+        if outcome.sample_count == 0 {
+            return "n/a".to_string();
+        }
+        let average = outcome
+            .average_directional_return_pct
+            .map(|value| format_signed_pct(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        let positive_rate = outcome
+            .positive_return_rate
+            .map(|value| format_percent(value, &prefs))
+            .unwrap_or_else(|| "pending".to_string());
+        format!(
+            "{} avg / {} positive ({} samples)",
+            average, positive_rate, outcome.sample_count
+        )
+    };
+    let counts = format!(
+        "{} / {}",
+        evidence.recorded_thesis_count, evidence.filled_thesis_count,
+    );
+    let maturity = if evidence.minimum_complete_observations > 0 {
+        format!(
+            "{} five-session samples needed",
+            evidence.minimum_complete_observations,
+        )
+    } else {
+        "threshold unavailable".to_string()
+    };
+    let status = evidence.status.replace('_', " ");
+    let gross_net_label = evidence.gross_net_label.replace('_', " ");
+    let scope = if evidence.scan_limit > 0 {
+        format!(
+            "Newest {} recorded BUY theses; not 30-day window",
+            evidence.scan_limit
+        )
+    } else {
+        "scope unavailable".to_string()
+    };
+    rsx! {
+        tr {
+            td { span { class: "status", "{status}" } }
+            td { "{counts}" }
+            td { "{outcome(&evidence.one_session)}" }
+            td { "{outcome(&evidence.five_session)}" }
+            td { "{maturity}" }
+            td { "{scope}" }
+            td { "{gross_net_label}" }
         }
     }
 }

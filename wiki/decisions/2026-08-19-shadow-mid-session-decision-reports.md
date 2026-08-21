@@ -24,7 +24,7 @@ sources:
 
 Implementation underway. Phase 0, Phase 1, Phase 2, Phase 3's
 capture/reference, daily-close maturity, fixed-reference FX/cost estimate,
-and the first twelve Phase 4 tuning slices are landed.
+and the first thirteen Phase 4 tuning slices are landed.
 The two new shadow schedules may create observation-only Decision Reports at
 their due times; they cannot queue orders, activate an experiment, or alter
 Saxo execution.
@@ -298,6 +298,15 @@ evidence. Missing and legacy-unknown values remain visible. The lane reads the
 compact persisted snapshot only: it does not refresh Quiver, use current data,
 forecast, replay a manager decision, create a queue row, precheck, or reach
 Saxo.
+
+**Landed 2026-08-21 (thirteenth slice):** a separate recorded-BUY-thesis lane
+reuses the existing bounded post-fill aggregation over the newest recorded
+BUY theses. It carries its own scan-limit, maturity threshold, and explicit
+gross-directional-return label, rather than inheriting the Tuning tab's
+30-day pulse window or being presented as realised P/L. It reads local
+execution/fill/daily-close evidence only; it cannot refresh a provider,
+change Hermes, replay a manager decision, create a queue row, precheck, or
+reach Saxo.
 
 The first version should contain:
 

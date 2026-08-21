@@ -2128,3 +2128,8 @@ broker mutation was added.
 
 - Added a typed, bounded shadow-candidate summary of persisted decision-time Quiver snapshot coverage, source freshness, direction buckets, missing/legacy records, and complete signal/confidence averages.
 - Source freshness remains distinct from a symbol-matched candidate snapshot. The view never refreshes Quiver or consults current data, and cannot affect a manager gate, queue, broker precheck, execution simulation, or Saxo action.
+
+## [2026-08-21] observability | Expose recorded BUY thesis outcomes in Tuning
+
+- Added a typed Tuning projection of the existing newest-recorded BUY-thesis outcome aggregate, preserving reconciled-fill counts, 1/5-session directional observations, scan limit, and maturity threshold.
+- Its newest-thesis scope, gross-only return label, and exclusion of realised P/L remain explicit and separate from the tab's 30-day pulse window. It uses only local execution/fill/daily-close evidence and cannot affect Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
