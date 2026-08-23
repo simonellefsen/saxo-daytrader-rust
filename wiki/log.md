@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Trading Manager consumption
+
+- Changed Cash Deployment and Instrument Quarantine to consume the typed Trading Manager availability/latest-run envelope directly.
+- The evolving persisted manager-run diagnostics remain compatibility JSON, while malformed overview data degrades to an explicit unavailable local envelope.
+- This preserves read-only dashboard observability and performs no decision generation, Trading Manager gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Integrity consumption
 
 - Changed the dashboard Integrity panel and Operations health calls to use a typed outer integrity contract for health, timestamps, acknowledgement count, and staged issue-list boundaries.

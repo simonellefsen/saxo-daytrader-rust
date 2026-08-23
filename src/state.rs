@@ -42,13 +42,13 @@ use crate::{
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        PerformanceSummaryPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3129,6 +3129,14 @@ fn dashboard_integrity_from_json(
     serde_json::from_value(integrity)
 }
 
+/// Decodes the stable Trading Manager boundary used by overview panels. The
+/// persisted run diagnostics intentionally remain staged JSON.
+fn dashboard_trading_manager_from_json(
+    trading_manager: JsonValue,
+) -> serde_json::Result<TradingManagerPayload> {
+    serde_json::from_value(trading_manager)
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5797,6 +5805,18 @@ impl AppState {
                 checked_at: String::new(),
             }
         });
+        let trading_manager = overview
+            .get("trading_manager")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let trading_manager =
+            dashboard_trading_manager_from_json(trading_manager).unwrap_or_else(|err| {
+                warn!("dashboard typed Trading Manager degraded: {err:#}");
+                TradingManagerPayload {
+                    status: "unavailable".to_string(),
+                    latest_run: JsonValue::Null,
+                }
+            });
         let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
             self.watchlists_payload().await.unwrap_or_else(|err| {
                 warn!("dashboard watchlists degraded: {err:#}");
@@ -6022,10 +6042,7 @@ impl AppState {
             integrity,
             execution_protection,
             market_status,
-            trading_manager: overview
-                .get("trading_manager")
-                .cloned()
-                .unwrap_or(JsonValue::Null),
+            trading_manager,
             watchlists,
             latest_decision,
             selected_decision,
@@ -16652,6 +16669,19 @@ mod tests {
         assert_eq!(integrity.expiry_pending_orders[0]["id"], json!(204));
         assert_eq!(integrity.acknowledged_issue_count, 1);
         assert!(dashboard_integrity_from_json(json!({"healthy": true})).is_err());
+    }
+
+    #[test]
+    fn dashboard_trading_manager_requires_the_stable_outer_contract() {
+        let trading_manager = dashboard_trading_manager_from_json(json!({
+            "status": "available",
+            "latest_run": {"id": 52, "status": "completed"}
+        }))
+        .expect("Trading Manager fixture has the dashboard contract");
+
+        assert_eq!(trading_manager.status, "available");
+        assert_eq!(trading_manager.latest_run["id"], json!(52));
+        assert!(dashboard_trading_manager_from_json(json!({"status": "available"})).is_err());
     }
 
     #[test]

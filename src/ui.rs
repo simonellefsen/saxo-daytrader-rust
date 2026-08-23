@@ -14,8 +14,8 @@ use crate::{
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
+        TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2084,11 +2084,11 @@ struct CashDeploymentSummary {
 }
 
 #[component]
-fn CashDeploymentPanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let latest = trading_manager
-        .get("latest_run")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+fn CashDeploymentPanel(
+    trading_manager: TradingManagerPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let latest = trading_manager.latest_run;
     let summary = cash_deployment_summary(&latest, &prefs);
     rsx! {
         section { class: "section",
@@ -2510,11 +2510,11 @@ struct InstrumentQuarantineSummary {
 }
 
 #[component]
-fn InstrumentQuarantinePanel(trading_manager: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let latest = trading_manager
-        .get("latest_run")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+fn InstrumentQuarantinePanel(
+    trading_manager: TradingManagerPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let latest = trading_manager.latest_run;
     let summary = instrument_quarantine_summary(&latest);
     rsx! {
         section { class: "section",

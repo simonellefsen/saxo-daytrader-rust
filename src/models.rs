@@ -92,7 +92,7 @@ pub struct DashboardView {
     pub integrity: OverviewIntegrityPayload,
     pub execution_protection: JsonValue,
     pub market_status: MarketStatusPayload,
-    pub trading_manager: JsonValue,
+    pub trading_manager: TradingManagerPayload,
     pub watchlists: JsonValue,
     pub latest_decision: JsonValue,
     pub selected_decision: JsonValue,
@@ -668,6 +668,18 @@ pub struct OverviewIntegrityPayload {
     pub expiry_pending_orders: Vec<JsonValue>,
     pub acknowledged_issue_count: i64,
     pub checked_at: String,
+}
+
+/// Bounded dashboard Trading Manager envelope.
+///
+/// The latest persisted run remains compatibility JSON because its diagnostics
+/// evolve with Trading Manager gates. The stable availability and latest-run
+/// boundary are typed so dashboard panels do not traverse an arbitrary
+/// overview document.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerPayload {
+    pub status: String,
+    pub latest_run: JsonValue,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.
