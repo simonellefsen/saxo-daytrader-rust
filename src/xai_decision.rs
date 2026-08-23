@@ -183,6 +183,17 @@ impl DecisionReportSubmissionMode {
 /// report immediately.
 pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
     let polled = poll_pending_deferred_reports(state).await?;
+    // OpenRouter completes synchronously while xAI completes through the
+    // deferred poller. Reconcile the record-only shadow ledger independently
+    // of either provider so an earlier completed report cannot be left without
+    // its auditable baseline merely because the provider path differed.
+    let shadow_outcome_backfill = match backfill_completed_shadow_report_outcomes(state).await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("shadow outcome backfill degraded: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
     // Do not abandon an already-submitted provider request when an operator
     // disables the strategy. Polling is read-only and lets the report reach a
     // terminal audit state; only new scheduled submissions are disabled.
@@ -191,6 +202,7 @@ pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
             "status": "disabled",
             "reason": "strategy.enabled is false; scheduled decision-report submission is disabled",
             "polled": polled,
+            "shadow_outcome_backfill": shadow_outcome_backfill,
             "submitted": [],
             "scheduler_results": []
         }));
@@ -199,6 +211,7 @@ pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
     Ok(json!({
         "status": "ok",
         "polled": polled,
+        "shadow_outcome_backfill": shadow_outcome_backfill,
         "submitted": scheduled.get("submitted").cloned().unwrap_or_else(|| json!([])),
         "scheduler_results": scheduled.get("results").cloned().unwrap_or_else(|| json!([])),
     }))
@@ -445,10 +458,19 @@ async fn submit_deferred_report(
             None,
         )
         .await?;
+        let report_id = row.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
+        let shadow_observations =
+            finalize_shadow_report_observations(state, report_id, &report_json, true).await;
         info!(
+            report_id,
             pulse_key = %pulse.key,
             provider = %provider,
             response_id = %response_id,
+            shadow_outcome_created = shadow_observations
+                .get("shadow_outcome_ledger")
+                .and_then(|value| value.get("created"))
+                .and_then(JsonValue::as_u64)
+                .unwrap_or(0),
             "completed AI decision report"
         );
         return Ok(row);
@@ -623,89 +645,8 @@ async fn poll_one_deferred_report(
         &report_json,
     )
     .await?;
-    // Shadow reports get a separate observational candidate ledger as soon as
-    // their normalized result is durable. It is intentionally outside the
-    // Trading Manager: the only follow-up is the existing read-only Saxo
-    // infoprice refresh needed to establish an auditable baseline.
-    let shadow_outcome_ledger = match state
-        .record_shadow_report_outcomes(pending.id, &report_json)
-        .await
-    {
-        Ok(summary) => summary,
-        Err(err) => {
-            warn!(
-                report_id = pending.id,
-                "shadow report outcome persistence degraded: {err:#}"
-            );
-            json!({
-                "status": "error",
-                "created": 0,
-                "error": "shadow outcome persistence unavailable",
-            })
-        }
-    };
-    let shadow_reference_capture = if shadow_outcome_ledger
-        .get("created")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
-        match crate::price_monitor::refresh_portfolio_prices(state).await {
-            Ok(summary) => summary,
-            Err(err) => {
-                warn!(
-                    report_id = pending.id,
-                    "shadow report reference quote capture degraded: {err:#}"
-                );
-                json!({
-                    "status": "error",
-                    "error": "read_only_saxo_reference_quote_capture_unavailable",
-                })
-            }
-        }
-    } else {
-        json!({"status": "not_required"})
-    };
-    // Hermes may audit a shadow report through its constrained MCP surface,
-    // but this is a permanently record-only path. Its compact effect is stored
-    // on the shadow rows and is never passed to the Trading Manager, queue, or
-    // Saxo adapter.
-    let shadow_hermes_advice = if shadow_outcome_ledger
-        .get("created")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
-        let request =
-            crate::trading_manager::request_hermes_shadow_decision_advice(state, pending.id)
-                .await
-                .unwrap_or_else(|err| {
-                    warn!(
-                        report_id = pending.id,
-                        "shadow Hermes advisory degraded: {err:#}"
-                    );
-                    json!({
-                        "status": "error",
-                        "source_session_id": format!("shadow-decision-advice-{}", pending.id),
-                        "safety": "shadow_record_only_no_queue_gate_or_saxo_authority",
-                    })
-                });
-        match state
-            .record_shadow_report_hermes_effects(pending.id, &request)
-            .await
-        {
-            Ok(effect) => json!({"request": request, "effect": effect}),
-            Err(err) => {
-                warn!(
-                    report_id = pending.id,
-                    "shadow Hermes effect persistence degraded: {err:#}"
-                );
-                json!({"request": request, "effect": {"status": "error"}})
-            }
-        }
-    } else {
-        json!({"status": "not_required"})
-    };
+    let shadow_observations =
+        finalize_shadow_report_observations(state, pending.id, &report_json, true).await;
     info!(
         report_id = pending.id,
         request_id = pending.request_id,
@@ -720,10 +661,205 @@ async fn poll_one_deferred_report(
         "report_id": pending.id,
         "request_id": pending.request_id,
         "response_id": response_json.get("id").cloned().unwrap_or(JsonValue::Null),
+        "shadow_outcome_ledger": shadow_observations.get("shadow_outcome_ledger").cloned().unwrap_or(JsonValue::Null),
+        "shadow_reference_capture": shadow_observations.get("shadow_reference_capture").cloned().unwrap_or(JsonValue::Null),
+        "shadow_hermes_advice": shadow_observations.get("shadow_hermes_advice").cloned().unwrap_or(JsonValue::Null),
+    }))
+}
+
+/// Records the observational consequences of a completed shadow report. This
+/// helper has no Trading Manager, order queue, precheck, or Saxo mutation
+/// authority; the optional Saxo call only captures an auditable price baseline.
+async fn finalize_shadow_report_observations(
+    state: &AppState,
+    report_id: i64,
+    report_json: &JsonValue,
+    capture_reference_now: bool,
+) -> JsonValue {
+    let shadow_outcome_ledger = match state
+        .record_shadow_report_outcomes(report_id, report_json)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(err) => {
+            warn!(
+                report_id,
+                "shadow report outcome persistence degraded: {err:#}"
+            );
+            json!({
+                "status": "error",
+                "created": 0,
+                "error": "shadow outcome persistence unavailable",
+            })
+        }
+    };
+    let created = shadow_outcome_ledger
+        .get("created")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(0);
+    let shadow_reference_capture = if created > 0 && capture_reference_now {
+        match crate::price_monitor::refresh_portfolio_prices(state).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!(
+                    report_id,
+                    "shadow report reference quote capture degraded: {err:#}"
+                );
+                json!({
+                    "status": "error",
+                    "error": "read_only_saxo_reference_quote_capture_unavailable",
+                })
+            }
+        }
+    } else if created > 0 {
+        match state
+            .mark_shadow_report_outcomes_retroactive_reference_unavailable(report_id)
+            .await
+        {
+            Ok(marked) => marked,
+            Err(err) => {
+                warn!(
+                    report_id,
+                    "could not mark retroactive shadow reference as unavailable: {err:#}"
+                );
+                json!({
+                    "status": "error",
+                    "error": "retroactive_shadow_reference_status_unavailable",
+                })
+            }
+        }
+    } else {
+        json!({"status": "not_required"})
+    };
+    let shadow_hermes_advice = if created > 0 {
+        let request =
+            crate::trading_manager::request_hermes_shadow_decision_advice(state, report_id)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!(report_id, "shadow Hermes advisory degraded: {err:#}");
+                    json!({
+                        "status": "error",
+                        "source_session_id": format!("shadow-decision-advice-{report_id}"),
+                        "safety": "shadow_record_only_no_queue_gate_or_saxo_authority",
+                    })
+                });
+        match state
+            .record_shadow_report_hermes_effects(report_id, &request)
+            .await
+        {
+            Ok(effect) => json!({"request": request, "effect": effect}),
+            Err(err) => {
+                warn!(
+                    report_id,
+                    "shadow Hermes effect persistence degraded: {err:#}"
+                );
+                json!({"request": request, "effect": {"status": "error"}})
+            }
+        }
+    } else {
+        json!({"status": "not_required"})
+    };
+    json!({
         "shadow_outcome_ledger": shadow_outcome_ledger,
         "shadow_reference_capture": shadow_reference_capture,
         "shadow_hermes_advice": shadow_hermes_advice,
+        "safety": "shadow_observation_only_no_queue_or_saxo_order_authority",
+    })
+}
+
+/// Replays completed shadow reports that predate the shared completion hook or
+/// survived an interrupted completion. The ledger insert is idempotent and
+/// reports without valid BUY/SELL candidates are deliberately skipped.
+async fn backfill_completed_shadow_report_outcomes(state: &AppState) -> Result<JsonValue> {
+    let rows = sqlx::query(
+        "SELECT id, report_json
+         FROM decision_reports
+         WHERE pulse_mode = 'shadow'
+           AND queue_eligible = 0
+           AND status IN ('completed', 'xai_fallback')
+           AND report_json IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM shadow_report_outcomes
+               WHERE shadow_report_outcomes.report_id = decision_reports.id
+           )
+         ORDER BY created_at ASC, id ASC
+         LIMIT 50",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("loading completed shadow reports missing outcome baselines")?;
+    let mut considered = 0usize;
+    let mut skipped_without_candidates = 0usize;
+    let mut created = 0usize;
+    let mut reports = Vec::new();
+    for row in rows.iter().map(row_to_json) {
+        let report_id = row.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
+        let report_json = decode_json_field(row.get("report_json"));
+        if !shadow_report_has_recordable_candidates(&report_json) {
+            skipped_without_candidates += 1;
+            continue;
+        }
+        considered += 1;
+        let observations =
+            finalize_shadow_report_observations(state, report_id, &report_json, false).await;
+        let outcome_created = observations
+            .get("shadow_outcome_ledger")
+            .and_then(|value| value.get("created"))
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(0) as usize;
+        created += outcome_created;
+        reports.push(json!({
+            "report_id": report_id,
+            "created": outcome_created,
+            "status": observations
+                .get("shadow_outcome_ledger")
+                .and_then(|value| value.get("status"))
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        }));
+    }
+    Ok(json!({
+        "status": "ok",
+        "considered": considered,
+        "skipped_without_candidates": skipped_without_candidates,
+        "created": created,
+        "reports": reports,
+        "safety": "idempotent_shadow_observation_backfill_no_queue_or_saxo_order_authority",
     }))
+}
+
+fn shadow_report_has_recordable_candidates(report: &JsonValue) -> bool {
+    report
+        .get("suggested_trades")
+        .or_else(|| {
+            report
+                .get("strategy_plan")
+                .and_then(|plan| plan.get("suggested_trades"))
+        })
+        .and_then(JsonValue::as_array)
+        .is_some_and(|trades| {
+            trades.iter().any(|trade| {
+                !trade
+                    .get("symbol")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+                    && matches!(
+                        trade
+                            .get("action")
+                            .and_then(JsonValue::as_str)
+                            .unwrap_or_default()
+                            .to_ascii_uppercase()
+                            .as_str(),
+                        "BUY" | "SELL"
+                    )
+                    && trade
+                        .get("quantity")
+                        .and_then(JsonValue::as_f64)
+                        .is_some_and(|quantity| quantity.is_finite() && quantity > 0.0)
+            })
+        })
 }
 
 fn completed_report_json(
@@ -3161,6 +3297,40 @@ mod tests {
             "us_open_followup"
         ));
         assert!(!scheduled_decision_pulse_enabled(&enabled, "manual"));
+    }
+
+    #[test]
+    fn shadow_outcome_backfill_only_selects_recordable_candidates() {
+        assert!(shadow_report_has_recordable_candidates(&json!({
+            "suggested_trades": [{
+                "symbol": "JNJ:xnys",
+                "action": "buy",
+                "quantity": 5
+            }]
+        })));
+        assert!(shadow_report_has_recordable_candidates(&json!({
+            "strategy_plan": {
+                "suggested_trades": [{
+                    "symbol": "COP:xnys",
+                    "action": "SELL",
+                    "quantity": 2.0
+                }]
+            }
+        })));
+        assert!(!shadow_report_has_recordable_candidates(&json!({
+            "suggested_trades": [{
+                "symbol": "JNJ:xnys",
+                "action": "HOLD",
+                "quantity": 5
+            }]
+        })));
+        assert!(!shadow_report_has_recordable_candidates(&json!({
+            "suggested_trades": [{
+                "symbol": "",
+                "action": "BUY",
+                "quantity": 5
+            }]
+        })));
     }
 
     #[test]

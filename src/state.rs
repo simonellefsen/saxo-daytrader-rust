@@ -10131,6 +10131,36 @@ impl AppState {
         }))
     }
 
+    /// A report that completed before the observational ledger was available
+    /// can still retain its candidates, but its historical infoprice cannot be
+    /// recreated honestly. Keep those rows out of the live quote loop instead
+    /// of treating a later quote as their report-time baseline.
+    pub async fn mark_shadow_report_outcomes_retroactive_reference_unavailable(
+        &self,
+        report_id: i64,
+    ) -> Result<JsonValue> {
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let result = sqlx::query(&format!(
+            "UPDATE shadow_report_outcomes
+             SET updated_at = '{}',
+                 reference_price_source = 'not_captured_retroactively',
+                 status = 'reference_unavailable_retroactive',
+                 outcome_maturity_status = 'reference_unavailable_retroactive'
+             WHERE report_id = {}
+               AND status = 'awaiting_reference'",
+            sql_escape(&now),
+            report_id.max(0),
+        ))
+        .execute(&self.pool)
+        .await
+        .context("marking retroactive shadow report reference unavailable")?;
+        Ok(json!({
+            "status": "reference_not_captured_retroactively",
+            "updated": result.rows_affected(),
+            "safety": "historical_shadow_baseline_not_inferred_from_later_saxo_quote",
+        }))
+    }
+
     /// Builds the only advisory context a shadow report may send to Hermes.
     /// It is a compact local projection of durable rows; raw prompts, provider
     /// content, broker payloads, sessions, and every execution surface remain

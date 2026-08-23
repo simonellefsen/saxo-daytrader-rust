@@ -67,7 +67,7 @@ Two things genuinely point the right way and should not be lost in the negative 
 
 **What would change the picture, in preference order:**
 
-1. **Get the shadow evidence producing data.** `shadow_report_outcomes` and `shadow_report_outcome_quotes` are both at **0 rows** despite the 25-commit tuning build. That infrastructure is the correct answer to "more signal sources than closed trades" — it generates evaluable outcomes without risking capital. It cannot help while empty. Confirm it is wired to a run path rather than awaiting a trigger that never fires.
+1. **Let the shadow evidence collect clean baselines.** The 2026-08-23 diagnostic found that synchronous OpenRouter completions persisted their completed shadow report but returned before the record-only outcome hook; only deferred xAI completions invoked it. The shared completion hook and an idempotent repair pass now cover both paths. Historical reports repaired after the fact retain their candidate context but are explicitly marked as lacking a report-time Saxo quote, rather than receiving an invented later baseline. New shadow reports are the source for evaluable 1/5/20-session evidence.
 2. **Wait for n to grow** before concluding anything from 20 trades.
 3. **Prefer work that increases the rate of evaluable outcomes** over work that adds new signal sources. The system already has Markov, Quiver, daily indicators, support risk, editorial research and Hermes advice feeding decisions it cannot yet evaluate.
 

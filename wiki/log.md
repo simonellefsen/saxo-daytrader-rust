@@ -2167,3 +2167,8 @@ broker mutation was added.
 
 - Added a typed projection of the existing configured monthly DKK planning target against the active import batch's calendar-month account-value baseline, preserving pending-baseline status, target, value change, target ratio, and period start.
 - This is local planning context rather than realised P/L, time-weighted/total return, or cash-flow/FX/dividend/fee/tax-normalized attribution. It does not create a risk, sizing, manager, queue, broker-precheck, Hermes, or Saxo-execution input.
+
+## [2026-08-23] trading-quality | Complete the shadow-outcome path for synchronous providers
+
+- OpenRouter's synchronous completion path now uses the same record-only shadow-outcome finalizer as xAI's deferred completion path. Every newly completed eligible shadow report therefore persists its candidate context, captures its immediate read-only Saxo reference quote, and records the constrained Hermes observation without acquiring manager, queue, precheck, or order authority.
+- The scheduler also performs a bounded, idempotent repair pass for older completed shadow reports that were missing a ledger row. A historical report is never assigned a later quote as if it were its report-time baseline: repaired candidates are explicitly marked `reference_not_captured_retroactively` and excluded from outcome maturation. This preserves auditability instead of manufacturing forward-return evidence.
