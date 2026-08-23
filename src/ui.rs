@@ -10,10 +10,10 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardView, DecisionGateReplayPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
         TuningExecutionPulseOutcome, TuningPulseComparison,
@@ -4449,7 +4449,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }
                 GateReplayPanel { replay: gate_replay, prefs: prefs.clone() }
-                SupportRiskEvidencePanel { evidence: data.decision_gate_replay.get("support_risk_evidence").cloned().unwrap_or(JsonValue::Null), prefs: prefs.clone() }
+                SupportRiskEvidencePanel { evidence: data.decision_gate_replay.support_risk_evidence.clone(), prefs: prefs.clone() }
                 div { class: "decision-report-grid",
                     div { class: "stack loose",
                         div { class: "event",
@@ -4607,10 +4607,10 @@ fn SupportRiskEvidenceRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn GateReplayPanel(replay: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&replay, "status");
-    let run_count = value_i64(&replay, "run_count");
-    let scenarios = json_array(&replay, "scenarios");
+fn GateReplayPanel(replay: DecisionGateReplayPayload, prefs: LocalizationPrefs) -> Element {
+    let status = replay.status;
+    let run_count = replay.run_count;
+    let scenarios = replay.scenarios;
     rsx! {
         div { class: "event candidate-scoring-panel",
             strong { "Gate Replay" }

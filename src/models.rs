@@ -96,7 +96,7 @@ pub struct DashboardView {
     pub watchlists: MarketWatchlistsPayload,
     pub latest_decision: JsonValue,
     pub selected_decision: JsonValue,
-    pub decision_gate_replay: JsonValue,
+    pub decision_gate_replay: DecisionGateReplayPayload,
     pub tuning: TuningPayload,
 }
 

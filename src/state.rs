@@ -36,20 +36,20 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        CashBufferSettings, DashboardView, DecisionGateReplayPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3155,6 +3155,25 @@ fn dashboard_watchlists_not_loaded() -> MarketWatchlistsPayload {
     }
 }
 
+/// Decodes the stable Decision Gate Replay envelope used by the Decisions tab.
+/// Scenario and support-risk evidence remain staged historical-analysis JSON.
+fn dashboard_decision_gate_replay_from_json(
+    replay: JsonValue,
+) -> serde_json::Result<DecisionGateReplayPayload> {
+    serde_json::from_value(replay)
+}
+
+fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayPayload {
+    DecisionGateReplayPayload {
+        status: "not_loaded".to_string(),
+        run_count: 0,
+        scenarios: Vec::new(),
+        safety: "not_loaded_outside_decisions_tab".to_string(),
+        interpretation: String::new(),
+        support_risk_evidence: JsonValue::Null,
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5409,7 +5428,7 @@ impl AppState {
         };
         let decision_gate_replay = if dashboard_loads_tab_exclusive_data(&active_view, "decisions")
         {
-            self.decision_gate_replay(GATE_REPLAY_DEFAULT_RUN_LIMIT)
+            let replay = self.decision_gate_replay(GATE_REPLAY_DEFAULT_RUN_LIMIT)
                 .await
                 .unwrap_or_else(|err| {
                     warn!("dashboard gate replay degraded: {err:#}");
@@ -5418,10 +5437,21 @@ impl AppState {
                         "run_count": 0,
                         "scenarios": [],
                         "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
+                        "interpretation": "Decision Gate Replay evidence could not be loaded.",
+                        "support_risk_evidence": null,
                     })
-                })
+                });
+            dashboard_decision_gate_replay_from_json(replay).unwrap_or_else(|err| {
+                warn!("dashboard typed gate replay degraded: {err:#}");
+                DecisionGateReplayPayload {
+                    status: "unavailable".to_string(),
+                    safety: "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation".to_string(),
+                    interpretation: "Decision Gate Replay evidence could not be loaded.".to_string(),
+                    ..dashboard_decision_gate_replay_not_loaded()
+                }
+            })
         } else {
-            JsonValue::Null
+            dashboard_decision_gate_replay_not_loaded()
         };
         // The Operations banner is visible on every dashboard tab, so it needs
         // a compact per-pulse report status rather than only the latest global
@@ -16728,6 +16758,30 @@ mod tests {
         assert_eq!(watchlists.categories[0]["key"], json!("nordic"));
         assert_eq!(dashboard_watchlists_not_loaded().categories.len(), 0);
         assert!(dashboard_watchlists_from_json(json!({"categories": []})).is_err());
+    }
+
+    #[test]
+    fn dashboard_gate_replay_requires_the_stable_outer_contract() {
+        let replay = dashboard_decision_gate_replay_from_json(json!({
+            "status": "available",
+            "run_count": 3,
+            "scenarios": [{"variable_path": "strategy.swing.markov_gate.min_signed_signal"}],
+            "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
+            "interpretation": "A target-gate clear is not an approval.",
+            "support_risk_evidence": {"status": "collecting"}
+        }))
+        .expect("gate replay fixture has the dashboard contract");
+
+        assert_eq!(replay.run_count, 3);
+        assert_eq!(
+            replay.scenarios[0]["variable_path"],
+            json!("strategy.swing.markov_gate.min_signed_signal")
+        );
+        assert_eq!(
+            dashboard_decision_gate_replay_not_loaded().status,
+            "not_loaded"
+        );
+        assert!(dashboard_decision_gate_replay_from_json(json!({"status": "available"})).is_err());
     }
 
     #[test]

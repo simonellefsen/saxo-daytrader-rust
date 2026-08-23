@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Decision Gate Replay consumption
+
+- Changed the Decisions tab's Gate Replay and Support/Risk calls to consume the typed replay status, count, scenario-list, safety, interpretation, and staged support-risk boundary directly.
+- Scenario and support-risk details remain compatibility JSON; malformed replay evidence becomes an explicit unavailable local contract rather than arbitrary dashboard JSON.
+- This preserves read-only historical analysis and performs no Decision Report generation, configuration, Trading Manager gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Watchlists consumption
 
 - Changed the Watchlists tab to consume the typed watchlist refresh metadata and category-list boundary directly.
