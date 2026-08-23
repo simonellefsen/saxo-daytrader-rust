@@ -934,17 +934,36 @@ pub struct PerformanceBenchmarksPayload {
     pub caveat: Option<String>,
 }
 
+/// One stored or response-time account-value observation in DKK.
+///
+/// This is local aggregate evidence, including cash, rather than a
+/// broker-computed time-weighted return or a live security quote. Older stored
+/// rows may not have a source label, which remains explicit as `None`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceHistoryRowPayload {
+    pub recorded_at: String,
+    pub snapshot_type: String,
+    pub total_market_value_dkk: f64,
+    pub invested_market_value_dkk: f64,
+    pub cash_balance_dkk: f64,
+    pub total_cost_basis_dkk: f64,
+    pub total_unrealised_pnl_dkk: f64,
+    pub total_daily_pnl_dkk: f64,
+    pub position_count: i64,
+    pub source: Option<String>,
+}
+
 /// Bounded performance envelope.
 ///
-/// History rows and the persisted benchmark-run evidence remain compatibility
-/// JSON while the performance read model is converted incrementally. The
+/// The persisted benchmark-run evidence remains compatibility JSON while the
+/// performance read model is converted incrementally. History rows,
 /// selected-range summary, benchmark comparison, and local goal tracking are
 /// typed projections. This does not change performance collection or any
 /// decision/execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformancePayload {
     pub range_key: String,
-    pub history: Vec<JsonValue>,
+    pub history: Vec<PerformanceHistoryRowPayload>,
     pub summary: PerformanceSummaryPayload,
     pub benchmarks: PerformanceBenchmarksPayload,
     pub goal_tracking: PerformanceGoalTrackingPayload,

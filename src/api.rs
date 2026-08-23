@@ -2923,7 +2923,18 @@ mod tests {
     fn performance_response_keeps_the_typed_outer_contract() {
         let payload = performance_payload(json!({
             "range_key": "1D",
-            "history": [{"recorded_at": "2026-08-01T18:00:00Z", "total_market_value_dkk": 300000.0}],
+            "history": [{
+                "recorded_at": "2026-08-01T18:00:00Z",
+                "snapshot_type": "runtime_current",
+                "total_market_value_dkk": 300000.0,
+                "invested_market_value_dkk": 240000.0,
+                "cash_balance_dkk": 60000.0,
+                "total_cost_basis_dkk": 225000.0,
+                "total_unrealised_pnl_dkk": 15000.0,
+                "total_daily_pnl_dkk": 250.0,
+                "position_count": 20,
+                "source": null,
+            }],
             "summary": {
                 "points": 2,
                 "first_recorded_at": "2026-08-01T10:00:00Z",
@@ -3123,6 +3134,8 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("performance payload serializes");
         assert_eq!(serialized["range_key"], "1D");
         assert_eq!(serialized["history"][0]["total_market_value_dkk"], 300000.0);
+        assert_eq!(serialized["history"][0]["snapshot_type"], "runtime_current");
+        assert!(serialized["history"][0]["source"].is_null());
         assert_eq!(serialized["summary"]["change_dkk"], 5000.0);
         assert_eq!(serialized["summary"]["confidence"]["status"], "current");
         assert_eq!(serialized["benchmarks"]["status"], "partial");

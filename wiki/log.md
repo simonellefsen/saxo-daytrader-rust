@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type selected-range Performance history rows
+
+- Typed the fixed local account-value observation fields: record time, snapshot type, nullable historical source, DKK aggregate/invested/cash/cost-basis/unrealised/daily-P&L values, and position count.
+- These rows continue to represent local account-value evidence including cash, not broker-computed time-weighted performance or a live security quote. The dashboard SSR compatibility model remains separately staged.
+- This preserves read-only Performance behavior and performs no Saxo provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type Performance benchmark comparison
 
 - Typed the selected-range benchmark status, account boundaries/return, coverage/freshness counters, caveat, and configured ETF-proxy comparison rows. Pending proxy history remains explicit optional return/close/timestamp/freshness fields.
