@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type retained Performance composition-change summary
+
+- Extended Performance snapshot evidence with a typed two-snapshot change envelope: current/previous retained metadata, aggregate opened/closed/resized and unchanged counts, and stored DKK market-value/cost-basis movements.
+- Collecting states preserve absent snapshot/count fields explicitly. Per-symbol change rows and integrity findings remain compatibility JSON for independently bounded conversion.
+- This preserves read-only historical evidence semantics and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type latest retained Performance snapshot
 
 - Extended the typed Performance snapshot-evidence boundary with explicit latest-snapshot availability, safety, interpretation, and retained metadata: identity, record time, source, position count, and stored DKK totals.

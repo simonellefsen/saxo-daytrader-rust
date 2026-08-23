@@ -2954,7 +2954,40 @@ mod tests {
                     "safety": "local_retained_position_snapshot_read_no_provider_hermes_gate_or_order_authority",
                     "interpretation": "Stored evidence, not a live broker portfolio.",
                 },
-                "latest_change": {"status": "available"},
+                "latest_change": {
+                    "status": "available",
+                    "current_snapshot": {
+                        "snapshot_id": 42,
+                        "recorded_at": "2026-08-01T12:00:00Z",
+                        "snapshot_type": "scheduler_cycle",
+                        "source": "test",
+                        "position_count": 2,
+                        "invested_market_value_dkk": 1500.0,
+                        "total_cost_basis_dkk": 1200.0,
+                        "total_unrealised_pnl_dkk": 300.0,
+                    },
+                    "previous_snapshot": {
+                        "snapshot_id": 41,
+                        "recorded_at": "2026-08-01T10:00:00Z",
+                        "snapshot_type": "scheduler_cycle",
+                        "source": "test",
+                        "position_count": 1,
+                        "invested_market_value_dkk": 1000.0,
+                        "total_cost_basis_dkk": 900.0,
+                        "total_unrealised_pnl_dkk": 100.0,
+                    },
+                    "opened": [{"symbol": "NEW:xnas"}],
+                    "closed": [],
+                    "resized": [],
+                    "opened_count": 1,
+                    "closed_count": 0,
+                    "resized_count": 0,
+                    "unchanged_quantity_count": 1,
+                    "net_market_value_change_dkk": 500.0,
+                    "net_cost_basis_change_dkk": 300.0,
+                    "safety": "local_retained_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+                    "interpretation": "Stored comparison only.",
+                },
                 "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
                 "integrity": {"status": "aligned"},
                 "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
@@ -2978,6 +3011,10 @@ mod tests {
         assert_eq!(
             serialized["snapshot_evidence"]["latest_change"]["status"],
             "available"
+        );
+        assert_eq!(
+            serialized["snapshot_evidence"]["latest_change"]["previous_snapshot"]["snapshot_id"],
+            41
         );
     }
 
