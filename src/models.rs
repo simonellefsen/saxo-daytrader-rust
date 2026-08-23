@@ -665,16 +665,34 @@ pub struct RetainedPositionSnapshotMetadataPayload {
     pub total_unrealised_pnl_dkk: f64,
 }
 
+/// One recomputable position row retained with a historical portfolio snapshot.
+///
+/// Every DKK value is tied to the stored quantity, local price, FX rate, and
+/// cost basis from the same observation; this is not a live broker position.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedPositionSnapshotItemPayload {
+    pub symbol: String,
+    pub isin: Option<String>,
+    pub currency: String,
+    pub quantity: f64,
+    pub price_local: f64,
+    pub fx_rate_to_dkk: f64,
+    pub cost_basis_local: f64,
+    pub cost_basis_dkk: f64,
+    pub market_value_dkk: f64,
+    pub unrealised_pnl_dkk: f64,
+}
+
 /// Bounded latest retained-position evidence envelope.
 ///
-/// The stored snapshot metadata and availability state are explicit, while
-/// individual historical position rows remain compatibility JSON for staged
-/// conversion.
+/// The stored snapshot metadata, availability state, and per-position rows are
+/// explicit; only independently staged change and mismatch detail remains
+/// compatibility JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedPositionSnapshotEvidencePayload {
     pub status: String,
     pub snapshot: Option<RetainedPositionSnapshotMetadataPayload>,
-    pub items: Vec<JsonValue>,
+    pub items: Vec<RetainedPositionSnapshotItemPayload>,
     pub safety: String,
     pub interpretation: Option<String>,
 }
@@ -725,8 +743,8 @@ pub struct PerformanceSnapshotIntegrityPayload {
 ///
 /// The selected-range coverage and retention contract is typed so callers can
 /// distinguish collecting, partial, and complete evidence without traversing
-/// arbitrary JSON. Individual historical position details and mismatch rows
-/// remain compatibility JSON while those nested read models are converted.
+/// arbitrary JSON. Per-symbol change and mismatch rows remain compatibility
+/// JSON while those nested read models are converted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotEvidencePayload {
     pub status: String,

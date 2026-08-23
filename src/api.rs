@@ -2950,7 +2950,18 @@ mod tests {
                         "total_cost_basis_dkk": 1200.0,
                         "total_unrealised_pnl_dkk": 300.0,
                     },
-                    "items": [{"symbol": "EXMPL:xnas"}],
+                    "items": [{
+                        "symbol": "EXMPL:xnas",
+                        "isin": "US0000000001",
+                        "currency": "USD",
+                        "quantity": 10.0,
+                        "price_local": 100.0,
+                        "fx_rate_to_dkk": 6.5,
+                        "cost_basis_local": 75.0,
+                        "cost_basis_dkk": 4875.0,
+                        "market_value_dkk": 6500.0,
+                        "unrealised_pnl_dkk": 1625.0,
+                    }],
                     "safety": "local_retained_position_snapshot_read_no_provider_hermes_gate_or_order_authority",
                     "interpretation": "Stored evidence, not a live broker portfolio.",
                 },
@@ -3016,6 +3027,10 @@ mod tests {
         assert_eq!(
             serialized["snapshot_evidence"]["latest_snapshot"]["snapshot"]["snapshot_id"],
             42
+        );
+        assert_eq!(
+            serialized["snapshot_evidence"]["latest_snapshot"]["items"][0]["market_value_dkk"],
+            6500.0
         );
         assert_eq!(
             serialized["snapshot_evidence"]["latest_change"]["status"],

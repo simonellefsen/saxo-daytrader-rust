@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type retained Performance position rows
+
+- Extended the typed Performance snapshot-evidence boundary with retained per-position symbol, optional ISIN, currency, quantity, local price, FX, local/DKK cost basis, DKK market value, and recomputed unrealised P/L.
+- These are immutable inputs and derived values from one stored observation, not a fresh Saxo portfolio read. Per-symbol composition-change and mismatch rows remain compatibility JSON for independently bounded conversion.
+- This preserves local read-only evidence semantics and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type Performance snapshot-integrity evidence
 
 - Extended the typed Performance snapshot-evidence boundary with aggregate-versus-position integrity status, checked count, structural mismatch count, broker-derived unrealised-P/L difference count, and safety.
