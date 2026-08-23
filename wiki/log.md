@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type retained Performance composition-change rows
+
+- Extended the typed Performance snapshot-evidence boundary with opened, closed, and resized symbol rows: before/after quantity, quantity change, and stored DKK market-value/cost-basis deltas.
+- The fields remain observational comparisons over two retained snapshots; value movement includes price, FX, and quantity effects and does not assert trades, fills, or causality. Only mismatch rows remain compatibility JSON for a separately bounded conversion.
+- This preserves local read-only evidence semantics and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type retained Performance position rows
 
 - Extended the typed Performance snapshot-evidence boundary with retained per-position symbol, optional ISIN, currency, quantity, local price, FX, local/DKK cost basis, DKK market value, and recomputed unrealised P/L.

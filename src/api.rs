@@ -2987,7 +2987,14 @@ mod tests {
                         "total_cost_basis_dkk": 900.0,
                         "total_unrealised_pnl_dkk": 100.0,
                     },
-                    "opened": [{"symbol": "NEW:xnas"}],
+                    "opened": [{
+                        "symbol": "NEW:xnas",
+                        "quantity_before": 0.0,
+                        "quantity_after": 2.0,
+                        "quantity_change": 2.0,
+                        "market_value_change_dkk": 500.0,
+                        "cost_basis_change_dkk": 300.0,
+                    }],
                     "closed": [],
                     "resized": [],
                     "opened_count": 1,
@@ -3039,6 +3046,10 @@ mod tests {
         assert_eq!(
             serialized["snapshot_evidence"]["latest_change"]["previous_snapshot"]["snapshot_id"],
             41
+        );
+        assert_eq!(
+            serialized["snapshot_evidence"]["latest_change"]["opened"][0]["quantity_change"],
+            2.0
         );
         assert_eq!(
             serialized["snapshot_evidence"]["integrity"]["broker_derived_unrealised_difference_count"],

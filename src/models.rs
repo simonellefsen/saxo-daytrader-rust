@@ -697,22 +697,36 @@ pub struct RetainedPositionSnapshotEvidencePayload {
     pub interpretation: Option<String>,
 }
 
+/// One symbol's quantity and stored-value change between two retained snapshots.
+///
+/// This is an observational comparison only: market-value movement includes
+/// price, FX, and quantity effects, and does not assert a trade or fill.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedPositionSnapshotChangeItemPayload {
+    pub symbol: String,
+    pub quantity_before: f64,
+    pub quantity_after: f64,
+    pub quantity_change: f64,
+    pub market_value_change_dkk: f64,
+    pub cost_basis_change_dkk: f64,
+}
+
 /// Bounded retained-position composition-change evidence envelope.
 ///
-/// Snapshot metadata and aggregate change counters are typed, while the
-/// per-symbol opened, closed, and resized rows remain compatibility JSON.
-/// Optional fields preserve the collecting state before two snapshots exist.
+/// Snapshot metadata, aggregate change counters, and per-symbol change rows
+/// are typed. Optional fields preserve the collecting state before two
+/// snapshots exist.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RetainedPositionSnapshotChangeEvidencePayload {
     pub status: String,
     pub current_snapshot: Option<RetainedPositionSnapshotMetadataPayload>,
     pub previous_snapshot: Option<RetainedPositionSnapshotMetadataPayload>,
     #[serde(default)]
-    pub opened: Vec<JsonValue>,
+    pub opened: Vec<RetainedPositionSnapshotChangeItemPayload>,
     #[serde(default)]
-    pub closed: Vec<JsonValue>,
+    pub closed: Vec<RetainedPositionSnapshotChangeItemPayload>,
     #[serde(default)]
-    pub resized: Vec<JsonValue>,
+    pub resized: Vec<RetainedPositionSnapshotChangeItemPayload>,
     pub opened_count: Option<i64>,
     pub closed_count: Option<i64>,
     pub resized_count: Option<i64>,
@@ -743,8 +757,8 @@ pub struct PerformanceSnapshotIntegrityPayload {
 ///
 /// The selected-range coverage and retention contract is typed so callers can
 /// distinguish collecting, partial, and complete evidence without traversing
-/// arbitrary JSON. Per-symbol change and mismatch rows remain compatibility
-/// JSON while those nested read models are converted.
+/// arbitrary JSON. Mismatch rows remain compatibility JSON while those nested
+/// read models are converted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotEvidencePayload {
     pub status: String,
