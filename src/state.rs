@@ -36,23 +36,23 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        CashBufferSettings, DashboardAiSettingsPayload, DashboardLatestRunPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3263,6 +3263,18 @@ fn dashboard_run_schedules_from_json(
     })
 }
 
+/// Decodes a retained Markov, Quiver, or indicator run for dashboard status.
+/// An absent row is an explicit no-run state; detailed config and summary data
+/// stay staged JSON.
+fn dashboard_latest_run_from_json(run: JsonValue) -> serde_json::Result<DashboardLatestRunPayload> {
+    if run.is_null() {
+        return Ok(DashboardLatestRunPayload::default());
+    }
+    let mut run: DashboardLatestRunPayload = serde_json::from_value(run)?;
+    run.available = true;
+    Ok(run)
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5754,6 +5766,11 @@ impl AppState {
             warn!("dashboard latest Markov run degraded: {err:#}");
             JsonValue::Null
         });
+        let latest_markov_run =
+            dashboard_latest_run_from_json(latest_markov_run).unwrap_or_else(|err| {
+                warn!("dashboard typed latest Markov run degraded: {err:#}");
+                DashboardLatestRunPayload::default()
+            });
         let quiver_signal_total = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
             self.quiver_signals_count().await.unwrap_or_else(|err| {
                 warn!("dashboard Quiver signal count degraded: {err:#}");
@@ -5777,6 +5794,11 @@ impl AppState {
             warn!("dashboard latest Quiver run degraded: {err:#}");
             JsonValue::Null
         });
+        let latest_quiver_run =
+            dashboard_latest_run_from_json(latest_quiver_run).unwrap_or_else(|err| {
+                warn!("dashboard typed latest Quiver run degraded: {err:#}");
+                DashboardLatestRunPayload::default()
+            });
         let quiver_conflicts = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
             let held_positions = self.position_items(250).await.unwrap_or_else(|err| {
                 warn!("dashboard Quiver conflict holdings degraded: {err:#}");
@@ -5799,6 +5821,11 @@ impl AppState {
                     warn!("dashboard latest daily indicator run degraded: {err:#}");
                     JsonValue::Null
                 });
+        let latest_daily_indicator_run = dashboard_latest_run_from_json(latest_daily_indicator_run)
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed latest daily indicator run degraded: {err:#}");
+                DashboardLatestRunPayload::default()
+            });
         let performance_history =
             match dashboard_performance_history_limit(&active_view, &performance_range) {
                 Some(limit) => self
@@ -17061,6 +17088,38 @@ mod tests {
             !serde_json::to_string(&schedules)
                 .expect("dashboard schedules serialize")
                 .contains("must-not-reach-the-dashboard")
+        );
+    }
+
+    #[test]
+    fn dashboard_latest_run_keeps_lifecycle_and_stages_detail() {
+        let run = dashboard_latest_run_from_json(json!({
+            "id": "run-42",
+            "created_at": "2026-08-23T13:00:00Z",
+            "run_date": "2026-08-23",
+            "status": "completed",
+            "asset_count": 20,
+            "success_count": 19,
+            "error_count": 1,
+            "config_json": {"lookback_days": 120},
+            "summary_json": {"signals": []},
+            "raw_provider_field": "must-not-reach-the-dashboard"
+        }))
+        .expect("latest run decodes");
+
+        assert!(run.available);
+        assert_eq!(run.id.as_deref(), Some("run-42"));
+        assert_eq!(run.success_count, 19);
+        assert_eq!(run.config_json["lookback_days"], 120);
+        assert!(
+            !serde_json::to_string(&run)
+                .expect("latest run serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            !dashboard_latest_run_from_json(JsonValue::Null)
+                .expect("no latest run is explicit")
+                .available
         );
     }
 

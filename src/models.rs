@@ -75,11 +75,11 @@ pub struct DashboardView {
     pub active_strategy_baseline: JsonValue,
     pub hermes_baseline_evidence_pack: JsonValue,
     pub markov_signals: Vec<JsonValue>,
-    pub latest_markov_run: JsonValue,
+    pub latest_markov_run: DashboardLatestRunPayload,
     pub quiver_signals: Vec<JsonValue>,
-    pub latest_quiver_run: JsonValue,
+    pub latest_quiver_run: DashboardLatestRunPayload,
     pub quiver_conflicts: JsonValue,
-    pub latest_daily_indicator_run: JsonValue,
+    pub latest_daily_indicator_run: DashboardLatestRunPayload,
     pub run_schedules: DashboardRunSchedulesPayload,
     pub performance_history: Vec<PerformanceHistoryRowPayload>,
     pub performance_summary: Option<PerformanceSummaryPayload>,
@@ -801,6 +801,25 @@ pub struct DashboardRunSchedulesPayload {
     pub quiver: DashboardRunSchedulePayload,
     pub indicators: DashboardRunSchedulePayload,
     pub performance_benchmarks: JsonValue,
+}
+
+/// Stable run-level outcome used by dashboard operational panels.
+///
+/// Config and summary documents remain staged JSON because their provider and
+/// analysis details evolve independently of the read-only run lifecycle.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DashboardLatestRunPayload {
+    pub available: bool,
+    pub id: Option<String>,
+    pub created_at: Option<String>,
+    pub run_date: String,
+    pub status: String,
+    pub asset_count: i64,
+    pub success_count: i64,
+    pub error_count: i64,
+    pub config_json: JsonValue,
+    pub summary_json: JsonValue,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

@@ -11,12 +11,12 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardAiSettingsPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
@@ -3923,12 +3923,9 @@ fn WatchlistSupportRisk(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 #[component]
 fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let run = data.latest_markov_run.clone();
-    let config = run
-        .get("config_json")
-        .cloned()
-        .unwrap_or_else(|| JsonValue::Null);
-    let ok_count = value_i64(&run, "success_count");
-    let error_count = value_i64(&run, "error_count");
+    let config = run.config_json.clone();
+    let ok_count = run.success_count;
+    let error_count = run.error_count;
     let total_pages =
         ((data.markov_signal_total + data.markov_page_size - 1) / data.markov_page_size).max(1);
     // Paging must carry the active filter, or moving to page 2 silently drops
@@ -3957,18 +3954,18 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: if error_count == 0 { "pill" } else { "pill bad" }, "Errors: {error_count}" }
                 }
             }
-            if run.is_null() {
+            if !run.available {
                 div { class: "event",
                     strong { "No Markov run exists yet." }
                     span { class: "muted", "The scheduler will create the first run after the configured daily time once Saxo chart data is available." }
                 }
             } else {
                 div { class: "mini-grid",
-                    MetricCard { label: "Run Date", value: text(&run, "run_date"), tone: "" }
-                    MetricCard { label: "Status", value: text(&run, "status"), tone: "" }
-                    MetricCard { label: "Assets", value: text(&run, "asset_count"), tone: "" }
-                    MetricCard { label: "Succeeded", value: text(&run, "success_count"), tone: "good-text" }
-                    MetricCard { label: "Failed", value: text(&run, "error_count"), tone: if value_f64(&run, "error_count") > 0.0 { "bad-text" } else { "" } }
+                    MetricCard { label: "Run Date", value: run.run_date.clone(), tone: "" }
+                    MetricCard { label: "Status", value: run.status.clone(), tone: "" }
+                    MetricCard { label: "Assets", value: run.asset_count.to_string(), tone: "" }
+                    MetricCard { label: "Succeeded", value: run.success_count.to_string(), tone: "good-text" }
+                    MetricCard { label: "Failed", value: run.error_count.to_string(), tone: if run.error_count > 0 { "bad-text" } else { "" } }
                     MetricCard { label: "Signal Horizon", value: format!("{}d", text(&config, "signal_horizon_days")), tone: "" }
                 }
                 div { class: "event",
@@ -4088,12 +4085,9 @@ fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let run = data.latest_quiver_run.clone();
     let schedule = &data.run_schedules.quiver;
-    let config = run
-        .get("config_json")
-        .cloned()
-        .unwrap_or_else(|| JsonValue::Null);
-    let ok_count = value_i64(&run, "success_count");
-    let error_count = value_i64(&run, "error_count");
+    let config = run.config_json.clone();
+    let ok_count = run.success_count;
+    let error_count = run.error_count;
     let scheduled_for = schedule.scheduled_for.clone().unwrap_or_default();
     let schedule_status = schedule
         .schedule_status
@@ -4119,18 +4113,18 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     span { class: if error_count == 0 { "pill" } else { "pill bad" }, "Errors: {error_count}" }
                 }
             }
-            if run.is_null() {
+            if !run.available {
                 div { class: "event",
                     strong { "No Quiver run exists yet." }
                     span { class: "muted", "The scheduler will create the first run at the configured US market-open follow-up once QUIVERQUANT_API_KEY is available." }
                 }
             } else {
                 div { class: "mini-grid",
-                    MetricCard { label: "Run Date", value: text(&run, "run_date"), tone: "" }
-                    MetricCard { label: "Status", value: text(&run, "status"), tone: "" }
-                    MetricCard { label: "Assets", value: text(&run, "asset_count"), tone: "" }
-                    MetricCard { label: "Succeeded", value: text(&run, "success_count"), tone: "good-text" }
-                    MetricCard { label: "Failed", value: text(&run, "error_count"), tone: if value_f64(&run, "error_count") > 0.0 { "bad-text" } else { "" } }
+                    MetricCard { label: "Run Date", value: run.run_date.clone(), tone: "" }
+                    MetricCard { label: "Status", value: run.status.clone(), tone: "" }
+                    MetricCard { label: "Assets", value: run.asset_count.to_string(), tone: "" }
+                    MetricCard { label: "Succeeded", value: run.success_count.to_string(), tone: "good-text" }
+                    MetricCard { label: "Failed", value: run.error_count.to_string(), tone: if run.error_count > 0 { "bad-text" } else { "" } }
                     MetricCard { label: "Lookback", value: format!("{}d", text(&config, "lookback_days")), tone: "" }
                 }
                 div { class: "event",
@@ -9421,12 +9415,12 @@ fn decision_pulse_operation_health(
 
 fn run_operation_health(
     label: &str,
-    run: &JsonValue,
+    run: &DashboardLatestRunPayload,
     schedule: &DashboardRunSchedulePayload,
     now: DateTime<Utc>,
 ) -> OperationHealthItem {
     let schedule_state = scheduled_run_state(schedule, now);
-    if run.is_null() {
+    if !run.available {
         let (tone, status) = match schedule_state {
             ScheduledRunState::Disabled => ("neutral", "disabled"),
             ScheduledRunState::Weekend { .. } => ("neutral", "idle (weekend)"),
@@ -9443,9 +9437,13 @@ fn run_operation_health(
             detail: scheduled_run_missing_detail(label, schedule_state),
         };
     }
-    let status = text_or(run, "status", "unknown");
-    let run_date = text(run, "run_date");
-    let error_count = value_f64(run, "error_count");
+    let status = if run.status.is_empty() {
+        "unknown".to_string()
+    } else {
+        run.status.clone()
+    };
+    let run_date = run.run_date.clone();
+    let error_count = run.error_count as f64;
     let lower_status = status.to_ascii_lowercase();
     let (tone, display) = if lower_status.contains("error") || lower_status.contains("failed") {
         ("bad", "failed")
@@ -9467,8 +9465,8 @@ fn run_operation_health(
                 run_date
             },
             status,
-            fallback_text(run, "success_count", "0"),
-            fallback_text(run, "error_count", "0"),
+            run.success_count,
+            run.error_count,
             scheduled_run_detail(schedule_state),
         ),
     }
@@ -10931,6 +10929,13 @@ mod tests {
         schedule
     }
 
+    fn latest_run_fixture(value: JsonValue) -> DashboardLatestRunPayload {
+        let mut run: DashboardLatestRunPayload =
+            serde_json::from_value(value).expect("run fixture has the typed contract");
+        run.available = true;
+        run
+    }
+
     #[test]
     fn tradingview_modals_defer_external_chart_loading_until_opened() {
         assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
@@ -12047,12 +12052,12 @@ mod tests {
             .with_timezone(&Utc);
         let partial = run_operation_health(
             "Markov",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-06-24",
                 "status": "completed",
                 "success_count": 10,
                 "error_count": 2
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -12066,12 +12071,12 @@ mod tests {
 
         let stale = run_operation_health(
             "Indicators",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-06-23",
                 "status": "completed",
                 "success_count": 12,
                 "error_count": 0
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -12091,12 +12096,12 @@ mod tests {
             .with_timezone(&Utc);
         let item = run_operation_health(
             "Markov",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-07-10",
                 "status": "completed",
                 "success_count": 20,
                 "error_count": 0
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -12118,12 +12123,12 @@ mod tests {
             .with_timezone(&Utc);
         let item = run_operation_health(
             "Quiver",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-07-11",
                 "status": "completed",
                 "success_count": 20,
                 "error_count": 0
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -12144,12 +12149,12 @@ mod tests {
             .with_timezone(&Utc);
         let item = run_operation_health(
             "Quiver",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-07-29",
                 "status": "completed",
                 "success_count": 20,
                 "error_count": 0
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -12173,12 +12178,12 @@ mod tests {
             .with_timezone(&Utc);
         let item = run_operation_health(
             "Quiver",
-            &json!({
+            &latest_run_fixture(json!({
                 "run_date": "2026-07-29",
                 "status": "completed",
                 "success_count": 20,
                 "error_count": 0
-            }),
+            })),
             &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",

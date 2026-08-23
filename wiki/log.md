@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard latest signal-run summaries
+
+- Changed Markov, Quiver, and daily-indicator operations health plus the Markov/Quiver panels to consume typed run availability, lifecycle, coverage, and success/error fields.
+- Detailed run configuration and analysis summaries remain staged JSON; absent or malformed rows become an explicit no-run state.
+- This preserves read-only run observability and performs no collector, scheduler-job, provider, Decision Report, Hermes, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard scheduled-run timing
 
 - Changed Markov, Quiver, and daily-indicator operational health and Quiver schedule display to consume typed availability, enablement, cadence, and scheduled-target metadata.
