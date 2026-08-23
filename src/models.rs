@@ -705,12 +705,28 @@ pub struct RetainedPositionSnapshotChangeEvidencePayload {
     pub interpretation: Option<String>,
 }
 
+/// Bounded aggregate-versus-position snapshot integrity envelope.
+///
+/// The diagnosis state and counts are typed, while individual mismatches and
+/// tolerance details remain compatibility JSON for a later focused conversion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotIntegrityPayload {
+    pub status: String,
+    pub checked_snapshot_count: i64,
+    pub structural_mismatch_count: i64,
+    pub structural_mismatches: Vec<JsonValue>,
+    pub broker_derived_unrealised_difference_count: i64,
+    pub broker_derived_unrealised_differences: Vec<JsonValue>,
+    pub tolerance: JsonValue,
+    pub safety: String,
+}
+
 /// Bounded retained-position snapshot evidence envelope.
 ///
 /// The selected-range coverage and retention contract is typed so callers can
 /// distinguish collecting, partial, and complete evidence without traversing
-/// arbitrary JSON. Integrity and individual historical position details remain
-/// compatibility JSON while those nested read models are converted.
+/// arbitrary JSON. Individual historical position details and mismatch rows
+/// remain compatibility JSON while those nested read models are converted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotEvidencePayload {
     pub status: String,
@@ -726,7 +742,7 @@ pub struct PerformanceSnapshotEvidencePayload {
     pub latest_snapshot: RetainedPositionSnapshotEvidencePayload,
     pub latest_change: RetainedPositionSnapshotChangeEvidencePayload,
     pub detail_retention: String,
-    pub integrity: JsonValue,
+    pub integrity: PerformanceSnapshotIntegrityPayload,
     pub safety: String,
     pub interpretation: String,
 }

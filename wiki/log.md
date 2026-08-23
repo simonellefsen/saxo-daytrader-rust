@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type Performance snapshot-integrity evidence
+
+- Extended the typed Performance snapshot-evidence boundary with aggregate-versus-position integrity status, checked count, structural mismatch count, broker-derived unrealised-P/L difference count, and safety.
+- Individual mismatch rows and tolerance details remain compatibility JSON for an independently bounded conversion. Broker-derived valuation differences remain distinct from structural mismatch status.
+- This preserves local read-only diagnostics and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type retained Performance composition-change summary
 
 - Extended Performance snapshot evidence with a typed two-snapshot change envelope: current/previous retained metadata, aggregate opened/closed/resized and unchanged counts, and stored DKK market-value/cost-basis movements.

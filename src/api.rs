@@ -2989,7 +2989,16 @@ mod tests {
                     "interpretation": "Stored comparison only.",
                 },
                 "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
-                "integrity": {"status": "aligned"},
+                "integrity": {
+                    "status": "aligned",
+                    "checked_snapshot_count": 2,
+                    "structural_mismatch_count": 0,
+                    "structural_mismatches": [],
+                    "broker_derived_unrealised_difference_count": 1,
+                    "broker_derived_unrealised_differences": [{"snapshot_id": 42}],
+                    "tolerance": {"absolute_dkk": 0.01, "relative": 0.000001},
+                    "safety": "local_aggregate_and_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+                },
                 "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
                 "interpretation": "Coverage identifies retained position evidence.",
             },
@@ -3015,6 +3024,10 @@ mod tests {
         assert_eq!(
             serialized["snapshot_evidence"]["latest_change"]["previous_snapshot"]["snapshot_id"],
             41
+        );
+        assert_eq!(
+            serialized["snapshot_evidence"]["integrity"]["broker_derived_unrealised_difference_count"],
+            1
         );
     }
 
