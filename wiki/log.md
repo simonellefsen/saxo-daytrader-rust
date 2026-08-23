@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] observability | Show latest retained position composition in Performance
+
+- Extended repairable snapshot coverage with a bounded historical composition table for the latest retained snapshot inside the selected range. It shows the stored quantity, local price, FX rate, DKK cost basis, DKK market value, and recomputed unrealised P/L for each retained position.
+- The panel is explicit that it is stored historical evidence, not a fresh Saxo portfolio read. It intentionally does not fall back to current positions when no retained composition exists, and aggregate charts/valuation retain their existing source semantics.
+- This is a local durable-snapshot projection only; it performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] observability | Show repairable portfolio-snapshot coverage in Performance
 
 - The Performance view and typed API now report selected-range aggregate snapshot coverage by retained per-position evidence. It keeps legacy aggregate-only rows explicit: they remain chartable but cannot be recomputed or repaired from detail that was never stored.

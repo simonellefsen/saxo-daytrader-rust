@@ -2792,6 +2792,20 @@ fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPref
         .get("integrity")
         .cloned()
         .unwrap_or(JsonValue::Null);
+    let latest_snapshot = evidence
+        .get("latest_snapshot")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let latest_status = text(&latest_snapshot, "status");
+    let latest_metadata = latest_snapshot
+        .get("snapshot")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let latest_items = latest_snapshot
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -2808,6 +2822,34 @@ fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPref
                 MetricCard { label: "Position rows", value: text(&evidence, "position_evidence_row_count"), tone: "" }
             }
             p { class: "muted benchmark-caveat", "Position detail: {text(&evidence, \"detail_retention\")}. Latest covered: {format_timestamp(&text(&evidence, \"latest_covered_at\"), &prefs)}. Recent integrity: {text(&integrity, \"status\")} ({text(&integrity, \"structural_mismatch_count\")} structural mismatch(es)); broker-derived unrealised P/L differences are reported separately." }
+            if latest_status == "available" {
+                div { class: "section-title-row compact",
+                    h4 { "Latest retained composition · {format_timestamp(&text(&latest_metadata, \"recorded_at\"), &prefs)}" }
+                    span { class: "muted", "{text(&latest_metadata, \"position_count\")} aggregate positions · stored evidence, not live broker positions" }
+                }
+                if latest_items.is_empty() {
+                    p { class: "muted", "This retained snapshot recorded no held positions." }
+                } else {
+                    div { class: "table-wrap",
+                        table {
+                            thead { tr { th { "Symbol" } th { "Quantity" } th { "Stored price" } th { "FX to DKK" } th { "Cost basis" } th { "Market value" } th { "Recomputed P/L" } } }
+                            tbody {
+                                for row in latest_items.iter() {
+                                    tr {
+                                        td { strong { "{text(row, \"symbol\")}" } }
+                                        td { "{format_quantity(value_f64(row, \"quantity\"), &prefs)}" }
+                                        td { "{format_number(value_f64(row, \"price_local\"), 2, &prefs)} {text(row, \"currency\")}" }
+                                        td { "{format_number(value_f64(row, \"fx_rate_to_dkk\"), 4, &prefs)}" }
+                                        td { "{format_dkk(value_f64(row, \"cost_basis_dkk\"), &prefs)}" }
+                                        td { "{format_dkk(value_f64(row, \"market_value_dkk\"), &prefs)}" }
+                                        td { class: if value_f64(row, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{format_dkk(value_f64(row, \"unrealised_pnl_dkk\"), &prefs)}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

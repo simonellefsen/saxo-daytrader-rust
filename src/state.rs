@@ -9373,10 +9373,65 @@ impl AppState {
             "position_evidence_row_count": value_i64(&row, "position_evidence_row_count"),
             "first_covered_at": row.get("first_covered_at").cloned().unwrap_or(JsonValue::Null),
             "latest_covered_at": row.get("latest_covered_at").cloned().unwrap_or(JsonValue::Null),
+            "latest_snapshot": self
+                .latest_portfolio_position_snapshot_evidence(range_key)
+                .await?,
             "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
             "integrity": self.portfolio_position_snapshot_integrity().await?,
             "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
             "interpretation": "Coverage identifies snapshots whose position detail is retained and therefore recomputable. Aggregate-only legacy snapshots remain usable for charting but cannot be repaired from position evidence. A broker-derived aggregate unrealised P/L difference is reported separately by the integrity diagnostic and is not structural corruption.",
+        }))
+    }
+
+    /// Returns the latest stored, recomputable position composition in the
+    /// selected performance range. It intentionally does not fall back to a
+    /// live broker/current-position read: this panel is historical evidence.
+    async fn latest_portfolio_position_snapshot_evidence(
+        &self,
+        range_key: &str,
+    ) -> Result<JsonValue> {
+        let range_clause = match performance_start_at(range_key) {
+            Some(start_at) => format!("AND h.recorded_at >= '{}'", sql_escape(&start_at)),
+            None => String::new(),
+        };
+        let Some(snapshot) = self
+            .first_json(&format!(
+                "SELECT h.id AS snapshot_id, h.recorded_at, h.snapshot_type, h.source,
+                        h.position_count, h.invested_market_value_dkk,
+                        h.total_cost_basis_dkk, h.total_unrealised_pnl_dkk
+                 FROM portfolio_value_history h
+                 WHERE (h.position_count = 0 OR EXISTS (
+                    SELECT 1 FROM portfolio_position_snapshots p WHERE p.snapshot_id = h.id
+                 ))
+                 {range_clause}
+                 ORDER BY h.id DESC
+                 LIMIT 1"
+            ))
+            .await?
+        else {
+            return Ok(json!({
+                "status": "collecting",
+                "items": [],
+                "safety": "local_retained_position_snapshot_read_no_provider_hermes_gate_or_order_authority",
+            }));
+        };
+        let snapshot_id = value_i64(&snapshot, "snapshot_id");
+        let items = self
+            .select_json(&format!(
+                "SELECT symbol, isin, currency, quantity, price_local, fx_rate_to_dkk,
+                        cost_basis_local, cost_basis_dkk, market_value_dkk,
+                        unrealised_pnl_dkk
+                 FROM portfolio_position_snapshots
+                 WHERE snapshot_id = {snapshot_id}
+                 ORDER BY symbol ASC"
+            ))
+            .await?;
+        Ok(json!({
+            "status": "available",
+            "snapshot": snapshot,
+            "items": items,
+            "safety": "local_retained_position_snapshot_read_no_provider_hermes_gate_or_order_authority",
+            "interpretation": "This is the latest retained per-position composition inside the selected performance range, not a live broker portfolio. DKK market value and recomputed unrealised P/L can be reproduced from the stored local price, quantity, FX rate, and cost basis.",
         }))
     }
 
@@ -17681,6 +17736,18 @@ market_data:
         assert_eq!(coverage["aggregate_snapshot_count"], json!(1));
         assert_eq!(coverage["covered_snapshot_count"], json!(1));
         assert_eq!(coverage["missing_legacy_snapshot_count"], json!(0));
+        assert_eq!(coverage["latest_snapshot"]["status"], json!("available"));
+        assert_eq!(
+            coverage["latest_snapshot"]["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            coverage["latest_snapshot"]["items"][0]["symbol"],
+            json!("EXMPL:xnas")
+        );
 
         sqlx::query(
             "INSERT INTO portfolio_value_history (
@@ -17701,6 +17768,10 @@ market_data:
         assert_eq!(partial_coverage["aggregate_snapshot_count"], json!(2));
         assert_eq!(partial_coverage["covered_snapshot_count"], json!(1));
         assert_eq!(partial_coverage["missing_legacy_snapshot_count"], json!(1));
+        assert_eq!(
+            partial_coverage["latest_snapshot"]["snapshot"]["snapshot_id"],
+            recorded["snapshot"]["id"]
+        );
     }
 
     #[test]
