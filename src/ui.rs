@@ -3102,80 +3102,47 @@ fn PerformanceRealisedSellOutcomesPanel(
             }
         };
     };
-    let outcomes = serde_json::to_value(outcomes).unwrap_or(JsonValue::Null);
-    let rows = outcomes
-        .get("recent_rows")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let symbol_attribution = outcomes
-        .get("symbol_attribution")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let currency_attribution = outcomes
-        .get("currency_attribution")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let exit_route_attribution = outcomes
-        .get("exit_route_attribution")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let available = text(&outcomes, "status") != "unavailable";
-    let status = text(&outcomes, "status");
-    let (status_label, status_tone) = match status.as_str() {
+    let available = outcomes.status != "unavailable";
+    let status = outcomes.status.as_str();
+    let (status_label, status_tone) = match status {
         "preliminary" => ("preliminary sample", "warn-status"),
         "collecting" => ("collecting evidence", "warn-status"),
         _ => ("no reconciled sales", "warn-status"),
     };
-    let money = |key: &str| {
-        outcomes
-            .get(key)
-            .and_then(JsonValue::as_f64)
+    let money = |value: Option<f64>| {
+        value
             .filter(|value| value.is_finite())
             .map(|value| format_signed_dkk(value, &prefs))
             .unwrap_or_else(|| "n/a".to_string())
     };
+    let dkk = |value: Option<f64>| {
+        value
+            .filter(|value| value.is_finite())
+            .map(|value| format_dkk(value, &prefs))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
     let ratio = outcomes
-        .get("payoff_ratio")
-        .and_then(JsonValue::as_f64)
+        .payoff_ratio
         .filter(|value| value.is_finite())
         .map(|value| crate::localization::format_number(value, 2, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let win_rate = outcomes
-        .get("win_rate")
-        .and_then(JsonValue::as_f64)
+        .win_rate
         .filter(|value| value.is_finite())
         .map(|value| format_pct(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let currency_summary = currency_attribution
+    let currency_summary = outcomes
+        .currency_attribution
         .iter()
         .map(|row| {
-            let realised_gain_dkk = row
-                .get("realised_gain_dkk")
-                .and_then(JsonValue::as_f64)
-                .filter(|value| value.is_finite())
-                .map(|value| format_signed_dkk(value, &prefs))
-                .unwrap_or_else(|| "n/a".to_string());
-            format!("{} {realised_gain_dkk}", text(row, "instrument_currency"))
+            format!(
+                "{} {}",
+                row.instrument_currency.as_deref().unwrap_or_default(),
+                format_signed_dkk(row.realised_gain_dkk, &prefs),
+            )
         })
         .collect::<Vec<_>>()
         .join(" · ");
-    let row_money = |row: &JsonValue, key: &str, signed: bool| {
-        row.get(key)
-            .and_then(JsonValue::as_f64)
-            .filter(|value| value.is_finite())
-            .map(|value| {
-                if signed {
-                    format_signed_dkk(value, &prefs)
-                } else {
-                    format_dkk(value, &prefs)
-                }
-            })
-            .unwrap_or_else(|| "n/a".to_string())
-    };
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -3191,22 +3158,22 @@ fn PerformanceRealisedSellOutcomesPanel(
                 div { class: "mini-grid",
                     MetricCard { label: "Win rate", value: win_rate, tone: "" }
                     MetricCard { label: "Payoff ratio", value: ratio, tone: "" }
-                    MetricCard { label: "Realised P/L", value: money("total_realised_gain_dkk"), tone: if value_f64(&outcomes, "total_realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
-                    MetricCard { label: "Closed-sale rows", value: format!("{} / {}", text(&outcomes, "closed_sale_count"), text(&outcomes, "sample_requirement")), tone: "" }
-                    MetricCard { label: "Commission", value: outcomes.get("total_commission_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
-                    MetricCard { label: "Tax booked", value: outcomes.get("total_tax_dkk").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
+                    MetricCard { label: "Realised P/L", value: money(outcomes.total_realised_gain_dkk), tone: match outcomes.total_realised_gain_dkk { Some(value) if value >= 0.0 => "good-text", Some(_) => "bad-text", None => "" } }
+                    MetricCard { label: "Closed-sale rows", value: format!("{} / {}", outcomes.closed_sale_count, outcomes.sample_requirement), tone: "" }
+                    MetricCard { label: "Commission", value: dkk(outcomes.total_commission_dkk), tone: "" }
+                    MetricCard { label: "Tax booked", value: dkk(outcomes.total_tax_dkk), tone: "" }
                 }
                 div { class: "table-wrap",
                     table {
                         thead { tr { th { "Symbol" } th { "Instrument currency" } th { "Closed-sale rows" } th { "Realised P/L" } th { "Commission" } } }
                         tbody {
-                            for row in symbol_attribution {
+                            for row in outcomes.symbol_attribution.iter() {
                                 tr {
-                                    td { strong { "{text(&row, \"symbol\")}" } }
-                                    td { "{text(&row, \"instrument_currency\")}" }
-                                    td { "{text(&row, \"closed_sale_count\")}" }
-                                    td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row_money(&row, \"realised_gain_dkk\", true)}" }
-                                    td { "{row_money(&row, \"commission_dkk\", false)}" }
+                                    td { strong { "{row.symbol.as_deref().unwrap_or_default()}" } }
+                                    td { "{row.instrument_currency.as_deref().unwrap_or_default()}" }
+                                    td { "{row.closed_sale_count}" }
+                                    td { class: if row.realised_gain_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_dkk(row.realised_gain_dkk, &prefs)}" }
+                                    td { "{format_dkk(row.commission_dkk, &prefs)}" }
                                 }
                             }
                         }
@@ -3215,46 +3182,50 @@ fn PerformanceRealisedSellOutcomesPanel(
                 if !currency_summary.is_empty() {
                     p { class: "muted", "Instrument-currency grouping: {currency_summary}" }
                 }
-                p { class: "muted", "Showing the top {text(&outcomes, \"shown_symbol_attribution_count\")} of {text(&outcomes, \"attributed_symbol_count\")} symbol(s) by absolute realised P/L." }
-                if !exit_route_attribution.is_empty() {
+                p { class: "muted", "Showing the top {outcomes.shown_symbol_attribution_count} of {outcomes.attributed_symbol_count} symbol(s) by absolute realised P/L." }
+                if !outcomes.exit_route_attribution.is_empty() {
                     div { class: "table-wrap",
                         table {
                             thead { tr { th { "Recorded SELL route" } th { "Link" } th { "Closed-sale rows" } th { "Realised P/L" } th { "Commission" } } }
                             tbody {
-                                for row in exit_route_attribution {
+                                for row in outcomes.exit_route_attribution.iter() {
                                     tr {
-                                        td { strong { "{text(&row, \"exit_route\")}" } }
-                                        td { "{text(&row, \"link_status\").replace('_', \" \")}" }
-                                        td { "{text(&row, \"closed_sale_count\")}" }
-                                        td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row_money(&row, \"realised_gain_dkk\", true)}" }
-                                        td { "{row_money(&row, \"commission_dkk\", false)}" }
+                                        td { strong { "{row.exit_route}" } }
+                                        td { "{sell_link_status_label(&row.link_status)}" }
+                                        td { "{row.closed_sale_count}" }
+                                        td { class: if row.realised_gain_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_dkk(row.realised_gain_dkk, &prefs)}" }
+                                        td { "{format_dkk(row.commission_dkk, &prefs)}" }
                                     }
                                 }
                             }
                         }
                     }
-                    p { class: "muted", "SELL-route provenance: {text(&outcomes, \"linked_exit_route_count\")} linked to one recorded execution order, {text(&outcomes, \"unlinked_ledger_count\")} unlinked local ledger row(s), and {text(&outcomes, \"ambiguous_exit_link_count\")} ambiguous link(s). A route describes the recorded exit only; it is not entry-strategy attribution." }
+                    p { class: "muted", "SELL-route provenance: {outcomes.linked_exit_route_count} linked to one recorded execution order, {outcomes.unlinked_ledger_count} unlinked local ledger row(s), and {outcomes.ambiguous_exit_link_count} ambiguous link(s). A route describes the recorded exit only; it is not entry-strategy attribution." }
                 }
                 div { class: "table-wrap",
                     table {
                         thead { tr { th { "Closed" } th { "Symbol" } th { "Outcome" } th { "Commission" } th { "Cost basis" } } }
                         tbody {
-                            for row in rows {
+                            for row in outcomes.recent_rows.iter() {
                                 tr {
-                                    td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
-                                    td { strong { "{text(&row, \"symbol\")}" } }
-                                    td { class: if value_f64(&row, "realised_gain_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{row.get(\"realised_gain_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_signed_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
-                                    td { "{row.get(\"commission_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_signed_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
-                                    td { "{row.get(\"cost_basis_sold_dkk\").and_then(JsonValue::as_f64).filter(|value| value.is_finite()).map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                    td { "{format_timestamp(row.created_at.as_deref().unwrap_or_default(), &prefs)}" }
+                                    td { strong { "{row.symbol}" } }
+                                    td { class: if row.realised_gain_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_dkk(row.realised_gain_dkk, &prefs)}" }
+                                    td { "{format_signed_dkk(row.commission_dkk, &prefs)}" }
+                                    td { "{format_dkk(row.cost_basis_sold_dkk, &prefs)}" }
                                 }
                             }
                         }
                     }
                 }
-                p { class: "muted benchmark-caveat", "{text(&outcomes, \"closed_sale_count\")} closed sale row(s), including partial sales, are counted independently; {text(&outcomes, \"breakeven_count\")} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {text(&outcomes, \"sample_requirement\")} rows. Holding time is unavailable because the ledger does not retain a durable FIFO lot-to-sale link; realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
+                p { class: "muted benchmark-caveat", "{outcomes.closed_sale_count} closed sale row(s), including partial sales, are counted independently; {outcomes.breakeven_count} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {outcomes.sample_requirement} rows. Holding time is unavailable because the ledger does not retain a durable FIFO lot-to-sale link; realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
             }
         }
     }
+}
+
+fn sell_link_status_label(value: &str) -> String {
+    value.replace('_', " ")
 }
 
 fn performance_confidence_badge(

@@ -10,10 +10,10 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
-## [2026-08-23] architecture | Type dashboard Performance reconciled SELL-outcome boundary
+## [2026-08-23] architecture | Type dashboard Performance reconciled SELL outcomes
 
 - Added a typed dashboard model for local reconciled SELL accounting evidence: individual rows, symbol/currency/route aggregates, collecting versus preliminary sample status, totals, and explicit evidence limitations.
-- Missing or malformed SSR evidence now fails the typed boundary before rendering; the existing detailed table intentionally remains compatibility rendering for a separately bounded presentation migration.
+- The detailed panel now consumes that typed model directly; missing or malformed SSR evidence renders an explicit unavailable state without fabricating accounting results.
 - This preserves read-only Performance accounting evidence and performs no Saxo provider request, Hermes, decision-gate, queue, precheck, or broker-order action.
 
 ## [2026-08-23] architecture | Type dashboard Performance stored-exposure attribution
