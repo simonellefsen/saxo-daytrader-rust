@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use serde_json::Value as JsonValue;
 
 use crate::{
+    auth::SsoSession,
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
     localization::{
         LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
@@ -340,18 +341,16 @@ fn Dashboard(props: DashboardProps) -> Element {
     // checked by the Rust compiler before the binary can run.
     let data = props.data;
     let prefs = data.localization.clone();
-    let sso_user = data
+    let sso_label = data
         .sso_session
-        .get("user")
-        .and_then(JsonValue::as_object)
-        .cloned();
-    let sso_label = sso_user
+        .user
         .as_ref()
-        .and_then(|user| user.get("name").and_then(JsonValue::as_str))
-        .or_else(|| {
-            sso_user
-                .as_ref()
-                .and_then(|user| user.get("email").and_then(JsonValue::as_str))
+        .map(|user| {
+            if user.name.is_empty() {
+                user.email.as_str()
+            } else {
+                user.name.as_str()
+            }
         })
         .unwrap_or("Not signed in through SSO")
         .to_string();
@@ -450,26 +449,22 @@ fn Dashboard(props: DashboardProps) -> Element {
 
 #[component]
 fn UserMenu(
-    sso_session: JsonValue,
+    sso_session: SsoSession,
     prefs: LocalizationPrefs,
     active_view: String,
     range: String,
     ai_settings: JsonValue,
 ) -> Element {
-    let user = sso_session
-        .get("user")
-        .and_then(JsonValue::as_object)
-        .cloned()
+    let email = sso_session
+        .user
+        .as_ref()
+        .map(|user| user.email.clone())
         .unwrap_or_default();
-    let email = user
-        .get("email")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .to_string();
-    let name = user
-        .get("name")
-        .and_then(JsonValue::as_str)
-        .filter(|value| !value.is_empty())
+    let name = sso_session
+        .user
+        .as_ref()
+        .map(|user| user.name.trim())
+        .filter(|name| !name.is_empty())
         .unwrap_or("SSO user")
         .to_string();
     let initials = initials_for_name(&name, &email);

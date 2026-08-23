@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard SSO session
+
+- Changed the top-bar identity and settings menu to use the existing typed header-derived SSO session directly.
+- The dashboard retains only the authenticated flag and optional name/email; localization persistence remains on its separate request compatibility boundary.
+- This preserves read-only identity display and performs no ngrok OAuth/SSO, user-settings, Saxo, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard sanitized Saxo session status
 
 - Changed the dashboard and Operations health panel to consume a typed display-only Saxo session-status contract.

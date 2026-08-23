@@ -5298,7 +5298,7 @@ impl AppState {
     pub async fn dashboard_view(
         &self,
         localization: LocalizationPrefs,
-        sso_session: JsonValue,
+        sso_session: auth::SsoSession,
         active_view: String,
         performance_range: String,
         selected_report_id: Option<i64>,

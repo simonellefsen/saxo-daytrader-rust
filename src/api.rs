@@ -227,11 +227,12 @@ async fn index(
     Query(params): Query<ViewParams>,
 ) -> Html<String> {
     // `State(...)` unwraps the shared app state that was attached to the router.
-    let sso_session = json!(SsoSession::from_headers(&headers));
+    let sso_session = SsoSession::from_headers(&headers);
+    let sso_session_value = json!(sso_session);
     let localization = state
         .localization_for_user(
             LocalizationPrefs::from_headers_and_config(&headers, &state.config),
-            &sso_session,
+            &sso_session_value,
         )
         .await;
     let active_view = normalize_view(params.view.as_deref());

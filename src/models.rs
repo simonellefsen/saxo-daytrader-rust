@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::localization::LocalizationPrefs;
+use crate::{auth::SsoSession, localization::LocalizationPrefs};
 
 // Rust structs play the same role as typed objects/interfaces in TypeScript.
 // `derive` asks the compiler to generate standard behavior, like cloning and
@@ -29,7 +29,7 @@ pub struct DashboardView {
     pub execution_adapter: String,
     pub saxo_status: String,
     pub saxo_auth: DashboardSaxoAuthPayload,
-    pub sso_session: JsonValue,
+    pub sso_session: SsoSession,
     pub ai_settings: JsonValue,
     pub localization: LocalizationPrefs,
     pub active_view: String,
