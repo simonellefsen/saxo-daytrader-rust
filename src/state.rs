@@ -2867,6 +2867,7 @@ fn tuning_pulse_comparison_from_rows(
             shadow_repeated_candidate_count: 0,
             shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
+            shadow_reference_unavailable_retroactive_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
             twenty_session_outcome_count: 0,
@@ -2888,6 +2889,7 @@ fn tuning_pulse_comparison_from_rows(
             shadow_repeated_candidate_count: 0,
             shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
+            shadow_reference_unavailable_retroactive_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
             twenty_session_outcome_count: 0,
@@ -2909,6 +2911,7 @@ fn tuning_pulse_comparison_from_rows(
             shadow_repeated_candidate_count: 0,
             shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
+            shadow_reference_unavailable_retroactive_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
             twenty_session_outcome_count: 0,
@@ -2930,6 +2933,7 @@ fn tuning_pulse_comparison_from_rows(
             shadow_repeated_candidate_count: 0,
             shadow_candidate_novelty_rate: None,
             shadow_reference_captured_count: 0,
+            shadow_reference_unavailable_retroactive_count: 0,
             one_session_outcome_count: 0,
             five_session_outcome_count: 0,
             twenty_session_outcome_count: 0,
@@ -2988,6 +2992,8 @@ fn tuning_pulse_comparison_from_rows(
         }
         if json_text(row, "reference_price_source") == "saxo_infoprices" {
             pulse.shadow_reference_captured_count += 1;
+        } else if json_text(row, "reference_price_source") == "not_captured_retroactively" {
+            pulse.shadow_reference_unavailable_retroactive_count += 1;
         }
         if !decode_shadow_json_field(row.get("one_session_outcome_json")).is_null() {
             pulse.one_session_outcome_count += 1;
@@ -3012,6 +3018,10 @@ fn tuning_pulse_comparison_from_rows(
         }
         if pulse.shadow_candidate_count == 0 {
             pulse.outcome_status = "awaiting_shadow_candidates".to_string();
+        } else if pulse.shadow_reference_captured_count == 0
+            && pulse.shadow_reference_unavailable_retroactive_count == pulse.shadow_candidate_count
+        {
+            pulse.outcome_status = "historical_reference_unavailable".to_string();
         } else if pulse.shadow_reference_captured_count == 0 {
             pulse.outcome_status = "awaiting_saxo_reference_quote".to_string();
         } else {
@@ -19124,6 +19134,31 @@ market_data:
         assert_eq!(us_shadow.five_session_after_cost_positive_rate, Some(0.6));
         assert_eq!(us_shadow.maturity, "mature");
         assert_eq!(us_shadow.outcome_status, "observational_shadow_outcomes");
+
+        let retroactive = tuning_pulse_comparison_from_rows(
+            &[json!({
+                "analysis_pulse_key": "us_mid_session_shadow:2026-08-21",
+                "status": "completed",
+            })],
+            &[json!({
+                "analysis_pulse_key": "us_mid_session_shadow:2026-08-21",
+                "reference_price_source": "not_captured_retroactively",
+            })],
+        );
+        let retroactive_us = retroactive
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("retroactive US shadow pulse");
+        assert_eq!(retroactive_us.shadow_candidate_count, 1);
+        assert_eq!(retroactive_us.shadow_reference_captured_count, 0);
+        assert_eq!(
+            retroactive_us.shadow_reference_unavailable_retroactive_count,
+            1
+        );
+        assert_eq!(
+            retroactive_us.outcome_status,
+            "historical_reference_unavailable"
+        );
 
         let changes = tuning_shadow_change_evidence_from_rows(&reports);
         let us_changes = changes

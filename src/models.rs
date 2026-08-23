@@ -139,6 +139,7 @@ pub struct TuningPulseComparison {
     pub shadow_repeated_candidate_count: i64,
     pub shadow_candidate_novelty_rate: Option<f64>,
     pub shadow_reference_captured_count: i64,
+    pub shadow_reference_unavailable_retroactive_count: i64,
     pub one_session_outcome_count: i64,
     pub five_session_outcome_count: i64,
     pub twenty_session_outcome_count: i64,

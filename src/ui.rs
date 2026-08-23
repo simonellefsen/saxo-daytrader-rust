@@ -818,7 +818,7 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         th { "Terminal success" }
                         th { "Shadow candidates" }
                         th { "Novel vs opening" }
-                        th { "Reference quotes" }
+                        th { "Reference evidence" }
                         th { "1 / 5 / 20 sessions" }
                         th { "5-session after-cost" }
                         th { "Maturity" }
@@ -1894,6 +1894,15 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
         .unwrap_or_else(|| "n/a".to_string());
     let authority = pulse.authority.replace('_', " ");
     let outcome_status = pulse.outcome_status.replace('_', " ");
+    let reference_evidence = if pulse.authority != "shadow_observation_only" {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{} captured / {} historical unavailable",
+            pulse.shadow_reference_captured_count,
+            pulse.shadow_reference_unavailable_retroactive_count,
+        )
+    };
     let novelty = if pulse.authority != "shadow_observation_only"
         || pulse.shadow_comparable_candidate_count == 0
     {
@@ -1919,7 +1928,7 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
             td { "{pulse.terminal_success_count} · {success_rate}" }
             td { "{pulse.shadow_candidate_count}" }
             td { "{novelty}" }
-            td { "{pulse.shadow_reference_captured_count}" }
+            td { "{reference_evidence}" }
             td { "{pulse.one_session_outcome_count} / {pulse.five_session_outcome_count} / {pulse.twenty_session_outcome_count}" }
             td { "{pulse.five_session_after_cost_count} · {after_cost_positive_rate}" }
             td {
