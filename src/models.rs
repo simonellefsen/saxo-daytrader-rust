@@ -94,7 +94,7 @@ pub struct DashboardView {
     pub market_status: MarketStatusPayload,
     pub trading_manager: TradingManagerPayload,
     pub watchlists: MarketWatchlistsPayload,
-    pub latest_decision: JsonValue,
+    pub latest_decision: LatestDecisionStatusPayload,
     pub selected_decision: JsonValue,
     pub decision_gate_replay: DecisionGateReplayPayload,
     pub tuning: TuningPayload,
@@ -697,6 +697,20 @@ pub struct ProtectiveStopCoveragePayload {
     pub recent_lifecycle_tests: Vec<JsonValue>,
     pub safety: String,
     pub interpretation: String,
+}
+
+/// Stable latest-Decision-Report metadata used across dashboard tabs.
+///
+/// The normalized report and provider-shaped detail remain staged JSON in the
+/// Decisions view. This compact status never generates a report or changes
+/// Trading Manager or broker behavior.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LatestDecisionStatusPayload {
+    pub id: Option<i64>,
+    pub created_at: Option<String>,
+    pub status: Option<String>,
+    pub model: Option<String>,
+    pub error_text: Option<String>,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

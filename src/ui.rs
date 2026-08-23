@@ -10,8 +10,8 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, DecisionGateReplayPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        DashboardView, DecisionGateReplayPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -4265,7 +4265,7 @@ fn QuiverSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 #[component]
 fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let report = if data.selected_decision.is_null() {
-        data.latest_decision.clone()
+        latest_decision_status_as_json(&data.latest_decision)
     } else {
         data.selected_decision.clone()
     };
@@ -5619,17 +5619,19 @@ fn DecisionReportRow(row: JsonValue, prefs: LocalizationPrefs, selected_id: i64)
 #[component]
 fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let latest = data.latest_decision.clone();
-    let report_id = latest.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
+    let report_id = latest.id.unwrap_or(0);
+    let created_at = latest.created_at.as_deref().unwrap_or("");
+    let status = latest.status.as_deref().unwrap_or("");
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
                 div {
                     h2 { "AI Prompts" }
-                    p { class: "muted", "Runtime prompt previews for the Decision Report, Trading Manager, and end-of-day diary. Generated {format_timestamp(&text(&latest, \"created_at\"), &prefs)}." }
+                    p { class: "muted", "Runtime prompt previews for the Decision Report, Trading Manager, and end-of-day diary. Generated {format_timestamp(created_at, &prefs)}." }
                 }
                 div { class: "pill-row right",
-                    span { class: "pill", "Decision #{text(&latest, \"id\")}" }
-                    span { class: "pill", "{text(&latest, \"status\")}" }
+                    span { class: "pill", "Decision #{report_id}" }
+                    span { class: "pill", "{status}" }
                 }
             }
             div { class: "notice-banner good-banner",
@@ -10862,18 +10864,29 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 /// Health pill for the decision engine derived from the latest report.
 /// Credit/spending-limit failures get their own label because they need
 /// operator action (top up xAI credits) rather than a code fix.
-fn decision_health(latest_decision: &JsonValue) -> (&'static str, String) {
-    let status = latest_decision
-        .get("status")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
+fn latest_decision_status_as_json(latest: &LatestDecisionStatusPayload) -> JsonValue {
+    if latest.id.is_none() {
+        JsonValue::Null
+    } else {
+        serde_json::json!({
+            "id": latest.id,
+            "created_at": latest.created_at,
+            "status": latest.status,
+            "model": latest.model,
+            "error_text": latest.error_text,
+        })
+    }
+}
+
+fn decision_health(latest_decision: &LatestDecisionStatusPayload) -> (&'static str, String) {
+    let status = latest_decision.status.as_deref().unwrap_or("");
     match status {
         "completed" | "xai_fallback" => ("pill good", "Decisions: OK".to_string()),
         "pending" | "xai_deferred" => ("pill", "Decisions: Pending".to_string()),
         "xai_error" => {
             let error_text = latest_decision
-                .get("error_text")
-                .and_then(JsonValue::as_str)
+                .error_text
+                .as_deref()
                 .unwrap_or("")
                 .to_lowercase();
             if error_text.contains("credits") || error_text.contains("spending limit") {
@@ -12506,37 +12519,45 @@ mod tests {
 
     #[test]
     fn derives_decision_health_pill_from_latest_report() {
-        let (class, label) = decision_health(&json!({"status": "completed"}));
+        let decision = |status: &str, error_text: Option<&str>| LatestDecisionStatusPayload {
+            status: Some(status.to_string()),
+            error_text: error_text.map(ToString::to_string),
+            ..LatestDecisionStatusPayload::default()
+        };
+
+        let (class, label) = decision_health(&decision("completed", None));
         assert_eq!(class, "pill good");
         assert_eq!(label, "Decisions: OK");
 
-        let (class, label) = decision_health(&json!({"status": "xai_fallback"}));
+        let (class, label) = decision_health(&decision("xai_fallback", None));
         assert_eq!(class, "pill good");
         assert_eq!(label, "Decisions: OK");
 
-        let (class, label) = decision_health(&json!({
-            "status": "xai_error",
-            "error_text": "xAI deferred submit failed with HTTP 403 Forbidden: {\"code\":\"permission-denied\",\"error\":\"Your team has either used all available credits or reached its monthly spending limit.\"}"
-        }));
+        let (class, label) = decision_health(&decision(
+            "xai_error",
+            Some(
+                "xAI deferred submit failed with HTTP 403 Forbidden: {\"code\":\"permission-denied\",\"error\":\"Your team has either used all available credits or reached its monthly spending limit.\"}",
+            ),
+        ));
         assert_eq!(class, "pill bad");
         assert_eq!(label, "Decisions: xAI out of credits");
 
-        let (class, label) = decision_health(&json!({
-            "status": "xai_error",
-            "error_text": "xAI deferred submit failed with HTTP 500"
-        }));
+        let (class, label) = decision_health(&decision(
+            "xai_error",
+            Some("xAI deferred submit failed with HTTP 500"),
+        ));
         assert_eq!(class, "pill bad");
         assert_eq!(label, "Decisions: xAI error");
 
-        let (class, label) = decision_health(&json!({"status": "pending"}));
+        let (class, label) = decision_health(&decision("pending", None));
         assert_eq!(class, "pill");
         assert_eq!(label, "Decisions: Pending");
 
-        let (class, label) = decision_health(&json!({"status": "xai_deferred"}));
+        let (class, label) = decision_health(&decision("xai_deferred", None));
         assert_eq!(class, "pill");
         assert_eq!(label, "Decisions: Pending");
 
-        let (class, label) = decision_health(&JsonValue::Null);
+        let (class, label) = decision_health(&LatestDecisionStatusPayload::default());
         assert_eq!(class, "pill");
         assert_eq!(label, "Decisions: None yet");
     }

@@ -38,8 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionGateReplayPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3196,6 +3196,18 @@ fn dashboard_protective_stop_coverage_not_loaded() -> ProtectiveStopCoveragePayl
     }
 }
 
+/// Decodes compact latest-report metadata used outside the detailed Decisions
+/// view. Full Decision Report detail remains staged JSON.
+fn dashboard_latest_decision_from_json(
+    decision: JsonValue,
+) -> serde_json::Result<LatestDecisionStatusPayload> {
+    if decision.is_null() {
+        Ok(LatestDecisionStatusPayload::default())
+    } else {
+        serde_json::from_value(decision)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -6000,6 +6012,11 @@ impl AppState {
         } else {
             reports.first().cloned().unwrap_or(JsonValue::Null)
         };
+        let latest_decision =
+            dashboard_latest_decision_from_json(latest_decision).unwrap_or_else(|err| {
+                warn!("dashboard typed latest decision degraded: {err:#}");
+                LatestDecisionStatusPayload::default()
+            });
         let summary = overview
             .get("portfolio_summary")
             .and_then(JsonValue::as_object)
@@ -16842,6 +16859,28 @@ mod tests {
         assert!(
             dashboard_protective_stop_coverage_from_json(json!({"status": "covered"})).is_err()
         );
+    }
+
+    #[test]
+    fn dashboard_latest_decision_requires_stable_status_metadata() {
+        let latest = dashboard_latest_decision_from_json(json!({
+            "id": 312,
+            "created_at": "2026-08-23T12:00:00Z",
+            "status": "completed",
+            "model": "openai/gpt-5",
+            "error_text": null
+        }))
+        .expect("latest decision fixture has the dashboard contract");
+
+        assert_eq!(latest.id, Some(312));
+        assert_eq!(latest.status.as_deref(), Some("completed"));
+        assert!(
+            dashboard_latest_decision_from_json(JsonValue::Null)
+                .expect("absent latest decision is explicit")
+                .id
+                .is_none()
+        );
+        assert!(dashboard_latest_decision_from_json(json!({"status": 42})).is_err());
     }
 
     #[test]

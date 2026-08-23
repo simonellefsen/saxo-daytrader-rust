@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard latest-Decision status
+
+- Changed the global Decision health badge and AI Prompts view to consume typed latest-report ID, timestamp, status, model, and error metadata directly.
+- Detailed normalized/provider report data remains compatibility JSON; absent or malformed metadata becomes an explicit no-report state.
+- This preserves read-only status rendering and performs no report generation, Trading Manager, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Protective Stop Coverage consumption
 
 - Changed the Execution tab's protective-stop audit panel to consume typed coverage status, summary, position/exception/test list boundaries, safety, and interpretation directly.
