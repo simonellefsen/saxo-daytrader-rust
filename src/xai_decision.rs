@@ -828,7 +828,12 @@ async fn backfill_completed_shadow_report_outcomes(state: &AppState) -> Result<J
     }))
 }
 
-fn shadow_report_has_recordable_candidates(report: &JsonValue) -> bool {
+/// Shared eligibility rule for record-only shadow outcome baselines.
+///
+/// The Tuning view uses this same pure predicate to distinguish a completed
+/// report with no candidate from one whose outcome-ledger rows are missing.
+/// It has no provider, Hermes, queue, or broker authority.
+pub(crate) fn shadow_report_has_recordable_candidates(report: &JsonValue) -> bool {
     report
         .get("suggested_trades")
         .or_else(|| {

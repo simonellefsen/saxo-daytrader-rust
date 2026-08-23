@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-20
+updated: 2026-08-23
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-23] observability | Surface shadow outcome-ledger integrity in Tuning
+
+- The existing shadow pulse table now separates ordinary collection from a completed candidate report that has no corresponding `shadow_report_outcomes` rows. It uses the same pure BUY/SELL/positive-quantity predicate as the bounded scheduler repair, so UI coverage cannot silently drift from ledger eligibility.
+- Reference evidence now states captured, retroactively unavailable, awaiting-reference, and missing-ledger counts. A missing ledger report is labelled `shadow_outcome_ledger_gap`; an existing row awaiting its immediate quote remains the distinct, non-terminal `awaiting_saxo_reference_quote` state.
+- The projection reads only persisted decision-report and shadow-outcome rows. It neither calls Saxo nor invokes a provider, Hermes, gates, queues, prechecks, or order mutations.
 
 ## [2026-08-20] observability | Add the first typed Tuning pulse comparison
 

@@ -2862,6 +2862,9 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_candidate_report_count: 0,
+            shadow_reports_missing_outcome_count: 0,
+            shadow_awaiting_reference_count: 0,
             shadow_comparable_candidate_count: 0,
             shadow_new_candidate_count: 0,
             shadow_repeated_candidate_count: 0,
@@ -2884,6 +2887,9 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_candidate_report_count: 0,
+            shadow_reports_missing_outcome_count: 0,
+            shadow_awaiting_reference_count: 0,
             shadow_comparable_candidate_count: 0,
             shadow_new_candidate_count: 0,
             shadow_repeated_candidate_count: 0,
@@ -2906,6 +2912,9 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_candidate_report_count: 0,
+            shadow_reports_missing_outcome_count: 0,
+            shadow_awaiting_reference_count: 0,
             shadow_comparable_candidate_count: 0,
             shadow_new_candidate_count: 0,
             shadow_repeated_candidate_count: 0,
@@ -2928,6 +2937,9 @@ fn tuning_pulse_comparison_from_rows(
             terminal_success_count: 0,
             terminal_success_rate: None,
             shadow_candidate_count: 0,
+            shadow_candidate_report_count: 0,
+            shadow_reports_missing_outcome_count: 0,
+            shadow_awaiting_reference_count: 0,
             shadow_comparable_candidate_count: 0,
             shadow_new_candidate_count: 0,
             shadow_repeated_candidate_count: 0,
@@ -2943,19 +2955,46 @@ fn tuning_pulse_comparison_from_rows(
             outcome_status: "awaiting_shadow_candidates".to_string(),
         },
     ];
+    let mut shadow_candidate_report_ids = [
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+    ];
+    let mut shadow_outcome_report_ids = [
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+        HashSet::<i64>::new(),
+    ];
     for row in report_rows {
         let Some(kind) = tuning_pulse_kind(&json_text(row, "analysis_pulse_key")) else {
             continue;
         };
-        let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.pulse_key == kind) else {
+        let Some(index) = pulses.iter().position(|pulse| pulse.pulse_key == kind) else {
             continue;
         };
-        pulse.report_count += 1;
-        if matches!(
-            json_text(row, "status").as_str(),
-            "completed" | "xai_fallback"
-        ) {
-            pulse.terminal_success_count += 1;
+        let is_shadow = {
+            let pulse = &mut pulses[index];
+            pulse.report_count += 1;
+            if matches!(
+                json_text(row, "status").as_str(),
+                "completed" | "xai_fallback"
+            ) {
+                pulse.terminal_success_count += 1;
+            }
+            pulse.authority == "shadow_observation_only"
+        };
+        let report_id = value_i64(row, "id");
+        let report_json = decode_shadow_json_field(row.get("report_json"));
+        if is_shadow
+            && json_text(row, "status") == "completed"
+            && report_id > 0
+            && crate::xai_decision::shadow_report_has_recordable_candidates(&report_json)
+        {
+            if shadow_candidate_report_ids[index].insert(report_id) {
+                pulses[index].shadow_candidate_report_count += 1;
+            }
         }
     }
     for pulse in &mut pulses {
@@ -2977,7 +3016,14 @@ fn tuning_pulse_comparison_from_rows(
         if pulse.authority != "shadow_observation_only" {
             continue;
         }
+        let report_id = value_i64(row, "report_id");
+        if report_id > 0 {
+            shadow_outcome_report_ids[index].insert(report_id);
+        }
         pulse.shadow_candidate_count += 1;
+        if json_text(row, "status") == "awaiting_reference" {
+            pulse.shadow_awaiting_reference_count += 1;
+        }
         if value_i64(row, "earlier_pulse_report_id") > 0 {
             pulse.shadow_comparable_candidate_count += 1;
             if row
@@ -3016,8 +3062,15 @@ fn tuning_pulse_comparison_from_rows(
         if pulse.authority != "shadow_observation_only" {
             continue;
         }
-        if pulse.shadow_candidate_count == 0 {
+        pulse.shadow_reports_missing_outcome_count = shadow_candidate_report_ids[index]
+            .difference(&shadow_outcome_report_ids[index])
+            .count() as i64;
+        if pulse.shadow_reports_missing_outcome_count > 0 {
+            pulse.outcome_status = "shadow_outcome_ledger_gap".to_string();
+        } else if pulse.shadow_candidate_count == 0 {
             pulse.outcome_status = "awaiting_shadow_candidates".to_string();
+        } else if pulse.shadow_awaiting_reference_count > 0 {
+            pulse.outcome_status = "awaiting_saxo_reference_quote".to_string();
         } else if pulse.shadow_reference_captured_count == 0
             && pulse.shadow_reference_unavailable_retroactive_count == pulse.shadow_candidate_count
         {
@@ -5579,7 +5632,7 @@ impl AppState {
             OR analysis_pulse_key LIKE 'us_mid_session_shadow:%')";
         let report_rows = self
             .select_json(&format!(
-                "SELECT analysis_pulse_key, status, report_json
+                "SELECT id, analysis_pulse_key, status, report_json
                  FROM decision_reports
                  WHERE created_at >= '{}' AND {pulse_filter}",
                 sql_escape(&window_start_text),
@@ -5587,7 +5640,8 @@ impl AppState {
             .await?;
         let shadow_rows = self
             .select_json(&format!(
-                "SELECT analysis_pulse_key, earlier_pulse_report_id, appeared_in_earlier_pulse,
+                "SELECT report_id, analysis_pulse_key, status,
+                        earlier_pulse_report_id, appeared_in_earlier_pulse,
                         deterministic_gate_code, deterministic_gate_json,
                         hermes_effect, hermes_advice_snapshot_json, approved_policy_source,
                         report_time_context_json,
@@ -5745,7 +5799,7 @@ impl AppState {
             monthly_goal_progress,
             benchmark_comparison,
             safety: "read_only_local_decision_reports_execution_orders_fills_ledger_daily_closes_and_shadow_outcome_ledger_no_provider_hermes_broker_gate_or_order_mutation".to_string(),
-            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The one-month account-value outcome lane is simple local snapshot movement including cash, with visible freshness and no realised-P/L, time-weighted-return, or total-return claim. Its calendar-month target context is a separately labelled configured DKK planning reference, with an active-batch baseline and the same non-realised/non-normalized limits. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
+            interpretation: "This view compares report reliability, separately-labelled execution evidence, and shadow-observation coverage. The shadow reference lane also distinguishes a completed eligible report without any local outcome-ledger row from a row still awaiting its immediate read-only quote; it is an integrity observation, not a retry or an alert action. The shadow-change table uses only the server-normalized report assessment: candidate count does not determine material change or no-new-information status, and the no-new-information rate excludes reports without an opening reference. Support/Risk, Markov, and Quiver are saved decision-time context and coverage summaries, not forecasts or gates; neither Markov nor Quiver is rerun here. The shadow signal-gate table is a bounded replay over persisted decision-time technical/Markov evidence, and the Hermes table reports separately persisted record-only advice coverage; neither is a Trading Manager approval, broker precheck, or execution simulation. The one-month account-value outcome lane is simple local snapshot movement including cash, with visible freshness and no realised-P/L, time-weighted-return, or total-return claim. Its calendar-month target context is a separately labelled configured DKK planning reference, with an active-batch baseline and the same non-realised/non-normalized limits. The separately labelled thesis lane is bounded to newest recorded BUY theses rather than the 30-day pulse window and reports gross directional observations, not realised P/L. Experiment governance is a retained lifecycle inventory only: it does not expose proposal values, measure performance, or activate anything. Benchmark comparison is a separate one-month local account-value versus stored native-currency ETF proxy price-return view, with explicit alignment/freshness and non-total-return caveats. Shadow 1/5/20-session and after-cost fields are equal-weighted quote-to-close evidence, never realised P/L, fill quality, or a trading recommendation. Execution BUY directional movement, reconciled SELL accounting, local candidate-funnel counts, and persisted lifecycle statuses are separately labelled; no execution field is blended with shadow observations or treated as a current broker poll. Protective-stop coverage is a separate current local snapshot and counts only broker-confirmed stop evidence.".to_string(),
         })
     }
 
@@ -19225,6 +19279,50 @@ market_data:
         assert_eq!(eu_shadow.shadow_new_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_repeated_candidate_count, 0);
         assert_eq!(eu_shadow.shadow_candidate_novelty_rate, None);
+    }
+
+    #[test]
+    fn tuning_shadow_outcome_integrity_separates_missing_ledger_from_pending_quote() {
+        let reports = [json!({
+            "id": 71,
+            "analysis_pulse_key": "us_mid_session_shadow:2026-08-24",
+            "status": "completed",
+            "report_json": {
+                "suggested_trades": [{
+                    "symbol": "MSFT:xnas",
+                    "action": "BUY",
+                    "quantity": 2,
+                }],
+            },
+        })];
+
+        let missing = tuning_pulse_comparison_from_rows(&reports, &[]);
+        let missing_us = missing
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow pulse with missing ledger");
+        assert_eq!(missing_us.shadow_candidate_report_count, 1);
+        assert_eq!(missing_us.shadow_reports_missing_outcome_count, 1);
+        assert_eq!(missing_us.shadow_awaiting_reference_count, 0);
+        assert_eq!(missing_us.outcome_status, "shadow_outcome_ledger_gap");
+
+        let pending = tuning_pulse_comparison_from_rows(
+            &reports,
+            &[json!({
+                "report_id": 71,
+                "analysis_pulse_key": "us_mid_session_shadow:2026-08-24",
+                "status": "awaiting_reference",
+                "reference_price_source": "awaiting_saxo_infoprice",
+            })],
+        );
+        let pending_us = pending
+            .iter()
+            .find(|pulse| pulse.pulse_key == "us_mid_session_shadow")
+            .expect("US shadow pulse awaiting quote");
+        assert_eq!(pending_us.shadow_candidate_report_count, 1);
+        assert_eq!(pending_us.shadow_reports_missing_outcome_count, 0);
+        assert_eq!(pending_us.shadow_awaiting_reference_count, 1);
+        assert_eq!(pending_us.outcome_status, "awaiting_saxo_reference_quote");
     }
 
     #[test]

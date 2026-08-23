@@ -818,7 +818,7 @@ fn TuningView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         th { "Terminal success" }
                         th { "Shadow candidates" }
                         th { "Novel vs opening" }
-                        th { "Reference evidence" }
+                        th { "Reference evidence / integrity" }
                         th { "1 / 5 / 20 sessions" }
                         th { "5-session after-cost" }
                         th { "Maturity" }
@@ -1898,9 +1898,11 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
         "n/a".to_string()
     } else {
         format!(
-            "{} captured / {} historical unavailable",
+            "{} captured / {} historical unavailable / {} awaiting / {} ledger gap",
             pulse.shadow_reference_captured_count,
             pulse.shadow_reference_unavailable_retroactive_count,
+            pulse.shadow_awaiting_reference_count,
+            pulse.shadow_reports_missing_outcome_count,
         )
     };
     let novelty = if pulse.authority != "shadow_observation_only"
@@ -1928,7 +1930,10 @@ fn TuningPulseComparisonRow(pulse: TuningPulseComparison, prefs: LocalizationPre
             td { "{pulse.terminal_success_count} · {success_rate}" }
             td { "{pulse.shadow_candidate_count}" }
             td { "{novelty}" }
-            td { "{reference_evidence}" }
+            td {
+                "{reference_evidence}"
+                small { class: "muted block", "{outcome_status}" }
+            }
             td { "{pulse.one_session_outcome_count} / {pulse.five_session_outcome_count} / {pulse.twenty_session_outcome_count}" }
             td { "{pulse.five_session_after_cost_count} · {after_cost_positive_rate}" }
             td {
