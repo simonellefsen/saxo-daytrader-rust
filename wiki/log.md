@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type latest Performance benchmark run
+
+- Typed the optional persisted benchmark-run metadata: identity, creation time, run date, status, and configured-reference/success/error counts. No run remains an explicit null for disabled and pre-sync states.
+- This is local operational coverage evidence only; it neither changes proxy returns nor introduces a benchmark, Hermes, decision, manager, or broker input.
+- This preserves read-only Performance behavior and performs no Saxo provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type selected-range Performance history rows
 
 - Typed the fixed local account-value observation fields: record time, snapshot type, nullable historical source, DKK aggregate/invested/cash/cost-basis/unrealised/daily-P&L values, and position count.

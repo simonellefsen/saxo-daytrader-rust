@@ -912,15 +912,29 @@ pub struct PerformanceBenchmarkReferencePayload {
     pub freshness: Option<String>,
 }
 
+/// One persisted local benchmark refresh run.
+///
+/// This is operational coverage evidence only; it does not change proxy
+/// returns, decision context, or execution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceBenchmarkRunPayload {
+    pub id: String,
+    pub created_at: String,
+    pub run_date: String,
+    pub status: String,
+    pub reference_count: i64,
+    pub success_count: i64,
+    pub error_count: i64,
+}
+
 /// Read-only selected-range comparison against configured ETF price proxies.
 ///
-/// The optional comparison fields preserve disabled and collecting states. A
-/// completed benchmark run remains compatibility JSON because it is persisted
-/// run evidence rather than a stable public read-model contract.
+/// The optional comparison fields and latest run preserve disabled and
+/// collecting states.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceBenchmarksPayload {
     pub status: String,
-    pub latest_run: Option<JsonValue>,
+    pub latest_run: Option<PerformanceBenchmarkRunPayload>,
     pub portfolio_baseline_at: Option<String>,
     pub portfolio_latest_at: Option<String>,
     pub portfolio_return_pct: Option<f64>,
@@ -955,11 +969,9 @@ pub struct PerformanceHistoryRowPayload {
 
 /// Bounded performance envelope.
 ///
-/// The persisted benchmark-run evidence remains compatibility JSON while the
-/// performance read model is converted incrementally. History rows,
-/// selected-range summary, benchmark comparison, and local goal tracking are
-/// typed projections. This does not change performance collection or any
-/// decision/execution behavior.
+/// History rows, selected-range summary, benchmark comparison, and local goal
+/// tracking are typed projections. This does not change performance collection
+/// or any decision/execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformancePayload {
     pub range_key: String,

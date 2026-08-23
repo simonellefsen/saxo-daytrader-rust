@@ -2959,7 +2959,15 @@ mod tests {
             },
             "benchmarks": {
                 "status": "partial",
-                "latest_run": {"status": "partial", "run_date": "2026-08-01"},
+                "latest_run": {
+                    "id": "performance-benchmarks-42",
+                    "created_at": "2026-08-01T22:15:00Z",
+                    "run_date": "2026-08-01",
+                    "status": "partial",
+                    "reference_count": 2,
+                    "success_count": 1,
+                    "error_count": 1,
+                },
                 "portfolio_baseline_at": "2026-08-01T10:00:00Z",
                 "portfolio_latest_at": "2026-08-01T12:00:00Z",
                 "portfolio_return_pct": 1.6949152542,
@@ -3139,6 +3147,7 @@ mod tests {
         assert_eq!(serialized["summary"]["change_dkk"], 5000.0);
         assert_eq!(serialized["summary"]["confidence"]["status"], "current");
         assert_eq!(serialized["benchmarks"]["status"], "partial");
+        assert_eq!(serialized["benchmarks"]["latest_run"]["success_count"], 1);
         assert_eq!(serialized["benchmarks"]["ready_count"], 1);
         assert_eq!(
             serialized["benchmarks"]["references"][0]["excess_return_pct"],
