@@ -22,6 +22,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Detail rows retain quantity, local price, FX rate, local/DKK cost basis, recomputed market value, and recomputed unrealised P/L. The aggregate and detail derive from one effective-position read, while current dashboard/performance readers remain unchanged on the aggregate table.
 - This records only data already held locally after existing portfolio reads; it does not request Saxo data, alter a queue, invoke a provider or Hermes, or mutate broker orders. Retention and aggregate/detail integrity checking remain the explicitly sequenced next slices.
 
+## [2026-08-23] maintenance | Bound per-position snapshot retention
+
+- The scheduler now keeps full per-cycle position evidence for the 90-day drawdown window and removes only older detail rows that have a later aggregate snapshot on the same UTC date. The final retained observation is described honestly as a stored daily point, not an exchange-close claim.
+- Aggregate `portfolio_value_history` is untouched, so current performance/drawdown readers and legacy evidence retain their complete history. The scheduler stores the local prune result in its cycle record for diagnostics.
+- This is a bounded local database cleanup: it performs no Saxo, provider, Hermes, queue, gate, precheck, or order action.
+
 ## [2026-08-20] observability | Add the first typed Tuning pulse comparison
 
 - Added a lazily loaded, read-only Tuning tab with a typed 30-day pulse-comparison payload for EU open, EU shadow, US open, and US shadow reports.

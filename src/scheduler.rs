@@ -306,6 +306,27 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         step_started,
     );
     let step_started = Instant::now();
+    let portfolio_position_snapshot_prune = match state
+        .prune_portfolio_position_snapshots(Utc::now())
+        .await
+    {
+        Ok(deleted_rows) => json!({
+            "status": "ok",
+            "deleted_rows": deleted_rows,
+            "retention_days": 90,
+            "safety": "local_portfolio_position_snapshot_retention_no_provider_or_broker_authority",
+        }),
+        Err(err) => {
+            warn!("portfolio position snapshot prune failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(
+        &mut step_durations,
+        "portfolio_position_snapshot_prune",
+        step_started,
+    );
+    let step_started = Instant::now();
     let notifications = match dispatch_execution_notifications(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -394,6 +415,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "portfolio_value_snapshot": portfolio_value_snapshot,
+        "portfolio_position_snapshot_prune": portfolio_position_snapshot_prune,
         "notifications": notifications,
         "operational_notifications": operational_notifications,
         "journal": journal,

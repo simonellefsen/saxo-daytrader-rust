@@ -115,6 +115,9 @@ const DECISION_REPORT_SUMMARY_COLUMNS: &str = "id, created_at, report_date, mode
 const DECISION_REPORT_DETAIL_COLUMNS: &str = "id, created_at, report_date, model, status, analysis_window_active, response_id, prompt_text, request_json, response_json, report_json, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible";
 const DEFAULT_SCHEDULER_HISTORY_MAX_ROWS: i64 = 250;
 const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
+/// Keep full per-cycle detail through the drawdown lookback; older detail is
+/// thinned to the final snapshot of each UTC date.
+const PORTFOLIO_POSITION_SNAPSHOT_RETENTION_DAYS: i64 = 90;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
 const TUNING_PULSE_WINDOW_DAYS: i64 = 30;
 const TUNING_MATURE_OUTCOME_MINIMUM: i64 = 20;
@@ -9159,6 +9162,31 @@ impl AppState {
         Ok(deleted_rows)
     }
 
+    /// Bounds high-resolution portfolio-position evidence without touching the
+    /// aggregate history. Full per-cycle detail is retained for the drawdown
+    /// window; older days retain their final recorded snapshot only.
+    pub async fn prune_portfolio_position_snapshots(&self, now: DateTime<Utc>) -> Result<i64> {
+        let cutoff = (now - Duration::days(PORTFOLIO_POSITION_SNAPSHOT_RETENTION_DAYS))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let result = sqlx::query(&format!(
+            "DELETE FROM portfolio_position_snapshots AS older
+             WHERE older.recorded_at < '{cutoff}'
+               AND EXISTS (
+                   SELECT 1
+                   FROM portfolio_value_history AS newer
+                   WHERE newer.recorded_at < '{cutoff}'
+                     AND SUBSTR(newer.recorded_at, 1, 10) = SUBSTR(older.recorded_at, 1, 10)
+                     AND (newer.recorded_at > older.recorded_at
+                          OR (newer.recorded_at = older.recorded_at AND newer.id > older.snapshot_id))
+               )",
+            cutoff = sql_escape(&cutoff),
+        ))
+        .execute(&self.pool)
+        .await
+        .context("pruning retained portfolio position snapshots")?;
+        Ok(result.rows_affected() as i64)
+    }
+
     pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
         Ok(self
             .first_json(
@@ -17439,6 +17467,66 @@ market_data:
         assert!((market_value - quantity * price_local * fx_rate).abs() < 1e-9);
         assert!((unrealised - (market_value - cost_basis)).abs() < 1e-9);
         assert!((row.try_get::<f64, _>("cost_basis_local").unwrap() - 750.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn portfolio_position_snapshot_retention_keeps_recent_and_daily_final_rows() {
+        let state = portfolio_snapshot_test_state().await;
+        for (id, recorded_at) in [
+            (1, "2026-05-01T09:00:00Z"),
+            (2, "2026-05-01T17:00:00Z"),
+            (3, "2026-05-02T17:00:00Z"),
+            (4, "2026-08-22T17:00:00Z"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO portfolio_value_history (
+                    id, recorded_at, snapshot_type, total_market_value_dkk,
+                    invested_market_value_dkk, cash_balance_dkk, total_cost_basis_dkk,
+                    total_unrealised_pnl_dkk, total_daily_pnl_dkk, position_count,
+                    raw_payload_json
+                ) VALUES (
+                    {id}, '{recorded_at}', 'scheduler_cycle', 100, 50, 50, 40, 10, 0, 1, '{{}}'
+                )"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed aggregate snapshot");
+            sqlx::query(&format!(
+                "INSERT INTO portfolio_position_snapshots (
+                    snapshot_id, recorded_at, symbol, currency, quantity, price_local,
+                    fx_rate_to_dkk, cost_basis_local, cost_basis_dkk,
+                    market_value_dkk, unrealised_pnl_dkk
+                ) VALUES (
+                    {id}, '{recorded_at}', 'EXMPL:xnas', 'USD', 1, 100, 1, 90, 90, 100, 10
+                )"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("seed position evidence");
+        }
+        let now = DateTime::parse_from_rfc3339("2026-08-23T18:00:00Z")
+            .expect("parse retention time")
+            .with_timezone(&Utc);
+        assert_eq!(
+            state
+                .prune_portfolio_position_snapshots(now)
+                .await
+                .expect("prune position evidence"),
+            1
+        );
+        let retained = state
+            .select_json(
+                "SELECT snapshot_id FROM portfolio_position_snapshots ORDER BY snapshot_id ASC",
+            )
+            .await
+            .expect("read retained position evidence");
+        assert_eq!(
+            retained
+                .iter()
+                .map(|row| value_i64(row, "snapshot_id"))
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
     }
 
     /// A drawdown peak must never reach back across a re-baselining.
