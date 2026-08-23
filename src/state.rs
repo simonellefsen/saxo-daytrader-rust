@@ -9330,7 +9330,7 @@ impl AppState {
                             ELSE 0
                         END), 0) AS covered_snapshot_count,
                         COUNT(details.snapshot_id) AS snapshots_with_position_rows,
-                        COALESCE(SUM(details.position_row_count), 0) AS position_evidence_row_count,
+                        CAST(COALESCE(SUM(details.position_row_count), 0) AS BIGINT) AS position_evidence_row_count,
                         MIN(CASE
                             WHEN h.position_count = 0 OR details.snapshot_id IS NOT NULL THEN h.recorded_at
                         END) AS first_covered_at,
