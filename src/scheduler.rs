@@ -327,6 +327,24 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         step_started,
     );
     let step_started = Instant::now();
+    let portfolio_position_snapshot_integrity =
+        match state.portfolio_position_snapshot_integrity().await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("portfolio position snapshot integrity check failed: {err:#}");
+                json!({
+                    "status": "unavailable",
+                    "error": err.to_string(),
+                    "safety": "local_snapshot_diagnostic_no_provider_or_broker_authority",
+                })
+            }
+        };
+    record_step_duration(
+        &mut step_durations,
+        "portfolio_position_snapshot_integrity",
+        step_started,
+    );
+    let step_started = Instant::now();
     let notifications = match dispatch_execution_notifications(state).await {
         Ok(value) => value,
         Err(err) => {
@@ -416,6 +434,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
         "portfolio_value_snapshot": portfolio_value_snapshot,
         "portfolio_position_snapshot_prune": portfolio_position_snapshot_prune,
+        "portfolio_position_snapshot_integrity": portfolio_position_snapshot_integrity,
         "notifications": notifications,
         "operational_notifications": operational_notifications,
         "journal": journal,

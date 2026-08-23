@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] correctness | Check aggregate and position snapshot integrity
+
+- The scheduler now compares the latest bounded aggregate snapshots with their linked position evidence. Position count, market value, and cost basis use strict monetary tolerances; a mismatch is surfaced as `attention_required` in the Scheduler Cycles table.
+- Aggregate unrealised P/L deliberately remains the broker-derived field while position evidence recomputes it from market value less local cost basis. The diagnostic reports that divergence separately as `broker_derived_unrealised_difference`, preventing a legitimate valuation-method difference from being misrepresented as structural corruption.
+- The check reads local durable snapshot rows only and has no provider, Hermes, decision-gate, queue, Saxo precheck, or broker-order authority.
+
 ## [2026-08-23] observability | Surface shadow outcome-ledger integrity in Tuning
 
 - The existing shadow pulse table now separates ordinary collection from a completed candidate report that has no corresponding `shadow_report_outcomes` rows. It uses the same pure BUY/SELL/positive-quantity predicate as the bounded scheduler repair, so UI coverage cannot silently drift from ledger eligibility.

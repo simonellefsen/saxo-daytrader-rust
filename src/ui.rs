@@ -6266,7 +6266,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         span { class: "muted", "{data.scheduler_cycle_total} total · page {data.scheduler_page} of {scheduler_total_pages}" }
                     }
                     table {
-                        thead { tr { th { "Started" } th { "Runtime" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } } }
+                        thead { tr { th { "Started" } th { "Runtime" } th { "Status" } th { "Decision" } th { "Queue" } th { "Alerts" } th { "Ops Alerts" } th { "Snapshot integrity" } } }
                         tbody {
                             for row in data.scheduler_cycles.iter() {
                                 tr {
@@ -6277,6 +6277,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                                     td { "{text(row, \"queue_status\")}" }
                                     td { "{text_or(row, \"notifications_status\", \"n/a\")}" }
                                     td { "{scheduler_cycle_json_status(row, \"operational_notifications\")}" }
+                                    td { "{scheduler_cycle_json_status(row, \"portfolio_position_snapshot_integrity\")}" }
                                 }
                             }
                         }

@@ -118,6 +118,9 @@ const DEFAULT_SCHEDULER_HISTORY_RETENTION_DAYS: i64 = 30;
 /// Keep full per-cycle detail through the drawdown lookback; older detail is
 /// thinned to the final snapshot of each UTC date.
 const PORTFOLIO_POSITION_SNAPSHOT_RETENTION_DAYS: i64 = 90;
+const PORTFOLIO_POSITION_SNAPSHOT_INTEGRITY_LIMIT: i64 = 30;
+const PORTFOLIO_POSITION_SNAPSHOT_MONEY_ABS_TOLERANCE_DKK: f64 = 0.05;
+const PORTFOLIO_POSITION_SNAPSHOT_MONEY_REL_TOLERANCE: f64 = 1e-8;
 const DEFAULT_POSITION_DECISION_STALE_AFTER_DAYS: i64 = 7;
 const TUNING_PULSE_WINDOW_DAYS: i64 = 30;
 const TUNING_MATURE_OUTCOME_MINIMUM: i64 = 20;
@@ -2036,6 +2039,88 @@ fn money_mismatch_exceeds_tolerance(
     let diff = (left - right).abs();
     let scale = left.abs().max(right.abs()).max(1.0);
     diff > abs_tolerance && diff / scale > rel_tolerance
+}
+
+fn portfolio_position_snapshot_integrity_from_rows(rows: &[JsonValue]) -> JsonValue {
+    let mut structural_mismatches = Vec::new();
+    let mut broker_unrealised_differences = Vec::new();
+    for row in rows {
+        let snapshot_id = value_i64(row, "snapshot_id");
+        let recorded_at = json_text(row, "recorded_at");
+        let aggregate_position_count = value_i64(row, "aggregate_position_count");
+        let detail_position_count = value_i64(row, "detail_position_count");
+        let aggregate_market_value_dkk = value_f64(row, "aggregate_market_value_dkk");
+        let detail_market_value_dkk = value_f64(row, "detail_market_value_dkk");
+        let aggregate_cost_basis_dkk = value_f64(row, "aggregate_cost_basis_dkk");
+        let detail_cost_basis_dkk = value_f64(row, "detail_cost_basis_dkk");
+        let aggregate_unrealised_pnl_dkk = value_f64(row, "aggregate_unrealised_pnl_dkk");
+        let detail_unrealised_pnl_dkk = value_f64(row, "detail_unrealised_pnl_dkk");
+        let position_count_mismatch = aggregate_position_count != detail_position_count;
+        let market_value_mismatch = money_mismatch_exceeds_tolerance(
+            aggregate_market_value_dkk,
+            detail_market_value_dkk,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_ABS_TOLERANCE_DKK,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_REL_TOLERANCE,
+        );
+        let cost_basis_mismatch = money_mismatch_exceeds_tolerance(
+            aggregate_cost_basis_dkk,
+            detail_cost_basis_dkk,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_ABS_TOLERANCE_DKK,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_REL_TOLERANCE,
+        );
+        if position_count_mismatch || market_value_mismatch || cost_basis_mismatch {
+            structural_mismatches.push(json!({
+                "snapshot_id": snapshot_id,
+                "recorded_at": recorded_at,
+                "position_count": {
+                    "aggregate": aggregate_position_count,
+                    "detail": detail_position_count,
+                    "mismatch": position_count_mismatch,
+                },
+                "market_value_difference_dkk": aggregate_market_value_dkk - detail_market_value_dkk,
+                "market_value_mismatch": market_value_mismatch,
+                "cost_basis_difference_dkk": aggregate_cost_basis_dkk - detail_cost_basis_dkk,
+                "cost_basis_mismatch": cost_basis_mismatch,
+            }));
+        }
+        if money_mismatch_exceeds_tolerance(
+            aggregate_unrealised_pnl_dkk,
+            detail_unrealised_pnl_dkk,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_ABS_TOLERANCE_DKK,
+            PORTFOLIO_POSITION_SNAPSHOT_MONEY_REL_TOLERANCE,
+        ) {
+            broker_unrealised_differences.push(json!({
+                "snapshot_id": snapshot_id,
+                "recorded_at": recorded_at,
+                "difference_dkk": aggregate_unrealised_pnl_dkk - detail_unrealised_pnl_dkk,
+                "aggregate_unrealised_pnl_dkk": aggregate_unrealised_pnl_dkk,
+                "recomputed_unrealised_pnl_dkk": detail_unrealised_pnl_dkk,
+                "interpretation": "aggregate_uses_broker_derived_unrealised_pnl",
+            }));
+        }
+    }
+    let status = if rows.is_empty() {
+        "collecting"
+    } else if !structural_mismatches.is_empty() {
+        "attention_required"
+    } else if !broker_unrealised_differences.is_empty() {
+        "broker_derived_unrealised_difference"
+    } else {
+        "aligned"
+    };
+    json!({
+        "status": status,
+        "checked_snapshot_count": rows.len(),
+        "structural_mismatch_count": structural_mismatches.len(),
+        "structural_mismatches": structural_mismatches,
+        "broker_derived_unrealised_difference_count": broker_unrealised_differences.len(),
+        "broker_derived_unrealised_differences": broker_unrealised_differences,
+        "tolerance": {
+            "absolute_dkk": PORTFOLIO_POSITION_SNAPSHOT_MONEY_ABS_TOLERANCE_DKK,
+            "relative": PORTFOLIO_POSITION_SNAPSHOT_MONEY_REL_TOLERANCE,
+        },
+        "safety": "local_aggregate_and_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+    })
 }
 
 fn is_duplicate_column_error(err: &sqlx::Error) -> bool {
@@ -9185,6 +9270,33 @@ impl AppState {
         .await
         .context("pruning retained portfolio position snapshots")?;
         Ok(result.rows_affected() as i64)
+    }
+
+    /// Compares recent aggregate snapshots with their immutable position
+    /// evidence. Broker-derived unrealised P/L is reported separately because
+    /// it can legitimately differ from `market value - local cost basis`.
+    pub async fn portfolio_position_snapshot_integrity(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT h.id AS snapshot_id, h.recorded_at,
+                        h.position_count AS aggregate_position_count,
+                        h.invested_market_value_dkk AS aggregate_market_value_dkk,
+                        h.total_cost_basis_dkk AS aggregate_cost_basis_dkk,
+                        h.total_unrealised_pnl_dkk AS aggregate_unrealised_pnl_dkk,
+                        COUNT(p.snapshot_id) AS detail_position_count,
+                        COALESCE(SUM(p.market_value_dkk), 0) AS detail_market_value_dkk,
+                        COALESCE(SUM(p.cost_basis_dkk), 0) AS detail_cost_basis_dkk,
+                        COALESCE(SUM(p.unrealised_pnl_dkk), 0) AS detail_unrealised_pnl_dkk
+                 FROM portfolio_value_history h
+                 INNER JOIN portfolio_position_snapshots p ON p.snapshot_id = h.id
+                 GROUP BY h.id, h.recorded_at, h.position_count,
+                          h.invested_market_value_dkk, h.total_cost_basis_dkk,
+                          h.total_unrealised_pnl_dkk
+                 ORDER BY h.id DESC
+                 LIMIT {PORTFOLIO_POSITION_SNAPSHOT_INTEGRITY_LIMIT}"
+            ))
+            .await?;
+        Ok(portfolio_position_snapshot_integrity_from_rows(&rows))
     }
 
     pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
@@ -17467,6 +17579,56 @@ market_data:
         assert!((market_value - quantity * price_local * fx_rate).abs() < 1e-9);
         assert!((unrealised - (market_value - cost_basis)).abs() < 1e-9);
         assert!((row.try_get::<f64, _>("cost_basis_local").unwrap() - 750.0).abs() < 1e-9);
+
+        let integrity = state
+            .portfolio_position_snapshot_integrity()
+            .await
+            .expect("compare aggregate and position snapshot evidence");
+        assert_eq!(integrity["status"], json!("aligned"));
+        assert_eq!(integrity["checked_snapshot_count"], json!(1));
+        assert_eq!(integrity["structural_mismatch_count"], json!(0));
+        assert_eq!(
+            integrity["broker_derived_unrealised_difference_count"],
+            json!(0)
+        );
+    }
+
+    #[test]
+    fn portfolio_position_snapshot_integrity_distinguishes_structure_from_broker_pnl() {
+        let base = json!({
+            "snapshot_id": 7,
+            "recorded_at": "2026-08-23T12:00:00Z",
+            "aggregate_position_count": 2,
+            "detail_position_count": 2,
+            "aggregate_market_value_dkk": 1000.0,
+            "detail_market_value_dkk": 1000.0,
+            "aggregate_cost_basis_dkk": 800.0,
+            "detail_cost_basis_dkk": 800.0,
+            "aggregate_unrealised_pnl_dkk": 200.0,
+            "detail_unrealised_pnl_dkk": 200.0,
+        });
+        let aligned = portfolio_position_snapshot_integrity_from_rows(&[base.clone()]);
+        assert_eq!(aligned["status"], json!("aligned"));
+
+        let mut broker_derived = base.clone();
+        broker_derived["aggregate_unrealised_pnl_dkk"] = json!(235.0);
+        let broker_only = portfolio_position_snapshot_integrity_from_rows(&[broker_derived]);
+        assert_eq!(
+            broker_only["status"],
+            json!("broker_derived_unrealised_difference")
+        );
+        assert_eq!(broker_only["structural_mismatch_count"], json!(0));
+        assert_eq!(
+            broker_only["broker_derived_unrealised_difference_count"],
+            json!(1)
+        );
+
+        let mut structural = base;
+        structural["detail_position_count"] = json!(1);
+        structural["detail_market_value_dkk"] = json!(900.0);
+        let attention_required = portfolio_position_snapshot_integrity_from_rows(&[structural]);
+        assert_eq!(attention_required["status"], json!("attention_required"));
+        assert_eq!(attention_required["structural_mismatch_count"], json!(1));
     }
 
     #[tokio::test]
