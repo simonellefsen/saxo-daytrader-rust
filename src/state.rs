@@ -40,14 +40,14 @@ use crate::{
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3102,6 +3102,18 @@ fn dashboard_performance_exposure_attribution_from_json(
     }
 }
 
+/// Decodes local realised SELL-outcome evidence for the dashboard while
+/// retaining an explicit unavailable state outside the Performance view.
+fn dashboard_performance_realised_sell_outcomes_from_json(
+    outcomes: JsonValue,
+) -> serde_json::Result<Option<PerformanceRealisedSellOutcomesPayload>> {
+    if outcomes.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(outcomes).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5680,6 +5692,15 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_realised_sell_outcomes = if active_view == "performance" {
+            overview
+                .get("integrity")
+                .and_then(|integrity| integrity.get("realised_sell_outcomes"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
         let performance_history = dashboard_performance_history_from_json(performance_history)
             .unwrap_or_else(|err| {
                 warn!("dashboard typed performance history degraded: {err:#}");
@@ -5721,6 +5742,14 @@ impl AppState {
                     warn!("dashboard typed performance exposure attribution degraded: {err:#}");
                     None
                 });
+        let performance_realised_sell_outcomes =
+            dashboard_performance_realised_sell_outcomes_from_json(
+                performance_realised_sell_outcomes,
+            )
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed performance realised SELL outcomes degraded: {err:#}");
+                None
+            });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -5946,6 +5975,7 @@ impl AppState {
             performance_snapshot_evidence,
             performance_pnl_reconciliation,
             performance_exposure_attribution,
+            performance_realised_sell_outcomes,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -22912,6 +22942,42 @@ analysis_windows:
         assert!(
             dashboard_performance_exposure_attribution_from_json(json!({
                 "status": "available"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_realised_sell_outcomes_preserve_empty_and_collecting_states() {
+        let unavailable = dashboard_performance_realised_sell_outcomes_from_json(
+            realised_sell_outcome_evidence(&[]),
+        )
+        .expect("empty outcome evidence is typed")
+        .expect("non-null outcome evidence is present");
+        assert_eq!(unavailable.status, "unavailable");
+        assert!(unavailable.recent_rows.is_empty());
+
+        let outcomes = dashboard_performance_realised_sell_outcomes_from_json(
+            realised_sell_outcome_evidence(&[json!({
+                "created_at": "2026-08-23T08:00:00Z",
+                "symbol": "TEST:xcse",
+                "quantity": 1.0,
+                "currency": "DKK",
+                "realised_gain_dkk": 100.0,
+                "commission_dkk": 2.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 1_000.0,
+                "status": "executed",
+            })]),
+        )
+        .expect("collecting outcome evidence is typed")
+        .expect("non-null outcome evidence is present");
+        assert_eq!(outcomes.status, "collecting");
+        assert_eq!(outcomes.recent_rows[0].symbol, "TEST:xcse");
+        assert_eq!(outcomes.symbol_attribution[0].closed_sale_count, 1);
+        assert!(
+            dashboard_performance_realised_sell_outcomes_from_json(json!({
+                "status": "collecting"
             }))
             .is_err()
         );

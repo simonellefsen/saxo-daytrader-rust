@@ -13,8 +13,9 @@ use crate::{
         DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
 };
 
@@ -2745,11 +2746,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 prefs: prefs.clone(),
             }
             PerformanceRealisedSellOutcomesPanel {
-                outcomes: data
-                    .integrity
-                    .get("realised_sell_outcomes")
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
+                outcomes: data.performance_realised_sell_outcomes.clone(),
                 prefs: prefs.clone(),
             }
             PerformanceBenchmarkPanel { benchmarks, prefs: prefs.clone(), range: range.clone() }
@@ -3087,7 +3084,25 @@ fn PerformanceExposureAttributionPanel(
 }
 
 #[component]
-fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn PerformanceRealisedSellOutcomesPanel(
+    outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let Some(outcomes) = outcomes else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Reconciled SELL Outcomes" }
+                        p { class: "muted", "Historical local-accounting evidence for closed sale rows. It is read-only and does not imply a strategy recommendation." }
+                    }
+                    span { class: "status warn-status", "no reconciled sales" }
+                }
+                p { class: "muted", "SELL-outcome evidence was unavailable or failed validation, so no accounting comparison is shown." }
+            }
+        };
+    };
+    let outcomes = serde_json::to_value(outcomes).unwrap_or(JsonValue::Null);
     let rows = outcomes
         .get("recent_rows")
         .and_then(JsonValue::as_array)

@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance reconciled SELL-outcome boundary
+
+- Added a typed dashboard model for local reconciled SELL accounting evidence: individual rows, symbol/currency/route aggregates, collecting versus preliminary sample status, totals, and explicit evidence limitations.
+- Missing or malformed SSR evidence now fails the typed boundary before rendering; the existing detailed table intentionally remains compatibility rendering for a separately bounded presentation migration.
+- This preserves read-only Performance accounting evidence and performs no Saxo provider request, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance stored-exposure attribution
 
 - Changed the Stored Exposure P/L Attribution panel to consume typed per-symbol and per-instrument-currency stored Saxo exposure data directly.

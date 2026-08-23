@@ -88,6 +88,7 @@ pub struct DashboardView {
     pub performance_snapshot_evidence: Option<PerformanceSnapshotEvidencePayload>,
     pub performance_pnl_reconciliation: Option<PerformancePnlReconciliationPayload>,
     pub performance_exposure_attribution: Option<PerformanceExposureAttributionPayload>,
+    pub performance_realised_sell_outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
     pub market_status: JsonValue,
@@ -916,6 +917,100 @@ pub struct PerformanceExposureAttributionPayload {
     pub rows: Vec<PerformanceExposureAttributionRowPayload>,
     #[serde(default)]
     pub currencies: Vec<PerformanceExposureCurrencyPayload>,
+}
+
+/// One closed-sale ledger row used by local realised-outcome evidence.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceRealisedSellRowPayload {
+    pub created_at: Option<String>,
+    pub symbol: String,
+    pub instrument_name: Option<String>,
+    pub quantity: Option<f64>,
+    pub currency: Option<String>,
+    pub realised_gain_dkk: f64,
+    pub commission_dkk: f64,
+    pub tax_dkk: f64,
+    pub cost_basis_sold_dkk: f64,
+    pub mode: Option<String>,
+    pub status: Option<String>,
+    pub execution_order_id: Option<i64>,
+    pub linked_order_count: Option<i64>,
+    pub exit_strategy_type: Option<String>,
+    pub exit_strategy_role: Option<String>,
+}
+
+/// One local realised-outcome aggregation by symbol or instrument currency.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceRealisedSellAttributionPayload {
+    pub symbol: Option<String>,
+    pub instrument_currency: Option<String>,
+    pub closed_sale_count: i64,
+    pub realised_gain_dkk: f64,
+    pub commission_dkk: f64,
+    pub tax_dkk: f64,
+}
+
+/// One recorded SELL-route aggregation from linked local execution evidence.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceRealisedSellExitRoutePayload {
+    pub exit_route: String,
+    pub link_status: String,
+    pub closed_sale_count: i64,
+    pub realised_gain_dkk: f64,
+    pub commission_dkk: f64,
+    pub tax_dkk: f64,
+}
+
+/// Read-only local accounting evidence for reconciled SELL ledger rows.
+///
+/// Partial sales are individual rows. The ledger deliberately makes no claim
+/// about holding time, realised slippage, entry-strategy attribution, or a
+/// backtested trading edge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceRealisedSellOutcomesPayload {
+    pub status: String,
+    pub scope: String,
+    pub counting_unit: String,
+    pub sample_requirement: i64,
+    #[serde(default)]
+    pub scan_limit: i64,
+    pub closed_sale_count: i64,
+    #[serde(default)]
+    pub decisive_sale_count: i64,
+    #[serde(default)]
+    pub win_count: i64,
+    #[serde(default)]
+    pub loss_count: i64,
+    #[serde(default)]
+    pub breakeven_count: i64,
+    pub win_rate: Option<f64>,
+    pub average_win_dkk: Option<f64>,
+    pub average_loss_dkk: Option<f64>,
+    pub payoff_ratio: Option<f64>,
+    pub total_realised_gain_dkk: Option<f64>,
+    pub total_commission_dkk: Option<f64>,
+    pub total_tax_dkk: Option<f64>,
+    pub total_cost_basis_sold_dkk: Option<f64>,
+    #[serde(default)]
+    pub attributed_symbol_count: i64,
+    #[serde(default)]
+    pub shown_symbol_attribution_count: i64,
+    #[serde(default)]
+    pub symbol_attribution: Vec<PerformanceRealisedSellAttributionPayload>,
+    #[serde(default)]
+    pub currency_attribution: Vec<PerformanceRealisedSellAttributionPayload>,
+    #[serde(default)]
+    pub linked_exit_route_count: i64,
+    #[serde(default)]
+    pub unlinked_ledger_count: i64,
+    #[serde(default)]
+    pub ambiguous_exit_link_count: i64,
+    #[serde(default)]
+    pub exit_route_attribution: Vec<PerformanceRealisedSellExitRoutePayload>,
+    #[serde(default)]
+    pub recent_rows: Vec<PerformanceRealisedSellRowPayload>,
+    pub holding_time_status: String,
+    pub slippage_status: String,
 }
 
 /// Evidence provenance for a performance-range summary.
