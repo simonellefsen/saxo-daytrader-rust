@@ -38,9 +38,9 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        PerformanceBenchmarksPayload, PerformanceHistoryRowPayload, PerformanceSummaryPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        PerformanceBenchmarksPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3052,6 +3052,18 @@ fn dashboard_performance_benchmarks_from_json(
     }
 }
 
+/// Decodes local goal progress for SSR while retaining the unavailable state on
+/// views that do not load the Performance projection.
+fn dashboard_performance_goal_tracking_from_json(
+    goal_tracking: JsonValue,
+) -> serde_json::Result<Option<PerformanceGoalTrackingPayload>> {
+    if goal_tracking.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(goal_tracking).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5629,6 +5641,12 @@ impl AppState {
             warn!("dashboard typed performance benchmarks degraded: {err:#}");
             None
         });
+        let performance_goal_tracking =
+            dashboard_performance_goal_tracking_from_json(performance_goal_tracking)
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed performance goal tracking degraded: {err:#}");
+                    None
+                });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -22587,6 +22605,53 @@ analysis_windows:
         assert_eq!(benchmarks.references[0].status, "pending_history");
         assert!(benchmarks.references[0].benchmark_return_pct.is_none());
         assert!(dashboard_performance_benchmarks_from_json(json!({"status": "ready"})).is_err());
+    }
+
+    #[test]
+    fn dashboard_goal_tracking_preserves_unavailable_and_pending_baselines() {
+        assert!(
+            dashboard_performance_goal_tracking_from_json(JsonValue::Null)
+                .expect("null stays unavailable")
+                .is_none()
+        );
+        let goal_tracking = dashboard_performance_goal_tracking_from_json(json!({
+            "weekly_target_dkk": 880.0,
+            "monthly_target_dkk": 3800.0,
+            "basis": "Local portfolio-value history baseline.",
+            "periods": {
+                "week": {
+                    "status": "ready",
+                    "pnl_dkk": 440.0,
+                    "target_dkk": 880.0,
+                    "progress_pct": 0.5,
+                    "baseline_value_dkk": 299_560.0,
+                    "period_start_utc": "2026-08-17T00:00:00Z",
+                },
+                "month": {
+                    "status": "pending_baseline",
+                    "pnl_dkk": null,
+                    "target_dkk": 3800.0,
+                    "progress_pct": null,
+                    "baseline_value_dkk": null,
+                    "period_start_utc": "2026-08-01T00:00:00Z",
+                },
+                "since_reset": {
+                    "status": "pending_baseline",
+                    "pnl_dkk": null,
+                    "return_pct": null,
+                    "baseline_value_dkk": null,
+                    "baseline_recorded_at": null,
+                },
+            },
+        }))
+        .expect("complete goal tracking is typed")
+        .expect("non-null goal tracking is present");
+        assert_eq!(goal_tracking.periods.month.status, "pending_baseline");
+        assert!(goal_tracking.periods.month.pnl_dkk.is_none());
+        assert!(
+            dashboard_performance_goal_tracking_from_json(json!({"basis": "missing periods"}))
+                .is_err()
+        );
     }
 
     #[test]

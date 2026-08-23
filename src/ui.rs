@@ -11,8 +11,8 @@ use crate::{
     },
     models::{
         DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceHistoryRowPayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformanceSummaryPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2731,8 +2731,8 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 MetricCard { label: "Daily P/L", value: daily_pnl.map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: match daily_pnl { Some(value) if value >= 0.0 => "good-text", Some(_) => "bad-text", None => "" } }
                 MetricCard { label: "Snapshots", value: summary.as_ref().map(|summary| summary.points.to_string()).unwrap_or_else(|| "n/a".to_string()), tone: "" }
             }
-            PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
-            PerformanceContextPanel { summary, goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
+            PerformanceGoalProgressPanel { goal_tracking: goal_tracking.clone(), prefs: prefs.clone() }
+            PerformanceContextPanel { summary, goal_tracking, range: range.clone(), prefs: prefs.clone() }
             PerformanceSnapshotEvidencePanel { evidence: data.performance_snapshot_evidence.clone(), prefs: prefs.clone() }
             PerformancePnlReconciliationPanel {
                 reconciliation: data
@@ -3278,52 +3278,52 @@ fn performance_confidence_badge(
 #[component]
 fn PerformanceContextPanel(
     summary: Option<PerformanceSummaryPayload>,
-    goal_tracking: JsonValue,
+    goal_tracking: Option<PerformanceGoalTrackingPayload>,
     range: String,
     prefs: LocalizationPrefs,
 ) -> Element {
     let since_reset = goal_tracking
-        .get("periods")
-        .and_then(|periods| periods.get("since_reset"))
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let since_reset_status = text(&since_reset, "status");
+        .as_ref()
+        .map(|goal_tracking| &goal_tracking.periods.since_reset);
+    let since_reset_status = since_reset
+        .map(|since_reset| since_reset.status.as_str())
+        .unwrap_or("unavailable");
     let unreliable_cost_basis_points = summary
         .as_ref()
         .map(|summary| summary.unreliable_cost_basis_points)
         .unwrap_or(0);
-    let since_reset_pnl = since_reset.get("pnl_dkk").and_then(JsonValue::as_f64);
-    let since_reset_return = since_reset.get("return_pct").and_then(JsonValue::as_f64);
-    let since_reset_at = format_timestamp(&text(&since_reset, "baseline_recorded_at"), &prefs);
-    let (since_reset_value, since_reset_subtitle, since_reset_tone) = match (
-        since_reset_status.as_str(),
-        since_reset_pnl,
-        since_reset_return,
-    ) {
-        ("ready", Some(pnl), Some(return_pct)) => {
-            let tone = if pnl > 0.0 {
-                "good-text"
-            } else if pnl < 0.0 {
-                "bad-text"
-            } else {
-                ""
-            };
-            (
-                format_signed_dkk(pnl, &prefs),
-                format!(
-                    "{} return · baseline {}",
-                    format_optional_percentage_points(Some(return_pct), &prefs),
-                    since_reset_at
-                ),
-                tone,
-            )
-        }
-        _ => (
-            "Awaiting baseline".to_string(),
-            "No comparable snapshot in the active import batch.".to_string(),
-            "",
-        ),
-    };
+    let since_reset_pnl = since_reset.and_then(|since_reset| since_reset.pnl_dkk);
+    let since_reset_return = since_reset.and_then(|since_reset| since_reset.return_pct);
+    let since_reset_at = since_reset
+        .and_then(|since_reset| since_reset.baseline_recorded_at.as_deref())
+        .map(|recorded_at| format_timestamp(recorded_at, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let (since_reset_value, since_reset_subtitle, since_reset_tone) =
+        match (since_reset_status, since_reset_pnl, since_reset_return) {
+            ("ready", Some(pnl), Some(return_pct)) => {
+                let tone = if pnl > 0.0 {
+                    "good-text"
+                } else if pnl < 0.0 {
+                    "bad-text"
+                } else {
+                    ""
+                };
+                (
+                    format_signed_dkk(pnl, &prefs),
+                    format!(
+                        "{} return · baseline {}",
+                        format_optional_percentage_points(Some(return_pct), &prefs),
+                        since_reset_at
+                    ),
+                    tone,
+                )
+            }
+            _ => (
+                "Awaiting baseline".to_string(),
+                "No comparable snapshot in the active import batch.".to_string(),
+                "",
+            ),
+        };
     let range_drawdown = summary.and_then(|summary| summary.range_max_drawdown_pct);
     let (drawdown_value, drawdown_subtitle, drawdown_tone) = match range_drawdown {
         Some(value) if value.is_finite() => (
@@ -3363,12 +3363,20 @@ fn PerformanceContextPanel(
 }
 
 #[component]
-fn PerformanceGoalProgressPanel(goal_tracking: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let periods = goal_tracking
-        .get("periods")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let basis = text(&goal_tracking, "basis");
+fn PerformanceGoalProgressPanel(
+    goal_tracking: Option<PerformanceGoalTrackingPayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let week = goal_tracking
+        .as_ref()
+        .map(|goal_tracking| goal_tracking.periods.week.clone());
+    let month = goal_tracking
+        .as_ref()
+        .map(|goal_tracking| goal_tracking.periods.month.clone());
+    let basis = goal_tracking
+        .as_ref()
+        .map(|goal_tracking| goal_tracking.basis.clone())
+        .unwrap_or_default();
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -3380,12 +3388,12 @@ fn PerformanceGoalProgressPanel(goal_tracking: JsonValue, prefs: LocalizationPre
             div { class: "mini-grid",
                 GoalProgressCard {
                     label: "Week to date",
-                    period: periods.get("week").cloned().unwrap_or(JsonValue::Null),
+                    period: week,
                     prefs: prefs.clone(),
                 }
                 GoalProgressCard {
                     label: "Month to date",
-                    period: periods.get("month").cloned().unwrap_or(JsonValue::Null),
+                    period: month,
                     prefs: prefs.clone(),
                 }
             }
@@ -3397,12 +3405,19 @@ fn PerformanceGoalProgressPanel(goal_tracking: JsonValue, prefs: LocalizationPre
 }
 
 #[component]
-fn GoalProgressCard(label: String, period: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&period, "status");
-    let target = period.get("target_dkk").and_then(JsonValue::as_f64);
-    let pnl = period.get("pnl_dkk").and_then(JsonValue::as_f64);
-    let progress = period.get("progress_pct").and_then(JsonValue::as_f64);
-    let (value, subtitle, tone) = match (status.as_str(), pnl, progress, target) {
+fn GoalProgressCard(
+    label: String,
+    period: Option<PerformanceGoalPeriodPayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = period
+        .as_ref()
+        .map(|period| period.status.as_str())
+        .unwrap_or("unavailable");
+    let target = period.as_ref().map(|period| period.target_dkk);
+    let pnl = period.as_ref().and_then(|period| period.pnl_dkk);
+    let progress = period.as_ref().and_then(|period| period.progress_pct);
+    let (value, subtitle, tone) = match (status, pnl, progress, target) {
         ("ready", Some(pnl), Some(progress), Some(target)) => {
             let tone = if pnl > 0.0 {
                 "good-text"
