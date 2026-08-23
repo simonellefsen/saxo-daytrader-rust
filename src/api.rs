@@ -3013,7 +3013,14 @@ mod tests {
                     "structural_mismatch_count": 0,
                     "structural_mismatches": [],
                     "broker_derived_unrealised_difference_count": 1,
-                    "broker_derived_unrealised_differences": [{"snapshot_id": 42}],
+                    "broker_derived_unrealised_differences": [{
+                        "snapshot_id": 42,
+                        "recorded_at": "2026-08-01T12:00:00Z",
+                        "difference_dkk": 25.0,
+                        "aggregate_unrealised_pnl_dkk": 325.0,
+                        "recomputed_unrealised_pnl_dkk": 300.0,
+                        "interpretation": "aggregate_uses_broker_derived_unrealised_pnl",
+                    }],
                     "tolerance": {"absolute_dkk": 0.01, "relative": 0.000001},
                     "safety": "local_aggregate_and_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
                 },
@@ -3054,6 +3061,11 @@ mod tests {
         assert_eq!(
             serialized["snapshot_evidence"]["integrity"]["broker_derived_unrealised_difference_count"],
             1
+        );
+        assert_eq!(
+            serialized["snapshot_evidence"]["integrity"]["broker_derived_unrealised_differences"]
+                [0]["difference_dkk"],
+            25.0
         );
     }
 

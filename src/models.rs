@@ -737,19 +737,57 @@ pub struct RetainedPositionSnapshotChangeEvidencePayload {
     pub interpretation: Option<String>,
 }
 
+/// Aggregate and retained-position counts for one integrity comparison.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotPositionCountPayload {
+    pub aggregate: i64,
+    pub detail: i64,
+    pub mismatch: bool,
+}
+
+/// One structural aggregate-versus-position snapshot mismatch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotStructuralMismatchPayload {
+    pub snapshot_id: i64,
+    pub recorded_at: String,
+    pub position_count: PerformanceSnapshotPositionCountPayload,
+    pub market_value_difference_dkk: f64,
+    pub market_value_mismatch: bool,
+    pub cost_basis_difference_dkk: f64,
+    pub cost_basis_mismatch: bool,
+}
+
+/// One broker-derived aggregate unrealised-P/L difference.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotBrokerPnlDifferencePayload {
+    pub snapshot_id: i64,
+    pub recorded_at: String,
+    pub difference_dkk: f64,
+    pub aggregate_unrealised_pnl_dkk: f64,
+    pub recomputed_unrealised_pnl_dkk: f64,
+    pub interpretation: String,
+}
+
+/// Absolute and relative tolerances used by snapshot integrity diagnostics.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotIntegrityTolerancePayload {
+    pub absolute_dkk: f64,
+    pub relative: f64,
+}
+
 /// Bounded aggregate-versus-position snapshot integrity envelope.
 ///
-/// The diagnosis state and counts are typed, while individual mismatches and
-/// tolerance details remain compatibility JSON for a later focused conversion.
+/// The diagnosis state, counters, mismatch observations, and tolerances are
+/// all explicit historical diagnostic fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotIntegrityPayload {
     pub status: String,
     pub checked_snapshot_count: i64,
     pub structural_mismatch_count: i64,
-    pub structural_mismatches: Vec<JsonValue>,
+    pub structural_mismatches: Vec<PerformanceSnapshotStructuralMismatchPayload>,
     pub broker_derived_unrealised_difference_count: i64,
-    pub broker_derived_unrealised_differences: Vec<JsonValue>,
-    pub tolerance: JsonValue,
+    pub broker_derived_unrealised_differences: Vec<PerformanceSnapshotBrokerPnlDifferencePayload>,
+    pub tolerance: PerformanceSnapshotIntegrityTolerancePayload,
     pub safety: String,
 }
 
@@ -757,8 +795,8 @@ pub struct PerformanceSnapshotIntegrityPayload {
 ///
 /// The selected-range coverage and retention contract is typed so callers can
 /// distinguish collecting, partial, and complete evidence without traversing
-/// arbitrary JSON. Mismatch rows remain compatibility JSON while those nested
-/// read models are converted.
+/// arbitrary JSON. Its retained evidence and integrity diagnostics are fully
+/// typed; history, benchmark, and goal-tracking models remain staged.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotEvidencePayload {
     pub status: String,

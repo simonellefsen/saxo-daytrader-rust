@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Complete typed Performance snapshot-evidence diagnostics
+
+- Typed the remaining aggregate/detail integrity fields: absolute/relative tolerance, structural mismatch rows with aggregate/detail counts and DKK deltas, and broker-derived unrealised-P/L difference rows.
+- The response preserves the diagnostic distinction between a structural mismatch and the stored broker valuation basis. Performance snapshot evidence is now fully typed while history, benchmarks, and goal tracking remain separate staged read models.
+- This preserves local historical diagnostics and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type retained Performance composition-change rows
 
 - Extended the typed Performance snapshot-evidence boundary with opened, closed, and resized symbol rows: before/after quantity, quantity change, and stored DKK market-value/cost-basis deltas.
