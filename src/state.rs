@@ -5470,6 +5470,19 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_snapshot_evidence = if active_view == "performance" {
+            self.portfolio_position_snapshot_coverage(&performance_range)
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("dashboard position-snapshot coverage degraded: {err:#}");
+                    json!({
+                        "status": "unavailable",
+                        "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
+                    })
+                })
+        } else {
+            JsonValue::Null
+        };
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -5692,6 +5705,7 @@ impl AppState {
             performance_summary,
             performance_benchmarks,
             performance_goal_tracking,
+            performance_snapshot_evidence,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -6051,7 +6065,8 @@ impl AppState {
             "history": history,
             "summary": performance_summary_from_history(&history, Utc::now()),
             "benchmarks": crate::performance_benchmarks::performance_benchmark_payload(self, &history).await?,
-            "goal_tracking": self.goal_tracking(total).await
+            "goal_tracking": self.goal_tracking(total).await,
+            "snapshot_evidence": self.portfolio_position_snapshot_coverage(range_key).await?
         }))
     }
 
@@ -9297,6 +9312,72 @@ impl AppState {
             ))
             .await?;
         Ok(portfolio_position_snapshot_integrity_from_rows(&rows))
+    }
+
+    /// Reports how much selected performance history has reproducible
+    /// per-position evidence. Historical aggregate-only rows remain visible
+    /// but are deliberately never relabelled as repairable.
+    pub async fn portfolio_position_snapshot_coverage(&self, range_key: &str) -> Result<JsonValue> {
+        let where_clause = match performance_start_at(range_key) {
+            Some(start_at) => format!("WHERE h.recorded_at >= '{}'", sql_escape(&start_at)),
+            None => String::new(),
+        };
+        let row = self
+            .first_json(&format!(
+                "SELECT COUNT(*) AS aggregate_snapshot_count,
+                        COALESCE(SUM(CASE
+                            WHEN h.position_count = 0 OR details.snapshot_id IS NOT NULL THEN 1
+                            ELSE 0
+                        END), 0) AS covered_snapshot_count,
+                        COUNT(details.snapshot_id) AS snapshots_with_position_rows,
+                        COALESCE(SUM(details.position_row_count), 0) AS position_evidence_row_count,
+                        MIN(CASE
+                            WHEN h.position_count = 0 OR details.snapshot_id IS NOT NULL THEN h.recorded_at
+                        END) AS first_covered_at,
+                        MAX(CASE
+                            WHEN h.position_count = 0 OR details.snapshot_id IS NOT NULL THEN h.recorded_at
+                        END) AS latest_covered_at
+                 FROM portfolio_value_history h
+                 LEFT JOIN (
+                    SELECT snapshot_id, COUNT(*) AS position_row_count
+                    FROM portfolio_position_snapshots
+                    GROUP BY snapshot_id
+                 ) details ON details.snapshot_id = h.id
+                 {where_clause}"
+            ))
+            .await?
+            .unwrap_or_else(|| json!({}));
+        let aggregate_snapshot_count = value_i64(&row, "aggregate_snapshot_count");
+        let covered_snapshot_count = value_i64(&row, "covered_snapshot_count");
+        let missing_snapshot_count = (aggregate_snapshot_count - covered_snapshot_count).max(0);
+        let status = if aggregate_snapshot_count == 0 {
+            "collecting"
+        } else if missing_snapshot_count == 0 {
+            "complete"
+        } else {
+            "partial"
+        };
+        let coverage_pct = if aggregate_snapshot_count > 0 {
+            JsonValue::from(covered_snapshot_count as f64 * 100.0 / aggregate_snapshot_count as f64)
+        } else {
+            JsonValue::Null
+        };
+        Ok(json!({
+            "status": status,
+            "range_key": range_key,
+            "aggregate_snapshot_count": aggregate_snapshot_count,
+            "covered_snapshot_count": covered_snapshot_count,
+            "missing_legacy_snapshot_count": missing_snapshot_count,
+            "coverage_pct": coverage_pct,
+            "snapshots_with_position_rows": value_i64(&row, "snapshots_with_position_rows"),
+            "position_evidence_row_count": value_i64(&row, "position_evidence_row_count"),
+            "first_covered_at": row.get("first_covered_at").cloned().unwrap_or(JsonValue::Null),
+            "latest_covered_at": row.get("latest_covered_at").cloned().unwrap_or(JsonValue::Null),
+            "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
+            "integrity": self.portfolio_position_snapshot_integrity().await?,
+            "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
+            "interpretation": "Coverage identifies snapshots whose position detail is retained and therefore recomputable. Aggregate-only legacy snapshots remain usable for charting but cannot be repaired from position evidence. A broker-derived aggregate unrealised P/L difference is reported separately by the integrity diagnostic and is not structural corruption.",
+        }))
     }
 
     pub async fn price_monitor_status_value(&self) -> Result<JsonValue> {
@@ -17591,6 +17672,35 @@ market_data:
             integrity["broker_derived_unrealised_difference_count"],
             json!(0)
         );
+
+        let coverage = state
+            .portfolio_position_snapshot_coverage("ALL")
+            .await
+            .expect("summarize position snapshot coverage");
+        assert_eq!(coverage["status"], json!("complete"));
+        assert_eq!(coverage["aggregate_snapshot_count"], json!(1));
+        assert_eq!(coverage["covered_snapshot_count"], json!(1));
+        assert_eq!(coverage["missing_legacy_snapshot_count"], json!(0));
+
+        sqlx::query(
+            "INSERT INTO portfolio_value_history (
+                id, recorded_at, snapshot_type, total_market_value_dkk,
+                invested_market_value_dkk, cash_balance_dkk, total_cost_basis_dkk,
+                total_unrealised_pnl_dkk, total_daily_pnl_dkk, position_count,
+                raw_payload_json
+            ) VALUES (2, '2026-08-23T18:00:00Z', 'legacy', 2500, 1500, 1000, 1200, 300, 0, 1, '{}')",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("seed aggregate-only legacy snapshot");
+        let partial_coverage = state
+            .portfolio_position_snapshot_coverage("ALL")
+            .await
+            .expect("surface aggregate-only legacy snapshot");
+        assert_eq!(partial_coverage["status"], json!("partial"));
+        assert_eq!(partial_coverage["aggregate_snapshot_count"], json!(2));
+        assert_eq!(partial_coverage["covered_snapshot_count"], json!(1));
+        assert_eq!(partial_coverage["missing_legacy_snapshot_count"], json!(1));
     }
 
     #[test]

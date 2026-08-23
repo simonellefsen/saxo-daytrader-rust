@@ -2728,6 +2728,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
             PerformanceContextPanel { summary: summary.clone(), goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
+            PerformanceSnapshotEvidencePanel { evidence: data.performance_snapshot_evidence.clone(), prefs: prefs.clone() }
             PerformancePnlReconciliationPanel {
                 reconciliation: data
                     .integrity
@@ -2768,6 +2769,45 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let status = text(&evidence, "status");
+    let (label, tone) = match status.as_str() {
+        "complete" => ("all selected snapshots repairable", "good-status"),
+        "partial" => ("legacy coverage gap", "warn-status"),
+        "collecting" => ("collecting position evidence", "warn-status"),
+        _ => ("snapshot evidence unavailable", "warn-status"),
+    };
+    let coverage_pct = evidence
+        .get("coverage_pct")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite())
+        .map(|value| format!("{value:.1}%"))
+        .unwrap_or_else(|| "n/a".to_string());
+    let integrity = evidence
+        .get("integrity")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    rsx! {
+        section { class: "section benchmark-panel",
+            div { class: "section-title-row compact",
+                div {
+                    h3 { "Repairable Snapshot Evidence" }
+                    p { class: "muted", "Read-only coverage of aggregate history that retains linked per-position evidence. Legacy aggregate-only rows remain chartable but cannot be repaired from local position detail." }
+                }
+                span { class: "status {tone}", "{label}" }
+            }
+            div { class: "mini-grid",
+                MetricCard { label: "Coverage", value: coverage_pct, tone: "" }
+                MetricCard { label: "Repairable", value: format!("{} / {}", text(&evidence, "covered_snapshot_count"), text(&evidence, "aggregate_snapshot_count")), tone: "" }
+                MetricCard { label: "Legacy-only", value: text(&evidence, "missing_legacy_snapshot_count"), tone: "" }
+                MetricCard { label: "Position rows", value: text(&evidence, "position_evidence_row_count"), tone: "" }
+            }
+            p { class: "muted benchmark-caveat", "Position detail: {text(&evidence, \"detail_retention\")}. Latest covered: {format_timestamp(&text(&evidence, \"latest_covered_at\"), &prefs)}. Recent integrity: {text(&integrity, \"status\")} ({text(&integrity, \"structural_mismatch_count\")} structural mismatch(es)); broker-derived unrealised P/L differences are reported separately." }
         }
     }
 }

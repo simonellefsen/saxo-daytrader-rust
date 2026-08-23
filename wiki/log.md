@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] observability | Show repairable portfolio-snapshot coverage in Performance
+
+- The Performance view and typed API now report selected-range aggregate snapshot coverage by retained per-position evidence. It keeps legacy aggregate-only rows explicit: they remain chartable but cannot be recomputed or repaired from detail that was never stored.
+- Coverage includes retained position-row counts, first/latest covered snapshots, the 90-day/full-then-daily retention policy, and the existing bounded aggregate/detail integrity result. Broker-derived aggregate unrealised P/L differences remain a distinct valuation-method observation, not structural drift.
+- This is a local read-only projection over durable snapshot tables. It does not call Saxo, a provider, Hermes, gates, queues, prechecks, or broker orders.
+
 ## [2026-08-23] correctness | Check aggregate and position snapshot integrity
 
 - The scheduler now compares the latest bounded aggregate snapshots with their linked position evidence. Position count, market value, and cost basis use strict monetary tolerances; a mismatch is surfaced as `attention_required` in the Scheduler Cycles table.

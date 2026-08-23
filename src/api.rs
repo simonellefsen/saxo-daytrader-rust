@@ -2927,6 +2927,7 @@ mod tests {
             "summary": {"total_return_pct": 1.5},
             "benchmarks": {"status": "available"},
             "goal_tracking": {"status": "on_track"},
+            "snapshot_evidence": {"status": "partial", "coverage_pct": 50.0},
         }))
         .expect("performance compatibility payload has the public contract");
 
@@ -2936,6 +2937,7 @@ mod tests {
         assert_eq!(serialized["summary"]["total_return_pct"], 1.5);
         assert_eq!(serialized["benchmarks"]["status"], "available");
         assert_eq!(serialized["goal_tracking"]["status"], "on_track");
+        assert_eq!(serialized["snapshot_evidence"]["coverage_pct"], 50.0);
     }
 
     #[test]

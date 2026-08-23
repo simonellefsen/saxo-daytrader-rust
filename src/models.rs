@@ -83,6 +83,7 @@ pub struct DashboardView {
     pub performance_summary: JsonValue,
     pub performance_benchmarks: JsonValue,
     pub performance_goal_tracking: JsonValue,
+    pub performance_snapshot_evidence: JsonValue,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
     pub market_status: JsonValue,
@@ -661,6 +662,7 @@ pub struct PerformancePayload {
     pub summary: JsonValue,
     pub benchmarks: JsonValue,
     pub goal_tracking: JsonValue,
+    pub snapshot_evidence: JsonValue,
 }
 
 /// Bounded Decision Gate Replay envelope.
