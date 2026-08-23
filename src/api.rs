@@ -2927,7 +2927,24 @@ mod tests {
             "summary": {"total_return_pct": 1.5},
             "benchmarks": {"status": "available"},
             "goal_tracking": {"status": "on_track"},
-            "snapshot_evidence": {"status": "partial", "coverage_pct": 50.0},
+            "snapshot_evidence": {
+                "status": "partial",
+                "range_key": "1D",
+                "aggregate_snapshot_count": 4,
+                "covered_snapshot_count": 2,
+                "missing_legacy_snapshot_count": 2,
+                "coverage_pct": 50.0,
+                "snapshots_with_position_rows": 2,
+                "position_evidence_row_count": 40,
+                "first_covered_at": "2026-08-01T10:00:00Z",
+                "latest_covered_at": "2026-08-01T12:00:00Z",
+                "latest_snapshot": {"status": "available"},
+                "latest_change": {"status": "available"},
+                "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
+                "integrity": {"status": "aligned"},
+                "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
+                "interpretation": "Coverage identifies retained position evidence.",
+            },
         }))
         .expect("performance compatibility payload has the public contract");
 
@@ -2938,6 +2955,11 @@ mod tests {
         assert_eq!(serialized["benchmarks"]["status"], "available");
         assert_eq!(serialized["goal_tracking"]["status"], "on_track");
         assert_eq!(serialized["snapshot_evidence"]["coverage_pct"], 50.0);
+        assert_eq!(serialized["snapshot_evidence"]["covered_snapshot_count"], 2);
+        assert_eq!(
+            serialized["snapshot_evidence"]["latest_change"]["status"],
+            "available"
+        );
     }
 
     #[test]

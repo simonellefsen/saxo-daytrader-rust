@@ -649,6 +649,32 @@ pub struct MarketStatusPayload {
     pub price_monitor: JsonValue,
 }
 
+/// Bounded retained-position snapshot evidence envelope.
+///
+/// The selected-range coverage and retention contract is typed so callers can
+/// distinguish collecting, partial, and complete evidence without traversing
+/// arbitrary JSON. Individual historical snapshots and integrity findings
+/// remain compatibility JSON while those nested read models are converted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSnapshotEvidencePayload {
+    pub status: String,
+    pub range_key: String,
+    pub aggregate_snapshot_count: i64,
+    pub covered_snapshot_count: i64,
+    pub missing_legacy_snapshot_count: i64,
+    pub coverage_pct: Option<f64>,
+    pub snapshots_with_position_rows: i64,
+    pub position_evidence_row_count: i64,
+    pub first_covered_at: Option<String>,
+    pub latest_covered_at: Option<String>,
+    pub latest_snapshot: JsonValue,
+    pub latest_change: JsonValue,
+    pub detail_retention: String,
+    pub integrity: JsonValue,
+    pub safety: String,
+    pub interpretation: String,
+}
+
 /// Bounded performance envelope.
 ///
 /// History rows, benchmark data, and goal-tracking details remain compatibility
@@ -662,7 +688,7 @@ pub struct PerformancePayload {
     pub summary: JsonValue,
     pub benchmarks: JsonValue,
     pub goal_tracking: JsonValue,
-    pub snapshot_evidence: JsonValue,
+    pub snapshot_evidence: PerformanceSnapshotEvidencePayload,
 }
 
 /// Bounded Decision Gate Replay envelope.

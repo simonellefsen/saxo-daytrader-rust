@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type Performance snapshot-evidence API contract
+
+- Replaced the public Performance API's generic snapshot-evidence envelope with `PerformanceSnapshotEvidencePayload`. Its stable selected-range coverage, retention, timestamp, safety, and interpretation fields are now compiler-checked.
+- Nested historical snapshot, composition-change, and integrity payloads deliberately remain compatibility JSON for staged conversion. The serialized response values are unchanged and a focused API regression pins the typed contract.
+- This is an API/read-model boundary only; it performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] observability | Compare retained position compositions
 
 - Extended Performance snapshot evidence with a bounded comparison between the two newest retained per-position snapshots in the selected range. It reports opened, closed, resized, and unchanged-quantity counts plus net stored market-value and cost-basis movement.
