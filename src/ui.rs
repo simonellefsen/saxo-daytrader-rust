@@ -9,7 +9,10 @@ use crate::{
         LocalizationPrefs, format_money, format_number, format_percent, format_quantity,
         format_timestamp,
     },
-    models::{DashboardView, TuningExecutionPulseOutcome, TuningPulseComparison},
+    models::{
+        DashboardView, PerformanceHistoryRowPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
+    },
 };
 
 pub const CSS: &str = include_str!("../assets/app.css");
@@ -3579,17 +3582,17 @@ fn benchmark_freshness_badge(
 }
 
 #[component]
-fn PerformanceRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let daily = value_f64(&row, "total_daily_pnl_dkk");
+fn PerformanceRow(row: PerformanceHistoryRowPayload, prefs: LocalizationPrefs) -> Element {
+    let daily = row.total_daily_pnl_dkk;
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"recorded_at\"), &prefs)}" }
-            td { "{format_dkk(value_f64(&row, \"total_market_value_dkk\"), &prefs)}" }
-            td { "{format_dkk(value_f64(&row, \"invested_market_value_dkk\"), &prefs)}" }
-            td { "{format_dkk(value_f64(&row, \"cash_balance_dkk\"), &prefs)}" }
+            td { "{format_timestamp(&row.recorded_at, &prefs)}" }
+            td { "{format_dkk(row.total_market_value_dkk, &prefs)}" }
+            td { "{format_dkk(row.invested_market_value_dkk, &prefs)}" }
+            td { "{format_dkk(row.cash_balance_dkk, &prefs)}" }
             td { class: if daily >= 0.0 { "good-text" } else { "bad-text" }, "{format_dkk(daily, &prefs)}" }
-            td { "{text(&row, \"position_count\")}" }
-            td { "{text(&row, \"source\")}" }
+            td { "{row.position_count}" }
+            td { "{row.source.as_deref().unwrap_or(\"n/a\")}" }
         }
     }
 }
@@ -3606,7 +3609,7 @@ fn RangeLink(range: &'static str, active: bool) -> Element {
 }
 
 #[component]
-fn PerformanceChart(rows: Vec<JsonValue>) -> Element {
+fn PerformanceChart(rows: Vec<PerformanceHistoryRowPayload>) -> Element {
     let chart = chart_paths(&rows);
     rsx! {
         div { class: "chart-card interactive-chart",
@@ -10513,14 +10516,14 @@ struct ChartPaths {
     end_label: String,
 }
 
-fn chart_paths(rows: &[JsonValue]) -> ChartPaths {
+fn chart_paths(rows: &[PerformanceHistoryRowPayload]) -> ChartPaths {
     let portfolio = rows
         .iter()
-        .map(|row| value_f64(row, "total_market_value_dkk"))
+        .map(|row| row.total_market_value_dkk)
         .collect::<Vec<_>>();
     let cash = rows
         .iter()
-        .map(|row| value_f64(row, "cash_balance_dkk"))
+        .map(|row| row.cash_balance_dkk)
         .collect::<Vec<_>>();
     let portfolio_min = min_value(&portfolio);
     let portfolio_max = max_value(&portfolio);
@@ -10535,11 +10538,11 @@ fn chart_paths(rows: &[JsonValue]) -> ChartPaths {
         cash_max_label: format!("{} DKK", cash_max.round() as i64),
         start_label: rows
             .first()
-            .map(|row| text(row, "recorded_at"))
+            .map(|row| row.recorded_at.clone())
             .unwrap_or_default(),
         end_label: rows
             .last()
-            .map(|row| text(row, "recorded_at"))
+            .map(|row| row.recorded_at.clone())
             .unwrap_or_default(),
     }
 }

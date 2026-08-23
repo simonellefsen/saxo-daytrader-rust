@@ -38,8 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        PerformanceHistoryRowPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3016,6 +3016,17 @@ fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Op
     (active_view == "performance").then(|| performance_range_limit(range_key))
 }
 
+/// Validates the local aggregate rows before the dashboard renders them.
+///
+/// The performance API and persisted query already share this fixed projection.
+/// Keeping the dashboard conversion all-or-nothing avoids silently drawing a
+/// partial selected range if a legacy row is malformed.
+fn dashboard_performance_history_from_json(
+    history: Vec<JsonValue>,
+) -> serde_json::Result<Vec<PerformanceHistoryRowPayload>> {
+    history.into_iter().map(serde_json::from_value).collect()
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5576,6 +5587,11 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_history = dashboard_performance_history_from_json(performance_history)
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed performance history degraded: {err:#}");
+                Vec::new()
+            });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -22432,6 +22448,31 @@ analysis_windows:
                 "{view} must not load performance history"
             );
         }
+    }
+
+    #[test]
+    fn dashboard_performance_history_requires_the_typed_local_observation_shape() {
+        let rows = dashboard_performance_history_from_json(vec![json!({
+            "recorded_at": "2026-08-23T09:00:00Z",
+            "snapshot_type": "runtime_current",
+            "total_market_value_dkk": 244_404.95,
+            "invested_market_value_dkk": 214_118.30,
+            "cash_balance_dkk": 30_286.65,
+            "total_cost_basis_dkk": 202_849.06,
+            "total_unrealised_pnl_dkk": 14_824.65,
+            "total_daily_pnl_dkk": 2_263.17,
+            "position_count": 20,
+            "source": null,
+        })])
+        .expect("complete local observation is typed");
+        assert_eq!(rows[0].snapshot_type, "runtime_current");
+        assert!(rows[0].source.is_none());
+        assert!(
+            dashboard_performance_history_from_json(vec![json!({
+                "recorded_at": "2026-08-23T09:00:00Z"
+            })])
+            .is_err()
+        );
     }
 
     #[test]

@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance history consumption
+
+- Changed the Performance chart/table path to consume `PerformanceHistoryRowPayload` directly, removing generic JSON field reads for all local account-value observations.
+- The dashboard validates the complete selected range after its existing summary/benchmark calculations; an invalid legacy row produces an empty chart/table rather than a misleading partial range or fabricated zero fields.
+- This preserves read-only Performance behavior and performs no Saxo provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type latest Performance benchmark run
 
 - Typed the optional persisted benchmark-run metadata: identity, creation time, run date, status, and configured-reference/success/error counts. No run remains an explicit null for disabled and pre-sync states.
