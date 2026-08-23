@@ -2924,7 +2924,28 @@ mod tests {
         let payload = performance_payload(json!({
             "range_key": "1D",
             "history": [{"recorded_at": "2026-08-01T18:00:00Z", "total_market_value_dkk": 300000.0}],
-            "summary": {"total_return_pct": 1.5},
+            "summary": {
+                "points": 2,
+                "first_recorded_at": "2026-08-01T10:00:00Z",
+                "latest_recorded_at": "2026-08-01T12:00:00Z",
+                "first_total_market_value_dkk": 295000.0,
+                "latest_total_market_value_dkk": 300000.0,
+                "change_dkk": 5000.0,
+                "daily_pnl_dkk": 250.0,
+                "position_count": 20,
+                "range_return_pct": 1.6949152542,
+                "range_max_drawdown_pct": -0.5,
+                "confidence": {
+                    "status": "current",
+                    "valid_points": 2,
+                    "latest_recorded_at": "2026-08-01T12:00:00Z",
+                    "latest_snapshot_type": "runtime_current",
+                    "latest_source": "test",
+                    "age_minutes": 0,
+                    "scope": "account_value_only",
+                },
+                "unreliable_cost_basis_points": 0,
+            },
             "benchmarks": {"status": "available"},
             "goal_tracking": {"status": "on_track"},
             "snapshot_evidence": {
@@ -3033,7 +3054,8 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("performance payload serializes");
         assert_eq!(serialized["range_key"], "1D");
         assert_eq!(serialized["history"][0]["total_market_value_dkk"], 300000.0);
-        assert_eq!(serialized["summary"]["total_return_pct"], 1.5);
+        assert_eq!(serialized["summary"]["change_dkk"], 5000.0);
+        assert_eq!(serialized["summary"]["confidence"]["status"], "current");
         assert_eq!(serialized["benchmarks"]["status"], "available");
         assert_eq!(serialized["goal_tracking"]["status"], "on_track");
         assert_eq!(serialized["snapshot_evidence"]["coverage_pct"], 50.0);

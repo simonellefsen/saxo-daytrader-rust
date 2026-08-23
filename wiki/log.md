@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type Performance summary and confidence provenance
+
+- Typed the selected-range local-account-value summary: point/timestamp/value/change/daily-P&L/position/range-return/drawdown fields plus the confidence status, valid-point count, freshness, snapshot/source provenance, and scope.
+- The summary is explicitly a deterministic projection of persisted/current account-value history. It does not claim broker-computed time-weighted performance or a real-time quote; history rows, benchmarks, and goal tracking remain separately staged read models.
+- This preserves read-only Performance behavior and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Complete typed Performance snapshot-evidence diagnostics
 
 - Typed the remaining aggregate/detail integrity fields: absolute/relative tolerance, structural mismatch rows with aggregate/detail counts and DKK deltas, and broker-derived unrealised-P/L difference rows.

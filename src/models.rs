@@ -817,17 +817,49 @@ pub struct PerformanceSnapshotEvidencePayload {
     pub interpretation: String,
 }
 
+/// Evidence provenance for a performance-range summary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSummaryConfidencePayload {
+    pub status: String,
+    pub valid_points: i64,
+    pub latest_recorded_at: Option<String>,
+    pub latest_snapshot_type: Option<String>,
+    pub latest_source: Option<String>,
+    pub age_minutes: Option<i64>,
+    pub scope: String,
+}
+
+/// Deterministic summary of the selected local account-value history range.
+///
+/// It is derived only from persisted/current account-value snapshots and never
+/// represents a broker time-weighted return or a live quote.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSummaryPayload {
+    pub points: i64,
+    pub first_recorded_at: Option<String>,
+    pub latest_recorded_at: Option<String>,
+    pub first_total_market_value_dkk: f64,
+    pub latest_total_market_value_dkk: f64,
+    pub change_dkk: f64,
+    pub daily_pnl_dkk: f64,
+    pub position_count: i64,
+    pub range_return_pct: Option<f64>,
+    pub range_max_drawdown_pct: Option<f64>,
+    pub confidence: PerformanceSummaryConfidencePayload,
+    pub unreliable_cost_basis_points: i64,
+}
+
 /// Bounded performance envelope.
 ///
 /// History rows, benchmark data, and goal-tracking details remain compatibility
-/// JSON while the performance read model is converted incrementally. This makes
-/// the stable public response boundary explicit without changing performance
-/// collection or any decision and execution behavior.
+/// JSON while the performance read model is converted incrementally. The
+/// selected-range summary is typed from the pure local-history projection.
+/// This does not change performance collection or any decision/execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformancePayload {
     pub range_key: String,
     pub history: Vec<JsonValue>,
-    pub summary: JsonValue,
+    pub summary: PerformanceSummaryPayload,
     pub benchmarks: JsonValue,
     pub goal_tracking: JsonValue,
     pub snapshot_evidence: PerformanceSnapshotEvidencePayload,
