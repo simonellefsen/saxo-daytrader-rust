@@ -11,11 +11,12 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardAiSettingsPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
@@ -4086,19 +4087,22 @@ fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 #[component]
 fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let run = data.latest_quiver_run.clone();
-    let schedule = data
-        .run_schedules
-        .get("quiver")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let schedule = &data.run_schedules.quiver;
     let config = run
         .get("config_json")
         .cloned()
         .unwrap_or_else(|| JsonValue::Null);
     let ok_count = value_i64(&run, "success_count");
     let error_count = value_i64(&run, "error_count");
-    let scheduled_for = text(&schedule, "scheduled_for");
-    let schedule_status = text(&schedule, "schedule_status");
+    let scheduled_for = schedule.scheduled_for.clone().unwrap_or_default();
+    let schedule_status = schedule
+        .schedule_status
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let minutes_after_open = schedule
+        .minutes_after_open
+        .map(|minutes| minutes.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
     let total_pages =
         ((data.quiver_signal_total + data.quiver_page_size - 1) / data.quiver_page_size).max(1);
     let previous_page_href = format!("/?view=quiver&quiver_page={}", data.quiver_page - 1);
@@ -4131,7 +4135,7 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
                 div { class: "event",
                     strong { "Configuration" }
-                    span { "Sources congress_trading · US symbols only · US open +{text(&schedule, \"minutes_after_open\")}m · max symbols {text(&config, \"max_symbols\")}" }
+                    span { "Sources congress_trading · US symbols only · US open +{minutes_after_open}m · max symbols {text(&config, \"max_symbols\")}" }
                     if !scheduled_for.is_empty() {
                         span { class: "muted", " · {schedule_status} · today {format_timestamp(&scheduled_for, &prefs)}" }
                     } else {
@@ -9163,21 +9167,19 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
         run_operation_health(
             "Markov",
             &data.latest_markov_run,
-            data.run_schedules.get("markov").unwrap_or(&JsonValue::Null),
+            &data.run_schedules.markov,
             now,
         ),
         run_operation_health(
             "Quiver",
             &data.latest_quiver_run,
-            data.run_schedules.get("quiver").unwrap_or(&JsonValue::Null),
+            &data.run_schedules.quiver,
             now,
         ),
         run_operation_health(
             "Indicators",
             &data.latest_daily_indicator_run,
-            data.run_schedules
-                .get("indicators")
-                .unwrap_or(&JsonValue::Null),
+            &data.run_schedules.indicators,
             now,
         ),
         quote_operation_health(&data.positions, &data.market_status.price_monitor, now),
@@ -9420,7 +9422,7 @@ fn decision_pulse_operation_health(
 fn run_operation_health(
     label: &str,
     run: &JsonValue,
-    schedule: &JsonValue,
+    schedule: &DashboardRunSchedulePayload,
     now: DateTime<Utc>,
 ) -> OperationHealthItem {
     let schedule_state = scheduled_run_state(schedule, now);
@@ -9498,38 +9500,38 @@ enum ScheduledRunState {
     Unknown,
 }
 
-fn scheduled_run_state(schedule: &JsonValue, now: DateTime<Utc>) -> ScheduledRunState {
-    if schedule.is_null() {
+fn scheduled_run_state(
+    schedule: &DashboardRunSchedulePayload,
+    now: DateTime<Utc>,
+) -> ScheduledRunState {
+    if !schedule.available {
         return ScheduledRunState::Unknown;
     }
-    if !schedule
-        .get("enabled")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true)
-    {
+    if !schedule.enabled {
         return ScheduledRunState::Disabled;
     }
-    let timezone = text(schedule, "timezone")
+    let timezone = schedule
+        .timezone
         .parse::<Tz>()
         .unwrap_or(chrono_tz::Europe::Copenhagen);
     let now_local = now.with_timezone(&timezone);
     let local_date = now_local.date_naive();
-    if text(schedule, "schedule_kind") == "us_open_followup" {
-        let expected_run_date = text(schedule, "scheduled_run_date")
+    if schedule.schedule_kind == "us_open_followup" {
+        let expected_run_date = schedule
+            .scheduled_run_date
+            .as_deref()
+            .unwrap_or("")
             .parse::<NaiveDate>()
             .unwrap_or(local_date);
-        return match text(schedule, "schedule_status").as_str() {
+        return match schedule.schedule_status.as_deref().unwrap_or("") {
             "waiting" => ScheduledRunState::MarketOpenBeforeDue { expected_run_date },
             "due" => ScheduledRunState::MarketOpenDue { expected_run_date },
             _ => ScheduledRunState::MarketOpenNoSession { expected_run_date },
         };
     }
-    let due_time = NaiveTime::parse_from_str(&text(schedule, "daily_time"), "%H:%M")
+    let due_time = NaiveTime::parse_from_str(schedule.daily_time.as_deref().unwrap_or(""), "%H:%M")
         .unwrap_or_else(|_| NaiveTime::from_hms_opt(23, 30, 0).expect("valid default time"));
-    let weekdays_only = schedule
-        .get("run_weekdays_only")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
+    let weekdays_only = schedule.run_weekdays_only;
     let expected_run_date =
         latest_scheduled_run_date(local_date, now_local.time(), due_time, weekdays_only);
     if weekdays_only && local_date.weekday().number_from_monday() > 5 {
@@ -10922,6 +10924,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn scheduled_run_fixture(value: JsonValue) -> DashboardRunSchedulePayload {
+        let mut schedule: DashboardRunSchedulePayload =
+            serde_json::from_value(value).expect("schedule fixture has the typed contract");
+        schedule.available = true;
+        schedule
+    }
+
     #[test]
     fn tradingview_modals_defer_external_chart_loading_until_opened() {
         assert!(APP_SCRIPT.contains("iframe[data-tradingview-src]"));
@@ -12044,12 +12053,12 @@ mod tests {
                 "success_count": 10,
                 "error_count": 2
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "daily_time": "10:00",
                 "run_weekdays_only": true,
-            }),
+            })),
             now,
         );
         assert_eq!(partial.status, "partial");
@@ -12063,12 +12072,12 @@ mod tests {
                 "success_count": 12,
                 "error_count": 0
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "daily_time": "10:00",
                 "run_weekdays_only": true,
-            }),
+            })),
             now,
         );
         assert_eq!(stale.status, "stale");
@@ -12088,12 +12097,12 @@ mod tests {
                 "success_count": 20,
                 "error_count": 0
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "daily_time": "23:30",
                 "run_weekdays_only": true,
-            }),
+            })),
             now,
         );
 
@@ -12115,12 +12124,12 @@ mod tests {
                 "success_count": 20,
                 "error_count": 0
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "daily_time": "21:00",
                 "run_weekdays_only": true,
-            }),
+            })),
             now,
         );
 
@@ -12141,14 +12150,14 @@ mod tests {
                 "success_count": 20,
                 "error_count": 0
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "schedule_kind": "us_open_followup",
                 "schedule_status": "waiting",
                 "scheduled_run_date": "2026-07-30",
                 "minutes_after_open": 45
-            }),
+            })),
             now,
         );
 
@@ -12170,14 +12179,14 @@ mod tests {
                 "success_count": 20,
                 "error_count": 0
             }),
-            &json!({
+            &scheduled_run_fixture(json!({
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
                 "schedule_kind": "us_open_followup",
                 "schedule_status": "due",
                 "scheduled_run_date": "2026-07-30",
                 "minutes_after_open": 45
-            }),
+            })),
             now,
         );
 

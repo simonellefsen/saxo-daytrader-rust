@@ -36,7 +36,8 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
+        CashBufferSettings, DashboardAiSettingsPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardView,
         DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
         HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
@@ -3232,6 +3233,36 @@ fn dashboard_ai_settings_from_json(
     serde_json::from_value(settings)
 }
 
+fn dashboard_run_schedule_from_json(
+    schedule: JsonValue,
+) -> serde_json::Result<DashboardRunSchedulePayload> {
+    let mut schedule: DashboardRunSchedulePayload = serde_json::from_value(schedule)?;
+    schedule.available = true;
+    Ok(schedule)
+}
+
+/// Decodes only the timing metadata required by dashboard schedule status.
+/// Full collector configuration intentionally remains staged JSON.
+fn dashboard_run_schedules_from_json(
+    schedules: JsonValue,
+) -> serde_json::Result<DashboardRunSchedulesPayload> {
+    let mut schedules: BTreeMap<String, JsonValue> = serde_json::from_value(schedules)?;
+    Ok(DashboardRunSchedulesPayload {
+        markov: dashboard_run_schedule_from_json(
+            schedules.remove("markov").unwrap_or(JsonValue::Null),
+        )?,
+        quiver: dashboard_run_schedule_from_json(
+            schedules.remove("quiver").unwrap_or(JsonValue::Null),
+        )?,
+        indicators: dashboard_run_schedule_from_json(
+            schedules.remove("indicators").unwrap_or(JsonValue::Null),
+        )?,
+        performance_benchmarks: schedules
+            .remove("performance_benchmarks")
+            .unwrap_or(JsonValue::Null),
+    })
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -6072,6 +6103,16 @@ impl AppState {
             warn!("dashboard typed AI settings degraded: {err:#}");
             self.default_dashboard_ai_settings()
         });
+        let run_schedules = dashboard_run_schedules_from_json(json!({
+            "markov": crate::markov_method::markov_config_json_for_state(self),
+            "quiver": crate::quiver::quiver_config_json_for_state(self),
+            "indicators": crate::daily_indicators::indicator_config_json_for_state(self),
+            "performance_benchmarks": crate::performance_benchmarks::benchmark_config_json_for_state(self),
+        }))
+        .unwrap_or_else(|err| {
+            warn!("dashboard typed run schedules degraded: {err:#}");
+            DashboardRunSchedulesPayload::default()
+        });
 
         DashboardView {
             app_name: yaml_string(&self.config, &["app", "project_name"])
@@ -6171,12 +6212,7 @@ impl AppState {
             latest_quiver_run,
             quiver_conflicts,
             latest_daily_indicator_run,
-            run_schedules: json!({
-                "markov": crate::markov_method::markov_config_json_for_state(self),
-                "quiver": crate::quiver::quiver_config_json_for_state(self),
-                "indicators": crate::daily_indicators::indicator_config_json_for_state(self),
-                "performance_benchmarks": crate::performance_benchmarks::benchmark_config_json_for_state(self),
-            }),
+            run_schedules,
             performance_history,
             performance_summary,
             performance_benchmarks,
@@ -16985,6 +17021,47 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(dashboard_ai_settings_from_json(json!({"model": "openai/gpt-5.5"})).is_err());
+    }
+
+    #[test]
+    fn dashboard_run_schedules_retain_only_timing_metadata() {
+        let schedules = dashboard_run_schedules_from_json(json!({
+            "markov": {
+                "enabled": true,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "10:00",
+                "run_weekdays_only": true,
+                "window_days": 40
+            },
+            "quiver": {
+                "enabled": true,
+                "timezone": "America/New_York",
+                "schedule_kind": "us_open_followup",
+                "minutes_after_open": 45,
+                "scheduled_for": "2026-08-23T14:15:00Z",
+                "scheduled_run_date": "2026-08-23",
+                "schedule_status": "waiting",
+                "base_url": "must-not-reach-the-dashboard"
+            },
+            "indicators": {
+                "enabled": false,
+                "timezone": "Europe/Copenhagen",
+                "daily_time": "20:15",
+                "run_weekdays_only": true
+            },
+            "performance_benchmarks": {"retained": "staged"}
+        }))
+        .expect("dashboard schedule timing metadata decodes");
+
+        assert!(schedules.markov.available);
+        assert_eq!(schedules.quiver.minutes_after_open, Some(45));
+        assert!(!schedules.indicators.enabled);
+        assert_eq!(schedules.performance_benchmarks["retained"], "staged");
+        assert!(
+            !serde_json::to_string(&schedules)
+                .expect("dashboard schedules serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
     }
 
     #[test]

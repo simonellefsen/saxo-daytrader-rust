@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard scheduled-run timing
+
+- Changed Markov, Quiver, and daily-indicator operational health and Quiver schedule display to consume typed availability, enablement, cadence, and scheduled-target metadata.
+- Collector-specific configuration remains outside the dashboard timing model; missing or malformed schedule metadata becomes an explicit unknown state.
+- This preserves read-only operational status and performs no scheduler-job, provider, Decision Report, Hermes, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard data-freshness strip
 
 - Changed the dashboard staleness strip to consume typed source identity, owner-tab, observation/age, threshold, and state fields.

@@ -80,7 +80,7 @@ pub struct DashboardView {
     pub latest_quiver_run: JsonValue,
     pub quiver_conflicts: JsonValue,
     pub latest_daily_indicator_run: JsonValue,
-    pub run_schedules: JsonValue,
+    pub run_schedules: DashboardRunSchedulesPayload,
     pub performance_history: Vec<PerformanceHistoryRowPayload>,
     pub performance_summary: Option<PerformanceSummaryPayload>,
     pub performance_benchmarks: Option<PerformanceBenchmarksPayload>,
@@ -770,6 +770,37 @@ pub struct DataFreshnessSourcePayload {
     pub age_label: String,
     pub stale_after_minutes: i64,
     pub state: String,
+}
+
+/// Sanitized timing metadata for one dashboard-visible scheduled run.
+///
+/// It deliberately excludes collector configuration and provider material.
+/// The scheduler remains the only component that determines or executes runs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DashboardRunSchedulePayload {
+    pub available: bool,
+    pub enabled: bool,
+    pub timezone: String,
+    pub schedule_kind: String,
+    pub daily_time: Option<String>,
+    pub run_weekdays_only: bool,
+    pub minutes_after_open: Option<i64>,
+    pub scheduled_for: Option<String>,
+    pub scheduled_run_date: Option<String>,
+    pub schedule_status: Option<String>,
+}
+
+/// Dashboard-visible scheduled-run timing state.
+///
+/// Benchmark configuration stays staged JSON while only its outer boundary is
+/// carried here; no configuration is activated or changed through this model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardRunSchedulesPayload {
+    pub markov: DashboardRunSchedulePayload,
+    pub quiver: DashboardRunSchedulePayload,
+    pub indicators: DashboardRunSchedulePayload,
+    pub performance_benchmarks: JsonValue,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.
