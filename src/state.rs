@@ -39,16 +39,16 @@ use crate::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardLatestRunPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3211,6 +3211,15 @@ fn dashboard_latest_decision_from_json(
     }
 }
 
+/// Decodes the compact lifecycle state shown in the shared report-pulse cards
+/// and operations banner. Detailed report payloads remain on their lazy-loaded
+/// views, so unexpected fields cannot cross this SSR boundary.
+fn dashboard_decision_pulse_statuses_from_json(
+    statuses: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DecisionPulseStatusPayload>> {
+    statuses.into_iter().map(serde_json::from_value).collect()
+}
+
 /// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
@@ -5600,10 +5609,16 @@ impl AppState {
         // a compact per-pulse report status rather than only the latest global
         // report. The payload deliberately excludes report prompt/response
         // bodies and remains small enough for the shared read model.
-        let decision_pulse_statuses = self.decision_pulse_statuses().await.unwrap_or_else(|err| {
-            warn!("dashboard decision pulse statuses degraded: {err:#}");
-            Vec::new()
-        });
+        let decision_pulse_statuses = self
+            .decision_pulse_statuses()
+            .await
+            .and_then(|statuses| {
+                dashboard_decision_pulse_statuses_from_json(statuses).map_err(Into::into)
+            })
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed decision-pulse statuses degraded: {err:#}");
+                Vec::new()
+            });
         let journal_entries = if dashboard_loads_tab_exclusive_data(&active_view, "eod") {
             self.strategy_journal_items(20).await.unwrap_or_else(|err| {
                 warn!("dashboard end-of-day journal degraded: {err:#}");
@@ -17035,6 +17050,44 @@ mod tests {
                 .is_none()
         );
         assert!(dashboard_latest_decision_from_json(json!({"status": 42})).is_err());
+    }
+
+    #[test]
+    fn dashboard_decision_pulse_statuses_keep_only_compact_lifecycle_metadata() {
+        let statuses = dashboard_decision_pulse_statuses_from_json(vec![json!({
+            "key": "us_mid_session_shadow",
+            "prefix": "us_mid_session_shadow:",
+            "label": "US 14:15 Shadow",
+            "enabled": true,
+            "latest": {
+                "id": 345,
+                "created_at": "2026-08-23T18:15:00Z",
+                "status": "completed",
+                "provider_payload": "must-not-reach-the-dashboard"
+            },
+            "last_success": null,
+            "last_failure": null,
+            "attempts_7d": 5,
+            "report_prompt": "must-not-reach-the-dashboard"
+        })])
+        .expect("stable decision-pulse status decodes");
+
+        assert_eq!(statuses[0].key, "us_mid_session_shadow");
+        assert_eq!(
+            statuses[0].latest.as_ref().map(|report| report.id),
+            Some(345)
+        );
+        assert!(
+            !serde_json::to_string(&statuses)
+                .expect("typed pulse statuses serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_decision_pulse_statuses_from_json(vec![json!({
+                "key": "manual"
+            })])
+            .is_err()
+        );
     }
 
     #[test]

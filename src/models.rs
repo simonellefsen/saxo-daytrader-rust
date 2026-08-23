@@ -59,7 +59,7 @@ pub struct DashboardView {
     pub execution_decision_pulse_evidence: JsonValue,
     pub reports: Vec<JsonValue>,
     pub manual_report_in_flight: bool,
-    pub decision_pulse_statuses: Vec<JsonValue>,
+    pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
     pub journal_entries: Vec<JsonValue>,
     pub scheduler_cycles: Vec<JsonValue>,
     pub hermes_reflections: Vec<JsonValue>,
@@ -98,6 +98,36 @@ pub struct DashboardView {
     pub selected_decision: JsonValue,
     pub decision_gate_replay: DecisionGateReplayPayload,
     pub tuning: TuningPayload,
+}
+
+/// Compact, sanitized metadata for one retained Decision Report.
+///
+/// Decision details, prompts, provider payloads, and normalized report JSON
+/// remain behind their dedicated lazy-loaded dashboard paths. The shared
+/// operations banner only needs this lifecycle reference.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DecisionPulseReportStatusPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub status: String,
+}
+
+/// Latest lifecycle evidence for one scheduled or manual Decision Report pulse.
+///
+/// This read-only dashboard boundary is intentionally limited to pulse
+/// enablement, compact report references, and the seven-day attempt count. It
+/// cannot invoke report generation, alter queue eligibility, or reach Hermes,
+/// Trading Manager, Saxo prechecks, or broker mutations.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DecisionPulseStatusPayload {
+    pub key: String,
+    pub prefix: String,
+    pub label: String,
+    pub enabled: bool,
+    pub latest: Option<DecisionPulseReportStatusPayload>,
+    pub last_success: Option<DecisionPulseReportStatusPayload>,
+    pub last_failure: Option<DecisionPulseReportStatusPayload>,
+    pub attempts_7d: i64,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

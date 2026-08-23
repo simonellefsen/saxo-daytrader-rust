@@ -13,8 +13,8 @@ use crate::{
     models::{
         DashboardAiSettingsPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
         DashboardSaxoAuthPayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -5154,42 +5154,61 @@ fn decision_pulse_health(
 }
 
 fn decision_pulse_health_from_status(
-    statuses: &[JsonValue],
+    statuses: &[DecisionPulseStatusPayload],
     key: &str,
 ) -> Option<DecisionPulseHealth> {
-    let row = statuses.iter().find(|row| text(row, "key") == key)?;
-    let enabled = row
-        .get("enabled")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
-    let latest = row.get("latest").unwrap_or(&JsonValue::Null);
-    let last_success = row.get("last_success").unwrap_or(&JsonValue::Null);
-    let last_failure = row.get("last_failure").unwrap_or(&JsonValue::Null);
-    let latest_status = if !enabled {
+    let row = statuses.iter().find(|row| row.key == key)?;
+    let latest_status = if !row.enabled {
         "disabled".to_string()
-    } else if latest.is_null() {
+    } else if row.latest.is_none() {
         "missing".to_string()
     } else {
-        fallback_text(latest, "status", "missing")
+        row.latest
+            .as_ref()
+            .map(|report| report.status.clone())
+            .filter(|status| !status.is_empty())
+            .unwrap_or_else(|| "missing".to_string())
     };
     Some(DecisionPulseHealth {
-        label: fallback_text(row, "label", key),
+        label: if row.label.is_empty() {
+            key.to_string()
+        } else {
+            row.label.clone()
+        },
         latest_tone: decision_status_text_tone(&latest_status),
         latest_status,
-        latest_created_at: text(latest, "created_at"),
-        latest_id: latest.get("id").and_then(JsonValue::as_i64).unwrap_or(0),
-        last_success_at: text(last_success, "created_at"),
-        last_success_id: last_success
-            .get("id")
-            .and_then(JsonValue::as_i64)
+        latest_created_at: row
+            .latest
+            .as_ref()
+            .map(|report| report.created_at.clone())
+            .unwrap_or_default(),
+        latest_id: row.latest.as_ref().map(|report| report.id).unwrap_or(0),
+        last_success_at: row
+            .last_success
+            .as_ref()
+            .map(|report| report.created_at.clone())
+            .unwrap_or_default(),
+        last_success_id: row
+            .last_success
+            .as_ref()
+            .map(|report| report.id)
             .unwrap_or(0),
-        last_failure_at: text(last_failure, "created_at"),
-        last_failure_id: last_failure
-            .get("id")
-            .and_then(JsonValue::as_i64)
+        last_failure_at: row
+            .last_failure
+            .as_ref()
+            .map(|report| report.created_at.clone())
+            .unwrap_or_default(),
+        last_failure_id: row
+            .last_failure
+            .as_ref()
+            .map(|report| report.id)
             .unwrap_or(0),
-        last_failure_status: text(last_failure, "status"),
-        attempts_7d: value_i64(row, "attempts_7d"),
+        last_failure_status: row
+            .last_failure
+            .as_ref()
+            .map(|report| report.status.clone())
+            .unwrap_or_default(),
+        attempts_7d: row.attempts_7d,
     })
 }
 
@@ -9358,11 +9377,11 @@ fn active_broker_status(status: &str) -> bool {
 }
 
 fn decision_pulse_operation_health(
-    statuses: &[JsonValue],
+    statuses: &[DecisionPulseStatusPayload],
     key: &str,
     label: &str,
 ) -> OperationHealthItem {
-    let Some(pulse) = statuses.iter().find(|row| text(row, "key") == key) else {
+    let Some(pulse) = statuses.iter().find(|row| row.key == key) else {
         return OperationHealthItem {
             label: label.to_string(),
             status: "unknown".to_string(),
@@ -9370,12 +9389,7 @@ fn decision_pulse_operation_health(
             detail: "Decision-pulse status was unavailable while the dashboard loaded.".to_string(),
         };
     };
-    let latest = pulse.get("latest").unwrap_or(&JsonValue::Null);
-    let enabled = pulse
-        .get("enabled")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
-    if !enabled {
+    if !pulse.enabled {
         return OperationHealthItem {
             label: label.to_string(),
             status: "disabled".to_string(),
@@ -9383,40 +9397,53 @@ fn decision_pulse_operation_health(
             detail: format!("{label} is disabled by the active strategy pulse configuration."),
         };
     }
-    if latest.is_null() {
+    let Some(latest) = pulse.latest.as_ref() else {
         return OperationHealthItem {
             label: label.to_string(),
             status: "missing".to_string(),
             tone: "warn",
             detail: format!("No {label} decision report has been recorded yet."),
         };
-    }
+    };
 
-    let latest_status = fallback_text(latest, "status", "unknown");
+    let latest_status = if latest.status.is_empty() {
+        "unknown".to_string()
+    } else {
+        latest.status.clone()
+    };
     let (tone, status) = match latest_status.as_str() {
         "completed" | "xai_fallback" => ("good", "ok"),
         "pending" | "xai_deferred" => ("warn", "pending"),
         "xai_error" | "error" | "failed" | "parse_error" => ("bad", "failed"),
         _ => ("warn", "check"),
     };
-    let last_success = pulse.get("last_success").unwrap_or(&JsonValue::Null);
-    let success_detail = if last_success.is_null() {
-        "No successful report is recorded yet.".to_string()
-    } else {
-        format!(
-            "Last success #{} at {}.",
-            fallback_text(last_success, "id", "n/a"),
-            fallback_text(last_success, "created_at", "unknown time"),
-        )
-    };
+    let success_detail = pulse
+        .last_success
+        .as_ref()
+        .map(|last_success| {
+            format!(
+                "Last success #{} at {}.",
+                last_success.id,
+                if last_success.created_at.is_empty() {
+                    "unknown time"
+                } else {
+                    &last_success.created_at
+                },
+            )
+        })
+        .unwrap_or_else(|| "No successful report is recorded yet.".to_string());
     OperationHealthItem {
         label: label.to_string(),
         status: status.to_string(),
         tone,
         detail: format!(
             "Latest report #{} at {} is {}. {success_detail}",
-            fallback_text(latest, "id", "n/a"),
-            fallback_text(latest, "created_at", "unknown time"),
+            latest.id,
+            if latest.created_at.is_empty() {
+                "unknown time"
+            } else {
+                &latest.created_at
+            },
             latest_status,
         ),
     }
@@ -12650,19 +12677,27 @@ mod tests {
 
     #[test]
     fn derives_operation_health_from_per_pulse_report_status() {
-        let statuses = vec![json!({
-            "key": "us_open_followup",
-            "latest": {
-                "id": 77,
-                "created_at": "2026-07-14T14:45:00Z",
-                "status": "xai_fallback"
-            },
-            "last_success": {
-                "id": 77,
-                "created_at": "2026-07-14T14:45:00Z",
-                "status": "xai_fallback"
-            }
-        })];
+        let statuses: Vec<DecisionPulseStatusPayload> = vec![
+            serde_json::from_value(json!({
+                "key": "us_open_followup",
+                "prefix": "us_open_followup:",
+                "label": "US Open +1h15",
+                "enabled": true,
+                "latest": {
+                    "id": 77,
+                    "created_at": "2026-07-14T14:45:00Z",
+                    "status": "xai_fallback"
+                },
+                "last_success": {
+                    "id": 77,
+                    "created_at": "2026-07-14T14:45:00Z",
+                    "status": "xai_fallback"
+                },
+                "last_failure": null,
+                "attempts_7d": 1
+            }))
+            .expect("typed pulse status fixture"),
+        ];
 
         let health = decision_pulse_operation_health(&statuses, "us_open_followup", "US Report");
         assert_eq!(health.label, "US Report");
@@ -12675,12 +12710,19 @@ mod tests {
         assert_eq!(missing.status, "unknown");
         assert_eq!(missing.tone, "warn");
 
-        let disabled = vec![json!({
-            "key": "us_open_followup",
-            "enabled": false,
-            "latest": null,
-            "last_success": null,
-        })];
+        let disabled: Vec<DecisionPulseStatusPayload> = vec![
+            serde_json::from_value(json!({
+                "key": "us_open_followup",
+                "prefix": "us_open_followup:",
+                "label": "US Open +1h15",
+                "enabled": false,
+                "latest": null,
+                "last_success": null,
+                "last_failure": null,
+                "attempts_7d": 0,
+            }))
+            .expect("typed disabled pulse status fixture"),
+        ];
         let paused = decision_pulse_operation_health(&disabled, "us_open_followup", "US Report");
         assert_eq!(paused.status, "disabled");
         assert_eq!(paused.tone, "neutral");
@@ -12688,26 +12730,31 @@ mod tests {
 
     #[test]
     fn derives_decision_pulse_health_from_backend_status() {
-        let statuses = vec![json!({
-            "key": "us_open_followup",
-            "label": "US Open +1h15",
-            "latest": {
-                "id": 12,
-                "created_at": "2026-06-24T14:45:00Z",
-                "status": "xai_error"
-            },
-            "last_success": {
-                "id": 11,
-                "created_at": "2026-06-23T14:45:00Z",
-                "status": "completed"
-            },
-            "last_failure": {
-                "id": 12,
-                "created_at": "2026-06-24T14:45:00Z",
-                "status": "xai_error"
-            },
-            "attempts_7d": 4
-        })];
+        let statuses: Vec<DecisionPulseStatusPayload> = vec![
+            serde_json::from_value(json!({
+                "key": "us_open_followup",
+                "prefix": "us_open_followup:",
+                "label": "US Open +1h15",
+                "enabled": true,
+                "latest": {
+                    "id": 12,
+                    "created_at": "2026-06-24T14:45:00Z",
+                    "status": "xai_error"
+                },
+                "last_success": {
+                    "id": 11,
+                    "created_at": "2026-06-23T14:45:00Z",
+                    "status": "completed"
+                },
+                "last_failure": {
+                    "id": 12,
+                    "created_at": "2026-06-24T14:45:00Z",
+                    "status": "xai_error"
+                },
+                "attempts_7d": 4
+            }))
+            .expect("typed pulse status fixture"),
+        ];
 
         let us = decision_pulse_health_from_status(&statuses, "us_open_followup")
             .expect("backend status exists");

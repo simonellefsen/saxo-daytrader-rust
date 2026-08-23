@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Decision Pulse lifecycle status
+
+- Changed the Decision Report pulse cards and shared operations banner to consume typed pulse identity, enablement, compact latest/success/failure references, and seven-day attempt counts.
+- Prompt, provider, and detailed report fields are discarded at the SSR boundary; absent or malformed status evidence remains explicit as unavailable or unknown health rather than a fabricated success.
+- This preserves read-only operational status and performs no report generation, queue, gate, Hermes, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Quiver conflict evidence
 
 - Changed Held-Position Quiver Conflicts to consume typed status, held-symbol count, bearish threshold, review rows, safety, and interpretation fields directly.
