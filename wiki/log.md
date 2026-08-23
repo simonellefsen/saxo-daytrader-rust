@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard sanitized Saxo session status
+
+- Changed the dashboard and Operations health panel to consume a typed display-only Saxo session-status contract.
+- The contract retains connection, SIM/LIVE environment, token-validity, expiry, re-auth, and status text while omitting the local session path and credential-adjacent fields at this UI boundary.
+- This preserves read-only observability and performs no OAuth, refresh, SIM/LIVE admission, Trading Manager, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard latest-Decision status
 
 - Changed the global Decision health badge and AI Prompts view to consume typed latest-report ID, timestamp, status, model, and error metadata directly.

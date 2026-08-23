@@ -28,7 +28,7 @@ pub struct DashboardView {
     pub execution_mode: String,
     pub execution_adapter: String,
     pub saxo_status: String,
-    pub saxo_auth: JsonValue,
+    pub saxo_auth: DashboardSaxoAuthPayload,
     pub sso_session: JsonValue,
     pub ai_settings: JsonValue,
     pub localization: LocalizationPrefs,
@@ -711,6 +711,23 @@ pub struct LatestDecisionStatusPayload {
     pub status: Option<String>,
     pub model: Option<String>,
     pub error_text: Option<String>,
+}
+
+/// Sanitized Saxo session state shown in the dashboard and Operations panel.
+///
+/// This intentionally omits the local session path and all credential material.
+/// It is observational only; Saxo authentication, refresh, and execution remain
+/// owned by the dedicated auth and order modules.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardSaxoAuthPayload {
+    pub connected: bool,
+    pub environment: String,
+    pub token_valid: bool,
+    pub refresh_token_valid: bool,
+    pub expires_in_minutes: Option<i64>,
+    pub needs_reauth: bool,
+    pub status: String,
+    pub status_text: String,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

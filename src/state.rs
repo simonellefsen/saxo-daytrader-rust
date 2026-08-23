@@ -36,21 +36,21 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardView, DecisionGateReplayPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        CashBufferSettings, DashboardSaxoAuthPayload, DashboardView, DecisionGateReplayPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3208,6 +3208,21 @@ fn dashboard_latest_decision_from_json(
     }
 }
 
+/// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
+/// The broker auth module keeps the full status internally; this outer view omits
+/// path and credential-adjacent fields before UI rendering.
+fn dashboard_saxo_auth_from_json(auth: JsonValue) -> serde_json::Result<DashboardSaxoAuthPayload> {
+    serde_json::from_value(auth)
+}
+
+fn dashboard_saxo_auth_unavailable() -> DashboardSaxoAuthPayload {
+    DashboardSaxoAuthPayload {
+        status: "unavailable".to_string(),
+        status_text: "No Saxo session status is available.".to_string(),
+        ..DashboardSaxoAuthPayload::default()
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -6036,7 +6051,10 @@ impl AppState {
             .get("saxo_auth")
             .cloned()
             .unwrap_or(JsonValue::Null);
-        let saxo_auth_object = saxo_auth.as_object().cloned().unwrap_or_default();
+        let saxo_auth = dashboard_saxo_auth_from_json(saxo_auth).unwrap_or_else(|err| {
+            warn!("dashboard typed Saxo auth status degraded: {err:#}");
+            dashboard_saxo_auth_unavailable()
+        });
 
         DashboardView {
             app_name: yaml_string(&self.config, &["app", "project_name"])
@@ -6075,13 +6093,16 @@ impl AppState {
                 .and_then(JsonValue::as_str)
                 .unwrap_or("unknown")
                 .to_string(),
-            saxo_status: saxo_auth
-                .get("status_text")
-                .or_else(|| saxo_auth.get("status"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or("not connected")
-                .to_string(),
-            saxo_auth: JsonValue::Object(saxo_auth_object),
+            saxo_status: if saxo_auth.status_text.is_empty() {
+                if saxo_auth.status.is_empty() {
+                    "not connected".to_string()
+                } else {
+                    saxo_auth.status.clone()
+                }
+            } else {
+                saxo_auth.status_text.clone()
+            },
+            saxo_auth,
             sso_session,
             ai_settings: self.ai_settings_value().await.unwrap_or_else(|err| {
                 warn!("dashboard AI settings degraded: {err:#}");
@@ -16881,6 +16902,28 @@ mod tests {
                 .is_none()
         );
         assert!(dashboard_latest_decision_from_json(json!({"status": 42})).is_err());
+    }
+
+    #[test]
+    fn dashboard_saxo_auth_requires_the_sanitized_status_contract() {
+        let auth = dashboard_saxo_auth_from_json(json!({
+            "connected": true,
+            "environment": "SIM",
+            "token_valid": true,
+            "refresh_token_valid": true,
+            "expires_in_minutes": 29,
+            "needs_reauth": false,
+            "status": "connected",
+            "status_text": "Saxo SIM session ready.",
+            "session_path": "/tmp/daytrader/saxo_session.json"
+        }))
+        .expect("sanitized Saxo status decodes");
+
+        assert!(auth.connected);
+        assert_eq!(auth.environment, "SIM");
+        assert_eq!(auth.expires_in_minutes, Some(29));
+        assert!(dashboard_saxo_auth_from_json(json!({"connected": true})).is_err());
+        assert_eq!(dashboard_saxo_auth_unavailable().status, "unavailable");
     }
 
     #[test]

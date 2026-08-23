@@ -10,10 +10,11 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, DecisionGateReplayPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardSaxoAuthPayload, DashboardView, DecisionGateReplayPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
@@ -354,22 +355,16 @@ fn Dashboard(props: DashboardProps) -> Element {
         })
         .unwrap_or("Not signed in through SSO")
         .to_string();
-    let saxo_status_class = if data
-        .saxo_auth
-        .get("connected")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
+    let saxo_status_class = if data.saxo_auth.connected {
         "pill good"
     } else {
         "pill bad"
     };
-    let saxo_environment = data
-        .saxo_auth
-        .get("environment")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("n/a")
-        .to_uppercase();
+    let saxo_environment = if data.saxo_auth.environment.is_empty() {
+        "N/A".to_string()
+    } else {
+        data.saxo_auth.environment.to_uppercase()
+    };
     let (decision_health_class, decision_health_label) = decision_health(&data.latest_decision);
     let operation_items = operations_health(&data);
     let saxo_status_display = truncate_chars(&data.saxo_status, 90);
@@ -6200,6 +6195,23 @@ fn end_of_day_benchmark_readthrough(journal: &JsonValue) -> JsonValue {
 
 #[component]
 fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let saxo_environment = data.saxo_auth.environment.clone();
+    let saxo_token_label = if data.saxo_auth.token_valid {
+        "Yes"
+    } else {
+        "No"
+    };
+    let saxo_refresh_token_label = if data.saxo_auth.refresh_token_valid {
+        "Yes"
+    } else {
+        "No"
+    };
+    let saxo_expires_in_minutes = data
+        .saxo_auth
+        .expires_in_minutes
+        .map(|minutes| minutes.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let sim_enabled = saxo_environment.eq_ignore_ascii_case("SIM");
     let total_pages = ((data.execution_order_total + data.execution_page_size - 1)
         / data.execution_page_size)
         .max(1);
@@ -6243,16 +6255,16 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     p { class: "muted", "Trading mutations remain disabled until the Rust Saxo execution engine is fully ported." }
                 }
                 div { class: "broker-status-grid",
-                    span { "Environment " strong { "{text(&data.saxo_auth, \"environment\")}" } }
-                    span { "Token " strong { "{bool_label(&data.saxo_auth, \"token_valid\")}" } }
-                    span { "Refresh token " strong { "{bool_label(&data.saxo_auth, \"refresh_token_valid\")}" } }
-                    span { "Expires " strong { "{text(&data.saxo_auth, \"expires_in_minutes\")} min" } }
+                    span { "Environment " strong { "{saxo_environment}" } }
+                    span { "Token " strong { "{saxo_token_label}" } }
+                    span { "Refresh token " strong { "{saxo_refresh_token_label}" } }
+                    span { "Expires " strong { "{saxo_expires_in_minutes} min" } }
                 }
             }
             ProtectiveStopCoveragePanel {
                 coverage: data.execution_protection.clone(),
                 prefs: prefs.clone(),
-                sim_enabled: text(&data.saxo_auth, "environment").eq_ignore_ascii_case("SIM")
+                sim_enabled
             }
             TradeThesisOutcomeEvidencePanel {
                 evidence: data.execution_trade_thesis_evidence.clone(),
@@ -6269,12 +6281,7 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
             // SIM-only: Reset portfolio from Live Positioner export
             {
-                let saxo_env = data
-                    .saxo_auth
-                    .get("environment")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_uppercase();
+                let saxo_env = saxo_environment.to_uppercase();
                 if saxo_env == "SIM" {
                     rsx! {
                         section { class: "section sim-reset-card",
@@ -9172,14 +9179,18 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
     ]
 }
 
-fn saxo_operation_health(auth: &JsonValue) -> OperationHealthItem {
-    let connected = auth
-        .get("connected")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let status = text_or(auth, "status", "unknown");
-    let detail = text_or(auth, "status_text", "No Saxo session status is available.");
-    if !connected {
+fn saxo_operation_health(auth: &DashboardSaxoAuthPayload) -> OperationHealthItem {
+    let status = if auth.status.is_empty() {
+        "unknown".to_string()
+    } else {
+        auth.status.clone()
+    };
+    let detail = if auth.status_text.is_empty() {
+        "No Saxo session status is available.".to_string()
+    } else {
+        auth.status_text.clone()
+    };
+    if !auth.connected {
         return OperationHealthItem {
             label: "Saxo".to_string(),
             status: if status == "needs_reauth" || status == "missing_session" {
@@ -9192,13 +9203,13 @@ fn saxo_operation_health(auth: &JsonValue) -> OperationHealthItem {
         };
     }
 
-    let expires_in = value_f64(auth, "expires_in_minutes");
-    if expires_in > 0.0 && expires_in <= 10.0 {
+    let expires_in = auth.expires_in_minutes.unwrap_or_default();
+    if (1..=10).contains(&expires_in) {
         OperationHealthItem {
             label: "Saxo".to_string(),
             status: "expiring".to_string(),
             tone: "warn",
-            detail: format!("{detail} Access token expires in {:.0} min.", expires_in),
+            detail: format!("{detail} Access token expires in {expires_in} min."),
         }
     } else {
         OperationHealthItem {
@@ -11938,11 +11949,12 @@ mod tests {
 
     #[test]
     fn derives_saxo_operation_health_from_reauth_state() {
-        let item = saxo_operation_health(&json!({
-            "connected": false,
-            "status": "needs_reauth",
-            "status_text": "Saxo session expired. Re-authentication is required."
-        }));
+        let item = saxo_operation_health(&DashboardSaxoAuthPayload {
+            connected: false,
+            status: "needs_reauth".to_string(),
+            status_text: "Saxo session expired. Re-authentication is required.".to_string(),
+            ..DashboardSaxoAuthPayload::default()
+        });
 
         assert_eq!(item.label, "Saxo");
         assert_eq!(item.status, "reauth");
