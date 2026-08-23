@@ -16,6 +16,12 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Reference evidence now states captured, retroactively unavailable, awaiting-reference, and missing-ledger counts. A missing ledger report is labelled `shadow_outcome_ledger_gap`; an existing row awaiting its immediate quote remains the distinct, non-terminal `awaiting_saxo_reference_quote` state.
 - The projection reads only persisted decision-report and shadow-outcome rows. It neither calls Saxo nor invokes a provider, Hermes, gates, queues, prechecks, or order mutations.
 
+## [2026-08-23] correctness | Start repairable per-position portfolio snapshots
+
+- Added the first `portfolio_position_snapshots` dual-write slice. Each new aggregate portfolio snapshot and its per-position evidence commit together, preventing another aggregate-only history gap from being recorded on a partial write.
+- Detail rows retain quantity, local price, FX rate, local/DKK cost basis, recomputed market value, and recomputed unrealised P/L. The aggregate and detail derive from one effective-position read, while current dashboard/performance readers remain unchanged on the aggregate table.
+- This records only data already held locally after existing portfolio reads; it does not request Saxo data, alter a queue, invoke a provider or Hermes, or mutate broker orders. Retention and aggregate/detail integrity checking remain the explicitly sequenced next slices.
+
 ## [2026-08-20] observability | Add the first typed Tuning pulse comparison
 
 - Added a lazily loaded, read-only Tuning tab with a typed 30-day pulse-comparison payload for EU open, EU shadow, US open, and US shadow reports.

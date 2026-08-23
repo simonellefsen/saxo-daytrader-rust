@@ -6426,7 +6426,7 @@ impl AppState {
         };
         let base_rows = self
             .select_json(&format!(
-                "SELECT instrument_name, symbol, isin, quantity, currency, open_price_local, open_price_local AS paid_price_local, current_price_local, cost_basis_local, cost_basis_dkk, market_value_local, market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk, allocation_pct, asset_class, market_status, value_date FROM position_snapshots {where_clause}"
+                "SELECT instrument_name, symbol, isin, quantity, currency, open_price_local, open_price_local AS paid_price_local, current_price_local, cost_basis_local, cost_basis_local AS cost_basis_local_total, cost_basis_dkk, market_value_local, market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk, allocation_pct, asset_class, market_status, value_date FROM position_snapshots {where_clause}"
             ))
             .await
             .unwrap_or_default();
@@ -6618,7 +6618,13 @@ impl AppState {
                 "paid_price_local": if quantity > 0.0 { cost_basis_local_total / quantity } else { broker_open_price },
                 "open_price_local": broker_open_price,
                 "cost_basis_local": if quantity > 0.0 { cost_basis_local_total / quantity } else { broker_open_price },
+                // Position screens show unit cost, while the immutable
+                // per-position snapshot must retain the total that can be
+                // reconciled to the stored DKK basis.
+                "cost_basis_local_total": cost_basis_local_total,
                 "current_price_local": current_price_local,
+                "market_value_local": quantity * current_price_local,
+                "fx_rate_to_dkk": current_fx_rate,
                 "cost_basis_dkk": cost_basis_dkk,
                 "market_value_dkk": market_value_dkk,
                 "unrealised_pnl_dkk": unrealised_pnl_dkk,
@@ -6683,23 +6689,7 @@ impl AppState {
         Ok(rows)
     }
 
-    async fn position_aggregate(&self, batch_id: Option<&str>) -> Result<JsonValue> {
-        let rows = if self.broker_positions_available().await? {
-            self.effective_position_rows(None).await?
-        } else {
-            let where_clause = match batch_id {
-                Some(batch_id) => format!(
-                    "WHERE batch_id = '{}' AND excluded = 0",
-                    sql_escape(batch_id)
-                ),
-                None => "WHERE excluded = 0".to_string(),
-            };
-            self.select_json(&format!(
-                "SELECT market_value_dkk, cost_basis_dkk, unrealised_pnl_dkk, daily_pnl_dkk FROM position_snapshots {where_clause}"
-            ))
-            .await
-            .unwrap_or_default()
-        };
+    async fn position_aggregate_from_rows(&self, rows: &[JsonValue]) -> Result<JsonValue> {
         let invested = rows
             .iter()
             .map(|row| value_f64(row, "market_value_dkk"))
@@ -6720,6 +6710,83 @@ impl AppState {
             "position_count": rows.len() as i64,
             "source": if self.broker_positions_available().await? { "saxo_broker_snapshot" } else { "position_snapshots" }
         }))
+    }
+
+    async fn position_aggregate(&self, batch_id: Option<&str>) -> Result<JsonValue> {
+        let rows = if self.broker_positions_available().await? {
+            self.effective_position_rows(None).await?
+        } else {
+            let where_clause = match batch_id {
+                Some(batch_id) => format!(
+                    "WHERE batch_id = '{}' AND excluded = 0",
+                    sql_escape(batch_id)
+                ),
+                None => "WHERE excluded = 0".to_string(),
+            };
+            self.select_json(&format!(
+                "SELECT market_value_dkk, cost_basis_dkk, unrealised_pnl_dkk, daily_pnl_dkk FROM position_snapshots {where_clause}"
+            ))
+            .await
+            .unwrap_or_default()
+        };
+        self.position_aggregate_from_rows(&rows).await
+    }
+
+    /// Normalizes the same effective positions used for an aggregate snapshot
+    /// into immutable, recomputable position evidence. This is intentionally
+    /// pure: it neither refreshes prices nor changes portfolio/execution state.
+    fn portfolio_position_snapshot_rows(rows: &[JsonValue]) -> Result<Vec<JsonValue>> {
+        let mut snapshots = Vec::with_capacity(rows.len());
+        let mut seen_symbols = HashSet::new();
+        for row in rows {
+            let symbol = text_value(row, "symbol").trim().to_string();
+            let quantity = value_f64(row, "quantity");
+            let price_local = value_f64(row, "current_price_local");
+            let currency = text_value(row, "currency").trim().to_string();
+            let cost_basis_local = value_f64(row, "cost_basis_local_total");
+            let cost_basis_dkk = value_f64(row, "cost_basis_dkk");
+            if symbol.is_empty()
+                || currency.is_empty()
+                || !quantity.is_finite()
+                || quantity <= 0.0
+                || !price_local.is_finite()
+                || price_local <= 0.0
+                || !cost_basis_local.is_finite()
+                || cost_basis_local < 0.0
+                || !cost_basis_dkk.is_finite()
+                || cost_basis_dkk < 0.0
+            {
+                bail!("position snapshot inputs are incomplete for {symbol}");
+            }
+            let canonical_symbol = canonical_symbol_key(&symbol);
+            if !seen_symbols.insert(canonical_symbol) {
+                bail!("position snapshot contains duplicate symbol {symbol}");
+            }
+            let market_value_local = quantity * price_local;
+            let fx_rate_to_dkk = value_f64(row, "fx_rate_to_dkk");
+            let fx_rate_to_dkk = if fx_rate_to_dkk.is_finite() && fx_rate_to_dkk > 0.0 {
+                fx_rate_to_dkk
+            } else {
+                value_f64(row, "market_value_dkk") / market_value_local
+            };
+            if !fx_rate_to_dkk.is_finite() || fx_rate_to_dkk <= 0.0 {
+                bail!("position snapshot FX rate is unavailable for {symbol}");
+            }
+            let market_value_dkk = market_value_local * fx_rate_to_dkk;
+            snapshots.push(json!({
+                "symbol": symbol,
+                "isin": row.get("isin").cloned().unwrap_or(JsonValue::Null),
+                "currency": currency,
+                "quantity": quantity,
+                "price_local": price_local,
+                "fx_rate_to_dkk": fx_rate_to_dkk,
+                "cost_basis_local": cost_basis_local,
+                "cost_basis_dkk": cost_basis_dkk,
+                "market_value_dkk": market_value_dkk,
+                "unrealised_pnl_dkk": market_value_dkk - cost_basis_dkk,
+            }));
+        }
+        Ok(snapshots)
     }
 
     async fn cash_summary_from_ledger(&self) -> Result<JsonValue> {
@@ -11612,12 +11679,37 @@ impl AppState {
     ) -> Result<JsonValue> {
         let recorded_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let latest_batch = self.latest_batch_id().await?;
-        let aggregate = self.position_aggregate(latest_batch.as_deref()).await?;
+        // Read the effective positions once. The aggregate and its new
+        // per-position sibling must describe precisely the same observation.
+        let position_rows = if self.broker_positions_available().await? {
+            self.effective_position_rows(None).await?
+        } else {
+            let where_clause = latest_batch
+                .as_deref()
+                .map(|batch_id| {
+                    format!(
+                        "WHERE batch_id = '{}' AND excluded = 0",
+                        sql_escape(batch_id)
+                    )
+                })
+                .unwrap_or_else(|| "WHERE excluded = 0".to_string());
+            self.select_json(&format!(
+                "SELECT symbol, isin, quantity, currency, current_price_local,
+                        cost_basis_local, cost_basis_local AS cost_basis_local_total,
+                        cost_basis_dkk, market_value_local, market_value_dkk,
+                        unrealised_pnl_dkk, daily_pnl_dkk
+                 FROM position_snapshots {where_clause}"
+            ))
+            .await?
+        };
+        let aggregate = self.position_aggregate_from_rows(&position_rows).await?;
+        let position_snapshots = Self::portfolio_position_snapshot_rows(&position_rows)?;
         let payload = json!({
             "summary": aggregate,
             "snapshot_type": snapshot_type,
             "baseline_session_date": baseline_session_date,
             "source": source,
+            "position_snapshot_count": position_snapshots.len(),
             "extra": extra_payload,
         });
         let payload_text =
@@ -11666,44 +11758,62 @@ impl AppState {
             sql_optional_text(Some(source)),
             sql_escape(&payload_text)
         );
-        sqlx::query(&sql)
-            .execute(&self.pool)
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("starting portfolio snapshot transaction")?;
+        let snapshot_id = sqlx::query_scalar::<_, i64>(&format!("{sql} RETURNING id"))
+            .fetch_one(&mut *transaction)
             .await
             .context("recording portfolio value snapshot")?;
-        let snapshot = self
-            .first_json(&format!(
-                "SELECT recorded_at, snapshot_type, baseline_session_date, batch_id,
-                        total_market_value_dkk, invested_market_value_dkk, cash_balance_dkk,
-                        total_cost_basis_dkk, total_unrealised_pnl_dkk, total_daily_pnl_dkk,
-                        position_count, source
-                 FROM portfolio_value_history
-                 WHERE recorded_at = '{}' AND snapshot_type = '{}' AND source = '{}'
-                 ORDER BY id DESC
-                 LIMIT 1",
+        for position in &position_snapshots {
+            sqlx::query(&format!(
+                "INSERT INTO portfolio_position_snapshots (
+                    snapshot_id, recorded_at, symbol, isin, currency, quantity,
+                    price_local, fx_rate_to_dkk, cost_basis_local, cost_basis_dkk,
+                    market_value_dkk, unrealised_pnl_dkk
+                ) VALUES ({}, '{}', '{}', {}, '{}', {}, {}, {}, {}, {}, {}, {})",
+                snapshot_id,
                 sql_escape(&recorded_at),
-                sql_escape(snapshot_type),
-                sql_escape(source)
+                sql_escape(&json_text(position, "symbol")),
+                sql_optional_text(position.get("isin").and_then(JsonValue::as_str)),
+                sql_escape(&json_text(position, "currency")),
+                sql_f64(value_f64(position, "quantity")),
+                sql_f64(value_f64(position, "price_local")),
+                sql_f64(value_f64(position, "fx_rate_to_dkk")),
+                sql_f64(value_f64(position, "cost_basis_local")),
+                sql_f64(value_f64(position, "cost_basis_dkk")),
+                sql_f64(value_f64(position, "market_value_dkk")),
+                sql_f64(value_f64(position, "unrealised_pnl_dkk")),
             ))
-            .await?
-            .unwrap_or_else(|| {
-                json!({
-                    "recorded_at": recorded_at,
-                    "snapshot_type": snapshot_type,
-                    "baseline_session_date": baseline_session_date,
-                    "batch_id": latest_batch,
-                    "total_market_value_dkk": value_f64(&aggregate, "total_market_value_dkk"),
-                    "invested_market_value_dkk": value_f64(&aggregate, "invested_market_value_dkk"),
-                    "cash_balance_dkk": value_f64(&aggregate, "cash_balance_dkk"),
-                    "total_cost_basis_dkk": value_f64(&aggregate, "total_cost_basis_dkk"),
-                    "total_unrealised_pnl_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
-                    "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
-                    "position_count": value_i64(&aggregate, "position_count"),
-                    "source": source,
-                })
-            });
+            .execute(&mut *transaction)
+            .await
+            .context("recording portfolio position snapshot")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("committing portfolio snapshot transaction")?;
+        let snapshot = json!({
+            "id": snapshot_id,
+            "recorded_at": recorded_at,
+            "snapshot_type": snapshot_type,
+            "baseline_session_date": baseline_session_date,
+            "batch_id": latest_batch,
+            "total_market_value_dkk": value_f64(&aggregate, "total_market_value_dkk"),
+            "invested_market_value_dkk": value_f64(&aggregate, "invested_market_value_dkk"),
+            "cash_balance_dkk": value_f64(&aggregate, "cash_balance_dkk"),
+            "total_cost_basis_dkk": value_f64(&aggregate, "total_cost_basis_dkk"),
+            "total_unrealised_pnl_dkk": value_f64(&aggregate, "total_unrealised_pnl_dkk"),
+            "total_daily_pnl_dkk": value_f64(&aggregate, "total_daily_pnl_dkk"),
+            "position_count": value_i64(&aggregate, "position_count"),
+            "source": source,
+        });
         Ok(json!({
             "status": "ok",
             "snapshot": snapshot,
+            "position_snapshot_count": position_snapshots.len(),
         }))
     }
 
@@ -12640,6 +12750,41 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating portfolio value history recorded index")?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS portfolio_position_snapshots (
+                snapshot_id BIGINT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                isin TEXT,
+                currency TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                price_local REAL NOT NULL,
+                fx_rate_to_dkk REAL NOT NULL,
+                cost_basis_local REAL NOT NULL,
+                cost_basis_dkk REAL NOT NULL,
+                market_value_dkk REAL NOT NULL,
+                unrealised_pnl_dkk REAL NOT NULL,
+                PRIMARY KEY (snapshot_id, symbol),
+                FOREIGN KEY (snapshot_id) REFERENCES portfolio_value_history(id) ON DELETE CASCADE
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating portfolio position snapshots table")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_position_snapshots_recorded
+             ON portfolio_position_snapshots(recorded_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating portfolio position snapshots recorded index")?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_position_snapshots_symbol_recorded
+             ON portfolio_position_snapshots(symbol, recorded_at DESC)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating portfolio position snapshots symbol index")?;
         if self.db_url.starts_with("postgres://") || self.db_url.starts_with("postgresql://") {
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS notification_deliveries (
@@ -17187,6 +17332,113 @@ market_data:
             db_url: "sqlite::memory:".to_string(),
             pool,
         }
+    }
+
+    async fn portfolio_snapshot_test_state() -> AppState {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory portfolio snapshot database");
+        for statement in [
+            "CREATE TABLE import_batches (batch_id TEXT NOT NULL, imported_at TEXT NOT NULL)",
+            "CREATE TABLE broker_position_snapshots (symbol TEXT PRIMARY KEY)",
+            "CREATE TABLE position_snapshots (
+                instrument_name TEXT, symbol TEXT NOT NULL, isin TEXT, quantity REAL NOT NULL,
+                currency TEXT NOT NULL, open_price_local REAL, current_price_local REAL,
+                cost_basis_local REAL NOT NULL, cost_basis_dkk REAL NOT NULL,
+                market_value_local REAL, market_value_dkk REAL NOT NULL,
+                unrealised_pnl_dkk REAL, daily_pnl_dkk REAL, allocation_pct REAL,
+                asset_class TEXT, market_status TEXT, value_date TEXT, excluded INTEGER NOT NULL
+            )",
+            "CREATE TABLE trade_ledger (net_amount_dkk REAL NOT NULL, status TEXT NOT NULL)",
+            "CREATE TABLE portfolio_value_history (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, snapshot_type TEXT NOT NULL,
+                baseline_session_date TEXT, batch_id TEXT, total_market_value_dkk REAL NOT NULL,
+                invested_market_value_dkk REAL NOT NULL, cash_balance_dkk REAL NOT NULL,
+                total_cost_basis_dkk REAL NOT NULL, total_unrealised_pnl_dkk REAL NOT NULL,
+                total_daily_pnl_dkk REAL NOT NULL, position_count INTEGER NOT NULL,
+                source TEXT, raw_payload_json TEXT NOT NULL
+            )",
+            "CREATE TABLE portfolio_position_snapshots (
+                snapshot_id INTEGER NOT NULL, recorded_at TEXT NOT NULL, symbol TEXT NOT NULL,
+                isin TEXT, currency TEXT NOT NULL, quantity REAL NOT NULL,
+                price_local REAL NOT NULL, fx_rate_to_dkk REAL NOT NULL,
+                cost_basis_local REAL NOT NULL, cost_basis_dkk REAL NOT NULL,
+                market_value_dkk REAL NOT NULL, unrealised_pnl_dkk REAL NOT NULL,
+                PRIMARY KEY (snapshot_id, symbol)
+            )",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("create portfolio snapshot test table");
+        }
+        sqlx::query(
+            "INSERT INTO position_snapshots (
+                instrument_name, symbol, isin, quantity, currency, open_price_local,
+                current_price_local, cost_basis_local, cost_basis_dkk, market_value_local,
+                market_value_dkk, unrealised_pnl_dkk, daily_pnl_dkk, allocation_pct,
+                asset_class, market_status, value_date, excluded
+            ) VALUES (
+                'Example Inc.', 'EXMPL:xnas', 'US0000000001', 10, 'USD', 75,
+                100, 750, 1200, 1000, 1500, 300, 25, 0.6,
+                'Stock', 'Open', '2026-08-23', 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed position snapshot");
+        AppState {
+            config_path: std::path::PathBuf::from("portfolio-snapshot-test.yaml"),
+            config: serde_yaml::from_str("portfolio:\n  initial_cash_dkk: 1000\n")
+                .expect("parse portfolio snapshot test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        }
+    }
+
+    #[tokio::test]
+    async fn portfolio_value_snapshot_dual_writes_recomputable_position_evidence() {
+        let state = portfolio_snapshot_test_state().await;
+        let recorded = state
+            .record_portfolio_value_snapshot(
+                "scheduler_cycle",
+                None,
+                "test",
+                json!({"reason": "regression"}),
+            )
+            .await
+            .expect("record dual portfolio snapshot");
+        assert_eq!(recorded["status"], json!("ok"));
+        assert_eq!(recorded["position_snapshot_count"], json!(1));
+        assert_eq!(
+            recorded["snapshot"]["total_market_value_dkk"],
+            json!(2500.0)
+        );
+
+        let row = sqlx::query(
+            "SELECT snapshot_id, quantity, price_local, fx_rate_to_dkk,
+                    cost_basis_local, cost_basis_dkk, market_value_dkk,
+                    unrealised_pnl_dkk
+             FROM portfolio_position_snapshots",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read position evidence");
+        let snapshot_id = row.try_get::<i64, _>("snapshot_id").unwrap();
+        assert_eq!(snapshot_id, value_i64(&recorded["snapshot"], "id"));
+        let quantity = row.try_get::<f64, _>("quantity").unwrap();
+        let price_local = row.try_get::<f64, _>("price_local").unwrap();
+        let fx_rate = row.try_get::<f64, _>("fx_rate_to_dkk").unwrap();
+        let market_value = row.try_get::<f64, _>("market_value_dkk").unwrap();
+        let cost_basis = row.try_get::<f64, _>("cost_basis_dkk").unwrap();
+        let unrealised = row.try_get::<f64, _>("unrealised_pnl_dkk").unwrap();
+        assert!((market_value - quantity * price_local * fx_rate).abs() < 1e-9);
+        assert!((unrealised - (market_value - cost_basis)).abs() < 1e-9);
+        assert!((row.try_get::<f64, _>("cost_basis_local").unwrap() - 750.0).abs() < 1e-9);
     }
 
     /// A drawdown peak must never reach back across a re-baselining.

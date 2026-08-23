@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-21
+updated: 2026-08-23
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-23: Landed Portfolio Snapshot Schema slice 1. Every new aggregate `portfolio_value_history` row now commits, in the same transaction, a linked `portfolio_position_snapshots` row per effective held position. Each detail row retains quantity, local price, FX rate to DKK, local/DKK cost basis, recomputed market value, and recomputed unrealised P/L, so its DKK figures are independently reproducible. Existing dashboard and performance reads remain on the aggregate table; this adds no broker request, execution mutation, provider call, or new performance claim. Slice 2 retention and slice 3 aggregate/detail integrity checks remain deliberately separate follow-ups.
 - 2026-08-17: Corrected the SIM execution-admission regression found in live diagnostics. `execution.mode=live` means that the application submits to the Saxo adapter; `saxo.environment` selects the simulated (`SIM`) or real-money (`LIVE`) broker venue. The queue now permits only a valid matching configured/session pair (`SIM`/`SIM` or `LIVE`/`LIVE`) and fails closed for an unknown, missing, or mismatched environment. The dashboard reports `simulated_broker`, `live_broker`, or a specific disabled reason, rather than treating SIM as disabled. Reconciliation remains ISIN-first/case-normalized, and exposure P/L remains converted with each instrument currency's FX rate.
 - 2026-08-01: Replaced the public Decision Gate Replay compatibility-JSON envelope with typed Rust `DecisionGateReplayPayload`. Its stable availability, run count, scenarios, safety, interpretation, and support-risk evidence fields are explicit while nested historical-analysis details remain compatibility JSON during the staged port. This does not change target-gate replay calculation, support-risk evidence collection, Decision Reports, Hermes, Trading Manager gates, configuration, protective stops, or Saxo execution. A focused regression pins the serialization. Follow-up: continue only with another small independently tested public contract before attempting broad dashboard-payload conversion.
 - 2026-08-01: Replaced the public performance compatibility-JSON envelope with typed Rust `PerformancePayload`. Its stable range key, history list, summary, benchmarks, and goal-tracking fields are explicit while their nested read-model details remain compatibility JSON during the staged port. This does not change performance collection, benchmark retrieval, goal tracking, Decision Reports, Hermes, Trading Manager gates, protective stops, or Saxo execution. A focused regression pins the serialization. Follow-up: continue only with another small independently tested public contract before attempting broad dashboard-payload conversion.
