@@ -36,21 +36,22 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardSaxoAuthPayload, DashboardView, DecisionGateReplayPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        CashBufferSettings, DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
+        DecisionGateReplayPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3223,6 +3224,14 @@ fn dashboard_saxo_auth_unavailable() -> DashboardSaxoAuthPayload {
     }
 }
 
+/// Decodes the dashboard's sanitized AI settings and masked key status.
+/// Provider configuration and raw key overrides remain outside this SSR view.
+fn dashboard_ai_settings_from_json(
+    settings: JsonValue,
+) -> serde_json::Result<DashboardAiSettingsPayload> {
+    serde_json::from_value(settings)
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -6055,6 +6064,14 @@ impl AppState {
             warn!("dashboard typed Saxo auth status degraded: {err:#}");
             dashboard_saxo_auth_unavailable()
         });
+        let ai_settings = self.ai_settings_value().await.unwrap_or_else(|err| {
+            warn!("dashboard AI settings degraded: {err:#}");
+            self.default_ai_settings_value()
+        });
+        let ai_settings = dashboard_ai_settings_from_json(ai_settings).unwrap_or_else(|err| {
+            warn!("dashboard typed AI settings degraded: {err:#}");
+            self.default_dashboard_ai_settings()
+        });
 
         DashboardView {
             app_name: yaml_string(&self.config, &["app", "project_name"])
@@ -6104,10 +6121,7 @@ impl AppState {
             },
             saxo_auth,
             sso_session,
-            ai_settings: self.ai_settings_value().await.unwrap_or_else(|err| {
-                warn!("dashboard AI settings degraded: {err:#}");
-                self.default_ai_settings_value()
-            }),
+            ai_settings,
             localization,
             active_view,
             performance_range,
@@ -12955,6 +12969,24 @@ impl AppState {
         })
     }
 
+    fn default_dashboard_ai_settings(&self) -> DashboardAiSettingsPayload {
+        let mut value = self.default_ai_settings_value();
+        value
+            .as_object_mut()
+            .expect("default AI settings must be an object")
+            .insert(
+                "api_key".to_string(),
+                json!({
+                    "configured": false,
+                    "source": "missing",
+                    "masked": null,
+                    "updated_at": null
+                }),
+            );
+        dashboard_ai_settings_from_json(value)
+            .expect("default dashboard AI settings must satisfy the sanitized contract")
+    }
+
     pub async fn ai_settings_value(&self) -> Result<JsonValue> {
         let mut value = self.default_ai_settings_value();
         if let Some(saved) = self.runtime_setting("ai_settings").await? {
@@ -16924,6 +16956,35 @@ mod tests {
         assert_eq!(auth.expires_in_minutes, Some(29));
         assert!(dashboard_saxo_auth_from_json(json!({"connected": true})).is_err());
         assert_eq!(dashboard_saxo_auth_unavailable().status, "unavailable");
+    }
+
+    #[test]
+    fn dashboard_ai_settings_require_masked_key_status() {
+        let settings = dashboard_ai_settings_from_json(json!({
+            "provider": "openrouter",
+            "model": "openai/gpt-5.5",
+            "config_model": "openai/gpt-5.5",
+            "source": "runtime",
+            "updated_at": "2026-08-23T13:00:00Z",
+            "api_key": {
+                "configured": true,
+                "source": "runtime",
+                "masked": "sk-or-…5678",
+                "updated_at": "2026-08-23T13:00:00Z",
+                "raw": "must-not-reach-the-dashboard"
+            }
+        }))
+        .expect("sanitized AI settings decode");
+
+        assert!(settings.api_key.configured);
+        assert_eq!(settings.model, "openai/gpt-5.5");
+        assert_eq!(settings.api_key.masked.as_deref(), Some("sk-or-…5678"));
+        assert!(
+            !serde_json::to_string(&settings)
+                .expect("sanitized settings serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(dashboard_ai_settings_from_json(json!({"model": "openai/gpt-5.5"})).is_err());
     }
 
     #[test]

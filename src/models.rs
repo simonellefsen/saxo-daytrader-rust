@@ -30,7 +30,7 @@ pub struct DashboardView {
     pub saxo_status: String,
     pub saxo_auth: DashboardSaxoAuthPayload,
     pub sso_session: SsoSession,
-    pub ai_settings: JsonValue,
+    pub ai_settings: DashboardAiSettingsPayload,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -728,6 +728,32 @@ pub struct DashboardSaxoAuthPayload {
     pub needs_reauth: bool,
     pub status: String,
     pub status_text: String,
+}
+
+/// Masked API-key status shown in the dashboard settings menu.
+///
+/// This carries no usable key material. The raw override is retained only in
+/// runtime settings and is read by the provider request path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardAiKeyStatusPayload {
+    pub configured: bool,
+    pub source: String,
+    pub masked: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// Sanitized AI settings used by the dashboard settings menu.
+///
+/// Model selection and API-key updates remain handled by their existing
+/// request paths; this type only narrows the SSR display boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardAiSettingsPayload {
+    pub provider: String,
+    pub model: String,
+    pub config_model: String,
+    pub source: String,
+    pub updated_at: Option<String>,
+    pub api_key: DashboardAiKeyStatusPayload,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

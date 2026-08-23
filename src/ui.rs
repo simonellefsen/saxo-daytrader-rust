@@ -11,11 +11,11 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardSaxoAuthPayload, DashboardView, DecisionGateReplayPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
+        DecisionGateReplayPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
@@ -453,7 +453,7 @@ fn UserMenu(
     prefs: LocalizationPrefs,
     active_view: String,
     range: String,
-    ai_settings: JsonValue,
+    ai_settings: DashboardAiSettingsPayload,
 ) -> Element {
     let email = sso_session
         .user
@@ -476,20 +476,32 @@ fn UserMenu(
     } else {
         format!("/?view={active_view}")
     };
-    let ai_model = fallback_text(&ai_settings, "model", "openai/gpt-5.5");
-    let ai_source = fallback_text(&ai_settings, "source", "config");
-    let ai_config_model = fallback_text(&ai_settings, "config_model", "openai/gpt-5.5");
-    let key_status = ai_settings.get("api_key").cloned().unwrap_or_default();
-    let key_source = fallback_text(&key_status, "source", "missing");
-    let key_hint = if key_status
-        .get("configured")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
-        let masked = fallback_text(&key_status, "masked", "•••");
-        let updated = key_status
-            .get("updated_at")
-            .and_then(JsonValue::as_str)
+    let ai_model = if ai_settings.model.is_empty() {
+        "openai/gpt-5.5".to_string()
+    } else {
+        ai_settings.model.clone()
+    };
+    let ai_source = if ai_settings.source.is_empty() {
+        "config".to_string()
+    } else {
+        ai_settings.source.clone()
+    };
+    let ai_config_model = if ai_settings.config_model.is_empty() {
+        "openai/gpt-5.5".to_string()
+    } else {
+        ai_settings.config_model.clone()
+    };
+    let key_hint = if ai_settings.api_key.configured {
+        let masked = ai_settings.api_key.masked.as_deref().unwrap_or("•••");
+        let key_source = if ai_settings.api_key.source.is_empty() {
+            "missing"
+        } else {
+            &ai_settings.api_key.source
+        };
+        let updated = ai_settings
+            .api_key
+            .updated_at
+            .as_deref()
             .map(|value| format!(" · updated {value}"))
             .unwrap_or_default();
         format!("Active key: {masked} · source: {key_source}{updated}")
