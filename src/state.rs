@@ -37,10 +37,10 @@ use crate::{
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
-        DecisionGateReplayPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -9473,7 +9473,7 @@ impl AppState {
     /// missing table degrades that row to `missing` instead of failing the whole
     /// strip — this is a diagnostic, and a diagnostic that disappears when
     /// something is wrong is worse than none.
-    pub(crate) async fn data_freshness(&self) -> Vec<JsonValue> {
+    pub(crate) async fn data_freshness(&self) -> Vec<DataFreshnessSourcePayload> {
         let now = Utc::now();
         let mut rows = Vec::new();
         for source in FRESHNESS_SOURCES {
@@ -9492,16 +9492,16 @@ impl AppState {
                 .as_deref()
                 .and_then(parse_freshness_timestamp)
                 .map(|observed| (now - observed).num_minutes().max(0));
-            rows.push(json!({
-                "key": source.key,
-                "label": source.label,
-                "tab": source.tab,
-                "observed_at": observed_at,
-                "age_minutes": age_minutes,
-                "age_label": freshness_age_label(age_minutes),
-                "stale_after_minutes": source.stale_after_minutes,
-                "state": freshness_state(age_minutes, source.stale_after_minutes),
-            }));
+            rows.push(DataFreshnessSourcePayload {
+                key: source.key.to_string(),
+                label: source.label.to_string(),
+                tab: source.tab.to_string(),
+                observed_at,
+                age_minutes,
+                age_label: freshness_age_label(age_minutes),
+                stale_after_minutes: source.stale_after_minutes,
+                state: freshness_state(age_minutes, source.stale_after_minutes).to_string(),
+            });
         }
         rows
     }
@@ -22840,6 +22840,25 @@ analysis_windows:
         assert_eq!(freshness_age_label(Some(2 * 24 * 60)), "2d ago");
         // Negative clock skew must not render as a bizarre age.
         assert_eq!(freshness_age_label(Some(-5)), "just now");
+    }
+
+    #[test]
+    fn freshness_payload_keeps_the_dashboard_diagnostic_contract() {
+        let source = DataFreshnessSourcePayload {
+            key: "fx_rates".to_string(),
+            label: "FX rates".to_string(),
+            tab: "overview".to_string(),
+            observed_at: Some("2026-08-23T12:00:00Z".to_string()),
+            age_minutes: Some(45),
+            age_label: "45m ago".to_string(),
+            stale_after_minutes: 90,
+            state: "aging".to_string(),
+        };
+
+        let encoded = serde_json::to_value(&source).expect("freshness source serializes");
+        assert_eq!(encoded["key"], "fx_rates");
+        assert_eq!(encoded["state"], "aging");
+        assert_eq!(encoded["stale_after_minutes"], 90);
     }
 
     /// Every shipped source must name a tab that exists, or its chip can only

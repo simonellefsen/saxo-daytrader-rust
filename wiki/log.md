@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard data-freshness strip
+
+- Changed the dashboard staleness strip to consume typed source identity, owner-tab, observation/age, threshold, and state fields.
+- Per-source missing-data degradation remains explicit, so an unavailable table still appears as `missing` instead of suppressing the diagnostic.
+- This preserves read-only operational evidence and performs no scheduler, provider-refresh, Decision Report, Hermes, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard sanitized AI settings
 
 - Changed the settings menu to consume typed provider/model provenance and masked API-key status directly.

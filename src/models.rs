@@ -43,7 +43,7 @@ pub struct DashboardView {
     pub markov_signal_total: i64,
     pub markov_filter: String,
     pub hermes_section: String,
-    pub data_freshness: Vec<JsonValue>,
+    pub data_freshness: Vec<DataFreshnessSourcePayload>,
     pub quiver_page: i64,
     pub quiver_page_size: i64,
     pub quiver_signal_total: i64,
@@ -754,6 +754,22 @@ pub struct DashboardAiSettingsPayload {
     pub source: String,
     pub updated_at: Option<String>,
     pub api_key: DashboardAiKeyStatusPayload,
+}
+
+/// One independently refreshed dashboard data source and its staleness state.
+///
+/// This is read-only diagnostic evidence. The source query and refresh cadence
+/// remain owned by the scheduler and provider-specific collectors.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DataFreshnessSourcePayload {
+    pub key: String,
+    pub label: String,
+    pub tab: String,
+    pub observed_at: Option<String>,
+    pub age_minutes: Option<i64>,
+    pub age_label: String,
+    pub stale_after_minutes: i64,
+    pub state: String,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

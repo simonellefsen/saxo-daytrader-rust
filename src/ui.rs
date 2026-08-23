@@ -12,8 +12,8 @@ use crate::{
     },
     models::{
         DashboardAiSettingsPayload, DashboardSaxoAuthPayload, DashboardView,
-        DecisionGateReplayPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -649,15 +649,14 @@ fn TabNav(active_view: String) -> Element {
 /// Renders nothing when everything relevant is fresh, so a healthy system does
 /// not pay for a permanent banner that trains the eye to ignore it.
 #[component]
-fn DataFreshnessStrip(sources: Vec<JsonValue>, active_view: String) -> Element {
+fn DataFreshnessStrip(sources: Vec<DataFreshnessSourcePayload>, active_view: String) -> Element {
     let visible = sources
         .iter()
         .filter(|source| {
-            let state = text(source, "state");
-            let owned_by_tab = text(source, "tab") == active_view;
+            let owned_by_tab = source.tab == active_view;
             // `missing` is not surfaced from other tabs: a source that has never
             // produced a row is usually an unconfigured feature, not a fault.
-            (owned_by_tab && state != "fresh") || state == "stale"
+            (owned_by_tab && source.state != "fresh") || source.state == "stale"
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -668,10 +667,10 @@ fn DataFreshnessStrip(sources: Vec<JsonValue>, active_view: String) -> Element {
         div { class: "freshness-strip", aria_label: "Data freshness",
             for source in visible.iter() {
                 span {
-                    class: "freshness-chip {freshness_tone(&text(source, \"state\"))}",
+                    class: "freshness-chip {freshness_tone(&source.state)}",
                     title: "{freshness_tooltip(source)}",
-                    strong { "{text(source, \"label\")}" }
-                    span { "{text(source, \"age_label\")}" }
+                    strong { "{source.label}" }
+                    span { "{source.age_label}" }
                 }
             }
         }
@@ -687,16 +686,16 @@ fn freshness_tone(state: &str) -> &'static str {
     }
 }
 
-fn freshness_tooltip(source: &JsonValue) -> String {
-    let label = text(source, "label");
-    let observed = text(source, "observed_at");
-    let stale_after = value_f64(source, "stale_after_minutes") as i64;
+fn freshness_tooltip(source: &DataFreshnessSourcePayload) -> String {
+    let label = &source.label;
+    let observed = source.observed_at.as_deref().unwrap_or("never");
+    let stale_after = source.stale_after_minutes;
     let threshold = if stale_after >= 24 * 60 {
         format!("{} days", stale_after / (24 * 60))
     } else {
         format!("{stale_after} minutes")
     };
-    match text(source, "state").as_str() {
+    match source.state.as_str() {
         "missing" => format!("{label} has never recorded a value."),
         "stale" => format!(
             "{label} last updated {observed}. Expected to refresh well inside {threshold}; it has not, so treat anything derived from it as suspect."
