@@ -10,9 +10,10 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardView, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
         TuningExecutionPulseOutcome, TuningPulseComparison,
@@ -3737,18 +3738,15 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn WatchlistsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
-    let categories = data
-        .watchlists
-        .get("categories")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let watchlists: MarketWatchlistsPayload = data.watchlists.clone();
+    let generated_at = watchlists.generated_at;
+    let categories = watchlists.categories;
     rsx! {
         section { class: "section",
             div { class: "section-title-row",
                 div {
                     h2 { "Daily Watchlist Analysis" }
-                    p { class: "muted section-intro", "Quote-ranked stocks of interest for Nordic, UK, US, and EU/Euronext universes. Refreshed {format_timestamp(&text(&data.watchlists, \"generated_at\"), &prefs)}." }
+                    p { class: "muted section-intro", "Quote-ranked stocks of interest for Nordic, UK, US, and EU/Euronext universes. Refreshed {format_timestamp(&generated_at, &prefs)}." }
                 }
                 div { class: "pill-row right",
                     for category in categories.iter().filter(|category| text(category, "key") != "all") {

@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Watchlists consumption
+
+- Changed the Watchlists tab to consume the typed watchlist refresh metadata and category-list boundary directly.
+- Quote- and decision-derived category/item fields remain compatibility JSON; malformed tab evidence degrades to an empty local watchlist rather than arbitrary dashboard JSON.
+- This preserves read-only watchlist presentation and performs no quote refresh, candidate-membership, Decision Report, Hermes, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Trading Manager consumption
 
 - Changed Cash Deployment and Instrument Quarantine to consume the typed Trading Manager availability/latest-run envelope directly.

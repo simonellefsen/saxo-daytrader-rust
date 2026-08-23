@@ -38,17 +38,18 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        MarketStatusPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3137,6 +3138,23 @@ fn dashboard_trading_manager_from_json(
     serde_json::from_value(trading_manager)
 }
 
+/// Decodes the stable Watchlists envelope used by the Watchlists tab. The
+/// quote- and decision-derived category rows intentionally remain staged JSON.
+fn dashboard_watchlists_from_json(
+    watchlists: JsonValue,
+) -> serde_json::Result<MarketWatchlistsPayload> {
+    serde_json::from_value(watchlists)
+}
+
+fn dashboard_watchlists_not_loaded() -> MarketWatchlistsPayload {
+    MarketWatchlistsPayload {
+        generated_at: String::new(),
+        cache_ttl_seconds: 300,
+        universe: json!({}),
+        categories: Vec::new(),
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5818,12 +5836,24 @@ impl AppState {
                 }
             });
         let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
-            self.watchlists_payload().await.unwrap_or_else(|err| {
+            let watchlists = self.watchlists_payload().await.unwrap_or_else(|err| {
                 warn!("dashboard watchlists degraded: {err:#}");
-                json!({"generated_at": Utc::now().to_rfc3339(), "categories": []})
+                json!({
+                    "generated_at": Utc::now().to_rfc3339(),
+                    "cache_ttl_seconds": 300,
+                    "universe": {},
+                    "categories": []
+                })
+            });
+            dashboard_watchlists_from_json(watchlists).unwrap_or_else(|err| {
+                warn!("dashboard typed watchlists degraded: {err:#}");
+                MarketWatchlistsPayload {
+                    generated_at: Utc::now().to_rfc3339(),
+                    ..dashboard_watchlists_not_loaded()
+                }
             })
         } else {
-            JsonValue::Null
+            dashboard_watchlists_not_loaded()
         };
         let tuning = if dashboard_loads_tab_exclusive_data(&active_view, "tuning") {
             self.tuning_payload().await.unwrap_or_else(|err| {
@@ -16682,6 +16712,22 @@ mod tests {
         assert_eq!(trading_manager.status, "available");
         assert_eq!(trading_manager.latest_run["id"], json!(52));
         assert!(dashboard_trading_manager_from_json(json!({"status": "available"})).is_err());
+    }
+
+    #[test]
+    fn dashboard_watchlists_requires_the_stable_outer_contract() {
+        let watchlists = dashboard_watchlists_from_json(json!({
+            "generated_at": "2026-08-23T12:00:00Z",
+            "cache_ttl_seconds": 300,
+            "universe": {"source": "configured_analysis_universe"},
+            "categories": [{"key": "nordic", "items": [{"symbol": "NOVO-B:xcse"}]}]
+        }))
+        .expect("watchlists fixture has the dashboard contract");
+
+        assert_eq!(watchlists.cache_ttl_seconds, 300);
+        assert_eq!(watchlists.categories[0]["key"], json!("nordic"));
+        assert_eq!(dashboard_watchlists_not_loaded().categories.len(), 0);
+        assert!(dashboard_watchlists_from_json(json!({"categories": []})).is_err());
     }
 
     #[test]

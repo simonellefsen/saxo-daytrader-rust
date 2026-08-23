@@ -93,7 +93,7 @@ pub struct DashboardView {
     pub execution_protection: JsonValue,
     pub market_status: MarketStatusPayload,
     pub trading_manager: TradingManagerPayload,
-    pub watchlists: JsonValue,
+    pub watchlists: MarketWatchlistsPayload,
     pub latest_decision: JsonValue,
     pub selected_decision: JsonValue,
     pub decision_gate_replay: JsonValue,
