@@ -38,13 +38,13 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        PerformanceHistoryRowPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        PerformanceHistoryRowPayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3027,6 +3027,18 @@ fn dashboard_performance_history_from_json(
     history.into_iter().map(serde_json::from_value).collect()
 }
 
+/// Decodes the selected-range summary for SSR while preserving the non-Performance
+/// tabs' explicit unavailable state.
+fn dashboard_performance_summary_from_json(
+    summary: JsonValue,
+) -> serde_json::Result<Option<PerformanceSummaryPayload>> {
+    if summary.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(summary).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5591,6 +5603,11 @@ impl AppState {
             .unwrap_or_else(|err| {
                 warn!("dashboard typed performance history degraded: {err:#}");
                 Vec::new()
+            });
+        let performance_summary = dashboard_performance_summary_from_json(performance_summary)
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed performance summary degraded: {err:#}");
+                None
             });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
@@ -22473,6 +22490,41 @@ analysis_windows:
             })])
             .is_err()
         );
+    }
+
+    #[test]
+    fn dashboard_performance_summary_preserves_unavailable_and_confidence_states() {
+        assert!(
+            dashboard_performance_summary_from_json(JsonValue::Null)
+                .expect("null stays unavailable")
+                .is_none()
+        );
+        let summary = dashboard_performance_summary_from_json(json!({
+            "points": 2,
+            "first_recorded_at": "2026-08-23T08:00:00Z",
+            "latest_recorded_at": "2026-08-23T09:00:00Z",
+            "first_total_market_value_dkk": 240_000.0,
+            "latest_total_market_value_dkk": 244_000.0,
+            "change_dkk": 4_000.0,
+            "daily_pnl_dkk": 250.0,
+            "position_count": 20,
+            "range_return_pct": 1.6667,
+            "range_max_drawdown_pct": -0.5,
+            "confidence": {
+                "status": "current",
+                "valid_points": 2,
+                "latest_recorded_at": "2026-08-23T09:00:00Z",
+                "latest_snapshot_type": "runtime_current",
+                "latest_source": "test",
+                "age_minutes": 0,
+                "scope": "account_value_only",
+            },
+            "unreliable_cost_basis_points": 0,
+        }))
+        .expect("complete summary is typed")
+        .expect("non-null summary is present");
+        assert_eq!(summary.confidence.status, "current");
+        assert!(dashboard_performance_summary_from_json(json!({"points": 2})).is_err());
     }
 
     #[test]

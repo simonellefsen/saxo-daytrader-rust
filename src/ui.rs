@@ -10,8 +10,8 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, PerformanceHistoryRowPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        DashboardView, PerformanceHistoryRowPayload, PerformanceSummaryPayload,
+        TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2702,10 +2702,11 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let summary = data.performance_summary.clone();
     let benchmarks = data.performance_benchmarks.clone();
     let goal_tracking = data.performance_goal_tracking.clone();
-    let change = value_f64(&summary, "change_dkk");
+    let change = summary.as_ref().map(|summary| summary.change_dkk);
+    let daily_pnl = summary.as_ref().map(|summary| summary.daily_pnl_dkk);
     let range = data.performance_range.clone();
     let (confidence_label, confidence_tone, confidence_detail) =
-        performance_confidence_badge(&summary);
+        performance_confidence_badge(summary.as_ref());
     rsx! {
         section { class: "section",
             div { class: "section-title-row",
@@ -2724,13 +2725,13 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
             div { class: "mini-grid",
-                MetricCard { label: "Latest value", value: format_dkk(value_f64(&summary, "latest_total_market_value_dkk"), &prefs), tone: "" }
-                MetricCard { label: "Change", value: format_dkk(change, &prefs), tone: if change >= 0.0 { "good-text" } else { "bad-text" } }
-                MetricCard { label: "Daily P/L", value: format_dkk(value_f64(&summary, "daily_pnl_dkk"), &prefs), tone: if value_f64(&summary, "daily_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" } }
-                MetricCard { label: "Snapshots", value: text(&summary, "points"), tone: "" }
+                MetricCard { label: "Latest value", value: summary.as_ref().map(|summary| format_dkk(summary.latest_total_market_value_dkk, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: "" }
+                MetricCard { label: "Change", value: change.map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: match change { Some(value) if value >= 0.0 => "good-text", Some(_) => "bad-text", None => "" } }
+                MetricCard { label: "Daily P/L", value: daily_pnl.map(|value| format_dkk(value, &prefs)).unwrap_or_else(|| "n/a".to_string()), tone: match daily_pnl { Some(value) if value >= 0.0 => "good-text", Some(_) => "bad-text", None => "" } }
+                MetricCard { label: "Snapshots", value: summary.as_ref().map(|summary| summary.points.to_string()).unwrap_or_else(|| "n/a".to_string()), tone: "" }
             }
             PerformanceGoalProgressPanel { goal_tracking, prefs: prefs.clone() }
-            PerformanceContextPanel { summary: summary.clone(), goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
+            PerformanceContextPanel { summary, goal_tracking: data.performance_goal_tracking.clone(), range: range.clone(), prefs: prefs.clone() }
             PerformanceSnapshotEvidencePanel { evidence: data.performance_snapshot_evidence.clone(), prefs: prefs.clone() }
             PerformancePnlReconciliationPanel {
                 reconciliation: data
@@ -3210,24 +3211,33 @@ fn PerformanceRealisedSellOutcomesPanel(outcomes: JsonValue, prefs: Localization
     }
 }
 
-fn performance_confidence_badge(summary: &JsonValue) -> (String, &'static str, String) {
-    let confidence = summary
-        .get("confidence")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let valid_points = value_i64(&confidence, "valid_points");
-    let source = text(&confidence, "latest_source").replace('_', " ");
+fn performance_confidence_badge(
+    summary: Option<&PerformanceSummaryPayload>,
+) -> (String, &'static str, String) {
+    let Some(summary) = summary else {
+        return (
+            "account value unavailable".to_string(),
+            "bad-status",
+            "The latest account aggregate is missing or unusable, so this range cannot make a current account-value claim. This status does not change any trading behavior.".to_string(),
+        );
+    };
+    let confidence = &summary.confidence;
+    let valid_points = confidence.valid_points;
+    let source = confidence
+        .latest_source
+        .as_deref()
+        .unwrap_or_default()
+        .replace('_', " ");
     let source = if source.is_empty() {
         "an unspecified source".to_string()
     } else {
         source
     };
     let age = confidence
-        .get("age_minutes")
-        .and_then(JsonValue::as_i64)
+        .age_minutes
         .map(|minutes| format!(" Last recorded {minutes} minutes ago."))
         .unwrap_or_default();
-    match text(&confidence, "status").as_str() {
+    match confidence.status.as_str() {
         "current" => (
             "account value current".to_string(),
             "good-status",
@@ -3266,7 +3276,7 @@ fn performance_confidence_badge(summary: &JsonValue) -> (String, &'static str, S
 
 #[component]
 fn PerformanceContextPanel(
-    summary: JsonValue,
+    summary: Option<PerformanceSummaryPayload>,
     goal_tracking: JsonValue,
     range: String,
     prefs: LocalizationPrefs,
@@ -3278,8 +3288,8 @@ fn PerformanceContextPanel(
         .unwrap_or(JsonValue::Null);
     let since_reset_status = text(&since_reset, "status");
     let unreliable_cost_basis_points = summary
-        .get("unreliable_cost_basis_points")
-        .and_then(JsonValue::as_u64)
+        .as_ref()
+        .map(|summary| summary.unreliable_cost_basis_points)
         .unwrap_or(0);
     let since_reset_pnl = since_reset.get("pnl_dkk").and_then(JsonValue::as_f64);
     let since_reset_return = since_reset.get("return_pct").and_then(JsonValue::as_f64);
@@ -3313,9 +3323,7 @@ fn PerformanceContextPanel(
             "",
         ),
     };
-    let range_drawdown = summary
-        .get("range_max_drawdown_pct")
-        .and_then(JsonValue::as_f64);
+    let range_drawdown = summary.and_then(|summary| summary.range_max_drawdown_pct);
     let (drawdown_value, drawdown_subtitle, drawdown_tone) = match range_drawdown {
         Some(value) if value.is_finite() => (
             format_optional_percentage_points(Some(value), &prefs),
