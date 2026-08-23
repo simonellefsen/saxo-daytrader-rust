@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type Performance benchmark comparison
+
+- Typed the selected-range benchmark status, account boundaries/return, coverage/freshness counters, caveat, and configured ETF-proxy comparison rows. Pending proxy history remains explicit optional return/close/timestamp/freshness fields.
+- The retained benchmark-run record remains compatibility JSON because it is provider/run evidence rather than the stable public read-model contract. The proxy comparison remains native-currency price-return context, not normalized TWR/total return.
+- This preserves read-only Performance behavior and performs no Saxo provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type Performance goal tracking
 
 - Typed weekly/monthly local-baseline goal periods and since-reset performance: targets, ready/pending state, P/L, progress, baseline value/time, and since-reset return.

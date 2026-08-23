@@ -2946,7 +2946,47 @@ mod tests {
                 },
                 "unreliable_cost_basis_points": 0,
             },
-            "benchmarks": {"status": "available"},
+            "benchmarks": {
+                "status": "partial",
+                "latest_run": {"status": "partial", "run_date": "2026-08-01"},
+                "portfolio_baseline_at": "2026-08-01T10:00:00Z",
+                "portfolio_latest_at": "2026-08-01T12:00:00Z",
+                "portfolio_return_pct": 1.6949152542,
+                "ready_count": 1,
+                "reference_count": 2,
+                "aligned_count": 1,
+                "prior_close_count": 0,
+                "stale_close_count": 0,
+                "freshness": "aligned_close",
+                "references": [{
+                    "key": "us_large_cap",
+                    "label": "S&P 500 (SPY ETF proxy)",
+                    "symbol": "SPY:arcx",
+                    "status": "ready",
+                    "portfolio_return_pct": 1.6949152542,
+                    "benchmark_return_pct": 1.0,
+                    "excess_return_pct": 0.6949152542,
+                    "baseline_close": 100.0,
+                    "latest_close": 101.0,
+                    "baseline_at": "2026-08-01T00:00:00Z",
+                    "latest_at": "2026-08-01T00:00:00Z",
+                    "freshness": "aligned_close",
+                }, {
+                    "key": "us_tech",
+                    "label": "Nasdaq-100 (QQQ ETF proxy)",
+                    "symbol": "QQQ:xnas",
+                    "status": "pending_history",
+                    "portfolio_return_pct": 1.6949152542,
+                    "benchmark_return_pct": null,
+                    "excess_return_pct": null,
+                    "baseline_close": null,
+                    "latest_close": null,
+                    "baseline_at": null,
+                    "latest_at": null,
+                    "freshness": null,
+                }],
+                "caveat": "Read-only price-return proxy comparison.",
+            },
             "goal_tracking": {
                 "weekly_target_dkk": 880.0,
                 "monthly_target_dkk": 3800.0,
@@ -3085,7 +3125,13 @@ mod tests {
         assert_eq!(serialized["history"][0]["total_market_value_dkk"], 300000.0);
         assert_eq!(serialized["summary"]["change_dkk"], 5000.0);
         assert_eq!(serialized["summary"]["confidence"]["status"], "current");
-        assert_eq!(serialized["benchmarks"]["status"], "available");
+        assert_eq!(serialized["benchmarks"]["status"], "partial");
+        assert_eq!(serialized["benchmarks"]["ready_count"], 1);
+        assert_eq!(
+            serialized["benchmarks"]["references"][0]["excess_return_pct"],
+            0.6949152542
+        );
+        assert!(serialized["benchmarks"]["references"][1]["latest_close"].is_null());
         assert_eq!(
             serialized["goal_tracking"]["periods"]["week"]["progress_pct"],
             0.5

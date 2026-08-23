@@ -890,18 +890,63 @@ pub struct PerformanceGoalPeriodsPayload {
     pub since_reset: PerformanceSinceResetPayload,
 }
 
+/// One configured read-only ETF proxy comparison against the selected local
+/// portfolio-value range.
+///
+/// Return and close fields are absent while the proxy history is still being
+/// collected. The comparison is deliberately not a time-weighted or
+/// total-return calculation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceBenchmarkReferencePayload {
+    pub key: String,
+    pub label: String,
+    pub symbol: String,
+    pub status: String,
+    pub portfolio_return_pct: Option<f64>,
+    pub benchmark_return_pct: Option<f64>,
+    pub excess_return_pct: Option<f64>,
+    pub baseline_close: Option<f64>,
+    pub latest_close: Option<f64>,
+    pub baseline_at: Option<String>,
+    pub latest_at: Option<String>,
+    pub freshness: Option<String>,
+}
+
+/// Read-only selected-range comparison against configured ETF price proxies.
+///
+/// The optional comparison fields preserve disabled and collecting states. A
+/// completed benchmark run remains compatibility JSON because it is persisted
+/// run evidence rather than a stable public read-model contract.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceBenchmarksPayload {
+    pub status: String,
+    pub latest_run: Option<JsonValue>,
+    pub portfolio_baseline_at: Option<String>,
+    pub portfolio_latest_at: Option<String>,
+    pub portfolio_return_pct: Option<f64>,
+    pub ready_count: Option<i64>,
+    pub reference_count: Option<i64>,
+    pub aligned_count: Option<i64>,
+    pub prior_close_count: Option<i64>,
+    pub stale_close_count: Option<i64>,
+    pub freshness: Option<String>,
+    pub references: Vec<PerformanceBenchmarkReferencePayload>,
+    pub caveat: Option<String>,
+}
+
 /// Bounded performance envelope.
 ///
-/// History rows and benchmark data remain compatibility JSON while the
-/// performance read model is converted incrementally. The selected-range
-/// summary and local goal tracking are typed projections. This does not change
-/// performance collection or any decision/execution behavior.
+/// History rows and the persisted benchmark-run evidence remain compatibility
+/// JSON while the performance read model is converted incrementally. The
+/// selected-range summary, benchmark comparison, and local goal tracking are
+/// typed projections. This does not change performance collection or any
+/// decision/execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformancePayload {
     pub range_key: String,
     pub history: Vec<JsonValue>,
     pub summary: PerformanceSummaryPayload,
-    pub benchmarks: JsonValue,
+    pub benchmarks: PerformanceBenchmarksPayload,
     pub goal_tracking: PerformanceGoalTrackingPayload,
     pub snapshot_evidence: PerformanceSnapshotEvidencePayload,
 }
