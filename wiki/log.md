@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Protective Stop Coverage consumption
+
+- Changed the Execution tab's protective-stop audit panel to consume typed coverage status, summary, position/exception/test list boundaries, safety, and interpretation directly.
+- Broker- and lifecycle-specific rows remain compatibility JSON; malformed coverage becomes explicit unavailable local evidence.
+- This preserves the read-only audit. The separate SIM precheck, placement, cancellation, queue, and broker-order paths are unchanged.
+
 ## [2026-08-23] architecture | Type dashboard Decision Gate Replay consumption
 
 - Changed the Decisions tab's Gate Replay and Support/Risk calls to consume the typed replay status, count, scenario-list, safety, interpretation, and staged support-risk boundary directly.

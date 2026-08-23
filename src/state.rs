@@ -43,13 +43,14 @@ use crate::{
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3174,6 +3175,27 @@ fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayPayload {
     }
 }
 
+/// Decodes the stable protective-stop coverage boundary used by the Execution
+/// tab. Its detailed broker and lifecycle evidence remains staged JSON.
+fn dashboard_protective_stop_coverage_from_json(
+    coverage: JsonValue,
+) -> serde_json::Result<ProtectiveStopCoveragePayload> {
+    serde_json::from_value(coverage)
+}
+
+fn dashboard_protective_stop_coverage_not_loaded() -> ProtectiveStopCoveragePayload {
+    ProtectiveStopCoveragePayload {
+        status: "not_loaded".to_string(),
+        summary: json!({}),
+        positions: Vec::new(),
+        exceptions: Vec::new(),
+        recent_prechecks: Vec::new(),
+        recent_lifecycle_tests: Vec::new(),
+        safety: "not_loaded_outside_execution_tab".to_string(),
+        interpretation: String::new(),
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5354,18 +5376,30 @@ impl AppState {
         };
         let execution_protection = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
         {
-            self.protective_stop_coverage().await.unwrap_or_else(|err| {
+            let coverage = self.protective_stop_coverage().await.unwrap_or_else(|err| {
                 warn!("dashboard protective-stop coverage degraded: {err:#}");
                 json!({
                     "status": "unavailable",
                     "summary": {},
                     "positions": [],
+                    "exceptions": [],
+                    "recent_prechecks": [],
+                    "recent_lifecycle_tests": [],
                     "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
                     "interpretation": "Protective-stop coverage could not be loaded. No Saxo order was placed, replaced, or cancelled.",
                 })
+            });
+            dashboard_protective_stop_coverage_from_json(coverage).unwrap_or_else(|err| {
+                warn!("dashboard typed protective-stop coverage degraded: {err:#}");
+                ProtectiveStopCoveragePayload {
+                    status: "unavailable".to_string(),
+                    safety: "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation".to_string(),
+                    interpretation: "Protective-stop coverage could not be loaded. No Saxo order was placed, replaced, or cancelled.".to_string(),
+                    ..dashboard_protective_stop_coverage_not_loaded()
+                }
             })
         } else {
-            JsonValue::Null
+            dashboard_protective_stop_coverage_not_loaded()
         };
         let report_limit = match active_view.as_str() {
             "overview" => 5,
@@ -16782,6 +16816,32 @@ mod tests {
             "not_loaded"
         );
         assert!(dashboard_decision_gate_replay_from_json(json!({"status": "available"})).is_err());
+    }
+
+    #[test]
+    fn dashboard_protective_stop_coverage_requires_the_stable_outer_contract() {
+        let coverage = dashboard_protective_stop_coverage_from_json(json!({
+            "status": "attention_required",
+            "summary": {"protected_count": 4, "unprotected_count": 1},
+            "positions": [{"symbol": "NOVO-B:xcse"}],
+            "exceptions": [{"symbol": "NOVO-B:xcse", "reason": "missing_stop"}],
+            "recent_prechecks": [],
+            "recent_lifecycle_tests": [],
+            "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
+            "interpretation": "Coverage is a local audit."
+        }))
+        .expect("protective-stop fixture has the dashboard contract");
+
+        assert_eq!(coverage.status, "attention_required");
+        assert_eq!(coverage.positions[0]["symbol"], json!("NOVO-B:xcse"));
+        assert_eq!(coverage.exceptions.len(), 1);
+        assert_eq!(
+            dashboard_protective_stop_coverage_not_loaded().status,
+            "not_loaded"
+        );
+        assert!(
+            dashboard_protective_stop_coverage_from_json(json!({"status": "covered"})).is_err()
+        );
     }
 
     #[test]

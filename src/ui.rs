@@ -15,8 +15,9 @@ use crate::{
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TradingManagerPayload,
-        TuningExecutionPulseOutcome, TuningPulseComparison,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
 };
 
@@ -6777,13 +6778,13 @@ fn MissedTradeShadowEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs)
 
 #[component]
 fn ProtectiveStopCoveragePanel(
-    coverage: JsonValue,
+    coverage: ProtectiveStopCoveragePayload,
     prefs: LocalizationPrefs,
     sim_enabled: bool,
 ) -> Element {
-    let status = text(&coverage, "status");
-    let summary = coverage.get("summary").cloned().unwrap_or(JsonValue::Null);
-    let positions = json_array(&coverage, "positions");
+    let status = coverage.status;
+    let summary = coverage.summary;
+    let positions = coverage.positions;
     let tone = match status.as_str() {
         "covered" => "good",
         "attention_required" | "planned_only" => "warn",
@@ -6795,14 +6796,14 @@ fn ProtectiveStopCoveragePanel(
     let planned_count = value_i64(&summary, "planned_count");
     let unprotected_count = value_i64(&summary, "unprotected_count");
     let exception_count = value_i64(&summary, "exception_count");
-    let interpretation = fallback_text(
-        &coverage,
-        "interpretation",
-        "Protective-stop coverage is unavailable right now.",
-    );
-    let recent_prechecks = json_array(&coverage, "recent_prechecks");
-    let recent_lifecycle_tests = json_array(&coverage, "recent_lifecycle_tests");
-    let exceptions = json_array(&coverage, "exceptions");
+    let interpretation = if coverage.interpretation.is_empty() {
+        "Protective-stop coverage is unavailable right now.".to_string()
+    } else {
+        coverage.interpretation
+    };
+    let recent_prechecks = coverage.recent_prechecks;
+    let recent_lifecycle_tests = coverage.recent_lifecycle_tests;
+    let exceptions = coverage.exceptions;
     rsx! {
         section { class: "event candidate-scoring-panel",
             strong { "Protective Stop Coverage" }

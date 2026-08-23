@@ -90,7 +90,7 @@ pub struct DashboardView {
     pub performance_exposure_attribution: Option<PerformanceExposureAttributionPayload>,
     pub performance_realised_sell_outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
     pub integrity: OverviewIntegrityPayload,
-    pub execution_protection: JsonValue,
+    pub execution_protection: ProtectiveStopCoveragePayload,
     pub market_status: MarketStatusPayload,
     pub trading_manager: TradingManagerPayload,
     pub watchlists: MarketWatchlistsPayload,
@@ -680,6 +680,23 @@ pub struct OverviewIntegrityPayload {
 pub struct TradingManagerPayload {
     pub status: String,
     pub latest_run: JsonValue,
+}
+
+/// Bounded protective-stop coverage envelope for the Execution dashboard.
+///
+/// Per-position, exception, and recorded SIM-test details remain compatibility
+/// JSON because their fields depend on broker state and lifecycle evidence.
+/// This read model neither invokes Saxo nor changes any order state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopCoveragePayload {
+    pub status: String,
+    pub summary: JsonValue,
+    pub positions: Vec<JsonValue>,
+    pub exceptions: Vec<JsonValue>,
+    pub recent_prechecks: Vec<JsonValue>,
+    pub recent_lifecycle_tests: Vec<JsonValue>,
+    pub safety: String,
+    pub interpretation: String,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.
