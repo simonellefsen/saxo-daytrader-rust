@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance unrealised-P/L reconciliation
+
+- Changed the Unrealised P/L Sources panel to consume a typed dashboard/latest-history/stored-Saxo-exposure reconciliation model directly.
+- Source availability, snapshot timestamp, account currency, and instrument-currency FX basis remain explicit; malformed or unavailable SSR data produces an unavailable panel rather than a fabricated comparison.
+- This preserves read-only Performance diagnostics and performs no Saxo provider request, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance snapshot-evidence consumption
 
 - Changed the Repairable Snapshot Evidence panel to consume `PerformanceSnapshotEvidencePayload` and its retained metadata, item, change, and integrity fields directly.

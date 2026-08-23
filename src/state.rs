@@ -39,13 +39,14 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         PerformanceBenchmarksPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3076,6 +3077,18 @@ fn dashboard_performance_snapshot_evidence_from_json(
     }
 }
 
+/// Decodes read-only unrealised-P/L reconciliation for the dashboard while
+/// retaining an explicit unavailable state outside the Performance view.
+fn dashboard_performance_pnl_reconciliation_from_json(
+    reconciliation: JsonValue,
+) -> serde_json::Result<Option<PerformancePnlReconciliationPayload>> {
+    if reconciliation.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(reconciliation).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5636,6 +5649,15 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_pnl_reconciliation = if active_view == "performance" {
+            overview
+                .get("integrity")
+                .and_then(|integrity| integrity.get("pnl_reconciliation"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
         let performance_history = dashboard_performance_history_from_json(performance_history)
             .unwrap_or_else(|err| {
                 warn!("dashboard typed performance history degraded: {err:#}");
@@ -5663,6 +5685,12 @@ impl AppState {
             dashboard_performance_snapshot_evidence_from_json(performance_snapshot_evidence)
                 .unwrap_or_else(|err| {
                     warn!("dashboard typed performance snapshot evidence degraded: {err:#}");
+                    None
+                });
+        let performance_pnl_reconciliation =
+            dashboard_performance_pnl_reconciliation_from_json(performance_pnl_reconciliation)
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed performance P/L reconciliation degraded: {err:#}");
                     None
                 });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
@@ -5888,6 +5916,7 @@ impl AppState {
             performance_benchmarks,
             performance_goal_tracking,
             performance_snapshot_evidence,
+            performance_pnl_reconciliation,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -22751,6 +22780,55 @@ analysis_windows:
         assert!(
             dashboard_performance_snapshot_evidence_from_json(json!({"status": "complete"}))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_pnl_reconciliation_preserves_alignment_and_unavailable_states() {
+        assert!(
+            dashboard_performance_pnl_reconciliation_from_json(JsonValue::Null)
+                .expect("null stays unavailable")
+                .is_none()
+        );
+        let reconciliation = dashboard_performance_pnl_reconciliation_from_json(json!({
+            "scope": "read_only_unrealised_pnl_sources",
+            "dashboard": {
+                "status": "available",
+                "unrealised_pnl_dkk": 1_000.0,
+                "source": "saxo_broker_snapshot",
+                "snapshot_type": "runtime_current",
+            },
+            "latest_history": {
+                "status": "available",
+                "unrealised_pnl_dkk": 900.0,
+                "source": "daily_close",
+                "snapshot_type": "daily_close",
+                "recorded_at": "2026-08-23T08:00:00Z",
+                "difference_from_dashboard_dkk": 100.0,
+            },
+            "broker_exposure": {
+                "status": "aligned",
+                "unrealised_pnl_dkk": 950.0,
+                "difference_from_dashboard_dkk": 50.0,
+                "account_currency": "DKK",
+                "fx_basis": "instrument_currency",
+                "instrument_fx_rates_to_dkk": { "DKK": 1.0 },
+                "exposure_count": 2,
+                "updated_at": "2026-08-23T08:01:00Z",
+            },
+        }))
+        .expect("complete P/L reconciliation is typed")
+        .expect("non-null reconciliation is present");
+        assert_eq!(reconciliation.broker_exposure.status, "aligned");
+        assert_eq!(
+            reconciliation.latest_history.difference_from_dashboard_dkk,
+            Some(100.0)
+        );
+        assert!(
+            dashboard_performance_pnl_reconciliation_from_json(json!({
+                "scope": "read_only_unrealised_pnl_sources"
+            }))
+            .is_err()
         );
     }
 

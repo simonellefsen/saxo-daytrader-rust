@@ -12,8 +12,8 @@ use crate::{
     models::{
         DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2736,11 +2736,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             PerformanceContextPanel { summary, goal_tracking, range: range.clone(), prefs: prefs.clone() }
             PerformanceSnapshotEvidencePanel { evidence: data.performance_snapshot_evidence.clone(), prefs: prefs.clone() }
             PerformancePnlReconciliationPanel {
-                reconciliation: data
-                    .integrity
-                    .get("pnl_reconciliation")
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
+                reconciliation: data.performance_pnl_reconciliation.clone(),
                 prefs: prefs.clone(),
             }
             PerformanceExposureAttributionPanel {
@@ -2912,47 +2908,54 @@ fn PerformanceSnapshotEvidencePanel(
 
 #[component]
 fn PerformancePnlReconciliationPanel(
-    reconciliation: JsonValue,
+    reconciliation: Option<PerformancePnlReconciliationPayload>,
     prefs: LocalizationPrefs,
 ) -> Element {
-    let dashboard = reconciliation
-        .get("dashboard")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let history = reconciliation
-        .get("latest_history")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let broker = reconciliation
-        .get("broker_exposure")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let money = |row: &JsonValue, key: &str| {
-        row.get(key)
-            .and_then(JsonValue::as_f64)
+    let Some(reconciliation) = reconciliation else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Unrealised P/L Sources" }
+                        p { class: "muted", "Read-only comparison of the dashboard aggregate, the latest stored account snapshot, and stored Saxo exposures." }
+                    }
+                    span { class: "status warn-status", "snapshot unavailable" }
+                }
+                p { class: "muted benchmark-caveat", "P/L reconciliation was unavailable or failed validation, so no source comparison is shown." }
+            }
+        };
+    };
+    let dashboard = &reconciliation.dashboard;
+    let history = &reconciliation.latest_history;
+    let broker = &reconciliation.broker_exposure;
+    let money = |value: Option<f64>| {
+        value
             .filter(|value| value.is_finite())
             .map(|value| format_signed_dkk(value, &prefs))
             .unwrap_or_else(|| "n/a".to_string())
     };
-    let source = |row: &JsonValue| {
-        let source = text(row, "source").replace('_', " ");
+    let source = |value: &str| {
+        let source = value.replace('_', " ");
         if source.is_empty() {
             "source unavailable".to_string()
         } else {
             source
         }
     };
-    let broker_status = text(&broker, "status");
-    let (broker_label, broker_tone) = match broker_status.as_str() {
+    let broker_status = broker.status.as_str();
+    let (broker_label, broker_tone) = match broker_status {
         "aligned" => ("within tolerance", "good-status"),
         "drift" => ("drift detected", "warn-status"),
         _ => ("snapshot unavailable", "warn-status"),
     };
-    let broker_detail = match broker_status.as_str() {
+    let broker_detail = match broker_status {
         "aligned" | "drift" => format!(
             "{} exposure(s) · instrument FX conversion · {}",
-            text(&broker, "exposure_count"),
-            format_timestamp(&text(&broker, "updated_at"), &prefs),
+            broker
+                .exposure_count
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            format_timestamp(broker.updated_at.as_deref().unwrap_or_default(), &prefs),
         ),
         _ => "No stored Saxo instrument-exposure snapshot is available.".to_string(),
     };
@@ -2971,20 +2974,20 @@ fn PerformancePnlReconciliationPanel(
                     tbody {
                         tr {
                             td { strong { "Dashboard aggregate" } }
-                            td { "{money(&dashboard, \"unrealised_pnl_dkk\")}" }
+                            td { "{money(dashboard.unrealised_pnl_dkk)}" }
                             td { "n/a" }
-                            td { "{source(&dashboard)} · live aggregate for this response" }
+                            td { "{source(&dashboard.source)} · live aggregate for this response" }
                         }
                         tr {
                             td { strong { "Latest account snapshot" } }
-                            td { "{money(&history, \"unrealised_pnl_dkk\")}" }
-                            td { "{money(&history, \"difference_from_dashboard_dkk\")}" }
-                            td { "{source(&history)} · {format_timestamp(&text(&history, \"recorded_at\"), &prefs)}" }
+                            td { "{money(history.unrealised_pnl_dkk)}" }
+                            td { "{money(history.difference_from_dashboard_dkk)}" }
+                            td { "{source(&history.source)} · {format_timestamp(history.recorded_at.as_deref().unwrap_or_default(), &prefs)}" }
                         }
                         tr {
                             td { strong { "Saxo exposure aggregate" } }
-                            td { "{money(&broker, \"unrealised_pnl_dkk\")}" }
-                            td { class: if broker_status == "drift" { "bad-text" } else { "" }, "{money(&broker, \"difference_from_dashboard_dkk\")}" }
+                            td { "{money(broker.unrealised_pnl_dkk)}" }
+                            td { class: if broker_status == "drift" { "bad-text" } else { "" }, "{money(broker.difference_from_dashboard_dkk)}" }
                             td { "{broker_detail}" }
                         }
                     }

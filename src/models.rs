@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -84,6 +86,7 @@ pub struct DashboardView {
     pub performance_benchmarks: Option<PerformanceBenchmarksPayload>,
     pub performance_goal_tracking: Option<PerformanceGoalTrackingPayload>,
     pub performance_snapshot_evidence: Option<PerformanceSnapshotEvidencePayload>,
+    pub performance_pnl_reconciliation: Option<PerformancePnlReconciliationPayload>,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
     pub market_status: JsonValue,
@@ -815,6 +818,55 @@ pub struct PerformanceSnapshotEvidencePayload {
     pub integrity: PerformanceSnapshotIntegrityPayload,
     pub safety: String,
     pub interpretation: String,
+}
+
+/// Dashboard aggregate unrealised-P/L evidence for one response.
+///
+/// It is a local current aggregate, not a broker time-weighted performance
+/// measurement or a quote for an individual instrument.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformancePnlDashboardSourcePayload {
+    pub status: String,
+    pub unrealised_pnl_dkk: Option<f64>,
+    pub source: String,
+    pub snapshot_type: String,
+}
+
+/// Most recent persisted account-value observation used for P/L comparison.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformancePnlHistorySourcePayload {
+    pub status: String,
+    pub unrealised_pnl_dkk: Option<f64>,
+    pub source: String,
+    pub snapshot_type: String,
+    pub recorded_at: Option<String>,
+    pub difference_from_dashboard_dkk: Option<f64>,
+}
+
+/// Stored Saxo instrument-exposure aggregate used for P/L comparison.
+///
+/// The timestamp and per-instrument FX basis remain explicit so callers do
+/// not treat the stored observation as a real-time broker quote.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformancePnlBrokerExposurePayload {
+    pub status: String,
+    pub unrealised_pnl_dkk: Option<f64>,
+    pub difference_from_dashboard_dkk: Option<f64>,
+    pub account_currency: Option<String>,
+    pub fx_basis: Option<String>,
+    pub instrument_fx_rates_to_dkk: Option<BTreeMap<String, f64>>,
+    pub exposure_count: Option<i64>,
+    pub updated_at: Option<String>,
+}
+
+/// Read-only reconciliation between the dashboard, latest local snapshot, and
+/// stored Saxo exposure aggregate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformancePnlReconciliationPayload {
+    pub scope: String,
+    pub dashboard: PerformancePnlDashboardSourcePayload,
+    pub latest_history: PerformancePnlHistorySourcePayload,
+    pub broker_exposure: PerformancePnlBrokerExposurePayload,
 }
 
 /// Evidence provenance for a performance-range summary.
