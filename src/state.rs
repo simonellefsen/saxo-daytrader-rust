@@ -2123,6 +2123,99 @@ fn portfolio_position_snapshot_integrity_from_rows(rows: &[JsonValue]) -> JsonVa
     })
 }
 
+/// Compares two retained position compositions without treating ordinary price
+/// movement as a portfolio composition change. Snapshot symbols are a stable
+/// per-snapshot primary key, so a case-normalized symbol is the least-lossy
+/// cross-snapshot identity when historical ISIN coverage differs.
+fn portfolio_position_snapshot_change_from_rows(
+    current_snapshot: &JsonValue,
+    current_rows: &[JsonValue],
+    previous_snapshot: &JsonValue,
+    previous_rows: &[JsonValue],
+) -> JsonValue {
+    let current_by_symbol = current_rows
+        .iter()
+        .map(|row| (canonical_symbol_key(&json_text(row, "symbol")), row))
+        .collect::<HashMap<_, _>>();
+    let previous_by_symbol = previous_rows
+        .iter()
+        .map(|row| (canonical_symbol_key(&json_text(row, "symbol")), row))
+        .collect::<HashMap<_, _>>();
+    let symbols = current_by_symbol
+        .keys()
+        .chain(previous_by_symbol.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut opened = Vec::new();
+    let mut closed = Vec::new();
+    let mut resized = Vec::new();
+    let mut unchanged_quantity_count = 0usize;
+    let mut net_market_value_change_dkk = 0.0;
+    let mut net_cost_basis_change_dkk = 0.0;
+    for symbol_key in symbols {
+        let current = current_by_symbol.get(&symbol_key).copied();
+        let previous = previous_by_symbol.get(&symbol_key).copied();
+        let current_quantity = current.map(|row| value_f64(row, "quantity")).unwrap_or(0.0);
+        let previous_quantity = previous
+            .map(|row| value_f64(row, "quantity"))
+            .unwrap_or(0.0);
+        let current_market_value = current
+            .map(|row| value_f64(row, "market_value_dkk"))
+            .unwrap_or(0.0);
+        let previous_market_value = previous
+            .map(|row| value_f64(row, "market_value_dkk"))
+            .unwrap_or(0.0);
+        let current_cost_basis = current
+            .map(|row| value_f64(row, "cost_basis_dkk"))
+            .unwrap_or(0.0);
+        let previous_cost_basis = previous
+            .map(|row| value_f64(row, "cost_basis_dkk"))
+            .unwrap_or(0.0);
+        net_market_value_change_dkk += current_market_value - previous_market_value;
+        net_cost_basis_change_dkk += current_cost_basis - previous_cost_basis;
+        let symbol = current
+            .or(previous)
+            .map(|row| json_text(row, "symbol"))
+            .unwrap_or(symbol_key);
+        let change = json!({
+            "symbol": symbol,
+            "quantity_before": previous_quantity,
+            "quantity_after": current_quantity,
+            "quantity_change": current_quantity - previous_quantity,
+            "market_value_change_dkk": current_market_value - previous_market_value,
+            "cost_basis_change_dkk": current_cost_basis - previous_cost_basis,
+        });
+        match (current, previous) {
+            (Some(_), None) => opened.push(change),
+            (None, Some(_)) => closed.push(change),
+            (Some(_), Some(_)) if (current_quantity - previous_quantity).abs() > 1e-9 => {
+                resized.push(change)
+            }
+            (Some(_), Some(_)) => unchanged_quantity_count += 1,
+            (None, None) => unreachable!("symbol came from one of the snapshot maps"),
+        }
+    }
+    let opened_count = opened.len();
+    let closed_count = closed.len();
+    let resized_count = resized.len();
+    json!({
+        "status": "available",
+        "current_snapshot": current_snapshot,
+        "previous_snapshot": previous_snapshot,
+        "opened": opened,
+        "closed": closed,
+        "resized": resized,
+        "opened_count": opened_count,
+        "closed_count": closed_count,
+        "resized_count": resized_count,
+        "unchanged_quantity_count": unchanged_quantity_count,
+        "net_market_value_change_dkk": net_market_value_change_dkk,
+        "net_cost_basis_change_dkk": net_cost_basis_change_dkk,
+        "safety": "local_retained_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+        "interpretation": "This compares only two stored retained compositions. Market-value movement includes prices, FX, and quantity changes; opened, closed, and resized lists isolate quantity composition changes and do not assert trades, fills, or causality.",
+    })
+}
+
 fn is_duplicate_column_error(err: &sqlx::Error) -> bool {
     let message = err.to_string().to_lowercase();
     message.contains("duplicate column")
@@ -9376,11 +9469,82 @@ impl AppState {
             "latest_snapshot": self
                 .latest_portfolio_position_snapshot_evidence(range_key)
                 .await?,
+            "latest_change": self
+                .portfolio_position_snapshot_change_evidence(range_key)
+                .await?,
             "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
             "integrity": self.portfolio_position_snapshot_integrity().await?,
             "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
             "interpretation": "Coverage identifies snapshots whose position detail is retained and therefore recomputable. Aggregate-only legacy snapshots remain usable for charting but cannot be repaired from position evidence. A broker-derived aggregate unrealised P/L difference is reported separately by the integrity diagnostic and is not structural corruption.",
         }))
+    }
+
+    /// Summarizes composition changes between the two newest retained
+    /// snapshots in the selected range. Unlike current positions, both sides
+    /// are immutable local evidence from their respective record times.
+    async fn portfolio_position_snapshot_change_evidence(
+        &self,
+        range_key: &str,
+    ) -> Result<JsonValue> {
+        let range_clause = match performance_start_at(range_key) {
+            Some(start_at) => format!("AND h.recorded_at >= '{}'", sql_escape(&start_at)),
+            None => String::new(),
+        };
+        let snapshots = self
+            .select_json(&format!(
+                "SELECT h.id AS snapshot_id, h.recorded_at, h.snapshot_type, h.source,
+                        h.position_count, h.invested_market_value_dkk,
+                        h.total_cost_basis_dkk, h.total_unrealised_pnl_dkk
+                 FROM portfolio_value_history h
+                 WHERE (h.position_count = 0 OR EXISTS (
+                    SELECT 1 FROM portfolio_position_snapshots p WHERE p.snapshot_id = h.id
+                 ))
+                 {range_clause}
+                 ORDER BY h.id DESC
+                 LIMIT 2"
+            ))
+            .await?;
+        let Some(current_snapshot) = snapshots.first() else {
+            return Ok(json!({
+                "status": "collecting",
+                "safety": "local_retained_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+            }));
+        };
+        let Some(previous_snapshot) = snapshots.get(1) else {
+            return Ok(json!({
+                "status": "collecting",
+                "current_snapshot": current_snapshot,
+                "safety": "local_retained_position_snapshot_comparison_no_provider_hermes_gate_or_order_authority",
+            }));
+        };
+        let current_id = value_i64(current_snapshot, "snapshot_id");
+        let previous_id = value_i64(previous_snapshot, "snapshot_id");
+        let items = self
+            .select_json(&format!(
+                "SELECT snapshot_id, symbol, isin, currency, quantity, price_local,
+                        fx_rate_to_dkk, cost_basis_local, cost_basis_dkk,
+                        market_value_dkk, unrealised_pnl_dkk
+                 FROM portfolio_position_snapshots
+                 WHERE snapshot_id IN ({current_id}, {previous_id})
+                 ORDER BY snapshot_id DESC, symbol ASC"
+            ))
+            .await?;
+        let current_rows = items
+            .iter()
+            .filter(|row| value_i64(row, "snapshot_id") == current_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let previous_rows = items
+            .iter()
+            .filter(|row| value_i64(row, "snapshot_id") == previous_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(portfolio_position_snapshot_change_from_rows(
+            current_snapshot,
+            &current_rows,
+            previous_snapshot,
+            &previous_rows,
+        ))
     }
 
     /// Returns the latest stored, recomputable position composition in the
@@ -17748,6 +17912,7 @@ market_data:
             coverage["latest_snapshot"]["items"][0]["symbol"],
             json!("EXMPL:xnas")
         );
+        assert_eq!(coverage["latest_change"]["status"], json!("collecting"));
 
         sqlx::query(
             "INSERT INTO portfolio_value_history (
@@ -17810,6 +17975,39 @@ market_data:
         let attention_required = portfolio_position_snapshot_integrity_from_rows(&[structural]);
         assert_eq!(attention_required["status"], json!("attention_required"));
         assert_eq!(attention_required["structural_mismatch_count"], json!(1));
+    }
+
+    #[test]
+    fn portfolio_position_snapshot_change_distinguishes_opened_closed_and_resized() {
+        let previous_snapshot = json!({"snapshot_id": 7, "recorded_at": "2026-08-23T10:00:00Z"});
+        let current_snapshot = json!({"snapshot_id": 8, "recorded_at": "2026-08-23T11:00:00Z"});
+        let previous_rows = vec![
+            json!({"symbol": "AAA:xnas", "quantity": 1.0, "market_value_dkk": 100.0, "cost_basis_dkk": 90.0}),
+            json!({"symbol": "BBB:xnas", "quantity": 2.0, "market_value_dkk": 200.0, "cost_basis_dkk": 180.0}),
+            json!({"symbol": "CCC:xnas", "quantity": 1.0, "market_value_dkk": 70.0, "cost_basis_dkk": 60.0}),
+        ];
+        let current_rows = vec![
+            json!({"symbol": "aaa:xnas", "quantity": 3.0, "market_value_dkk": 330.0, "cost_basis_dkk": 270.0}),
+            json!({"symbol": "DDD:xnas", "quantity": 1.0, "market_value_dkk": 50.0, "cost_basis_dkk": 45.0}),
+        ];
+
+        let change = portfolio_position_snapshot_change_from_rows(
+            &current_snapshot,
+            &current_rows,
+            &previous_snapshot,
+            &previous_rows,
+        );
+
+        assert_eq!(change["status"], json!("available"));
+        assert_eq!(change["opened_count"], json!(1));
+        assert_eq!(change["closed_count"], json!(2));
+        assert_eq!(change["resized_count"], json!(1));
+        assert_eq!(change["unchanged_quantity_count"], json!(0));
+        assert_eq!(change["opened"][0]["symbol"], json!("DDD:xnas"));
+        assert_eq!(change["resized"][0]["symbol"], json!("aaa:xnas"));
+        assert_eq!(change["resized"][0]["quantity_change"], json!(2.0));
+        assert_eq!(change["net_market_value_change_dkk"], json!(10.0));
+        assert_eq!(change["net_cost_basis_change_dkk"], json!(-15.0));
     }
 
     #[tokio::test]

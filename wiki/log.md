@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] observability | Compare retained position compositions
+
+- Extended Performance snapshot evidence with a bounded comparison between the two newest retained per-position snapshots in the selected range. It reports opened, closed, resized, and unchanged-quantity counts plus net stored market-value and cost-basis movement.
+- Symbol matching is case-normalized and limited to the retained records. The projection explicitly distinguishes quantity composition from price/FX movement, and does not label a difference as a trade, fill, or causal event.
+- This reads local durable snapshot tables only; it performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] observability | Show latest retained position composition in Performance
 
 - Extended repairable snapshot coverage with a bounded historical composition table for the latest retained snapshot inside the selected range. It shows the stored quantity, local price, FX rate, DKK cost basis, DKK market value, and recomputed unrealised P/L for each retained position.

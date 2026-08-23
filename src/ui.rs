@@ -2806,6 +2806,19 @@ fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPref
         .and_then(JsonValue::as_array)
         .cloned()
         .unwrap_or_default();
+    let latest_change = evidence
+        .get("latest_change")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let latest_change_status = text(&latest_change, "status");
+    let latest_change_current = latest_change
+        .get("current_snapshot")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let latest_change_previous = latest_change
+        .get("previous_snapshot")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -2849,6 +2862,19 @@ fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPref
                         }
                     }
                 }
+            }
+            if latest_change_status == "available" {
+                div { class: "section-title-row compact",
+                    h4 { "Stored composition change" }
+                    span { class: "muted", "{format_timestamp(&text(&latest_change_previous, \"recorded_at\"), &prefs)} → {format_timestamp(&text(&latest_change_current, \"recorded_at\"), &prefs)} · two retained snapshots" }
+                }
+                div { class: "mini-grid",
+                    MetricCard { label: "Opened", value: text(&latest_change, "opened_count"), tone: "" }
+                    MetricCard { label: "Closed", value: text(&latest_change, "closed_count"), tone: "" }
+                    MetricCard { label: "Resized", value: text(&latest_change, "resized_count"), tone: "" }
+                    MetricCard { label: "Net stored value", value: format_signed_dkk(value_f64(&latest_change, "net_market_value_change_dkk"), &prefs), tone: "" }
+                }
+                p { class: "muted benchmark-caveat", "{text(&latest_change, \"unchanged_quantity_count\")} unchanged quantity position(s). This compares only stored observations; market-value movement includes price, FX, and quantity changes, and does not assert trades, fills, or causality." }
             }
         }
     }
