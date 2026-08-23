@@ -46,13 +46,14 @@ use crate::{
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3275,6 +3276,35 @@ fn dashboard_latest_run_from_json(run: JsonValue) -> serde_json::Result<Dashboar
     Ok(run)
 }
 
+/// Decodes held-position Quiver conflict evidence for the Quiver dashboard.
+/// Collector/provider detail remains in the Quiver context and is never used
+/// as a gate or broker instruction through this read-only SSR boundary.
+fn dashboard_quiver_conflicts_from_json(
+    conflicts: JsonValue,
+) -> serde_json::Result<QuiverConflictPayload> {
+    serde_json::from_value(conflicts)
+}
+
+fn dashboard_quiver_conflicts_not_loaded() -> QuiverConflictPayload {
+    QuiverConflictPayload {
+        status: "not_loaded".to_string(),
+        safety: "not_loaded_outside_quiver_tab_no_gate_hermes_or_broker_mutation".to_string(),
+        interpretation: "Quiver held-position conflict evidence was not loaded for this view."
+            .to_string(),
+        ..QuiverConflictPayload::default()
+    }
+}
+
+fn dashboard_quiver_conflicts_unavailable() -> QuiverConflictPayload {
+    QuiverConflictPayload {
+        status: "unavailable".to_string(),
+        safety: "advisory_unavailable_no_gate_hermes_or_broker_mutation".to_string(),
+        interpretation:
+            "Quiver held-position conflict evidence could not be decoded for this view.".to_string(),
+        ..QuiverConflictPayload::default()
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5813,6 +5843,14 @@ impl AppState {
             crate::quiver::held_position_conflicts(&held_positions, &context)
         } else {
             JsonValue::Null
+        };
+        let quiver_conflicts = if quiver_conflicts.is_null() {
+            dashboard_quiver_conflicts_not_loaded()
+        } else {
+            dashboard_quiver_conflicts_from_json(quiver_conflicts).unwrap_or_else(|err| {
+                warn!("dashboard typed Quiver conflicts degraded: {err:#}");
+                dashboard_quiver_conflicts_unavailable()
+            })
         };
         let latest_daily_indicator_run =
             self.latest_daily_indicator_run()
@@ -17121,6 +17159,40 @@ mod tests {
                 .expect("no latest run is explicit")
                 .available
         );
+    }
+
+    #[test]
+    fn dashboard_quiver_conflicts_keep_advisory_outer_contract() {
+        let conflicts = dashboard_quiver_conflicts_from_json(json!({
+            "status": "conflicts_detected",
+            "held_symbol_count": 4,
+            "strong_bearish_signal_lte": -0.5,
+            "conflicts": [{
+                "symbol": "CRM:xnys",
+                "signal": -0.71,
+                "direction": "bearish",
+                "confidence": 0.83,
+                "event_count": 6,
+                "latest_event_date": "2026-08-22",
+                "provider_detail": "must-not-reach-the-dashboard"
+            }],
+            "safety": "advisory_quiver_context_only_no_gate_hermes_or_broker_mutation",
+            "interpretation": "Review evidence only.",
+            "raw_provider_field": "must-not-reach-the-dashboard"
+        }))
+        .expect("stable Quiver conflict evidence decodes");
+
+        assert_eq!(conflicts.status, "conflicts_detected");
+        assert_eq!(conflicts.held_symbol_count, 4);
+        assert_eq!(conflicts.conflicts[0].symbol, "CRM:xnys");
+        assert_eq!(conflicts.conflicts[0].event_count, Some(6));
+        assert!(
+            !serde_json::to_string(&conflicts)
+                .expect("typed Quiver conflicts serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert_eq!(dashboard_quiver_conflicts_not_loaded().status, "not_loaded");
+        assert!(dashboard_quiver_conflicts_from_json(json!({"status": "clear"})).is_err());
     }
 
     #[test]

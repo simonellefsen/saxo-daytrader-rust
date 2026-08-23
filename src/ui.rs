@@ -19,8 +19,8 @@ use crate::{
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, TradingManagerPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -4179,14 +4179,23 @@ fn QuiverView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn QuiverConflictPanel(conflicts: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&conflicts, "status");
-    let rows = conflicts
-        .get("conflicts")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if status.is_empty() || status == "no_positions" || status == "clear" {
+fn QuiverConflictPanel(conflicts: QuiverConflictPayload, prefs: LocalizationPrefs) -> Element {
+    let status = conflicts.status.clone();
+    let rows = conflicts.conflicts;
+    if status == "unavailable" || status.is_empty() {
+        return rsx! {
+            section { class: "section stack",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Held-Position Quiver Conflicts" }
+                        p { class: "muted", "Quiver conflict evidence is unavailable. No exit, gate, or broker action is implied." }
+                    }
+                    span { class: "status bad-text", "unavailable" }
+                }
+            }
+        };
+    }
+    if status == "not_loaded" || status == "no_positions" || status == "clear" {
         return rsx! {
             section { class: "section stack",
                 div { class: "section-title-row compact",
@@ -4214,11 +4223,11 @@ fn QuiverConflictPanel(conflicts: JsonValue, prefs: LocalizationPrefs) -> Elemen
                     tbody {
                         for row in rows.iter() {
                             tr {
-                                td { SymbolLink { symbol: text(row, "symbol"), instrument_name: String::new() } }
-                                td { class: "bad-text", "{format_signed_pct(value_f64(row, \"signal\"), &prefs)}" }
-                                td { "{format_pct(value_f64(row, \"confidence\"), &prefs)}" }
-                                td { "{text(row, \"event_count\")}" }
-                                td { "{fallback_text(row, \"latest_event_date\", \"n/a\")}" }
+                                td { SymbolLink { symbol: row.symbol.clone(), instrument_name: String::new() } }
+                                td { class: "bad-text", "{format_signed_pct(row.signal, &prefs)}" }
+                                td { "{format_pct(row.confidence, &prefs)}" }
+                                td { "{row.event_count.map(|count| count.to_string()).unwrap_or_else(|| \"n/a\".to_string())}" }
+                                td { "{row.latest_event_date.clone().unwrap_or_else(|| \"n/a\".to_string())}" }
                             }
                         }
                     }

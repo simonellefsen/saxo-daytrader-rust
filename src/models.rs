@@ -78,7 +78,7 @@ pub struct DashboardView {
     pub latest_markov_run: DashboardLatestRunPayload,
     pub quiver_signals: Vec<JsonValue>,
     pub latest_quiver_run: DashboardLatestRunPayload,
-    pub quiver_conflicts: JsonValue,
+    pub quiver_conflicts: QuiverConflictPayload,
     pub latest_daily_indicator_run: DashboardLatestRunPayload,
     pub run_schedules: DashboardRunSchedulesPayload,
     pub performance_history: Vec<PerformanceHistoryRowPayload>,
@@ -820,6 +820,34 @@ pub struct DashboardLatestRunPayload {
     pub error_count: i64,
     pub config_json: JsonValue,
     pub summary_json: JsonValue,
+}
+
+/// One held-position conflict identified by the Quiver advisory context.
+///
+/// It is review evidence only. The signal neither creates an order nor changes
+/// any execution, gate, Hermes, or broker path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QuiverConflictRowPayload {
+    pub symbol: String,
+    pub signal: f64,
+    pub direction: String,
+    pub confidence: f64,
+    pub event_count: Option<i64>,
+    pub latest_event_date: Option<String>,
+}
+
+/// Bounded held-position Quiver conflict evidence for the dashboard.
+///
+/// The Quiver collector and Hermes context retain their own detailed JSON;
+/// this read-only boundary exposes only the stable review fields to SSR.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QuiverConflictPayload {
+    pub status: String,
+    pub held_symbol_count: i64,
+    pub strong_bearish_signal_lte: f64,
+    pub conflicts: Vec<QuiverConflictRowPayload>,
+    pub safety: String,
+    pub interpretation: String,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

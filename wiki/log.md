@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Quiver conflict evidence
+
+- Changed Held-Position Quiver Conflicts to consume typed status, held-symbol count, bearish threshold, review rows, safety, and interpretation fields directly.
+- Unexpected provider detail is discarded at the SSR boundary; absent and malformed evidence render explicit not-loaded or unavailable states rather than a fabricated clear result.
+- This preserves advisory-only review evidence and performs no collector, scheduler-job, provider, Decision Report, Hermes, gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard latest signal-run summaries
 
 - Changed Markov, Quiver, and daily-indicator operations health plus the Markov/Quiver panels to consume typed run availability, lifecycle, coverage, and success/error fields.
