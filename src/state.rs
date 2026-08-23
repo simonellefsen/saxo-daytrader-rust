@@ -38,7 +38,8 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        PerformanceBenchmarksPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
         PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
         TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
@@ -3089,6 +3090,18 @@ fn dashboard_performance_pnl_reconciliation_from_json(
     }
 }
 
+/// Decodes stored exposure P/L attribution for the dashboard while retaining
+/// an explicit unavailable state outside the Performance view.
+fn dashboard_performance_exposure_attribution_from_json(
+    attribution: JsonValue,
+) -> serde_json::Result<Option<PerformanceExposureAttributionPayload>> {
+    if attribution.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(attribution).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5658,6 +5671,15 @@ impl AppState {
         } else {
             JsonValue::Null
         };
+        let performance_exposure_attribution = if active_view == "performance" {
+            overview
+                .get("integrity")
+                .and_then(|integrity| integrity.get("unrealised_pnl_attribution"))
+                .cloned()
+                .unwrap_or(JsonValue::Null)
+        } else {
+            JsonValue::Null
+        };
         let performance_history = dashboard_performance_history_from_json(performance_history)
             .unwrap_or_else(|err| {
                 warn!("dashboard typed performance history degraded: {err:#}");
@@ -5691,6 +5713,12 @@ impl AppState {
             dashboard_performance_pnl_reconciliation_from_json(performance_pnl_reconciliation)
                 .unwrap_or_else(|err| {
                     warn!("dashboard typed performance P/L reconciliation degraded: {err:#}");
+                    None
+                });
+        let performance_exposure_attribution =
+            dashboard_performance_exposure_attribution_from_json(performance_exposure_attribution)
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed performance exposure attribution degraded: {err:#}");
                     None
                 });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
@@ -5917,6 +5945,7 @@ impl AppState {
             performance_goal_tracking,
             performance_snapshot_evidence,
             performance_pnl_reconciliation,
+            performance_exposure_attribution,
             integrity: overview
                 .get("integrity")
                 .cloned()
@@ -22827,6 +22856,62 @@ analysis_windows:
         assert!(
             dashboard_performance_pnl_reconciliation_from_json(json!({
                 "scope": "read_only_unrealised_pnl_sources"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_exposure_attribution_preserves_available_and_empty_states() {
+        let unavailable = dashboard_performance_exposure_attribution_from_json(json!({
+            "status": "unavailable",
+            "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
+            "rows": [],
+            "currencies": [],
+            "exposure_count": 0,
+        }))
+        .expect("empty attribution is typed")
+        .expect("non-null attribution is present");
+        assert_eq!(unavailable.status, "unavailable");
+        assert!(unavailable.rows.is_empty());
+
+        let attribution = dashboard_performance_exposure_attribution_from_json(json!({
+            "status": "available",
+            "scope": "read_only_stored_saxo_exposure_unrealised_pnl",
+            "account_currency": "DKK",
+            "fx_basis": "instrument_currency",
+            "instrument_fx_rates_to_dkk": { "USD": 6.4 },
+            "updated_at": "2026-08-23T08:00:00Z",
+            "exposure_count": 1,
+            "shown_row_count": 1,
+            "total_unrealised_pnl_dkk": 640.0,
+            "rows": [{
+                "symbol": "TEST:xnas",
+                "instrument_currency": "USD",
+                "quantity": 2.0,
+                "unrealised_pnl_dkk": 640.0,
+                "profit_loss_instrument_currency": 100.0,
+                "fx_rate_to_dkk": 6.4,
+                "calculation_reliability": "Estimated",
+                "updated_at": "2026-08-23T08:00:00Z",
+            }],
+            "currencies": [{
+                "instrument_currency": "USD",
+                "symbol_count": 1,
+                "unrealised_pnl_dkk": 640.0,
+                "absolute_contribution_pct": 100.0,
+            }],
+        }))
+        .expect("complete attribution is typed")
+        .expect("non-null attribution is present");
+        assert_eq!(attribution.rows[0].symbol, "TEST:xnas");
+        assert_eq!(
+            attribution.currencies[0].absolute_contribution_pct,
+            Some(100.0)
+        );
+        assert!(
+            dashboard_performance_exposure_attribution_from_json(json!({
+                "status": "available"
             }))
             .is_err()
         );

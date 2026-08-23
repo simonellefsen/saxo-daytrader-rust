@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance stored-exposure attribution
+
+- Changed the Stored Exposure P/L Attribution panel to consume typed per-symbol and per-instrument-currency stored Saxo exposure data directly.
+- Availability, quantity, reliability, timestamp, account currency, and per-instrument FX basis remain explicit; no-snapshot or malformed SSR data renders an unavailable panel.
+- This preserves read-only Performance diagnostics and performs no Saxo provider request, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance unrealised-P/L reconciliation
 
 - Changed the Unrealised P/L Sources panel to consume a typed dashboard/latest-history/stored-Saxo-exposure reconciliation model directly.

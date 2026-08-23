@@ -87,6 +87,7 @@ pub struct DashboardView {
     pub performance_goal_tracking: Option<PerformanceGoalTrackingPayload>,
     pub performance_snapshot_evidence: Option<PerformanceSnapshotEvidencePayload>,
     pub performance_pnl_reconciliation: Option<PerformancePnlReconciliationPayload>,
+    pub performance_exposure_attribution: Option<PerformanceExposureAttributionPayload>,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
     pub market_status: JsonValue,
@@ -867,6 +868,54 @@ pub struct PerformancePnlReconciliationPayload {
     pub dashboard: PerformancePnlDashboardSourcePayload,
     pub latest_history: PerformancePnlHistorySourcePayload,
     pub broker_exposure: PerformancePnlBrokerExposurePayload,
+}
+
+/// One stored Saxo instrument exposure converted to DKK for attribution.
+///
+/// Its currency is a grouping label. It does not isolate FX P/L or represent
+/// a real-time quote.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceExposureAttributionRowPayload {
+    pub symbol: String,
+    pub instrument_currency: String,
+    pub quantity: Option<f64>,
+    pub unrealised_pnl_dkk: f64,
+    pub profit_loss_instrument_currency: f64,
+    pub fx_rate_to_dkk: f64,
+    pub calculation_reliability: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+/// Aggregate exposure attribution for one instrument currency.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceExposureCurrencyPayload {
+    pub instrument_currency: String,
+    pub symbol_count: i64,
+    pub unrealised_pnl_dkk: f64,
+    pub absolute_contribution_pct: Option<f64>,
+}
+
+/// Read-only stored Saxo exposure P/L attribution.
+///
+/// Exposure P/L is converted using each instrument currency's recorded DKK
+/// rate; it must not be interpreted as realised P/L, a trading signal, or a
+/// standalone FX-P/L decomposition.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceExposureAttributionPayload {
+    pub status: String,
+    pub scope: String,
+    pub account_currency: Option<String>,
+    pub fx_basis: Option<String>,
+    pub instrument_fx_rates_to_dkk: Option<BTreeMap<String, f64>>,
+    pub updated_at: Option<String>,
+    pub exposure_count: i64,
+    #[serde(default)]
+    pub shown_row_count: i64,
+    pub total_unrealised_pnl_dkk: Option<f64>,
+    #[serde(default)]
+    pub rows: Vec<PerformanceExposureAttributionRowPayload>,
+    #[serde(default)]
+    pub currencies: Vec<PerformanceExposureCurrencyPayload>,
 }
 
 /// Evidence provenance for a performance-range summary.

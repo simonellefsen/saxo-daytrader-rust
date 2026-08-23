@@ -11,7 +11,8 @@ use crate::{
     },
     models::{
         DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceSnapshotEvidencePayload,
         PerformanceSummaryPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
@@ -2740,11 +2741,7 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 prefs: prefs.clone(),
             }
             PerformanceExposureAttributionPanel {
-                attribution: data
-                    .integrity
-                    .get("unrealised_pnl_attribution")
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
+                attribution: data.performance_exposure_attribution.clone(),
                 prefs: prefs.clone(),
             }
             PerformanceRealisedSellOutcomesPanel {
@@ -3000,30 +2997,32 @@ fn PerformancePnlReconciliationPanel(
 
 #[component]
 fn PerformanceExposureAttributionPanel(
-    attribution: JsonValue,
+    attribution: Option<PerformanceExposureAttributionPayload>,
     prefs: LocalizationPrefs,
 ) -> Element {
-    let rows = attribution
-        .get("rows")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let currencies = attribution
-        .get("currencies")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let available = text(&attribution, "status") == "available";
-    let money = |row: &JsonValue, key: &str| {
-        row.get(key)
-            .and_then(JsonValue::as_f64)
+    let Some(attribution) = attribution else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Stored Exposure P/L Attribution" }
+                        p { class: "muted", "Largest current unrealised P/L contributors from the stored Saxo exposure snapshot. Read-only, not realised P/L or a trading signal." }
+                    }
+                    span { class: "status warn-status", "snapshot unavailable" }
+                }
+                p { class: "muted", "Stored exposure attribution was unavailable or failed validation, so no contributor table is shown." }
+            }
+        };
+    };
+    let available = attribution.status == "available";
+    let money = |value: Option<f64>| {
+        value
             .filter(|value| value.is_finite())
             .map(|value| format_signed_dkk(value, &prefs))
             .unwrap_or_else(|| "n/a".to_string())
     };
-    let percent = |row: &JsonValue, key: &str| {
-        row.get(key)
-            .and_then(JsonValue::as_f64)
+    let percent = |value: Option<f64>| {
+        value
             .filter(|value| value.is_finite())
             .map(|value| format_signed_pct(value, &prefs))
             .unwrap_or_else(|| "n/a".to_string())
@@ -3031,8 +3030,11 @@ fn PerformanceExposureAttributionPanel(
     let evidence = if available {
         format!(
             "{} stored exposure(s) · instrument FX conversion · {}",
-            text(&attribution, "exposure_count"),
-            format_timestamp(&text(&attribution, "updated_at"), &prefs),
+            attribution.exposure_count,
+            format_timestamp(
+                attribution.updated_at.as_deref().unwrap_or_default(),
+                &prefs
+            ),
         )
     } else {
         "No stored Saxo instrument-exposure snapshot is available.".to_string()
@@ -3055,11 +3057,11 @@ fn PerformanceExposureAttributionPanel(
                 p { class: "muted", "{evidence}" }
             } else {
                 div { class: "mini-grid",
-                    for currency in currencies {
+                    for currency in attribution.currencies.iter() {
                         div { class: "metric-card compact-metric",
-                            span { class: "metric-label", "{text(&currency, \"instrument_currency\")}" }
-                            strong { class: if value_f64(&currency, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{money(&currency, \"unrealised_pnl_dkk\")}" }
-                            span { class: "muted", "{text(&currency, \"symbol_count\")} symbol(s) · {percent(&currency, \"absolute_contribution_pct\")} of absolute P/L" }
+                            span { class: "metric-label", "{currency.instrument_currency}" }
+                            strong { class: if currency.unrealised_pnl_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{money(Some(currency.unrealised_pnl_dkk))}" }
+                            span { class: "muted", "{currency.symbol_count} symbol(s) · {percent(currency.absolute_contribution_pct)} of absolute P/L" }
                         }
                     }
                 }
@@ -3067,18 +3069,18 @@ fn PerformanceExposureAttributionPanel(
                     table {
                         thead { tr { th { "Symbol" } th { "Instrument currency" } th { "Unrealised P/L" } th { "Reliability" } } }
                         tbody {
-                            for row in rows {
+                            for row in attribution.rows.iter() {
                                 tr {
-                                    td { strong { "{text(&row, \"symbol\")}" } }
-                                    td { "{text(&row, \"instrument_currency\")}" }
-                                    td { class: if value_f64(&row, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{money(&row, \"unrealised_pnl_dkk\")}" }
-                                    td { "{text(&row, \"calculation_reliability\")}" }
+                                    td { strong { "{row.symbol}" } }
+                                    td { "{row.instrument_currency}" }
+                                    td { class: if row.unrealised_pnl_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{money(Some(row.unrealised_pnl_dkk))}" }
+                                    td { "{row.calculation_reliability.as_deref().unwrap_or_default()}" }
                                 }
                             }
                         }
                     }
                 }
-                p { class: "muted benchmark-caveat", "{evidence}. Instrument currency is a grouping label only: Saxo reports exposure P/L in the broker account currency, so this table does not isolate FX P/L. Showing the top {text(&attribution, \"shown_row_count\")} by absolute P/L; sector, strategy-role, realised P/L, costs, and tax attribution are not included." }
+                p { class: "muted benchmark-caveat", "{evidence}. Instrument currency is a grouping label only: Saxo reports exposure P/L in the broker account currency, so this table does not isolate FX P/L. Showing the top {attribution.shown_row_count} by absolute P/L; sector, strategy-role, realised P/L, costs, and tax attribution are not included." }
             }
         }
     }
