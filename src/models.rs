@@ -849,19 +849,60 @@ pub struct PerformanceSummaryPayload {
     pub unreliable_cost_basis_points: i64,
 }
 
+/// Weekly or monthly local-history goal progress.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceGoalPeriodPayload {
+    pub status: String,
+    pub pnl_dkk: Option<f64>,
+    pub target_dkk: f64,
+    pub progress_pct: Option<f64>,
+    pub baseline_value_dkk: Option<f64>,
+    pub period_start_utc: String,
+}
+
+/// Since-reset local-history performance, which has no target by design.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceSinceResetPayload {
+    pub status: String,
+    pub pnl_dkk: Option<f64>,
+    pub return_pct: Option<f64>,
+    pub baseline_value_dkk: Option<f64>,
+    pub baseline_recorded_at: Option<String>,
+}
+
+/// Read-only local portfolio-value goal tracking.
+///
+/// Period baselines are scoped to the active import batch, so a portfolio reset
+/// cannot bleed earlier history into current week/month progress.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceGoalTrackingPayload {
+    pub weekly_target_dkk: f64,
+    pub monthly_target_dkk: f64,
+    pub basis: String,
+    pub periods: PerformanceGoalPeriodsPayload,
+}
+
+/// Grouped goal periods with deliberately different since-reset semantics.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PerformanceGoalPeriodsPayload {
+    pub week: PerformanceGoalPeriodPayload,
+    pub month: PerformanceGoalPeriodPayload,
+    pub since_reset: PerformanceSinceResetPayload,
+}
+
 /// Bounded performance envelope.
 ///
-/// History rows, benchmark data, and goal-tracking details remain compatibility
-/// JSON while the performance read model is converted incrementally. The
-/// selected-range summary is typed from the pure local-history projection.
-/// This does not change performance collection or any decision/execution behavior.
+/// History rows and benchmark data remain compatibility JSON while the
+/// performance read model is converted incrementally. The selected-range
+/// summary and local goal tracking are typed projections. This does not change
+/// performance collection or any decision/execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformancePayload {
     pub range_key: String,
     pub history: Vec<JsonValue>,
     pub summary: PerformanceSummaryPayload,
     pub benchmarks: JsonValue,
-    pub goal_tracking: JsonValue,
+    pub goal_tracking: PerformanceGoalTrackingPayload,
     pub snapshot_evidence: PerformanceSnapshotEvidencePayload,
 }
 

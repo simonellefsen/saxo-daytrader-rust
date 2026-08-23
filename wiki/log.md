@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type Performance goal tracking
+
+- Typed weekly/monthly local-baseline goal periods and since-reset performance: targets, ready/pending state, P/L, progress, baseline value/time, and since-reset return.
+- Goal baselines remain scoped to the active import batch, so portfolio-reset history cannot enter the current periods. Missing baselines remain explicit `pending_baseline` values rather than fabricated zero progress.
+- This preserves read-only local portfolio-value context and performs no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type Performance summary and confidence provenance
 
 - Typed the selected-range local-account-value summary: point/timestamp/value/change/daily-P&L/position/range-return/drawdown fields plus the confidence status, valid-point count, freshness, snapshot/source provenance, and scope.

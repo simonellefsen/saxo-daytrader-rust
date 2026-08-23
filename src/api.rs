@@ -2947,7 +2947,36 @@ mod tests {
                 "unreliable_cost_basis_points": 0,
             },
             "benchmarks": {"status": "available"},
-            "goal_tracking": {"status": "on_track"},
+            "goal_tracking": {
+                "weekly_target_dkk": 880.0,
+                "monthly_target_dkk": 3800.0,
+                "basis": "Local portfolio-value history baseline.",
+                "periods": {
+                    "week": {
+                        "status": "ready",
+                        "pnl_dkk": 440.0,
+                        "target_dkk": 880.0,
+                        "progress_pct": 0.5,
+                        "baseline_value_dkk": 299560.0,
+                        "period_start_utc": "2026-07-27T00:00:00Z",
+                    },
+                    "month": {
+                        "status": "pending_baseline",
+                        "pnl_dkk": null,
+                        "target_dkk": 3800.0,
+                        "progress_pct": null,
+                        "baseline_value_dkk": null,
+                        "period_start_utc": "2026-08-01T00:00:00Z",
+                    },
+                    "since_reset": {
+                        "status": "ready",
+                        "pnl_dkk": 5000.0,
+                        "return_pct": 1.6949152542,
+                        "baseline_value_dkk": 295000.0,
+                        "baseline_recorded_at": "2026-08-01T10:00:00Z",
+                    },
+                },
+            },
             "snapshot_evidence": {
                 "status": "partial",
                 "range_key": "1D",
@@ -3057,7 +3086,11 @@ mod tests {
         assert_eq!(serialized["summary"]["change_dkk"], 5000.0);
         assert_eq!(serialized["summary"]["confidence"]["status"], "current");
         assert_eq!(serialized["benchmarks"]["status"], "available");
-        assert_eq!(serialized["goal_tracking"]["status"], "on_track");
+        assert_eq!(
+            serialized["goal_tracking"]["periods"]["week"]["progress_pct"],
+            0.5
+        );
+        assert!(serialized["goal_tracking"]["periods"]["month"]["pnl_dkk"].is_null());
         assert_eq!(serialized["snapshot_evidence"]["coverage_pct"], 50.0);
         assert_eq!(serialized["snapshot_evidence"]["covered_snapshot_count"], 2);
         assert_eq!(
