@@ -38,16 +38,17 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        MarketStatusPayload, PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        MarketStatusPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3120,6 +3121,14 @@ fn dashboard_market_status_from_json(
     serde_json::from_value(market_status)
 }
 
+/// Decodes the stable Integrity status used by the dashboard. Individual
+/// issue rows remain staged JSON because their fields are check-specific.
+fn dashboard_integrity_from_json(
+    integrity: JsonValue,
+) -> serde_json::Result<OverviewIntegrityPayload> {
+    serde_json::from_value(integrity)
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5769,6 +5778,25 @@ impl AppState {
                 price_monitor: JsonValue::Null,
             }
         });
+        let integrity = overview
+            .get("integrity")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let integrity = dashboard_integrity_from_json(integrity).unwrap_or_else(|err| {
+            warn!("dashboard typed integrity degraded: {err:#}");
+            OverviewIntegrityPayload {
+                healthy: false,
+                warnings: vec![json!({
+                    "code": "integrity_dashboard_payload_unavailable",
+                    "severity": "warning",
+                    "message": "Integrity status could not be loaded for the dashboard."
+                })],
+                mismatches: Vec::new(),
+                expiry_pending_orders: Vec::new(),
+                acknowledged_issue_count: 0,
+                checked_at: String::new(),
+            }
+        });
         let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
             self.watchlists_payload().await.unwrap_or_else(|err| {
                 warn!("dashboard watchlists degraded: {err:#}");
@@ -5991,10 +6019,7 @@ impl AppState {
             performance_pnl_reconciliation,
             performance_exposure_attribution,
             performance_realised_sell_outcomes,
-            integrity: overview
-                .get("integrity")
-                .cloned()
-                .unwrap_or_else(|| json!({"healthy": false, "warnings": [], "mismatches": []})),
+            integrity,
             execution_protection,
             market_status,
             trading_manager: overview
@@ -16609,6 +16634,25 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_integrity_requires_the_stable_outer_contract() {
+        let integrity = dashboard_integrity_from_json(json!({
+            "healthy": false,
+            "warnings": [{"code": "broker_cash_drift"}],
+            "mismatches": [],
+            "expiry_pending_orders": [{"id": 204, "symbol": "BAC:xnys"}],
+            "acknowledged_issue_count": 1,
+            "checked_at": "2026-08-23T12:00:00Z"
+        }))
+        .expect("integrity fixture has the dashboard contract");
+
+        assert!(!integrity.healthy);
+        assert_eq!(integrity.warnings.len(), 1);
+        assert_eq!(integrity.expiry_pending_orders[0]["id"], json!(204));
+        assert_eq!(integrity.acknowledged_issue_count, 1);
+        assert!(dashboard_integrity_from_json(json!({"healthy": true})).is_err());
+    }
 
     #[test]
     fn goal_period_value_marks_missing_baseline_pending_instead_of_zero_progress() {

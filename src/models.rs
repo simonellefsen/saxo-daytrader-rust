@@ -89,7 +89,7 @@ pub struct DashboardView {
     pub performance_pnl_reconciliation: Option<PerformancePnlReconciliationPayload>,
     pub performance_exposure_attribution: Option<PerformanceExposureAttributionPayload>,
     pub performance_realised_sell_outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
-    pub integrity: JsonValue,
+    pub integrity: OverviewIntegrityPayload,
     pub execution_protection: JsonValue,
     pub market_status: MarketStatusPayload,
     pub trading_manager: JsonValue,
@@ -652,6 +652,22 @@ pub struct MarketStatusPayload {
     pub summary: JsonValue,
     pub scheduler: JsonValue,
     pub price_monitor: JsonValue,
+}
+
+/// Bounded dashboard integrity envelope.
+///
+/// Individual findings retain compatibility JSON because each check carries
+/// check-specific diagnostic detail and acknowledgement metadata. The stable
+/// status, timing, and list boundaries are typed so dashboard health cannot
+/// accidentally traverse an arbitrary overview document.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OverviewIntegrityPayload {
+    pub healthy: bool,
+    pub warnings: Vec<JsonValue>,
+    pub mismatches: Vec<JsonValue>,
+    pub expiry_pending_orders: Vec<JsonValue>,
+    pub acknowledged_issue_count: i64,
+    pub checked_at: String,
 }
 
 /// Stable metadata for a retained aggregate/position snapshot.

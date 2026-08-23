@@ -10,9 +10,9 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardView, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
         TuningPulseComparison,
@@ -2351,23 +2351,11 @@ fn cash_deployment_tone(status: &str) -> &'static str {
 }
 
 #[component]
-fn IntegrityPanel(integrity: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn IntegrityPanel(integrity: OverviewIntegrityPayload, prefs: LocalizationPrefs) -> Element {
     let summary = integrity_summary(&integrity, &prefs);
-    let warnings = integrity
-        .get("warnings")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mismatches = integrity
-        .get("mismatches")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let expiry_pending_orders = integrity
-        .get("expiry_pending_orders")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let warnings = integrity.warnings;
+    let mismatches = integrity.mismatches;
+    let expiry_pending_orders = integrity.expiry_pending_orders;
     rsx! {
         section { class: "section",
             h2 { "Integrity" }
@@ -2473,21 +2461,13 @@ fn IntegrityIssueRow(row: JsonValue) -> Element {
 }
 
 fn integrity_summary(
-    integrity: &JsonValue,
+    integrity: &OverviewIntegrityPayload,
     prefs: &LocalizationPrefs,
 ) -> (&'static str, String, String) {
-    let mismatch_count = integrity
-        .get("mismatches")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let warning_count = integrity
-        .get("warnings")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let checked_at = format_timestamp(&text(integrity, "checked_at"), prefs);
-    let acknowledged_count = value_i64(integrity, "acknowledged_issue_count");
+    let mismatch_count = integrity.mismatches.len();
+    let warning_count = integrity.warnings.len();
+    let checked_at = format_timestamp(&integrity.checked_at, prefs);
+    let acknowledged_count = integrity.acknowledged_issue_count;
     let ack_suffix = if acknowledged_count > 0 {
         format!(" · {acknowledged_count} acknowledged")
     } else {
@@ -9261,23 +9241,11 @@ fn scheduler_operation_health(summary: &JsonValue, now: DateTime<Utc>) -> Operat
     }
 }
 
-fn integrity_operation_health(integrity: &JsonValue) -> OperationHealthItem {
-    let mismatch_count = integrity
-        .get("mismatches")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let warning_count = integrity
-        .get("warnings")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let expiry_pending_count = integrity
-        .get("expiry_pending_orders")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let checked_at = text(integrity, "checked_at");
+fn integrity_operation_health(integrity: &OverviewIntegrityPayload) -> OperationHealthItem {
+    let mismatch_count = integrity.mismatches.len();
+    let warning_count = integrity.warnings.len();
+    let expiry_pending_count = integrity.expiry_pending_orders.len();
+    let checked_at = &integrity.checked_at;
     let checked_label = if checked_at.is_empty() {
         "not checked".to_string()
     } else {
@@ -11972,7 +11940,7 @@ mod tests {
 
     #[test]
     fn integrity_operation_health_warns_on_expiry_pending_orders() {
-        let item = integrity_operation_health(&json!({
+        let integrity = serde_json::from_value::<OverviewIntegrityPayload>(json!({
             "healthy": false,
             "warnings": [{
                 "code": "day_order_expiry_sync_pending",
@@ -11981,8 +11949,11 @@ mod tests {
             }],
             "mismatches": [],
             "expiry_pending_orders": [{"id": 204, "symbol": "BAC:xnys"}],
+            "acknowledged_issue_count": 0,
             "checked_at": "2026-07-09T20:15:00Z"
-        }));
+        }))
+        .expect("integrity fixture has the typed outer contract");
+        let item = integrity_operation_health(&integrity);
 
         assert_eq!(item.label, "Integrity");
         assert_eq!(item.status, "expiry sync");
@@ -11992,20 +11963,20 @@ mod tests {
 
     #[test]
     fn integrity_summary_mentions_acknowledged_issues() {
-        let summary = integrity_summary(
-            &json!({
-                "healthy": false,
-                "mismatches": [{
-                    "code": "portfolio_identity_mismatch",
-                    "severity": "error",
-                    "acknowledged": true
+        let integrity = serde_json::from_value::<OverviewIntegrityPayload>(json!({
+            "healthy": false,
+            "mismatches": [{
+                "code": "portfolio_identity_mismatch",
+                "severity": "error",
+                "acknowledged": true
                 }],
                 "warnings": [],
+                "expiry_pending_orders": [],
                 "acknowledged_issue_count": 1,
-                "checked_at": "2026-07-10T06:00:00Z"
-            }),
-            &default_prefs(),
-        );
+            "checked_at": "2026-07-10T06:00:00Z"
+        }))
+        .expect("integrity fixture has the typed outer contract");
+        let summary = integrity_summary(&integrity, &default_prefs());
 
         assert_eq!(summary.0, "bad-status");
         assert_eq!(summary.1, "1 error");

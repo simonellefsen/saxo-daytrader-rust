@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Integrity consumption
+
+- Changed the dashboard Integrity panel and Operations health calls to use a typed outer integrity contract for health, timestamps, acknowledgement count, and staged issue-list boundaries.
+- Check-specific findings and acknowledgement metadata remain compatibility JSON; malformed overview evidence becomes an explicit local warning rather than arbitrary dashboard JSON.
+- This preserves read-only integrity observability and performs no integrity-check, scheduler, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard market-status consumption
 
 - Changed the dashboard, Market tab, and Operations health calls to use the typed outer market-status contract, passing its summary and price-monitor subdocuments directly to staged diagnostic helpers.
