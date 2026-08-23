@@ -38,7 +38,7 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        MarketStatusPayload, PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
@@ -3114,6 +3114,12 @@ fn dashboard_performance_realised_sell_outcomes_from_json(
     }
 }
 
+fn dashboard_market_status_from_json(
+    market_status: JsonValue,
+) -> serde_json::Result<MarketStatusPayload> {
+    serde_json::from_value(market_status)
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5753,6 +5759,15 @@ impl AppState {
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
+        });
+        let market_status = dashboard_market_status_from_json(market_status).unwrap_or_else(|err| {
+            warn!("dashboard typed market status degraded: {err:#}");
+            MarketStatusPayload {
+                items: Vec::new(),
+                summary: json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}),
+                scheduler: JsonValue::Null,
+                price_monitor: JsonValue::Null,
+            }
         });
         let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
             self.watchlists_payload().await.unwrap_or_else(|err| {

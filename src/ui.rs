@@ -3685,21 +3685,9 @@ fn PerformanceChart(rows: Vec<PerformanceHistoryRowPayload>) -> Element {
 
 #[component]
 fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
-    let summary = data
-        .market_status
-        .get("summary")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let scheduler = data
-        .market_status
-        .get("scheduler")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let price_monitor = data
-        .market_status
-        .get("price_monitor")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let summary = data.market_status.summary.clone();
+    let scheduler = data.market_status.scheduler.clone();
+    let price_monitor = data.market_status.price_monitor.clone();
     rsx! {
         section { class: "layout",
             div {
@@ -3744,7 +3732,7 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                                 }
                             }
                             tbody {
-                                for row in data.market_status.get("items").and_then(JsonValue::as_array).cloned().unwrap_or_default() {
+                                for row in data.market_status.items.iter().cloned() {
                                     MarketRow { row, prefs: prefs.clone() }
                                 }
                             }
@@ -9157,7 +9145,7 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
     vec![
         saxo_operation_health(&data.saxo_auth),
         integrity_operation_health(&data.integrity),
-        scheduler_operation_health(&data.market_status, now),
+        scheduler_operation_health(&data.market_status.summary, now),
         decision_pulse_operation_health(
             &data.decision_pulse_statuses,
             "europe_open_followup",
@@ -9198,7 +9186,7 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
                 .unwrap_or(&JsonValue::Null),
             now,
         ),
-        quote_operation_health(&data.positions, &data.market_status, now),
+        quote_operation_health(&data.positions, &data.market_status.price_monitor, now),
         execution_operation_health(&data.orders),
     ]
 }
@@ -9241,11 +9229,7 @@ fn saxo_operation_health(auth: &JsonValue) -> OperationHealthItem {
     }
 }
 
-fn scheduler_operation_health(
-    market_status: &JsonValue,
-    now: DateTime<Utc>,
-) -> OperationHealthItem {
-    let summary = market_status.get("summary").unwrap_or(&JsonValue::Null);
+fn scheduler_operation_health(summary: &JsonValue, now: DateTime<Utc>) -> OperationHealthItem {
     let heartbeat = text(summary, "last_heartbeat_at");
     let last_cycle_status = text_or(summary, "last_cycle_status", "unknown");
     let Some(age_minutes) = age_minutes(&heartbeat, now) else {
@@ -9788,15 +9772,11 @@ fn price_monitor_skipped_symbols(summary: &JsonValue, limit: usize) -> String {
 
 fn quote_operation_health(
     positions: &[JsonValue],
-    market_status: &JsonValue,
+    monitor: &JsonValue,
     now: DateTime<Utc>,
 ) -> OperationHealthItem {
-    let monitor = market_status
-        .get("price_monitor")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let monitor_status = text(&monitor, "status");
-    let monitor_summary = price_monitor_summary(&monitor);
+    let monitor_status = text(monitor, "status");
+    let monitor_summary = price_monitor_summary(monitor);
     if monitor_status == "market_closed" {
         let skipped = value_f64(&monitor_summary, "skipped_closed") as usize;
         return OperationHealthItem {
@@ -11614,14 +11594,12 @@ mod tests {
         let item = quote_operation_health(
             &[],
             &json!({
-                "price_monitor": {
-                    "status": "market_closed",
-                    "summary_json": {
-                        "skipped_closed": 1,
-                        "skipped_closed_symbols": [
-                            {"symbol": "NOVOb:xcse", "exchange": "XCSE"}
-                        ]
-                    }
+                "status": "market_closed",
+                "summary_json": {
+                    "skipped_closed": 1,
+                    "skipped_closed_symbols": [
+                        {"symbol": "NOVOb:xcse", "exchange": "XCSE"}
+                    ]
                 }
             }),
             Utc::now(),
@@ -12041,10 +12019,8 @@ mod tests {
             .with_timezone(&Utc);
         let item = scheduler_operation_health(
             &json!({
-                "summary": {
-                    "last_heartbeat_at": "2026-06-24T10:45:00Z",
-                    "last_cycle_status": "ok"
-                }
+                "last_heartbeat_at": "2026-06-24T10:45:00Z",
+                "last_cycle_status": "ok"
             }),
             now,
         );

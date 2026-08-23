@@ -91,7 +91,7 @@ pub struct DashboardView {
     pub performance_realised_sell_outcomes: Option<PerformanceRealisedSellOutcomesPayload>,
     pub integrity: JsonValue,
     pub execution_protection: JsonValue,
-    pub market_status: JsonValue,
+    pub market_status: MarketStatusPayload,
     pub trading_manager: JsonValue,
     pub watchlists: JsonValue,
     pub latest_decision: JsonValue,

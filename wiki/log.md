@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard market-status consumption
+
+- Changed the dashboard, Market tab, and Operations health calls to use the typed outer market-status contract, passing its summary and price-monitor subdocuments directly to staged diagnostic helpers.
+- A malformed status payload now degrades to a local inactive/unavailable shape rather than leaving arbitrary JSON at the dashboard boundary.
+- This preserves read-only market observability and performs no Saxo calendar or quote request, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance reconciled SELL outcomes
 
 - Added a typed dashboard model for local reconciled SELL accounting evidence: individual rows, symbol/currency/route aggregates, collecting versus preliminary sample status, totals, and explicit evidence limitations.
