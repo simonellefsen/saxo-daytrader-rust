@@ -2938,7 +2938,22 @@ mod tests {
                 "position_evidence_row_count": 40,
                 "first_covered_at": "2026-08-01T10:00:00Z",
                 "latest_covered_at": "2026-08-01T12:00:00Z",
-                "latest_snapshot": {"status": "available"},
+                "latest_snapshot": {
+                    "status": "available",
+                    "snapshot": {
+                        "snapshot_id": 42,
+                        "recorded_at": "2026-08-01T12:00:00Z",
+                        "snapshot_type": "scheduler_cycle",
+                        "source": "test",
+                        "position_count": 2,
+                        "invested_market_value_dkk": 1500.0,
+                        "total_cost_basis_dkk": 1200.0,
+                        "total_unrealised_pnl_dkk": 300.0,
+                    },
+                    "items": [{"symbol": "EXMPL:xnas"}],
+                    "safety": "local_retained_position_snapshot_read_no_provider_hermes_gate_or_order_authority",
+                    "interpretation": "Stored evidence, not a live broker portfolio.",
+                },
                 "latest_change": {"status": "available"},
                 "detail_retention": "all_cycle_snapshots_for_90_days_then_final_stored_snapshot_per_utc_date",
                 "integrity": {"status": "aligned"},
@@ -2956,6 +2971,10 @@ mod tests {
         assert_eq!(serialized["goal_tracking"]["status"], "on_track");
         assert_eq!(serialized["snapshot_evidence"]["coverage_pct"], 50.0);
         assert_eq!(serialized["snapshot_evidence"]["covered_snapshot_count"], 2);
+        assert_eq!(
+            serialized["snapshot_evidence"]["latest_snapshot"]["snapshot"]["snapshot_id"],
+            42
+        );
         assert_eq!(
             serialized["snapshot_evidence"]["latest_change"]["status"],
             "available"

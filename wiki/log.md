@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type latest retained Performance snapshot
+
+- Extended the typed Performance snapshot-evidence boundary with explicit latest-snapshot availability, safety, interpretation, and retained metadata: identity, record time, source, position count, and stored DKK totals.
+- The collecting state retains an absent snapshot as an explicit optional field. Per-position historical rows, composition-change detail, and integrity findings remain compatibility JSON for independently bounded follow-up conversions.
+- This preserves response semantics and is read-only: no Saxo, provider, Hermes, decision-gate, queue, precheck, or broker-order action changed.
+
 ## [2026-08-23] architecture | Type Performance snapshot-evidence API contract
 
 - Replaced the public Performance API's generic snapshot-evidence envelope with `PerformanceSnapshotEvidencePayload`. Its stable selected-range coverage, retention, timestamp, safety, and interpretation fields are now compiler-checked.

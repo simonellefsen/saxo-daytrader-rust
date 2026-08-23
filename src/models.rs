@@ -649,12 +649,43 @@ pub struct MarketStatusPayload {
     pub price_monitor: JsonValue,
 }
 
+/// Stable metadata for a retained aggregate/position snapshot.
+///
+/// Per-position rows are intentionally not included here: their detailed
+/// values remain compatibility JSON in the surrounding evidence envelope.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedPositionSnapshotMetadataPayload {
+    pub snapshot_id: i64,
+    pub recorded_at: String,
+    pub snapshot_type: String,
+    pub source: Option<String>,
+    pub position_count: i64,
+    pub invested_market_value_dkk: f64,
+    pub total_cost_basis_dkk: f64,
+    pub total_unrealised_pnl_dkk: f64,
+}
+
+/// Bounded latest retained-position evidence envelope.
+///
+/// The stored snapshot metadata and availability state are explicit, while
+/// individual historical position rows remain compatibility JSON for staged
+/// conversion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RetainedPositionSnapshotEvidencePayload {
+    pub status: String,
+    pub snapshot: Option<RetainedPositionSnapshotMetadataPayload>,
+    pub items: Vec<JsonValue>,
+    pub safety: String,
+    pub interpretation: Option<String>,
+}
+
 /// Bounded retained-position snapshot evidence envelope.
 ///
 /// The selected-range coverage and retention contract is typed so callers can
 /// distinguish collecting, partial, and complete evidence without traversing
-/// arbitrary JSON. Individual historical snapshots and integrity findings
-/// remain compatibility JSON while those nested read models are converted.
+/// arbitrary JSON. Composition-change, integrity, and individual historical
+/// position details remain compatibility JSON while those nested read models
+/// are converted.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PerformanceSnapshotEvidencePayload {
     pub status: String,
@@ -667,7 +698,7 @@ pub struct PerformanceSnapshotEvidencePayload {
     pub position_evidence_row_count: i64,
     pub first_covered_at: Option<String>,
     pub latest_covered_at: Option<String>,
-    pub latest_snapshot: JsonValue,
+    pub latest_snapshot: RetainedPositionSnapshotEvidencePayload,
     pub latest_change: JsonValue,
     pub detail_retention: String,
     pub integrity: JsonValue,
