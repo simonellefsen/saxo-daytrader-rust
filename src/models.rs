@@ -81,7 +81,7 @@ pub struct DashboardView {
     pub run_schedules: JsonValue,
     pub performance_history: Vec<PerformanceHistoryRowPayload>,
     pub performance_summary: Option<PerformanceSummaryPayload>,
-    pub performance_benchmarks: JsonValue,
+    pub performance_benchmarks: Option<PerformanceBenchmarksPayload>,
     pub performance_goal_tracking: JsonValue,
     pub performance_snapshot_evidence: JsonValue,
     pub integrity: JsonValue,

@@ -38,13 +38,14 @@ use crate::{
     models::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        PerformanceHistoryRowPayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        PerformanceBenchmarksPayload, PerformanceHistoryRowPayload, PerformanceSummaryPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3039,6 +3040,18 @@ fn dashboard_performance_summary_from_json(
     }
 }
 
+/// Decodes the read-only proxy comparison for SSR while preserving an explicit
+/// unavailable state outside the Performance tab.
+fn dashboard_performance_benchmarks_from_json(
+    benchmarks: JsonValue,
+) -> serde_json::Result<Option<PerformanceBenchmarksPayload>> {
+    if benchmarks.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(benchmarks).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5609,6 +5622,13 @@ impl AppState {
                 warn!("dashboard typed performance summary degraded: {err:#}");
                 None
             });
+        let performance_benchmarks = dashboard_performance_benchmarks_from_json(
+            performance_benchmarks,
+        )
+        .unwrap_or_else(|err| {
+            warn!("dashboard typed performance benchmarks degraded: {err:#}");
+            None
+        });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
             json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
@@ -22525,6 +22545,48 @@ analysis_windows:
         .expect("non-null summary is present");
         assert_eq!(summary.confidence.status, "current");
         assert!(dashboard_performance_summary_from_json(json!({"points": 2})).is_err());
+    }
+
+    #[test]
+    fn dashboard_performance_benchmarks_preserve_unavailable_and_pending_rows() {
+        assert!(
+            dashboard_performance_benchmarks_from_json(JsonValue::Null)
+                .expect("null stays unavailable")
+                .is_none()
+        );
+        let benchmarks = dashboard_performance_benchmarks_from_json(json!({
+            "status": "partial",
+            "latest_run": null,
+            "portfolio_baseline_at": "2026-08-23T08:00:00Z",
+            "portfolio_latest_at": "2026-08-23T09:00:00Z",
+            "portfolio_return_pct": 1.5,
+            "ready_count": 1,
+            "reference_count": 2,
+            "aligned_count": 1,
+            "prior_close_count": 0,
+            "stale_close_count": 0,
+            "freshness": "aligned_close",
+            "references": [{
+                "key": "us_large_cap",
+                "label": "S&P 500 (SPY ETF proxy)",
+                "symbol": "SPY:arcx",
+                "status": "pending_history",
+                "portfolio_return_pct": 1.5,
+                "benchmark_return_pct": null,
+                "excess_return_pct": null,
+                "baseline_close": null,
+                "latest_close": null,
+                "baseline_at": null,
+                "latest_at": null,
+                "freshness": null,
+            }],
+            "caveat": "Read-only proxy comparison.",
+        }))
+        .expect("complete comparison is typed")
+        .expect("non-null comparison is present");
+        assert_eq!(benchmarks.references[0].status, "pending_history");
+        assert!(benchmarks.references[0].benchmark_return_pct.is_none());
+        assert!(dashboard_performance_benchmarks_from_json(json!({"status": "ready"})).is_err());
     }
 
     #[test]

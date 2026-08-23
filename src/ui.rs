@@ -10,8 +10,9 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardView, PerformanceHistoryRowPayload, PerformanceSummaryPayload,
-        TuningExecutionPulseOutcome, TuningPulseComparison,
+        DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceHistoryRowPayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
 };
 
@@ -3435,21 +3436,36 @@ fn GoalProgressCard(label: String, period: JsonValue, prefs: LocalizationPrefs) 
 
 #[component]
 fn PerformanceBenchmarkPanel(
-    benchmarks: JsonValue,
+    benchmarks: Option<PerformanceBenchmarksPayload>,
     prefs: LocalizationPrefs,
     range: String,
 ) -> Element {
-    let status = text(&benchmarks, "status").replace('_', " ");
+    let status = benchmarks
+        .as_ref()
+        .map(|benchmarks| benchmarks.status.replace('_', " "))
+        .unwrap_or_else(|| "unavailable".to_string());
     let references = benchmarks
-        .get("references")
-        .and_then(JsonValue::as_array)
-        .cloned()
+        .as_ref()
+        .map(|benchmarks| benchmarks.references.clone())
         .unwrap_or_default();
-    let caveat = text(&benchmarks, "caveat");
+    let caveat = benchmarks
+        .as_ref()
+        .and_then(|benchmarks| benchmarks.caveat.as_deref())
+        .unwrap_or("Benchmark comparison data is unavailable.")
+        .to_string();
     let (freshness_label, freshness_tone, freshness_detail) = benchmark_freshness_badge(
-        &text(&benchmarks, "freshness"),
-        value_i64(&benchmarks, "ready_count"),
-        value_i64(&benchmarks, "reference_count"),
+        benchmarks
+            .as_ref()
+            .and_then(|benchmarks| benchmarks.freshness.as_deref())
+            .unwrap_or_default(),
+        benchmarks
+            .as_ref()
+            .and_then(|benchmarks| benchmarks.ready_count)
+            .unwrap_or(0),
+        benchmarks
+            .as_ref()
+            .and_then(|benchmarks| benchmarks.reference_count)
+            .unwrap_or(0),
     );
     rsx! {
         section { class: "section benchmark-panel",
@@ -3491,30 +3507,27 @@ fn PerformanceBenchmarkPanel(
 }
 
 #[component]
-fn PerformanceBenchmarkRow(reference: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&reference, "status").replace('_', " ");
-    let portfolio_return = reference
-        .get("portfolio_return_pct")
-        .and_then(JsonValue::as_f64);
-    let benchmark_return = reference
-        .get("benchmark_return_pct")
-        .and_then(JsonValue::as_f64);
-    let excess_return = reference
-        .get("excess_return_pct")
-        .and_then(JsonValue::as_f64);
-    let label = text(&reference, "label");
-    let symbol = text(&reference, "symbol");
+fn PerformanceBenchmarkRow(
+    reference: PerformanceBenchmarkReferencePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = reference.status.replace('_', " ");
+    let portfolio_return = reference.portfolio_return_pct;
+    let benchmark_return = reference.benchmark_return_pct;
+    let excess_return = reference.excess_return_pct;
+    let label = reference.label;
+    let symbol = reference.symbol;
     let coverage = match (
-        text(&reference, "baseline_at"),
-        text(&reference, "latest_at"),
+        reference.baseline_at.as_deref(),
+        reference.latest_at.as_deref(),
     ) {
-        (baseline, latest) if !baseline.is_empty() && !latest.is_empty() => {
+        (Some(baseline), Some(latest)) if !baseline.is_empty() && !latest.is_empty() => {
             format!("{} to {}", short_date(&baseline), short_date(&latest))
         }
         _ => "Awaiting history".to_string(),
     };
     let (freshness_label, freshness_tone, freshness_detail) = benchmark_freshness_badge(
-        &text(&reference, "freshness"),
+        reference.freshness.as_deref().unwrap_or_default(),
         if portfolio_return.is_some() { 1 } else { 0 },
         1,
     );
@@ -6124,7 +6137,13 @@ fn EndOfDayBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> El
     let references = benchmarks
         .get("references")
         .and_then(JsonValue::as_array)
-        .cloned()
+        .map(|references| {
+            references
+                .iter()
+                .cloned()
+                .filter_map(|reference| serde_json::from_value(reference).ok())
+                .collect::<Vec<PerformanceBenchmarkReferencePayload>>()
+        })
         .unwrap_or_default();
     let caveat = text(&benchmarks, "caveat");
     rsx! {

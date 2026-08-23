@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance benchmark consumption
+
+- Changed the Performance benchmark panel and each configured ETF-proxy row to consume typed benchmark fields directly, including pending return/close/timestamp/freshness values. The End-of-Day journal validates its persisted compatibility rows before reusing the same typed renderer.
+- The SSR boundary preserves an explicit unavailable comparison and keeps the existing native-currency price-return caveat and freshness labels unchanged.
+- This preserves read-only Performance behavior and performs no Saxo collection, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance summary consumption
 
 - Changed the Performance metrics, confidence badge, and local drawdown/cost-basis context panel to consume the typed `PerformanceSummaryPayload` directly.
