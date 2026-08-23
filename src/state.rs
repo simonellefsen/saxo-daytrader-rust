@@ -39,13 +39,13 @@ use crate::{
         CashBufferSettings, DashboardView, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
         PerformanceBenchmarksPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformanceSummaryPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3064,6 +3064,18 @@ fn dashboard_performance_goal_tracking_from_json(
     }
 }
 
+/// Decodes retained position-snapshot evidence for SSR while preserving an
+/// explicit unavailable state outside the Performance view.
+fn dashboard_performance_snapshot_evidence_from_json(
+    evidence: JsonValue,
+) -> serde_json::Result<Option<PerformanceSnapshotEvidencePayload>> {
+    if evidence.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(evidence).map(Some)
+    }
+}
+
 fn dashboard_loads_tab_exclusive_data(active_view: &str, tab: &str) -> bool {
     active_view == tab
 }
@@ -5645,6 +5657,12 @@ impl AppState {
             dashboard_performance_goal_tracking_from_json(performance_goal_tracking)
                 .unwrap_or_else(|err| {
                     warn!("dashboard typed performance goal tracking degraded: {err:#}");
+                    None
+                });
+        let performance_snapshot_evidence =
+            dashboard_performance_snapshot_evidence_from_json(performance_snapshot_evidence)
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed performance snapshot evidence degraded: {err:#}");
                     None
                 });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
@@ -22650,6 +22668,88 @@ analysis_windows:
         assert!(goal_tracking.periods.month.pnl_dkk.is_none());
         assert!(
             dashboard_performance_goal_tracking_from_json(json!({"basis": "missing periods"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_snapshot_evidence_preserves_unavailable_and_retained_states() {
+        assert!(
+            dashboard_performance_snapshot_evidence_from_json(JsonValue::Null)
+                .expect("null stays unavailable")
+                .is_none()
+        );
+        let evidence = dashboard_performance_snapshot_evidence_from_json(json!({
+            "status": "complete",
+            "range_key": "1W",
+            "aggregate_snapshot_count": 2,
+            "covered_snapshot_count": 2,
+            "missing_legacy_snapshot_count": 0,
+            "coverage_pct": 100.0,
+            "snapshots_with_position_rows": 2,
+            "position_evidence_row_count": 3,
+            "first_covered_at": "2026-08-22T08:00:00Z",
+            "latest_covered_at": "2026-08-23T08:00:00Z",
+            "latest_snapshot": {
+                "status": "available",
+                "snapshot": {
+                    "snapshot_id": 7,
+                    "recorded_at": "2026-08-23T08:00:00Z",
+                    "snapshot_type": "runtime_current",
+                    "source": "test",
+                    "position_count": 1,
+                    "invested_market_value_dkk": 100.0,
+                    "total_cost_basis_dkk": 90.0,
+                    "total_unrealised_pnl_dkk": 10.0,
+                },
+                "items": [{
+                    "symbol": "TEST:xcse",
+                    "isin": null,
+                    "currency": "DKK",
+                    "quantity": 1.0,
+                    "price_local": 100.0,
+                    "fx_rate_to_dkk": 1.0,
+                    "cost_basis_local": 90.0,
+                    "cost_basis_dkk": 90.0,
+                    "market_value_dkk": 100.0,
+                    "unrealised_pnl_dkk": 10.0,
+                }],
+                "safety": "read_only",
+                "interpretation": "stored observation",
+            },
+            "latest_change": {
+                "status": "collecting",
+                "current_snapshot": null,
+                "previous_snapshot": null,
+                "opened_count": null,
+                "closed_count": null,
+                "resized_count": null,
+                "unchanged_quantity_count": null,
+                "net_market_value_change_dkk": null,
+                "net_cost_basis_change_dkk": null,
+                "safety": "read_only",
+                "interpretation": "needs two observations",
+            },
+            "detail_retention": "90 days",
+            "integrity": {
+                "status": "healthy",
+                "checked_snapshot_count": 2,
+                "structural_mismatch_count": 0,
+                "structural_mismatches": [],
+                "broker_derived_unrealised_difference_count": 0,
+                "broker_derived_unrealised_differences": [],
+                "tolerance": { "absolute_dkk": 50.0, "relative": 0.002 },
+                "safety": "read_only",
+            },
+            "safety": "read_only",
+            "interpretation": "local historical evidence",
+        }))
+        .expect("complete snapshot evidence is typed")
+        .expect("non-null evidence is present");
+        assert_eq!(evidence.latest_snapshot.items[0].symbol, "TEST:xcse");
+        assert!(evidence.latest_change.net_market_value_change_dkk.is_none());
+        assert!(
+            dashboard_performance_snapshot_evidence_from_json(json!({"status": "complete"}))
                 .is_err()
         );
     }

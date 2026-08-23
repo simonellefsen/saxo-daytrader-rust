@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-23] architecture | Type dashboard Performance snapshot-evidence consumption
+
+- Changed the Repairable Snapshot Evidence panel to consume `PerformanceSnapshotEvidencePayload` and its retained metadata, item, change, and integrity fields directly.
+- Unavailable or malformed SSR evidence now renders an explicit unavailable state; optional composition-change values render as `n/a` rather than fabricated zeroes.
+- This preserves read-only historical Performance behavior and performs no Saxo provider, Hermes, decision-gate, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Performance goal-tracking consumption
 
 - Changed the weekly/monthly target cards and since-reset context card to consume `PerformanceGoalTrackingPayload` and its typed periods directly.

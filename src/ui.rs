@@ -12,7 +12,8 @@ use crate::{
     models::{
         DashboardView, PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformanceSummaryPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
 };
 
@@ -2779,51 +2780,71 @@ fn PerformanceView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&evidence, "status");
-    let (label, tone) = match status.as_str() {
+fn PerformanceSnapshotEvidencePanel(
+    evidence: Option<PerformanceSnapshotEvidencePayload>,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let Some(evidence) = evidence else {
+        return rsx! {
+            section { class: "section benchmark-panel",
+                div { class: "section-title-row compact",
+                    div {
+                        h3 { "Repairable Snapshot Evidence" }
+                        p { class: "muted", "Read-only coverage of aggregate history that retains linked per-position evidence. Legacy aggregate-only rows remain chartable but cannot be repaired from local position detail." }
+                    }
+                    span { class: "status warn-status", "snapshot evidence unavailable" }
+                }
+                p { class: "muted benchmark-caveat", "Snapshot evidence was unavailable or failed validation, so no coverage or integrity values are shown." }
+            }
+        };
+    };
+    let status = evidence.status.as_str();
+    let (label, tone) = match status {
         "complete" => ("all selected snapshots repairable", "good-status"),
         "partial" => ("legacy coverage gap", "warn-status"),
         "collecting" => ("collecting position evidence", "warn-status"),
         _ => ("snapshot evidence unavailable", "warn-status"),
     };
     let coverage_pct = evidence
-        .get("coverage_pct")
-        .and_then(JsonValue::as_f64)
+        .coverage_pct
         .filter(|value| value.is_finite())
         .map(|value| format!("{value:.1}%"))
         .unwrap_or_else(|| "n/a".to_string());
-    let integrity = evidence
-        .get("integrity")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let latest_snapshot = evidence
-        .get("latest_snapshot")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let latest_status = text(&latest_snapshot, "status");
-    let latest_metadata = latest_snapshot
-        .get("snapshot")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let latest_items = latest_snapshot
-        .get("items")
-        .and_then(JsonValue::as_array)
-        .cloned()
+    let integrity = &evidence.integrity;
+    let latest_snapshot = &evidence.latest_snapshot;
+    let latest_status = latest_snapshot.status.as_str();
+    let latest_change = &evidence.latest_change;
+    let latest_change_status = latest_change.status.as_str();
+    let latest_change_current_at = latest_change
+        .current_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.recorded_at.as_str())
         .unwrap_or_default();
-    let latest_change = evidence
-        .get("latest_change")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let latest_change_status = text(&latest_change, "status");
-    let latest_change_current = latest_change
-        .get("current_snapshot")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let latest_change_previous = latest_change
-        .get("previous_snapshot")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let latest_change_previous_at = latest_change
+        .previous_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.recorded_at.as_str())
+        .unwrap_or_default();
+    let change_opened = latest_change
+        .opened_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let change_closed = latest_change
+        .closed_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let change_resized = latest_change
+        .resized_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let change_net_value = latest_change
+        .net_market_value_change_dkk
+        .map(|value| format_signed_dkk(value, &prefs))
+        .unwrap_or_else(|| "n/a".to_string());
+    let unchanged_quantity_count = latest_change
+        .unchanged_quantity_count
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
     rsx! {
         section { class: "section benchmark-panel",
             div { class: "section-title-row compact",
@@ -2835,51 +2856,55 @@ fn PerformanceSnapshotEvidencePanel(evidence: JsonValue, prefs: LocalizationPref
             }
             div { class: "mini-grid",
                 MetricCard { label: "Coverage", value: coverage_pct, tone: "" }
-                MetricCard { label: "Repairable", value: format!("{} / {}", text(&evidence, "covered_snapshot_count"), text(&evidence, "aggregate_snapshot_count")), tone: "" }
-                MetricCard { label: "Legacy-only", value: text(&evidence, "missing_legacy_snapshot_count"), tone: "" }
-                MetricCard { label: "Position rows", value: text(&evidence, "position_evidence_row_count"), tone: "" }
+                MetricCard { label: "Repairable", value: format!("{} / {}", evidence.covered_snapshot_count, evidence.aggregate_snapshot_count), tone: "" }
+                MetricCard { label: "Legacy-only", value: evidence.missing_legacy_snapshot_count.to_string(), tone: "" }
+                MetricCard { label: "Position rows", value: evidence.position_evidence_row_count.to_string(), tone: "" }
             }
-            p { class: "muted benchmark-caveat", "Position detail: {text(&evidence, \"detail_retention\")}. Latest covered: {format_timestamp(&text(&evidence, \"latest_covered_at\"), &prefs)}. Recent integrity: {text(&integrity, \"status\")} ({text(&integrity, \"structural_mismatch_count\")} structural mismatch(es)); broker-derived unrealised P/L differences are reported separately." }
+            p { class: "muted benchmark-caveat", "Position detail: {evidence.detail_retention}. Latest covered: {format_timestamp(evidence.latest_covered_at.as_deref().unwrap_or_default(), &prefs)}. Recent integrity: {integrity.status} ({integrity.structural_mismatch_count} structural mismatch(es)); broker-derived unrealised P/L differences are reported separately." }
             if latest_status == "available" {
-                div { class: "section-title-row compact",
-                    h4 { "Latest retained composition · {format_timestamp(&text(&latest_metadata, \"recorded_at\"), &prefs)}" }
-                    span { class: "muted", "{text(&latest_metadata, \"position_count\")} aggregate positions · stored evidence, not live broker positions" }
-                }
-                if latest_items.is_empty() {
-                    p { class: "muted", "This retained snapshot recorded no held positions." }
-                } else {
-                    div { class: "table-wrap",
-                        table {
-                            thead { tr { th { "Symbol" } th { "Quantity" } th { "Stored price" } th { "FX to DKK" } th { "Cost basis" } th { "Market value" } th { "Recomputed P/L" } } }
-                            tbody {
-                                for row in latest_items.iter() {
-                                    tr {
-                                        td { strong { "{text(row, \"symbol\")}" } }
-                                        td { "{format_quantity(value_f64(row, \"quantity\"), &prefs)}" }
-                                        td { "{format_number(value_f64(row, \"price_local\"), 2, &prefs)} {text(row, \"currency\")}" }
-                                        td { "{format_number(value_f64(row, \"fx_rate_to_dkk\"), 4, &prefs)}" }
-                                        td { "{format_dkk(value_f64(row, \"cost_basis_dkk\"), &prefs)}" }
-                                        td { "{format_dkk(value_f64(row, \"market_value_dkk\"), &prefs)}" }
-                                        td { class: if value_f64(row, "unrealised_pnl_dkk") >= 0.0 { "good-text" } else { "bad-text" }, "{format_dkk(value_f64(row, \"unrealised_pnl_dkk\"), &prefs)}" }
+                if let Some(latest_metadata) = latest_snapshot.snapshot.as_ref() {
+                    div { class: "section-title-row compact",
+                        h4 { "Latest retained composition · {format_timestamp(&latest_metadata.recorded_at, &prefs)}" }
+                        span { class: "muted", "{latest_metadata.position_count} aggregate positions · stored evidence, not live broker positions" }
+                    }
+                    if latest_snapshot.items.is_empty() {
+                        p { class: "muted", "This retained snapshot recorded no held positions." }
+                    } else {
+                        div { class: "table-wrap",
+                            table {
+                                thead { tr { th { "Symbol" } th { "Quantity" } th { "Stored price" } th { "FX to DKK" } th { "Cost basis" } th { "Market value" } th { "Recomputed P/L" } } }
+                                tbody {
+                                    for row in latest_snapshot.items.iter() {
+                                        tr {
+                                            td { strong { "{row.symbol}" } }
+                                            td { "{format_quantity(row.quantity, &prefs)}" }
+                                            td { "{format_number(row.price_local, 2, &prefs)} {row.currency}" }
+                                            td { "{format_number(row.fx_rate_to_dkk, 4, &prefs)}" }
+                                            td { "{format_dkk(row.cost_basis_dkk, &prefs)}" }
+                                            td { "{format_dkk(row.market_value_dkk, &prefs)}" }
+                                            td { class: if row.unrealised_pnl_dkk >= 0.0 { "good-text" } else { "bad-text" }, "{format_dkk(row.unrealised_pnl_dkk, &prefs)}" }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                } else {
+                    p { class: "muted", "Latest retained snapshot metadata is unavailable." }
                 }
             }
             if latest_change_status == "available" {
                 div { class: "section-title-row compact",
                     h4 { "Stored composition change" }
-                    span { class: "muted", "{format_timestamp(&text(&latest_change_previous, \"recorded_at\"), &prefs)} → {format_timestamp(&text(&latest_change_current, \"recorded_at\"), &prefs)} · two retained snapshots" }
+                    span { class: "muted", "{format_timestamp(latest_change_previous_at, &prefs)} → {format_timestamp(latest_change_current_at, &prefs)} · two retained snapshots" }
                 }
                 div { class: "mini-grid",
-                    MetricCard { label: "Opened", value: text(&latest_change, "opened_count"), tone: "" }
-                    MetricCard { label: "Closed", value: text(&latest_change, "closed_count"), tone: "" }
-                    MetricCard { label: "Resized", value: text(&latest_change, "resized_count"), tone: "" }
-                    MetricCard { label: "Net stored value", value: format_signed_dkk(value_f64(&latest_change, "net_market_value_change_dkk"), &prefs), tone: "" }
+                    MetricCard { label: "Opened", value: change_opened, tone: "" }
+                    MetricCard { label: "Closed", value: change_closed, tone: "" }
+                    MetricCard { label: "Resized", value: change_resized, tone: "" }
+                    MetricCard { label: "Net stored value", value: change_net_value, tone: "" }
                 }
-                p { class: "muted benchmark-caveat", "{text(&latest_change, \"unchanged_quantity_count\")} unchanged quantity position(s). This compares only stored observations; market-value movement includes price, FX, and quantity changes, and does not assert trades, fills, or causality." }
+                p { class: "muted benchmark-caveat", "{unchanged_quantity_count} unchanged quantity position(s). This compares only stored observations; market-value movement includes price, FX, and quantity changes, and does not assert trades, fills, or causality." }
             }
         }
     }
