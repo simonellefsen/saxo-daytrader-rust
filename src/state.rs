@@ -36,13 +36,13 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload, DashboardLatestRunPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionFillPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
+        DashboardSaxoAuthPayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3220,6 +3220,15 @@ fn dashboard_decision_pulse_statuses_from_json(
     statuses.into_iter().map(serde_json::from_value).collect()
 }
 
+/// Decodes the compact fill facts rendered on the Execution tab. Raw Saxo
+/// fill payloads stay outside the dashboard SSR model and cannot become an
+/// accidental browser-facing transport path.
+fn dashboard_execution_fills_from_json(
+    fills: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardExecutionFillPayload>> {
+    fills.into_iter().map(serde_json::from_value).collect()
+}
+
 /// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
@@ -5432,10 +5441,13 @@ impl AppState {
                 Vec::new()
             });
         let execution_fills = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
-            self.execution_fills(50).await.unwrap_or_else(|err| {
-                warn!("dashboard execution fills degraded: {err:#}");
-                Vec::new()
-            })
+            self.execution_fills(50)
+                .await
+                .and_then(|fills| dashboard_execution_fills_from_json(fills).map_err(Into::into))
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed execution fills degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -17085,6 +17097,42 @@ mod tests {
         assert!(
             dashboard_decision_pulse_statuses_from_json(vec![json!({
                 "key": "manual"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_execution_fills_keep_raw_broker_payloads_outside_ssr() {
+        let fills = dashboard_execution_fills_from_json(vec![json!({
+            "id": 91,
+            "created_at": "2026-08-23T18:15:59Z",
+            "execution_order_id": 345,
+            "broker_order_id": "SAXO-123",
+            "symbol": "AMD:xnas",
+            "side": "BUY",
+            "fill_status": "FinalFill",
+            "order_status": "broker_final_fill",
+            "cumulative_quantity": 4.0,
+            "delta_quantity": 4.0,
+            "average_price_local": 193.12,
+            "currency": "USD",
+            "ledger_id": 811,
+            "raw_payload_json": {"AccountKey": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable fill evidence decodes");
+
+        assert_eq!(fills[0].execution_order_id, 345);
+        assert_eq!(fills[0].ledger_id, Some(811));
+        assert!(
+            !serde_json::to_string(&fills)
+                .expect("typed fill evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_execution_fills_from_json(vec![json!({
+                "id": 91,
+                "symbol": "AMD:xnas"
             })])
             .is_err()
         );

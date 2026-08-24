@@ -52,7 +52,7 @@ pub struct DashboardView {
     pub scheduler_cycle_total: i64,
     pub positions: Vec<JsonValue>,
     pub orders: Vec<JsonValue>,
-    pub execution_fills: Vec<JsonValue>,
+    pub execution_fills: Vec<DashboardExecutionFillPayload>,
     pub execution_events: Vec<JsonValue>,
     pub execution_trade_thesis_evidence: JsonValue,
     pub execution_holding_thesis_reviews: JsonValue,
@@ -128,6 +128,28 @@ pub struct DecisionPulseStatusPayload {
     pub last_success: Option<DecisionPulseReportStatusPayload>,
     pub last_failure: Option<DecisionPulseReportStatusPayload>,
     pub attempts_7d: i64,
+}
+
+/// One compact, reconciled broker-fill observation shown in the dashboard.
+///
+/// Raw Saxo payloads and detailed order-attribution evidence stay on their
+/// separate diagnostic paths. This stable SSR model is observational only and
+/// cannot reconcile, replay, or mutate an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardExecutionFillPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub execution_order_id: i64,
+    pub broker_order_id: Option<String>,
+    pub symbol: String,
+    pub side: String,
+    pub fill_status: String,
+    pub order_status: Option<String>,
+    pub cumulative_quantity: f64,
+    pub delta_quantity: f64,
+    pub average_price_local: f64,
+    pub currency: String,
+    pub ledger_id: Option<i64>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

@@ -11,12 +11,13 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardAiSettingsPayload, DashboardExecutionFillPayload, DashboardLatestRunPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -7973,18 +7974,30 @@ fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn ExecutionFillRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn ExecutionFillRow(row: DashboardExecutionFillPayload, prefs: LocalizationPrefs) -> Element {
+    let fill_status = if row.fill_status.is_empty() {
+        row.order_status
+            .clone()
+            .filter(|status| !status.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
+        row.fill_status.clone()
+    };
+    let ledger_label = row
+        .ledger_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "broker-only".to_string());
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
-            td { "{text(&row, \"execution_order_id\")}" }
-            td { "{text(&row, \"symbol\")}" }
-            td { "{text(&row, \"side\")}" }
-            td { "{fallback_text(&row, \"fill_status\", &text(&row, \"order_status\"))}" }
-            td { "{format_quantity(value_f64(&row, \"delta_quantity\"), &prefs)}" }
-            td { "{format_quantity(value_f64(&row, \"cumulative_quantity\"), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"average_price_local\"), &text(&row, \"currency\"), &prefs)}" }
-            td { "{fallback_text(&row, \"ledger_id\", \"broker-only\")}" }
+            td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.execution_order_id}" }
+            td { "{row.symbol}" }
+            td { "{row.side}" }
+            td { "{fill_status}" }
+            td { "{format_quantity(row.delta_quantity, &prefs)}" }
+            td { "{format_quantity(row.cumulative_quantity, &prefs)}" }
+            td { "{format_local_money(row.average_price_local, &row.currency, &prefs)}" }
+            td { "{ledger_label}" }
         }
     }
 }

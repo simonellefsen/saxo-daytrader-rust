@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-24] architecture | Type dashboard broker-fill evidence
+
+- Changed Recent Broker Fills to consume typed local order linkage, broker reference, symbol/side/status, quantity/price/currency, and optional ledger-link fields.
+- Raw Saxo fill payloads stay outside the SSR model; malformed evidence degrades to an empty local table instead of pretending a fill was reconciled.
+- This preserves read-only fill observability and performs no reconciliation, replay, queue, precheck, or broker-order action.
+
 ## [2026-08-23] architecture | Type dashboard Decision Pulse lifecycle status
 
 - Changed the Decision Report pulse cards and shared operations banner to consume typed pulse identity, enablement, compact latest/success/failure references, and seven-day attempt counts.
