@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-24] architecture | Type dashboard scheduler-cycle evidence
+
+- Changed the Execution-tab scheduler history to consume typed cycle time/status, decision/queue/notification fields, and flattened duration plus two local health labels.
+- Retained cycle documents, including provider and detailed operations diagnostics, stay outside SSR; missing or malformed evidence degrades to an empty local table.
+- This preserves read-only scheduler observability and performs no scheduler action, data refresh, gate change, queue, precheck, or broker-order action.
+
 ## [2026-08-24] architecture | Type dashboard broker-event evidence
 
 - Changed the flat Execution-tab event list to consume only typed time, local order linkage, event type, optional broker status, and a whitelisted local failure-stage label.

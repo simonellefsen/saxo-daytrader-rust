@@ -38,18 +38,18 @@ use crate::{
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
         DashboardExecutionFillPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3262,6 +3262,91 @@ fn dashboard_execution_event_failure_stage(event: &JsonValue) -> Option<String> 
     }
 }
 
+/// Flattens only the scheduler-cycle fields rendered in the Execution tab.
+/// Retained `cycle_json` can contain detailed provider and operational
+/// diagnostics, so it is parsed locally and never becomes part of the SSR
+/// payload. The parser accepts both the legacy JSON-string form and the
+/// database adapter's parsed-object form.
+fn dashboard_scheduler_cycles_from_json(
+    cycles: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardSchedulerCyclePayload>> {
+    cycles
+        .into_iter()
+        .map(dashboard_scheduler_cycle_from_json)
+        .collect()
+}
+
+fn dashboard_scheduler_cycle_from_json(
+    cycle: JsonValue,
+) -> serde_json::Result<DashboardSchedulerCyclePayload> {
+    let cycle_json = dashboard_embedded_json(&cycle, "cycle_json").unwrap_or(JsonValue::Null);
+    Ok(DashboardSchedulerCyclePayload {
+        started_at: dashboard_required_string(&cycle, "started_at")?,
+        status: dashboard_required_string(&cycle, "status")?,
+        generated_decision: dashboard_required_boolish(&cycle, "generated_decision")?,
+        queue_status: dashboard_required_string(&cycle, "queue_status")?,
+        notifications_status: dashboard_optional_string(&cycle, "notifications_status")?,
+        duration_ms: dashboard_cycle_duration_ms(&cycle_json),
+        operational_notifications_status: dashboard_cycle_nested_status(
+            &cycle_json,
+            "operational_notifications",
+        ),
+        portfolio_position_snapshot_integrity_status: dashboard_cycle_nested_status(
+            &cycle_json,
+            "portfolio_position_snapshot_integrity",
+        ),
+    })
+}
+
+fn dashboard_embedded_json(row: &JsonValue, key: &str) -> Option<JsonValue> {
+    match row.get(key)? {
+        JsonValue::String(value) => serde_json::from_str(value).ok(),
+        value => Some(value.clone()),
+    }
+}
+
+fn dashboard_required_string(row: &JsonValue, key: &str) -> serde_json::Result<String> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn dashboard_optional_string(row: &JsonValue, key: &str) -> serde_json::Result<Option<String>> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn dashboard_required_boolish(row: &JsonValue, key: &str) -> serde_json::Result<bool> {
+    match row.get(key) {
+        Some(JsonValue::Bool(value)) => Ok(*value),
+        Some(JsonValue::Number(value)) if value.as_i64() == Some(0) => Ok(false),
+        Some(JsonValue::Number(value)) if value.as_i64() == Some(1) => Ok(true),
+        Some(JsonValue::String(value)) if value == "0" || value.eq_ignore_ascii_case("false") => {
+            Ok(false)
+        }
+        Some(JsonValue::String(value)) if value == "1" || value.eq_ignore_ascii_case("true") => {
+            Ok(true)
+        }
+        _ => serde_json::from_value(JsonValue::Null),
+    }
+}
+
+fn dashboard_cycle_duration_ms(cycle_json: &JsonValue) -> Option<u64> {
+    cycle_json.get("duration_ms").and_then(|value| {
+        value.as_u64().or_else(|| {
+            value
+                .as_f64()
+                .filter(|duration| duration.is_finite() && *duration >= 0.0)
+                .map(|duration| duration.round() as u64)
+        })
+    })
+}
+
+fn dashboard_cycle_nested_status(cycle_json: &JsonValue, key: &str) -> Option<String> {
+    cycle_json
+        .get(key)
+        .and_then(|item| item.get("status"))
+        .and_then(JsonValue::as_str)
+        .map(ToString::to_string)
+}
+
 /// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
@@ -5689,8 +5774,9 @@ impl AppState {
         let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
             self.scheduler_cycles_page(SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page.offset)
                 .await
+                .and_then(|cycles| dashboard_scheduler_cycles_from_json(cycles).map_err(Into::into))
                 .unwrap_or_else(|err| {
-                    warn!("dashboard scheduler cycles degraded: {err:#}");
+                    warn!("dashboard typed scheduler cycles degraded: {err:#}");
                     Vec::new()
                 })
         } else {
@@ -17197,6 +17283,44 @@ mod tests {
         assert!(
             dashboard_execution_events_from_json(vec![json!({
                 "event_type": "execution_failed"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_scheduler_cycles_keep_raw_cycle_documents_outside_ssr() {
+        let cycles = dashboard_scheduler_cycles_from_json(vec![json!({
+            "started_at": "2026-08-24T08:30:00Z",
+            "status": "ok",
+            "generated_decision": 1,
+            "queue_status": "queued",
+            "notifications_status": "ok",
+            "cycle_json": {
+                "duration_ms": 65_123,
+                "operational_notifications": {"status": "ok"},
+                "portfolio_position_snapshot_integrity": {"status": "warning"},
+                "provider_payload": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable scheduler-cycle evidence decodes");
+
+        assert!(cycles[0].generated_decision);
+        assert_eq!(cycles[0].duration_ms, Some(65_123));
+        assert_eq!(
+            cycles[0]
+                .portfolio_position_snapshot_integrity_status
+                .as_deref(),
+            Some("warning")
+        );
+        assert!(
+            !serde_json::to_string(&cycles)
+                .expect("typed scheduler-cycle evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_scheduler_cycles_from_json(vec![json!({
+                "started_at": "2026-08-24T08:30:00Z"
             })])
             .is_err()
         );

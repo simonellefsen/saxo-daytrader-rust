@@ -13,9 +13,9 @@ use crate::{
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -6448,14 +6448,14 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         tbody {
                             for row in data.scheduler_cycles.iter() {
                                 tr {
-                                    td { "{format_timestamp(&text(row, \"started_at\"), &prefs)}" }
+                                    td { "{format_timestamp(&row.started_at, &prefs)}" }
                                     td { "{scheduler_cycle_duration(row)}" }
-                                    td { "{text(row, \"status\")}" }
-                                    td { "{bool_label(row, \"generated_decision\")}" }
-                                    td { "{text(row, \"queue_status\")}" }
-                                    td { "{text_or(row, \"notifications_status\", \"n/a\")}" }
-                                    td { "{scheduler_cycle_json_status(row, \"operational_notifications\")}" }
-                                    td { "{scheduler_cycle_json_status(row, \"portfolio_position_snapshot_integrity\")}" }
+                                    td { "{row.status}" }
+                                    td { if row.generated_decision { "Yes" } else { "No" } }
+                                    td { "{row.queue_status}" }
+                                    td { "{row.notifications_status.as_deref().unwrap_or(\"n/a\")}" }
+                                    td { "{row.operational_notifications_status.as_deref().unwrap_or(\"n/a\")}" }
+                                    td { "{row.portfolio_position_snapshot_integrity_status.as_deref().unwrap_or(\"n/a\")}" }
                                 }
                             }
                         }
@@ -9125,36 +9125,10 @@ fn fallback_text(value: &JsonValue, key: &str, fallback: &str) -> String {
     }
 }
 
-fn scheduler_cycle_json_status(row: &JsonValue, key: &str) -> String {
-    row.get("cycle_json")
-        .and_then(JsonValue::as_str)
-        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
-        .and_then(|value| {
-            value
-                .get(key)
-                .and_then(|item| item.get("status"))
-                .and_then(JsonValue::as_str)
-                .map(ToString::to_string)
-        })
-        .unwrap_or_else(|| "n/a".to_string())
-}
-
-fn scheduler_cycle_duration(row: &JsonValue) -> String {
-    row.get("cycle_json")
-        .and_then(JsonValue::as_str)
-        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
-        .and_then(|value| value.get("duration_ms").and_then(json_duration_ms))
+fn scheduler_cycle_duration(row: &DashboardSchedulerCyclePayload) -> String {
+    row.duration_ms
         .map(format_duration_ms)
         .unwrap_or_else(|| "n/a".to_string())
-}
-
-fn json_duration_ms(value: &JsonValue) -> Option<u64> {
-    value.as_u64().or_else(|| {
-        value
-            .as_f64()
-            .filter(|duration| duration.is_finite() && *duration >= 0.0)
-            .map(|duration| duration.round() as u64)
-    })
 }
 
 fn format_duration_ms(duration_ms: u64) -> String {
@@ -12947,33 +12921,24 @@ mod tests {
     }
 
     #[test]
-    fn extracts_scheduler_cycle_nested_status() {
-        let row = json!({
-            "cycle_json": "{\"operational_notifications\":{\"status\":\"ok\"}}"
-        });
-        assert_eq!(
-            scheduler_cycle_json_status(&row, "operational_notifications"),
-            "ok"
-        );
-
-        let invalid_row = json!({"cycle_json": "not-json"});
-        assert_eq!(
-            scheduler_cycle_json_status(&invalid_row, "operational_notifications"),
-            "n/a"
-        );
-    }
-
-    #[test]
     fn extracts_scheduler_cycle_runtime_label() {
-        let row = json!({
-            "cycle_json": "{\"duration_ms\":65123,\"step_durations\":{\"decision_reports\":{\"duration_ms\":60400}}}"
-        });
+        let row = DashboardSchedulerCyclePayload {
+            started_at: "2026-08-24T08:30:00Z".to_string(),
+            status: "ok".to_string(),
+            generated_decision: true,
+            queue_status: "queued".to_string(),
+            notifications_status: Some("ok".to_string()),
+            duration_ms: Some(65_123),
+            operational_notifications_status: Some("ok".to_string()),
+            portfolio_position_snapshot_integrity_status: Some("ok".to_string()),
+        };
         assert_eq!(scheduler_cycle_duration(&row), "1m 5s");
         assert_eq!(format_duration_ms(950), "950 ms");
         assert_eq!(format_duration_ms(12_345), "12.3s");
-
-        let invalid_row = json!({"cycle_json": "not-json"});
-        assert_eq!(scheduler_cycle_duration(&invalid_row), "n/a");
+        assert_eq!(
+            scheduler_cycle_duration(&DashboardSchedulerCyclePayload::default()),
+            "n/a"
+        );
     }
 
     #[test]

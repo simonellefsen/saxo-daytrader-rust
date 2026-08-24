@@ -61,7 +61,7 @@ pub struct DashboardView {
     pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
     pub journal_entries: Vec<JsonValue>,
-    pub scheduler_cycles: Vec<JsonValue>,
+    pub scheduler_cycles: Vec<DashboardSchedulerCyclePayload>,
     pub hermes_reflections: Vec<JsonValue>,
     pub hermes_lessons_pending_review: Vec<JsonValue>,
     pub hermes_learning_memory: Vec<JsonValue>,
@@ -165,6 +165,24 @@ pub struct DashboardExecutionEventPayload {
     pub event_type: String,
     pub broker_status: Option<String>,
     pub failure_stage: Option<String>,
+}
+
+/// Compact local scheduler-cycle evidence rendered on the Execution tab.
+///
+/// The retained cycle document can contain detailed provider and operations
+/// diagnostics. This SSR model exposes only the lifecycle metadata and the
+/// three status/runtime values the table renders. It is observational only and
+/// cannot schedule work, refresh data, change a gate, or mutate a broker order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardSchedulerCyclePayload {
+    pub started_at: String,
+    pub status: String,
+    pub generated_decision: bool,
+    pub queue_status: String,
+    pub notifications_status: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub operational_notifications_status: Option<String>,
+    pub portfolio_position_snapshot_integrity_status: Option<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.
