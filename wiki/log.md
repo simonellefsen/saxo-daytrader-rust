@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-24] architecture | Type dashboard broker-event evidence
+
+- Changed the flat Execution-tab event list to consume only typed time, local order linkage, event type, optional broker status, and a whitelisted local failure-stage label.
+- Persisted raw Saxo payloads and free-form broker error text stay outside SSR; missing or malformed evidence degrades to an empty local table rather than fabricating lifecycle detail.
+- This preserves read-only event observability and performs no reconciliation, replay, queue, precheck, or broker-order action.
+
 ## [2026-08-24] architecture | Type dashboard broker-fill evidence
 
 - Changed Recent Broker Fills to consume typed local order linkage, broker reference, symbol/side/status, quantity/price/currency, and optional ledger-link fields.

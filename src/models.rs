@@ -53,7 +53,7 @@ pub struct DashboardView {
     pub positions: Vec<JsonValue>,
     pub orders: Vec<JsonValue>,
     pub execution_fills: Vec<DashboardExecutionFillPayload>,
-    pub execution_events: Vec<JsonValue>,
+    pub execution_events: Vec<DashboardExecutionEventPayload>,
     pub execution_trade_thesis_evidence: JsonValue,
     pub execution_holding_thesis_reviews: JsonValue,
     pub execution_decision_pulse_evidence: JsonValue,
@@ -150,6 +150,21 @@ pub struct DashboardExecutionFillPayload {
     pub average_price_local: f64,
     pub currency: String,
     pub ledger_id: Option<i64>,
+}
+
+/// Minimal execution lifecycle evidence rendered in the dashboard event list.
+///
+/// The broker payload and free-form broker error text are retained only in the
+/// local audit store. The optional failure stage is constrained to known local
+/// pipeline stages before it crosses the SSR boundary. This view cannot alter,
+/// replay, reconcile, precheck, queue, or submit an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardExecutionEventPayload {
+    pub created_at: String,
+    pub execution_order_id: i64,
+    pub event_type: String,
+    pub broker_status: Option<String>,
+    pub failure_stage: Option<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

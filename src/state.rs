@@ -36,19 +36,20 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionFillPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
-        DashboardSaxoAuthPayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
+        DashboardExecutionFillPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3229,6 +3230,38 @@ fn dashboard_execution_fills_from_json(
     fills.into_iter().map(serde_json::from_value).collect()
 }
 
+/// Decodes only the stable lifecycle facts needed by the flat Execution-tab
+/// event list. The persisted raw Saxo response never enters this SSR model.
+/// Failure-stage labels originate in local order processing, so the decoder
+/// retains only the fixed vocabulary shown in the dashboard.
+fn dashboard_execution_events_from_json(
+    events: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardExecutionEventPayload>> {
+    events
+        .into_iter()
+        .map(|event| {
+            let failure_stage = dashboard_execution_event_failure_stage(&event);
+            let mut event: DashboardExecutionEventPayload = serde_json::from_value(event)?;
+            event.failure_stage = failure_stage;
+            Ok(event)
+        })
+        .collect()
+}
+
+fn dashboard_execution_event_failure_stage(event: &JsonValue) -> Option<String> {
+    let payload = match event.get("raw_payload_json")? {
+        JsonValue::String(value) => serde_json::from_str(value).ok()?,
+        value => value.clone(),
+    };
+    match payload.get("failure_stage").and_then(JsonValue::as_str) {
+        Some(
+            stage @ ("local_validation" | "precheck_guard" | "request_build" | "precheck"
+            | "placement" | "execution"),
+        ) => Some(stage.to_string()),
+        _ => None,
+    }
+}
+
 /// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
@@ -5452,10 +5485,13 @@ impl AppState {
             Vec::new()
         };
         let execution_events = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
-            self.execution_events(50).await.unwrap_or_else(|err| {
-                warn!("dashboard execution events degraded: {err:#}");
-                Vec::new()
-            })
+            self.execution_events(50)
+                .await
+                .and_then(|events| dashboard_execution_events_from_json(events).map_err(Into::into))
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed execution events degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -17133,6 +17169,34 @@ mod tests {
             dashboard_execution_fills_from_json(vec![json!({
                 "id": 91,
                 "symbol": "AMD:xnas"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_execution_events_keep_raw_broker_payloads_outside_ssr() {
+        let events = dashboard_execution_events_from_json(vec![json!({
+            "id": 188,
+            "created_at": "2026-08-24T08:30:00Z",
+            "execution_order_id": 345,
+            "event_type": "execution_failed",
+            "broker_status": "execution_failed",
+            "raw_payload_json": {
+                "failure_stage": "precheck",
+                "AccountKey": "must-not-reach-the-dashboard",
+                "Message": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable execution-event evidence decodes");
+
+        assert_eq!(events[0].execution_order_id, 345);
+        assert_eq!(events[0].failure_stage.as_deref(), Some("precheck"));
+        let serialized = serde_json::to_string(&events).expect("typed event evidence serializes");
+        assert!(!serialized.contains("must-not-reach-the-dashboard"));
+        assert!(
+            dashboard_execution_events_from_json(vec![json!({
+                "event_type": "execution_failed"
             })])
             .is_err()
         );

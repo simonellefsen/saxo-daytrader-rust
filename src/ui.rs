@@ -11,13 +11,13 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardExecutionFillPayload, DashboardLatestRunPayload,
-        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionPulseStatusPayload, LatestDecisionStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -7939,20 +7939,22 @@ fn attribution_evidence_source(value: &JsonValue) -> &'static str {
 }
 
 #[component]
-fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = fallback_text(&row, "broker_status", &text(&row, "status"));
-    let detail = execution_event_detail(&row);
-    let reason = execution_event_reason(&row);
-    let failure_stage = execution_event_failure_stage(&row);
-    let failure_stage_label = execution_failure_stage_label(&failure_stage);
+fn ExecutionEventRow(row: DashboardExecutionEventPayload, prefs: LocalizationPrefs) -> Element {
+    let status = row.broker_status.clone().unwrap_or_default();
+    let reason = execution_event_reason(&status);
+    let failure_stage_label = row
+        .failure_stage
+        .as_deref()
+        .map(execution_failure_stage_label)
+        .unwrap_or_default();
     let status_class = execution_status_class(&status);
     let reason_class = execution_reason_class(&reason);
-    let tooltip = execution_event_tooltip(&row, &status, &reason, &detail);
+    let tooltip = execution_event_tooltip(&row, &status, &reason);
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
-            td { "{text(&row, \"execution_order_id\")}" }
-            td { "{text(&row, \"event_type\")}" }
+            td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.execution_order_id}" }
+            td { "{row.event_type}" }
             td { class: "execution-status-cell",
                 span { class: "{status_class}", title: "{tooltip}", "{status}" }
                 if !reason.is_empty() {
@@ -7963,11 +7965,7 @@ fn ExecutionEventRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 }
             }
             td { class: "muted error-cell",
-                if !detail.is_empty() {
-                    span { class: "event-message", title: "{tooltip}", "{truncate_chars(&detail, 180)}" }
-                } else {
-                    span { class: "muted", "n/a" }
-                }
+                span { class: "muted", "n/a" }
             }
         }
     }
@@ -10040,14 +10038,6 @@ fn execution_failure_stage(row: &JsonValue) -> String {
         .unwrap_or_default()
 }
 
-fn execution_event_failure_stage(row: &JsonValue) -> String {
-    diagnostic_payload(row, "raw_payload_json")
-        .and_then(|payload| payload.get("failure_stage").cloned())
-        .and_then(|value| value.as_str().map(str::trim).map(ToString::to_string))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_default()
-}
-
 fn execution_failure_stage_label(stage: &str) -> &'static str {
     match stage {
         "local_validation" => "Local validation",
@@ -10119,48 +10109,36 @@ fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) 
     lines.join("; ")
 }
 
-fn execution_event_detail(row: &JsonValue) -> String {
-    let message = text(row, "message");
-    let error = text(row, "error_text");
-    match (message.is_empty(), error.is_empty()) {
-        (false, false) => format!("{message}: {error}"),
-        (false, true) => message,
-        (true, false) => error,
-        (true, true) => diagnostic_payload(row, "raw_payload_json")
-            .and_then(|payload| diagnostic_detail_from_json(&payload))
-            .unwrap_or_default(),
-    }
+fn execution_event_reason(status: &str) -> String {
+    classify_execution_detail(status, "")
 }
 
-fn execution_event_reason(row: &JsonValue) -> String {
-    let status = fallback_text(row, "broker_status", &text(row, "status"));
-    let detail = execution_event_detail(row);
-    classify_execution_detail(&status, &detail)
-}
-
-fn execution_event_tooltip(row: &JsonValue, status: &str, reason: &str, detail: &str) -> String {
+fn execution_event_tooltip(
+    row: &DashboardExecutionEventPayload,
+    status: &str,
+    reason: &str,
+) -> String {
     let mut lines = Vec::new();
     if !status.is_empty() {
         lines.push(format!("status: {status}"));
     }
-    let event_type = text(row, "event_type");
-    if !event_type.is_empty() {
-        lines.push(format!("event: {event_type}"));
+    if !row.event_type.is_empty() {
+        lines.push(format!("event: {}", row.event_type));
     }
-    let order_id = text(row, "execution_order_id");
-    if !order_id.is_empty() {
-        lines.push(format!("order: {order_id}"));
-    }
+    lines.push(format!("order: {}", row.execution_order_id));
     if !reason.is_empty() {
         lines.push(format!("reason: {reason}"));
     }
-    let failure_stage = execution_event_failure_stage(row);
-    let failure_stage_label = execution_failure_stage_label(&failure_stage);
+    let failure_stage_label = row
+        .failure_stage
+        .as_deref()
+        .map(execution_failure_stage_label)
+        .unwrap_or_default();
     if !failure_stage_label.is_empty() {
-        lines.push(format!("stage: {failure_stage_label} ({failure_stage})"));
-    }
-    if !detail.is_empty() {
-        lines.push(format!("detail: {detail}"));
+        lines.push(format!(
+            "stage: {failure_stage_label} ({})",
+            row.failure_stage.as_deref().unwrap_or_default()
+        ));
     }
     lines.join("\n")
 }
@@ -11952,34 +11930,26 @@ mod tests {
     }
 
     #[test]
-    fn classifies_execution_event_errors() {
-        let row = json!({
-            "execution_order_id": 119,
-            "event_type": "broker_sync",
-            "status": "execution_failed",
-            "message": "Saxo placement failed",
-            "error_text": "HTTP 401 Unauthorized while placing order",
-            "raw_payload_json": {"failure_stage": "placement"}
-        });
+    fn classifies_execution_event_status_and_whitelisted_stage() {
+        let row = DashboardExecutionEventPayload {
+            created_at: "2026-08-24T08:30:00Z".to_string(),
+            execution_order_id: 119,
+            event_type: "broker_sync".to_string(),
+            broker_status: Some("execution_failed".to_string()),
+            failure_stage: Some("placement".to_string()),
+        };
 
-        assert_eq!(execution_event_reason(&row), "Saxo auth");
-        assert!(
-            execution_event_tooltip(
-                &row,
-                "execution_failed",
-                "Saxo auth",
-                &execution_event_detail(&row)
-            )
-            .contains("order: 119")
+        assert_eq!(
+            execution_event_reason("execution_failed"),
+            "Broker rejected"
         );
         assert!(
-            execution_event_tooltip(
-                &row,
-                "execution_failed",
-                "Saxo auth",
-                &execution_event_detail(&row)
-            )
-            .contains("stage: Saxo placement (placement)")
+            execution_event_tooltip(&row, "execution_failed", "Broker rejected")
+                .contains("order: 119")
+        );
+        assert!(
+            execution_event_tooltip(&row, "execution_failed", "Broker rejected")
+                .contains("stage: Saxo placement (placement)")
         );
     }
 
@@ -11988,32 +11958,6 @@ mod tests {
         assert_eq!(execution_failure_stage_label("precheck"), "Saxo precheck");
         assert_eq!(execution_failure_stage_label("placement"), "Saxo placement");
         assert_eq!(execution_failure_stage_label("unrecognized"), "");
-    }
-
-    #[test]
-    fn execution_event_detail_does_not_surface_broker_identifiers() {
-        let row = json!({
-            "execution_order_id": 137,
-            "event_type": "broker_final_fill",
-            "status": "FinalFill",
-            "raw_payload_json": {
-                "AccountId": "22109870",
-                "ClientId": "22109870",
-                "UserId": "22109870",
-                "Status": "FinalFill"
-            }
-        });
-
-        assert_eq!(execution_event_detail(&row), "");
-
-        let sanitized = sanitize_diagnostic_json(row.get("raw_payload_json").unwrap());
-        assert!(sanitized.get("AccountId").is_none());
-        assert!(sanitized.get("ClientId").is_none());
-        assert!(sanitized.get("UserId").is_none());
-        assert_eq!(
-            sanitized.get("Status").and_then(JsonValue::as_str),
-            Some("FinalFill")
-        );
     }
 
     #[test]
