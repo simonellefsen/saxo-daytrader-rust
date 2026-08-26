@@ -135,13 +135,16 @@ pub struct DecisionPulseStatusPayload {
 /// Full report, prompt, request, response, and debug documents stay behind the
 /// selected-report and lazy debug paths. This metadata cannot generate a
 /// report, change queue eligibility, reach Hermes, or mutate a Saxo order.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DashboardDecisionReportSummaryPayload {
     pub id: i64,
     pub created_at: String,
     pub status: String,
+    #[serde(default)]
     pub model: String,
+    #[serde(default)]
     pub analysis_pulse_key: String,
+    #[serde(default)]
     pub analysis_pulse_label: String,
 }
 
@@ -1188,11 +1191,13 @@ pub struct DecisionLatestPayload {
 
 /// Bounded Decision Report list envelope.
 ///
-/// The list itself is stable, but each persisted report remains compatibility
-/// JSON while the provider/report pipeline is ported incrementally.
+/// Each row contains stable report metadata only. Detailed provider and report
+/// documents remain on the server-rendered Decisions view and the dedicated
+/// redacted debug path. This list cannot generate a report, invoke Hermes,
+/// change queue eligibility, or mutate a Saxo order.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DecisionReportListPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<DashboardDecisionReportSummaryPayload>,
 }
 
 /// Bounded portfolio position-list envelope.

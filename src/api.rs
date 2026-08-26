@@ -19,14 +19,15 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DecisionGateReplayPayload, DecisionLatestPayload,
-        DecisionPulseReportStatusPayload, DecisionReportListPayload, DrawdownGuardOverrideRequest,
-        ExecutionPayload, HermesExperimentRequest, HermesExperimentTransitionRequest,
-        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradesPayload,
+        CashBufferSettings, DashboardDecisionReportSummaryPayload, DecisionGateReplayPayload,
+        DecisionLatestPayload, DecisionPulseReportStatusPayload, DecisionReportListPayload,
+        DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
+        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
+        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradesPayload,
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
         QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
@@ -1829,15 +1830,19 @@ async fn decision_reports(
     let limit = params.limit.unwrap_or(20);
     json_result(
         state
-            .decision_report_items(limit)
+            .decision_report_summaries(limit)
             .await
-            .map(decision_report_list_payload)
+            .and_then(decision_report_list_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
-fn decision_report_list_payload(items: Vec<JsonValue>) -> DecisionReportListPayload {
-    DecisionReportListPayload { items }
+fn decision_report_list_payload(rows: Vec<JsonValue>) -> Result<DecisionReportListPayload> {
+    let items = rows
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<serde_json::Result<Vec<DashboardDecisionReportSummaryPayload>>>()?;
+    Ok(DecisionReportListPayload { items })
 }
 
 fn strategy_journal_payload(items: Vec<JsonValue>) -> StrategyJournalPayload {
@@ -2720,13 +2725,34 @@ mod tests {
 
     #[test]
     fn decision_report_list_response_keeps_the_typed_list_envelope() {
-        let payload = decision_report_list_payload(vec![json!({"id": 42}), json!({"id": 43})]);
+        let payload = decision_report_list_payload(vec![
+            json!({
+                "id": 42,
+                "created_at": "2026-08-26T12:00:00Z",
+                "status": "completed",
+                "model": "openai/gpt-5",
+                "analysis_pulse_key": "us_open_followup:2026-08-26",
+                "analysis_pulse_label": "US Open +1h15",
+                "report_json": {"api_key": "must-not-reach-the-list"},
+                "request_json": {"token": "must-not-reach-the-list"},
+                "response_json": {"provider": "must-not-reach-the-list"},
+                "prompt_text": "must-not-reach-the-list",
+                "error_text": "must-not-reach-the-list"
+            }),
+            json!({
+                "id": 43,
+                "created_at": "2026-08-26T12:01:00Z",
+                "status": "pending"
+            }),
+        ])
+        .expect("stable Decision Report list rows decode");
 
         assert_eq!(payload.items.len(), 2);
 
         let serialized = serde_json::to_value(payload).expect("Decision Report list serializes");
         assert_eq!(serialized["items"][0]["id"], 42);
         assert_eq!(serialized["items"][1]["id"], 43);
+        assert!(!serialized.to_string().contains("must-not-reach-the-list"));
     }
 
     #[test]

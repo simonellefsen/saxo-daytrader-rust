@@ -2571,3 +2571,7 @@ broker mutation was added.
 
 - Changed `/api/decision/latest` to use the compact Decision Report summary query and a typed lifecycle-only payload (id, creation time, status).
 - Full prompt, request, response, and normalized report documents remain on the existing detailed-report and sanitized debug paths; a malformed summary is treated as unavailable with no report, queue, Hermes, or broker side effect.
+## 2026-08-26 — Typed Decision Report list API
+
+- Changed `/api/decision/reports` to use the compact summary query and typed `DashboardDecisionReportSummaryPayload` rows while retaining the `{ items }` response envelope.
+- Full prompt, request, response, normalized report, and error documents no longer cross that list endpoint; malformed rows fail closed at the read-only API boundary with no report, Hermes, queue, or broker side effect.
