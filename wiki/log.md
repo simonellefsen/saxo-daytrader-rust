@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard missed-trade shadow aggregate evidence
+
+- Changed the Missed Trade Shadow evidence panel to consume typed aggregate status, sample counts, equal-weighted directional-return summaries, and per-gate breakdowns.
+- Raw shadow rows, scan metadata, and safety marker remain outside SSR; malformed evidence degrades to the existing unavailable panel state.
+- The aggregate remains observational only, excludes execution, fees, FX, slippage, and tax, and cannot override a manager gate or mutate a Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard missed-trade shadow evidence
 
 - Changed the Missed Trade Shadows table to consume typed quote-to-quote observation fields and its distinct manager-gate reason.

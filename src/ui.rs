@@ -15,13 +15,13 @@ use crate::{
         DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -6753,53 +6753,50 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
 }
 
 #[component]
-fn MissedTradeShadowEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&evidence, "status").replace('_', " ");
-    let recorded_count = value_i64(&evidence, "recorded_shadow_count");
-    let observed_count = value_i64(&evidence, "observed_shadow_count");
-    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
-    let overall = evidence.get("overall").unwrap_or(&JsonValue::Null);
-    let average = overall
-        .get("average_directional_return_pct")
-        .and_then(JsonValue::as_f64)
+fn MissedTradeShadowEvidencePanel(
+    evidence: DashboardMissedTradeShadowEvidencePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let raw_status = evidence.status.clone();
+    let status = raw_status.replace('_', " ");
+    let recorded_count = evidence.recorded_shadow_count;
+    let observed_count = evidence.observed_shadow_count;
+    let minimum_complete = evidence.minimum_complete_observations;
+    let average = evidence
+        .overall
+        .average_directional_return_pct
         .map(|value| format_signed_pct(value, &prefs))
         .unwrap_or_else(|| "pending".to_string());
-    let positive_rate = overall
-        .get("positive_return_rate")
-        .and_then(JsonValue::as_f64)
+    let positive_rate = evidence
+        .overall
+        .positive_return_rate
         .map(|value| format_pct(value, &prefs))
         .unwrap_or_else(|| "pending".to_string());
     let gate_breakdown = evidence
-        .get("by_gate")
-        .and_then(JsonValue::as_array)
-        .map(|rows| {
-            rows.iter()
-                .take(4)
-                .map(|row| {
-                    let gate = fallback_text(row, "source_gate", "unknown").replace('_', " ");
-                    let outcome = row.get("outcome").unwrap_or(&JsonValue::Null);
-                    let average = outcome
-                        .get("average_directional_return_pct")
-                        .and_then(JsonValue::as_f64)
-                        .map(|value| format_signed_pct(value, &prefs))
-                        .unwrap_or_else(|| "pending".to_string());
-                    let samples = value_i64(outcome, "sample_count");
-                    format!("{gate}: {average} across {samples}")
-                })
-                .collect::<Vec<_>>()
-                .join(" · ")
+        .by_gate
+        .iter()
+        .take(4)
+        .map(|row| {
+            let gate = row.source_gate.replace('_', " ");
+            let average = row
+                .outcome
+                .average_directional_return_pct
+                .map(|value| format_signed_pct(value, &prefs))
+                .unwrap_or_else(|| "pending".to_string());
+            format!("{gate}: {average} across {}", row.outcome.sample_count)
         })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "No observed gate outcomes yet.".to_string());
-    let interpretation = text_or(
-        &evidence,
-        "interpretation",
-        "Read-only quote-to-quote evidence only.",
-    );
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let gate_breakdown = if gate_breakdown.is_empty() {
+        "No observed gate outcomes yet.".to_string()
+    } else {
+        gate_breakdown
+    };
+    let interpretation = evidence.interpretation;
     rsx! {
-        if text(&evidence, "status") == "no_recorded_shadows" {
+        if raw_status == "no_recorded_shadows" {
             span { class: "muted", "No eligible manager-gate shadows have been recorded yet." }
-        } else if text(&evidence, "status") == "unavailable" {
+        } else if raw_status == "unavailable" {
             span { class: "muted", "Missed-trade shadow outcome evidence is unavailable right now." }
         } else {
             div { class: "quality-score-row",

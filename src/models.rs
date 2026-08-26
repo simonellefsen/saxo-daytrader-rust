@@ -71,7 +71,7 @@ pub struct DashboardView {
     pub hermes_decision_advice_audit: Vec<JsonValue>,
     pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
     pub missed_trade_shadows: Vec<DashboardMissedTradeShadowPayload>,
-    pub missed_trade_shadow_evidence: JsonValue,
+    pub missed_trade_shadow_evidence: DashboardMissedTradeShadowEvidencePayload,
     pub active_strategy_baseline: JsonValue,
     pub hermes_baseline_evidence_pack: JsonValue,
     pub markov_signals: Vec<JsonValue>,
@@ -323,6 +323,37 @@ pub struct DashboardMissedTradeShadowPayload {
     pub latest_price_at: Option<String>,
     pub estimated_return_pct: Option<f64>,
     pub estimated_pnl_local: Option<f64>,
+}
+
+/// Aggregate outcome summary for the bounded missed-trade shadow sample.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardMissedTradeShadowOutcomePayload {
+    pub sample_count: i64,
+    pub average_directional_return_pct: Option<f64>,
+    pub positive_return_rate: Option<f64>,
+}
+
+/// Read-only aggregate evidence for manager-gate missed-trade shadows.
+///
+/// The sample is not a backtest or gate override signal. It excludes execution,
+/// fees, FX, slippage, and tax, and cannot affect a manager gate or broker
+/// order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardMissedTradeShadowEvidencePayload {
+    pub status: String,
+    pub recorded_shadow_count: i64,
+    pub observed_shadow_count: i64,
+    pub overall: DashboardMissedTradeShadowOutcomePayload,
+    pub by_gate: Vec<DashboardMissedTradeShadowGatePayload>,
+    pub minimum_complete_observations: i64,
+    pub interpretation: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardMissedTradeShadowGatePayload {
+    pub source_gate: String,
+    pub recorded_shadow_count: i64,
+    pub outcome: DashboardMissedTradeShadowOutcomePayload,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

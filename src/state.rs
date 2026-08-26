@@ -41,13 +41,14 @@ use crate::{
         DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
         DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
         DashboardHermesReflectionPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
+        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3571,6 +3572,65 @@ fn dashboard_missed_trade_shadows_from_json(
         .collect()
 }
 
+/// Decodes the deliberately small missed-trade shadow aggregate. Its raw rows,
+/// safety marker, and scan metadata remain in the local evidence store.
+fn dashboard_missed_trade_shadow_evidence_from_json(
+    evidence: JsonValue,
+) -> serde_json::Result<DashboardMissedTradeShadowEvidencePayload> {
+    Ok(DashboardMissedTradeShadowEvidencePayload {
+        status: dashboard_required_string(&evidence, "status")?,
+        recorded_shadow_count: dashboard_required_i64(&evidence, "recorded_shadow_count")?,
+        observed_shadow_count: dashboard_required_i64(&evidence, "observed_shadow_count")?,
+        overall: dashboard_missed_trade_shadow_outcome_from_json(
+            evidence.get("overall").cloned().unwrap_or(JsonValue::Null),
+        )?,
+        by_gate: evidence
+            .get("by_gate")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .ok_or_else(|| serde_json::Error::io(std::io::Error::other("missing by_gate")))?
+            .into_iter()
+            .map(|gate| {
+                Ok(DashboardMissedTradeShadowGatePayload {
+                    source_gate: dashboard_required_string(&gate, "source_gate")?,
+                    recorded_shadow_count: dashboard_required_i64(&gate, "recorded_shadow_count")?,
+                    outcome: dashboard_missed_trade_shadow_outcome_from_json(
+                        gate.get("outcome").cloned().unwrap_or(JsonValue::Null),
+                    )?,
+                })
+            })
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        minimum_complete_observations: dashboard_required_i64(
+            &evidence,
+            "minimum_complete_observations",
+        )?,
+        interpretation: dashboard_required_string(&evidence, "interpretation")?,
+    })
+}
+
+fn dashboard_missed_trade_shadow_outcome_from_json(
+    outcome: JsonValue,
+) -> serde_json::Result<DashboardMissedTradeShadowOutcomePayload> {
+    Ok(DashboardMissedTradeShadowOutcomePayload {
+        sample_count: dashboard_required_i64(&outcome, "sample_count")?,
+        average_directional_return_pct: dashboard_optional_f64(
+            &outcome,
+            "average_directional_return_pct",
+        )?,
+        positive_return_rate: dashboard_optional_f64(&outcome, "positive_return_rate")?,
+    })
+}
+
+fn dashboard_missed_trade_shadow_evidence_unavailable() -> DashboardMissedTradeShadowEvidencePayload
+{
+    DashboardMissedTradeShadowEvidencePayload {
+        status: "unavailable".to_string(),
+        interpretation: "Missed-trade shadow outcome evidence is unavailable right now."
+            .to_string(),
+        ..DashboardMissedTradeShadowEvidencePayload::default()
+    }
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -6148,23 +6208,21 @@ impl AppState {
             } else {
                 Vec::new()
             };
-        let missed_trade_shadow_evidence = if dashboard_loads_tab_exclusive_data(
-            &active_view,
-            "hermes",
-        ) {
-            self.missed_trade_shadow_outcome_evidence()
+        let missed_trade_shadow_evidence =
+            if dashboard_loads_tab_exclusive_data(&active_view, "hermes") {
+                self.missed_trade_shadow_outcome_evidence()
                     .await
-                    .unwrap_or_else(|err| {
-                        warn!("dashboard missed-trade shadow evidence degraded: {err:#}");
-                        json!({
-                            "status": "unavailable",
-                            "safety": "read_only_local_quote_to_quote_observations_no_saxo_provider_hermes_or_order_mutation",
-                            "interpretation": "Missed-trade shadow evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
-                        })
+                    .and_then(|evidence| {
+                        dashboard_missed_trade_shadow_evidence_from_json(evidence)
+                            .map_err(Into::into)
                     })
-        } else {
-            JsonValue::Null
-        };
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed missed-trade shadow evidence degraded: {err:#}");
+                        dashboard_missed_trade_shadow_evidence_unavailable()
+                    })
+            } else {
+                DashboardMissedTradeShadowEvidencePayload::default()
+            };
         let active_strategy_baseline =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "baselines") {
                 self.active_strategy_baseline().await.unwrap_or_else(|err| {
@@ -17855,6 +17913,46 @@ mod tests {
             dashboard_missed_trade_shadows_from_json(vec![json!({
                 "report_id": 43
             })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_missed_trade_shadow_evidence_keeps_raw_rows_outside_ssr() {
+        let evidence = dashboard_missed_trade_shadow_evidence_from_json(json!({
+            "status": "collecting",
+            "recorded_shadow_count": 3,
+            "observed_shadow_count": 2,
+            "overall": {
+                "sample_count": 2,
+                "average_directional_return_pct": 0.025,
+                "positive_return_rate": 0.5
+            },
+            "by_gate": [{
+                "source_gate": "cash_budget",
+                "recorded_shadow_count": 2,
+                "outcome": {
+                    "sample_count": 2,
+                    "average_directional_return_pct": 0.025,
+                    "positive_return_rate": 0.5
+                }
+            }],
+            "minimum_complete_observations": 20,
+            "interpretation": "Read-only quote-to-quote evidence only.",
+            "raw_rows": [{"api_key": "must-not-reach-the-dashboard"}]
+        }))
+        .expect("stable missed-trade shadow aggregate decodes");
+
+        assert_eq!(evidence.by_gate[0].outcome.sample_count, 2);
+        assert!(
+            !serde_json::to_string(&evidence)
+                .expect("typed missed-trade shadow aggregate serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_missed_trade_shadow_evidence_from_json(json!({
+                "status": "collecting"
+            }))
             .is_err()
         );
     }
