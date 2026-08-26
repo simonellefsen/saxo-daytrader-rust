@@ -405,6 +405,20 @@ pub struct DashboardHermesExperimentPayload {
     pub evidence_display: String,
 }
 
+/// Stable advisory metadata for one Hermes experiment exposed by the protected
+/// API list. Proposed values, evidence, approvals, metrics, and provider
+/// payloads remain in the local audit store and separate internal read models.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct HermesExperimentSummaryPayload {
+    pub id: String,
+    pub created_at: String,
+    pub status: String,
+    pub baseline_id: Option<String>,
+    pub goal_version: i64,
+    pub changed_variable_path: String,
+    pub source_session_id: Option<String>,
+}
+
 /// Display-safe metadata for the promoted baseline audit record.
 ///
 /// The persisted prompt and source documents stay local. Configuration is
@@ -1320,13 +1334,13 @@ pub struct HermesReflectionsPayload {
 
 /// Bounded Hermes experiment-list envelope.
 ///
-/// Individual persisted experiment rows remain compatibility JSON while the
-/// Hermes read model is converted incrementally. This keeps the protected
-/// advisory read boundary explicit without changing proposal lifecycle or
+/// Individual experiment rows expose only stable lifecycle metadata. Proposed
+/// values, evidence, approvals, metrics, and provider payloads stay outside
+/// this protected API boundary without changing proposal lifecycle or
 /// activation behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HermesExperimentsPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<HermesExperimentSummaryPayload>,
 }
 
 /// Bounded market-watchlists envelope.

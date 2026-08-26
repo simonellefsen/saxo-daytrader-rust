@@ -22,16 +22,17 @@ use crate::{
         CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
         DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
-        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesExperimentsPayload,
-        HermesReflectionRequest, HermesReflectionSummaryPayload, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
+        HermesExperimentRequest, HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
+        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
+        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -40,8 +41,9 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, hermes_reflection_summaries_from_json,
-        portfolio_trades_from_json, strategy_journal_summaries_from_json,
+        AppState, dashboard_positions_from_json, hermes_experiment_summaries_from_json,
+        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
+        strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1876,7 +1878,9 @@ fn hermes_reflections_payload(
     HermesReflectionsPayload { items }
 }
 
-fn hermes_experiments_payload(items: Vec<JsonValue>) -> HermesExperimentsPayload {
+fn hermes_experiments_payload(
+    items: Vec<HermesExperimentSummaryPayload>,
+) -> HermesExperimentsPayload {
     HermesExperimentsPayload { items }
 }
 
@@ -2063,8 +2067,9 @@ async fn hermes_experiments(
     let limit = params.limit.unwrap_or(20);
     json_result(
         state
-            .hermes_experiments(limit)
+            .hermes_experiment_summaries(limit)
             .await
+            .and_then(|items| hermes_experiment_summaries_from_json(items).map_err(Into::into))
             .map(hermes_experiments_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
@@ -2939,11 +2944,15 @@ mod tests {
 
     #[test]
     fn hermes_experiments_response_keeps_the_typed_list_envelope() {
-        let payload = hermes_experiments_payload(vec![json!({
-            "id": "experiment-2026-08-01",
-            "status": "pending_review",
-            "changed_variable_path": "strategy.swing.technical_gate"
-        })]);
+        let payload = hermes_experiments_payload(vec![HermesExperimentSummaryPayload {
+            id: "experiment-2026-08-01".to_string(),
+            created_at: "2026-08-01T20:15:00Z".to_string(),
+            status: "pending_review".to_string(),
+            baseline_id: None,
+            goal_version: 2,
+            changed_variable_path: "strategy.swing.technical_gate".to_string(),
+            source_session_id: Some("daily-eod-reflection-2026-08-01".to_string()),
+        }]);
 
         assert_eq!(payload.items.len(), 1);
 
@@ -2951,6 +2960,7 @@ mod tests {
             serde_json::to_value(payload).expect("Hermes experiments payload serializes");
         assert_eq!(serialized["items"][0]["id"], "experiment-2026-08-01");
         assert_eq!(serialized["items"][0]["status"], "pending_review");
+        assert!(serialized["items"][0].get("new_value_json").is_none());
     }
 
     #[test]

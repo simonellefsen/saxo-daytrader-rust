@@ -57,15 +57,16 @@ use crate::{
         DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, HermesReflectionSummaryPayload, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, StrategyJournalEntryPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        HermesExperimentSummaryPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
+        QuiverConflictPayload, StrategyJournalEntryPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3520,6 +3521,31 @@ fn dashboard_hermes_experiments_from_json(
                 hypothesis: dashboard_required_string(&experiment, "hypothesis")?,
                 expected_effect: dashboard_required_string(&experiment, "expected_effect")?,
                 evidence_display: compact_json_redacted(experiment.get("evidence_json"), 220),
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable experiment metadata for the protected API list. Proposed
+/// values and supporting documents remain in the local audit store and do not
+/// cross this boundary.
+pub(crate) fn hermes_experiment_summaries_from_json(
+    experiments: Vec<JsonValue>,
+) -> serde_json::Result<Vec<HermesExperimentSummaryPayload>> {
+    experiments
+        .into_iter()
+        .map(|experiment| {
+            Ok(HermesExperimentSummaryPayload {
+                id: dashboard_required_string(&experiment, "id")?,
+                created_at: dashboard_required_string(&experiment, "created_at")?,
+                status: dashboard_required_string(&experiment, "status")?,
+                baseline_id: dashboard_optional_string(&experiment, "baseline_id")?,
+                goal_version: dashboard_required_i64(&experiment, "goal_version")?,
+                changed_variable_path: dashboard_required_string(
+                    &experiment,
+                    "changed_variable_path",
+                )?,
+                source_session_id: dashboard_optional_string(&experiment, "source_session_id")?,
             })
         })
         .collect()
@@ -13309,6 +13335,17 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    pub async fn hermes_experiment_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, status, baseline_id, goal_version, changed_variable_path, source_session_id
+             FROM strategy_experiments
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
     /// Return the only experiment rows that can be used as Hermes advisory
     /// context. Pending proposals are intentionally omitted with their values
     /// redacted: seeing a proposed threshold or setting is enough for an LLM
@@ -19177,6 +19214,39 @@ mod tests {
         );
         assert!(
             dashboard_hermes_experiments_from_json(vec![json!({
+                "id": "experiment-91"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn hermes_experiment_summaries_exclude_proposal_and_provider_documents() {
+        let experiments = hermes_experiment_summaries_from_json(vec![json!({
+            "id": "experiment-91",
+            "created_at": "2026-08-26T08:30:00Z",
+            "status": "pending_review",
+            "baseline_id": null,
+            "goal_version": 4,
+            "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+            "source_session_id": "daily-eod-reflection-2026-08-26",
+            "old_value_json": {"value": 0.05, "api_key": "must-not-reach-the-public-api"},
+            "new_value_json": {"value": 0.03, "api_key": "must-not-reach-the-public-api"},
+            "evidence_json": {"source": "SIM journal", "api_key": "must-not-reach-the-public-api"},
+            "approval_json": {"operator": "must-not-reach-the-public-api"},
+            "metrics_json": {"provider_response": "must-not-reach-the-public-api"},
+            "raw_payload_json": {"api_key": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable Hermes experiment summaries decode");
+
+        assert_eq!(experiments[0].status, "pending_review");
+        assert!(
+            !serde_json::to_string(&experiments)
+                .expect("typed Hermes experiment summaries serialize")
+                .contains("must-not-reach-the-public-api")
+        );
+        assert!(
+            hermes_experiment_summaries_from_json(vec![json!({
                 "id": "experiment-91"
             })])
             .is_err()

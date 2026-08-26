@@ -10,6 +10,11 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type protected Hermes experiment list
+
+- Changed `GET /api/hermes/experiments` to return typed stable identity, lifecycle, baseline, goal-version, changed-path, and source-session metadata only.
+- Proposed values, evidence, approvals, metrics, and raw model payloads remain in the local audit store and internal read models. The MCP advisory list retains its stricter pending-review value exclusion; this cannot create, transition, promote, queue, precheck, or reach Saxo.
+
 ## [2026-08-26] architecture | Type protected Hermes reflection list
 
 - Changed `GET /api/hermes/reflections` to return typed stable reflection identity, timing, goal-version, summary, and source-session metadata only.
