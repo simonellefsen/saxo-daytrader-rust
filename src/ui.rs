@@ -7237,7 +7237,7 @@ fn PositionRow(
             td { PositionSymbolCell { row: row.clone(), prefs: prefs.clone() } }
             td {
                 DecisionBadge {
-                    decision: row.decision.clone(),
+                    decision: position_decision_as_json(row.decision.as_ref()),
                     prefs: prefs.clone(),
                     stale_after_days: decision_stale_after_days,
                 }
@@ -10684,13 +10684,11 @@ fn sparkline_points(row: &JsonValue) -> Sparkline {
 }
 
 fn position_sparkline_points(row: &DashboardPositionPayload) -> Sparkline {
-    let decision = row.decision.clone();
-    let technical = decision
-        .get("source")
-        .and_then(|source| source.get("technical"))
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let trend_bias = text(&technical, "trend_bias");
+    let trend_bias = row
+        .decision
+        .as_ref()
+        .map(|decision| decision.trend_bias.as_str())
+        .unwrap_or_default();
     let positive = if trend_bias == "bearish" {
         false
     } else if trend_bias == "bullish" {
@@ -10713,6 +10711,22 @@ fn position_sparkline_points(row: &DashboardPositionPayload) -> Sparkline {
         points: points.join(" "),
         positive,
     }
+}
+
+fn position_decision_as_json(
+    decision: Option<&crate::models::DashboardPositionDecisionPayload>,
+) -> JsonValue {
+    decision
+        .map(|decision| {
+            json!({
+                "sentiment": decision.sentiment,
+                "action": decision.action,
+                "created_at": decision.created_at,
+                "rationale": decision.rationale,
+                "target_rationale": decision.target_rationale,
+            })
+        })
+        .unwrap_or(JsonValue::Null)
 }
 
 fn symbol_seed(symbol: &str) -> u64 {

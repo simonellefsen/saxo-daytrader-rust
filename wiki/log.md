@@ -10,6 +10,11 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type nested portfolio decision display
+
+- Replaced the compatibility decision document in typed portfolio rows with explicit advisory badge and trend fields, redacting and bounding rationale text.
+- Full Decision Report documents remain on their dedicated selected-report path; this display data cannot change a report, queue, precheck, or Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard execution queue rows
 
 - Changed the shared overview/Execution order rows to consume typed identity, lifecycle, instrument, price, quantity, and strategy fields, with capped/redacted error text.

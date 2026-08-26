@@ -173,7 +173,20 @@ pub struct DashboardPositionPayload {
     pub market_status: String,
     pub change_pct: f64,
     pub latest_quote_updated_at: String,
-    pub decision: JsonValue,
+    pub decision: Option<DashboardPositionDecisionPayload>,
+}
+
+/// Advisory decision fields rendered by a portfolio badge and trend sparkline.
+///
+/// The full Decision Report remains on its dedicated selected-report path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardPositionDecisionPayload {
+    pub sentiment: String,
+    pub action: String,
+    pub created_at: String,
+    pub rationale: String,
+    pub target_rationale: String,
+    pub trend_bias: String,
 }
 
 /// One read-only execution queue row rendered in the overview and Execution tab.

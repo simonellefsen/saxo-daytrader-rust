@@ -50,20 +50,21 @@ use crate::{
         DashboardLatestRunPayload, DashboardMarkovSignalPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3720,10 +3721,48 @@ fn dashboard_positions_from_json(
                     "latest_quote_updated_at",
                 )?
                 .unwrap_or_default(),
-                decision: position.get("decision").cloned().unwrap_or(JsonValue::Null),
+                decision: dashboard_position_decision_from_json(
+                    position.get("decision").unwrap_or(&JsonValue::Null),
+                ),
             })
         })
         .collect()
+}
+
+fn dashboard_position_decision_from_json(
+    value: &JsonValue,
+) -> Option<DashboardPositionDecisionPayload> {
+    (!value.is_null()).then(|| DashboardPositionDecisionPayload {
+        sentiment: dashboard_optional_string(value, "sentiment")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        action: dashboard_optional_string(value, "action")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        created_at: dashboard_optional_string(value, "created_at")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        rationale: dashboard_optional_string(value, "rationale")
+            .ok()
+            .flatten()
+            .map(|text| compact_debug_text(&text, 360))
+            .unwrap_or_default(),
+        target_rationale: dashboard_optional_string(value, "target_rationale")
+            .ok()
+            .flatten()
+            .map(|text| compact_debug_text(&text, 360))
+            .unwrap_or_default(),
+        trend_bias: value
+            .get("source")
+            .and_then(|source| source.get("technical"))
+            .and_then(|technical| technical.get("trend_bias"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
 }
 
 /// Decodes stable execution-row fields while retaining the existing bounded
@@ -18343,6 +18382,13 @@ mod tests {
 
         assert_eq!(positions[0].symbol, "EXAMPLE:xnas");
         assert_eq!(positions[0].market_value_dkk, 2900.0);
+        assert_eq!(
+            positions[0]
+                .decision
+                .as_ref()
+                .map(|decision| decision.trend_bias.as_str()),
+            Some("bullish")
+        );
         assert!(
             !serde_json::to_string(&positions)
                 .expect("typed portfolio positions serialize")
