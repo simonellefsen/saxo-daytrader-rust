@@ -37,20 +37,21 @@ use crate::{
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardExecutionFillPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesReflectionPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3393,6 +3394,42 @@ fn dashboard_hermes_lessons_pending_review_from_json(
         .collect()
 }
 
+/// Decodes the compressed Hermes learning-memory evidence displayed by the
+/// advisory-only dashboard. Raw reflections and the memory's internal safety
+/// marker remain outside the SSR contract.
+fn dashboard_hermes_learning_memory_from_json(
+    memory: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesLearningMemoryPayload>> {
+    memory
+        .into_iter()
+        .map(|lesson| {
+            let status = dashboard_required_string(&lesson, "status")?;
+            if !matches!(status.as_str(), "stable" | "emerging" | "stale") {
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown Hermes learning-memory status",
+                )));
+            }
+            Ok(DashboardHermesLearningMemoryPayload {
+                status,
+                lesson: dashboard_required_string(&lesson, "lesson")?,
+                observation_count: serde_json::from_value(
+                    lesson
+                        .get("observation_count")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                first_seen: dashboard_required_string(&lesson, "first_seen")?,
+                last_seen: dashboard_required_string(&lesson, "last_seen")?,
+                expires_at: dashboard_required_string(&lesson, "expires_at")?,
+                cadences: serde_json::from_value(
+                    lesson.get("cadences").cloned().unwrap_or(JsonValue::Null),
+                )?,
+            })
+        })
+        .collect()
+}
+
 fn dashboard_required_i64(row: &JsonValue, key: &str) -> serde_json::Result<i64> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -5875,8 +5912,11 @@ impl AppState {
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
                 self.hermes_learning_memory(LEARNING_MEMORY_LIMIT as i64)
                     .await
+                    .and_then(|memory| {
+                        dashboard_hermes_learning_memory_from_json(memory).map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard Hermes learning memory degraded: {err:#}");
+                        warn!("dashboard typed Hermes learning memory degraded: {err:#}");
                         Vec::new()
                     })
             } else {
@@ -17452,6 +17492,40 @@ mod tests {
         assert!(
             dashboard_hermes_lessons_pending_review_from_json(vec![json!({
                 "created_at": "2026-08-26T08:30:00Z"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_learning_memory_keeps_only_typed_evidence() {
+        let memory = dashboard_hermes_learning_memory_from_json(vec![json!({
+            "status": "stable",
+            "lesson": "Review SIM protective-stop coverage before changing policy.",
+            "observation_count": 2,
+            "first_seen": "2026-08-20T08:30:00Z",
+            "last_seen": "2026-08-26T08:30:00Z",
+            "expires_at": "2026-09-16T08:30:00Z",
+            "cadences": ["daily", "weekly"],
+            "safety": "must-not-reach-the-dashboard",
+            "raw_payload_json": {
+                "api_key": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable Hermes learning memory decodes");
+
+        assert_eq!(
+            memory[0].cadences,
+            vec!["daily".to_string(), "weekly".to_string()]
+        );
+        assert!(
+            !serde_json::to_string(&memory)
+                .expect("typed Hermes learning memory serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_learning_memory_from_json(vec![json!({
+                "status": "unknown"
             })])
             .is_err()
         );

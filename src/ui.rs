@@ -12,13 +12,14 @@ use crate::{
     },
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -5737,12 +5738,12 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let stable_learning_memory = data
         .hermes_learning_memory
         .iter()
-        .filter(|row| text(row, "status") == "stable")
+        .filter(|row| row.status == "stable")
         .count();
     let stale_learning_memory = data
         .hermes_learning_memory
         .iter()
-        .filter(|row| text(row, "status") == "stale")
+        .filter(|row| row.status == "stale")
         .count();
     let latest_created = latest_reflection
         .as_ref()
@@ -8043,30 +8044,32 @@ fn HermesLessonPendingReviewRow(
 }
 
 #[component]
-fn HermesLearningMemoryRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text_or(&row, "status", "emerging");
+fn HermesLearningMemoryRow(
+    row: DashboardHermesLearningMemoryPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = row.status;
     let status_class = match status.as_str() {
         "stable" => "status good-status",
         "stale" => "status warn-status",
         _ => "status",
     };
-    let lesson = text_or(&row, "lesson", "No lesson text recorded.");
-    let observation_count = text_or(&row, "observation_count", "0");
-    let first_seen = format_timestamp(&text(&row, "first_seen"), &prefs);
-    let last_seen = format_timestamp(&text(&row, "last_seen"), &prefs);
-    let expires_at = format_timestamp(&text(&row, "expires_at"), &prefs);
+    let lesson = row.lesson;
+    let observation_count = row.observation_count.to_string();
+    let first_seen = format_timestamp(&row.first_seen, &prefs);
+    let last_seen = format_timestamp(&row.last_seen, &prefs);
+    let expires_at = format_timestamp(&row.expires_at, &prefs);
     let cadences = row
-        .get("cadences")
-        .and_then(JsonValue::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
+        .cadences
+        .into_iter()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "n/a".to_string());
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cadences = if cadences.is_empty() {
+        "n/a".to_string()
+    } else {
+        cadences
+    };
     rsx! {
         tr {
             td { span { class: "{status_class}", "{status}" } }

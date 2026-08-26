@@ -64,7 +64,7 @@ pub struct DashboardView {
     pub scheduler_cycles: Vec<DashboardSchedulerCyclePayload>,
     pub hermes_reflections: Vec<DashboardHermesReflectionPayload>,
     pub hermes_lessons_pending_review: Vec<DashboardHermesLessonPendingReviewPayload>,
-    pub hermes_learning_memory: Vec<JsonValue>,
+    pub hermes_learning_memory: Vec<DashboardHermesLearningMemoryPayload>,
     pub hermes_one_variable_audit: Vec<JsonValue>,
     pub hermes_proposal_quality: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,
@@ -215,6 +215,23 @@ pub struct DashboardHermesLessonPendingReviewPayload {
     pub lesson: String,
     pub reflection_summary: Option<String>,
     pub source_session_id: Option<String>,
+}
+
+/// One compressed, expiring Hermes lesson rendered for read-only review.
+///
+/// This projection preserves only the already-redacted lesson, lifecycle
+/// labels, timing, and aggregate provenance. It cannot promote a lesson,
+/// invoke Hermes, change configuration or experiment state, or affect Trading
+/// Manager or Saxo execution.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesLearningMemoryPayload {
+    pub status: String,
+    pub lesson: String,
+    pub observation_count: usize,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub expires_at: String,
+    pub cadences: Vec<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.
