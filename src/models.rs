@@ -51,7 +51,7 @@ pub struct DashboardView {
     pub scheduler_page_size: i64,
     pub scheduler_cycle_total: i64,
     pub positions: Vec<DashboardPositionPayload>,
-    pub orders: Vec<JsonValue>,
+    pub orders: Vec<DashboardExecutionOrderPayload>,
     pub execution_fills: Vec<DashboardExecutionFillPayload>,
     pub execution_events: Vec<DashboardExecutionEventPayload>,
     pub execution_trade_thesis_evidence: DashboardTradeThesisEvidencePayload,
@@ -174,6 +174,34 @@ pub struct DashboardPositionPayload {
     pub change_pct: f64,
     pub latest_quote_updated_at: String,
     pub decision: JsonValue,
+}
+
+/// One read-only execution queue row rendered in the overview and Execution tab.
+///
+/// The existing lifecycle result and attribution documents remain compatibility
+/// JSON for detailed diagnostics only. This payload cannot claim, precheck,
+/// place, cancel, replace, or reconcile a Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardExecutionOrderPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub action: String,
+    pub order_type: String,
+    pub status: String,
+    pub quantity: f64,
+    pub price_local: f64,
+    pub limit_price_local: f64,
+    pub stop_price_local: f64,
+    pub currency: String,
+    pub strategy_type: String,
+    pub strategy_role: String,
+    pub error_text: String,
+    pub order_duration_type: String,
+    pub expected_expiry_at_utc: String,
+    pub lifecycle_state: String,
+    pub execution_result_json: JsonValue,
+    pub attribution: JsonValue,
 }
 
 /// One compact, reconciled broker-fill observation shown in the dashboard.

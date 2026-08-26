@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard execution queue rows
+
+- Changed the shared overview/Execution order rows to consume typed identity, lifecycle, instrument, price, quantity, and strategy fields, with capped/redacted error text.
+- Existing lifecycle-result and attribution documents remain compatibility JSON only for detailed diagnostics; no execution mutation path changed.
+- Malformed rows degrade to an empty local page and cannot claim, precheck, place, cancel, replace, or reconcile a Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard portfolio position rows
 
 - Changed the overview position list to consume typed instrument, price, valuation, P/L, allocation, and quote-freshness fields.

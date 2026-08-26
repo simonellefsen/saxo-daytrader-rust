@@ -40,30 +40,30 @@ use crate::{
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesBaselineEvidencePackPayload,
-        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
-        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
-        DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
-        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardExecutionFillPayload, DashboardExecutionOrderPayload,
+        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
+        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
+        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
+        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
+        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3726,6 +3726,52 @@ fn dashboard_positions_from_json(
         .collect()
 }
 
+/// Decodes stable execution-row fields while retaining the existing bounded
+/// lifecycle and attribution diagnostic documents for the detailed table.
+fn dashboard_execution_orders_from_json(
+    orders: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardExecutionOrderPayload>> {
+    orders
+        .into_iter()
+        .map(|order| {
+            let number =
+                |key| dashboard_optional_f64(&order, key).map(|value| value.unwrap_or(0.0));
+            Ok(DashboardExecutionOrderPayload {
+                id: dashboard_required_i64(&order, "id")?,
+                created_at: dashboard_required_string(&order, "created_at")?,
+                symbol: dashboard_required_string(&order, "symbol")?,
+                action: dashboard_required_string(&order, "action")?,
+                order_type: dashboard_optional_string(&order, "order_type")?.unwrap_or_default(),
+                status: dashboard_required_string(&order, "status")?,
+                quantity: number("quantity")?,
+                price_local: number("price_local")?,
+                limit_price_local: number("limit_price_local")?,
+                stop_price_local: number("stop_price_local")?,
+                currency: dashboard_optional_string(&order, "currency")?.unwrap_or_default(),
+                strategy_type: dashboard_optional_string(&order, "strategy_type")?
+                    .unwrap_or_default(),
+                strategy_role: dashboard_optional_string(&order, "strategy_role")?
+                    .unwrap_or_default(),
+                error_text: dashboard_optional_string(&order, "error_text")?
+                    .map(|value| compact_debug_text(&value, 220))
+                    .unwrap_or_default(),
+                order_duration_type: dashboard_optional_string(&order, "order_duration_type")?
+                    .unwrap_or_default(),
+                expected_expiry_at_utc: dashboard_optional_string(
+                    &order,
+                    "expected_expiry_at_utc",
+                )?
+                .unwrap_or_default(),
+                lifecycle_state: dashboard_optional_string(&order, "lifecycle_state")?
+                    .unwrap_or_default(),
+                execution_result_json: dashboard_embedded_json(&order, "execution_result_json")
+                    .unwrap_or(JsonValue::Null),
+                attribution: order.get("attribution").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect()
+}
+
 /// Decodes the deterministic, display-only quality rubric for active Hermes
 /// proposals. The underlying experiment documents and their evidence stay
 /// outside the SSR boundary.
@@ -6542,8 +6588,9 @@ impl AppState {
                 execution_order_window.offset,
             )
             .await
+            .and_then(|orders| dashboard_execution_orders_from_json(orders).map_err(Into::into))
             .unwrap_or_else(|err| {
-                warn!("dashboard execution queue degraded: {err:#}");
+                warn!("dashboard typed execution queue degraded: {err:#}");
                 Vec::new()
             });
         let execution_fills = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
@@ -18302,6 +18349,32 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(dashboard_positions_from_json(vec![json!({"quantity": 4.0})]).is_err());
+    }
+
+    #[test]
+    fn dashboard_execution_orders_keep_broker_documents_outside_stable_fields() {
+        let orders = dashboard_execution_orders_from_json(vec![json!({
+            "id": 91,
+            "created_at": "2026-08-26T12:00:00Z",
+            "symbol": "EXAMPLE:xnas",
+            "action": "BUY",
+            "status": "broker_working",
+            "quantity": 4.0,
+            "currency": "USD",
+            "error_text": "Saxo response included sk-must-not-reach-the-dashboard-1234567890",
+            "execution_result_json": {"raw_payload": "must-not-reach-the-dashboard"},
+            "attribution": {"manager": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable execution order decodes");
+
+        assert_eq!(orders[0].id, 91);
+        assert!(orders[0].error_text.contains("[redacted]"));
+        assert!(
+            !serde_json::to_string(&orders)
+                .expect("typed execution orders serialize")
+                .contains("must-not-reach-the-dashboard-1234567890")
+        );
+        assert!(dashboard_execution_orders_from_json(vec![json!({"id": 91})]).is_err());
     }
 
     #[test]

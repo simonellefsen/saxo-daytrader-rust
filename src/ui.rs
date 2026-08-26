@@ -1,7 +1,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use dioxus::prelude::*;
-use serde_json::Value as JsonValue;
+use serde_json::{Value as JsonValue, json};
 
 use crate::{
     auth::SsoSession,
@@ -14,16 +14,16 @@ use crate::{
         DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
         DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
         DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesBaselineEvidencePackPayload,
-        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
-        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
-        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
-        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardExecutionFillPayload, DashboardExecutionOrderPayload,
+        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
+        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
+        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
         DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
         MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
@@ -7553,7 +7553,8 @@ fn MarketRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn OrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPrefs) -> Element {
+    let row = execution_order_as_json(&row);
     let id = text(&row, "id");
     let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
     let symbol = text(&row, "symbol");
@@ -7594,7 +7595,8 @@ fn OrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn ExecutionOrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPrefs) -> Element {
+    let row = execution_order_as_json(&row);
     let status = text(&row, "status");
     let detail = execution_status_detail(&row);
     let reason = execution_status_reason(&row);
@@ -7670,6 +7672,30 @@ fn ExecutionOrderRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
         }
     }
+}
+
+fn execution_order_as_json(row: &DashboardExecutionOrderPayload) -> JsonValue {
+    json!({
+        "id": row.id,
+        "created_at": row.created_at,
+        "symbol": row.symbol,
+        "action": row.action,
+        "order_type": row.order_type,
+        "status": row.status,
+        "quantity": row.quantity,
+        "price_local": row.price_local,
+        "limit_price_local": row.limit_price_local,
+        "stop_price_local": row.stop_price_local,
+        "currency": row.currency,
+        "strategy_type": row.strategy_type,
+        "strategy_role": row.strategy_role,
+        "error_text": row.error_text,
+        "order_duration_type": row.order_duration_type,
+        "expected_expiry_at_utc": row.expected_expiry_at_utc,
+        "lifecycle_state": row.lifecycle_state,
+        "execution_result_json": row.execution_result_json,
+        "attribution": row.attribution,
+    })
 }
 
 fn execution_attribution_label(row: &JsonValue) -> (String, &'static str) {
@@ -9266,10 +9292,10 @@ fn integrity_operation_health(integrity: &OverviewIntegrityPayload) -> Operation
     }
 }
 
-fn execution_operation_health(orders: &[JsonValue]) -> OperationHealthItem {
+fn execution_operation_health(orders: &[DashboardExecutionOrderPayload]) -> OperationHealthItem {
     let expiry_pending = orders
         .iter()
-        .filter(|order| text(order, "lifecycle_state") == "expiry_pending_broker_sync")
+        .filter(|order| order.lifecycle_state == "expiry_pending_broker_sync")
         .count();
     if expiry_pending > 0 {
         return OperationHealthItem {
@@ -9284,7 +9310,7 @@ fn execution_operation_health(orders: &[JsonValue]) -> OperationHealthItem {
 
     let broker_live = orders
         .iter()
-        .filter(|order| active_broker_status(&text(order, "status")))
+        .filter(|order| active_broker_status(&order.status))
         .count();
     if broker_live > 0 {
         OperationHealthItem {
@@ -11541,10 +11567,11 @@ mod tests {
 
     #[test]
     fn execution_operation_health_warns_on_expiry_pending_sync() {
-        let item = execution_operation_health(&[json!({
-            "status": "broker_working",
-            "lifecycle_state": "expiry_pending_broker_sync"
-        })]);
+        let item = execution_operation_health(&[DashboardExecutionOrderPayload {
+            status: "broker_working".to_string(),
+            lifecycle_state: "expiry_pending_broker_sync".to_string(),
+            ..DashboardExecutionOrderPayload::default()
+        }]);
 
         assert_eq!(item.label, "Execution");
         assert_eq!(item.status, "expiry sync");
