@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Quiver signal rows
+
+- Changed the paginated Quiver signals table to consume explicit rendered market, Congress aggregate, date, status, and bounded sanitized-error fields.
+- Source-status, top-event, and provider documents remain outside SSR; malformed rows degrade to the existing empty local page.
+- This preserves pagination and read-only display behavior and cannot refresh Quiver data, change a Decision Report, manager gate, queue, precheck, or Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard Markov signal rows
 
 - Changed the paginated Markov signals table to consume explicit rendered fields, including a flattened stationary distribution and bounded sanitized error text.

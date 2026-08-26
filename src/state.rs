@@ -49,20 +49,20 @@ use crate::{
         DashboardLatestRunPayload, DashboardMarkovSignalPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
-        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardQuiverSignalPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3625,6 +3625,40 @@ fn dashboard_markov_signals_from_json(
         .collect()
 }
 
+/// Decodes the rendered Quiver signal table fields while keeping source-status,
+/// top-event, and provider diagnostics on their dedicated read-only paths.
+fn dashboard_quiver_signals_from_json(
+    signals: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardQuiverSignalPayload>> {
+    signals
+        .into_iter()
+        .map(|signal| {
+            let error_text = dashboard_optional_string(&signal, "error_text")?
+                .map(|value| compact_debug_text(&value, 220))
+                .unwrap_or_default();
+            Ok(DashboardQuiverSignalPayload {
+                symbol: dashboard_required_string(&signal, "symbol")?,
+                ticker: dashboard_required_string(&signal, "ticker")?,
+                instrument_name: dashboard_required_string(&signal, "instrument_name")?,
+                signal: dashboard_required_f64(&signal, "signal")?,
+                direction: dashboard_required_string(&signal, "direction")?,
+                confidence: dashboard_required_f64(&signal, "confidence")?,
+                event_count: dashboard_required_i64(&signal, "event_count")?,
+                congress_purchase_count: dashboard_required_i64(
+                    &signal,
+                    "congress_purchase_count",
+                )?,
+                congress_sale_count: dashboard_required_i64(&signal, "congress_sale_count")?,
+                net_congress_amount: dashboard_required_f64(&signal, "net_congress_amount")?,
+                latest_event_date: dashboard_optional_string(&signal, "latest_event_date")?
+                    .unwrap_or_else(|| "n/a".to_string()),
+                status: dashboard_required_string(&signal, "status")?,
+                error_text,
+            })
+        })
+        .collect()
+}
+
 /// Decodes the deterministic, display-only quality rubric for active Hermes
 /// proposals. The underlying experiment documents and their evidence stay
 /// outside the SSR boundary.
@@ -6899,8 +6933,9 @@ impl AppState {
         let quiver_signals = if dashboard_loads_tab_exclusive_data(&active_view, "quiver") {
             self.quiver_signals_page(QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page.offset)
                 .await
+                .and_then(|signals| dashboard_quiver_signals_from_json(signals).map_err(Into::into))
                 .unwrap_or_else(|err| {
-                    warn!("dashboard Quiver signals degraded: {err:#}");
+                    warn!("dashboard typed Quiver signals degraded: {err:#}");
                     Vec::new()
                 })
         } else {
@@ -18488,6 +18523,47 @@ mod tests {
         );
         assert!(
             dashboard_markov_signals_from_json(vec![json!({
+                "symbol": "EXAMPLE:xnas"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_quiver_signals_keep_source_documents_outside_ssr() {
+        let signals = dashboard_quiver_signals_from_json(vec![json!({
+            "id": "quiver-91",
+            "run_id": "run-91",
+            "created_at": "2026-08-26T08:30:00Z",
+            "run_date": "2026-08-26",
+            "status": "error",
+            "symbol": "EXAMPLE:xnas",
+            "ticker": "EXAMPLE",
+            "instrument_name": "Example Corp",
+            "signal": 0.4,
+            "direction": "bullish",
+            "confidence": 0.8,
+            "event_count": 3,
+            "congress_purchase_count": 2,
+            "congress_sale_count": 1,
+            "net_congress_amount": 120000.0,
+            "latest_event_date": "2026-08-25",
+            "error_text": "Quiver response included sk-must-not-reach-the-dashboard-1234567890",
+            "source_status_json": {"api_key": "must-not-reach-the-dashboard"},
+            "top_events_json": [{"token": "must-not-reach-the-dashboard"}]
+        })])
+        .expect("stable Quiver signal display row decodes");
+
+        assert_eq!(signals[0].symbol, "EXAMPLE:xnas");
+        assert_eq!(signals[0].event_count, 3);
+        assert!(signals[0].error_text.contains("[redacted]"));
+        assert!(
+            !serde_json::to_string(&signals)
+                .expect("typed Quiver signals serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_quiver_signals_from_json(vec![json!({
                 "symbol": "EXAMPLE:xnas"
             })])
             .is_err()

@@ -76,7 +76,7 @@ pub struct DashboardView {
     pub hermes_baseline_evidence_pack: DashboardHermesBaselineEvidencePackPayload,
     pub markov_signals: Vec<DashboardMarkovSignalPayload>,
     pub latest_markov_run: DashboardLatestRunPayload,
-    pub quiver_signals: Vec<JsonValue>,
+    pub quiver_signals: Vec<DashboardQuiverSignalPayload>,
     pub latest_quiver_run: DashboardLatestRunPayload,
     pub quiver_conflicts: QuiverConflictPayload,
     pub latest_daily_indicator_run: DashboardLatestRunPayload,
@@ -338,6 +338,28 @@ pub struct DashboardMarkovSignalPayload {
     pub stationary_bear_prob: f64,
     pub rolling_return: f64,
     pub sample_count: i64,
+    pub status: String,
+    pub error_text: String,
+}
+
+/// One bounded, read-only Quiver signal row for the paginated dashboard table.
+///
+/// Source-status and top-event documents remain outside SSR. This observation
+/// cannot refresh Quiver data or influence a Decision Report, manager gate,
+/// queue, precheck, or Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardQuiverSignalPayload {
+    pub symbol: String,
+    pub ticker: String,
+    pub instrument_name: String,
+    pub signal: f64,
+    pub direction: String,
+    pub confidence: f64,
+    pub event_count: i64,
+    pub congress_purchase_count: i64,
+    pub congress_sale_count: i64,
+    pub net_congress_amount: f64,
+    pub latest_event_date: String,
     pub status: String,
     pub error_text: String,
 }

@@ -21,13 +21,13 @@ use crate::{
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
         DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
         DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardMissedTradeShadowPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -4265,8 +4265,8 @@ fn QuiverConflictPanel(conflicts: QuiverConflictPayload, prefs: LocalizationPref
 }
 
 #[component]
-fn QuiverSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let signal = value_f64(&row, "signal");
+fn QuiverSignalRow(row: DashboardQuiverSignalPayload, prefs: LocalizationPrefs) -> Element {
+    let signal = row.signal;
     let tone = if signal > 0.0 {
         "good-text"
     } else if signal < 0.0 {
@@ -4274,23 +4274,34 @@ fn QuiverSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     } else {
         ""
     };
-    let status = text(&row, "status");
+    let status = row.status;
+    let symbol = row.symbol;
+    let instrument_name = row.instrument_name;
+    let ticker = row.ticker;
+    let direction = row.direction;
+    let confidence = row.confidence;
+    let event_count = row.event_count;
+    let congress_purchase_count = row.congress_purchase_count;
+    let congress_sale_count = row.congress_sale_count;
+    let net_congress_amount = row.net_congress_amount;
+    let latest_event_date = row.latest_event_date;
+    let error_text = row.error_text;
     rsx! {
         tr {
-            td { SymbolLink { symbol: text(&row, "symbol"), instrument_name: text(&row, "instrument_name") } }
-            td { "{fallback_text(&row, \"ticker\", \"n/a\")}" }
+            td { SymbolLink { symbol, instrument_name } }
+            td { "{ticker}" }
             td { class: tone, "{format_signed_pct(signal, &prefs)}" }
-            td { "{fallback_text(&row, \"direction\", \"n/a\")}" }
-            td { "{format_pct(value_f64(&row, \"confidence\"), &prefs)}" }
-            td { "{text(&row, \"event_count\")}" }
-            td { "{text(&row, \"congress_purchase_count\")}" }
-            td { "{text(&row, \"congress_sale_count\")}" }
-            td { class: if value_f64(&row, "net_congress_amount") >= 0.0 { "good-text" } else { "bad-text" }, "{format_money(value_f64(&row, \"net_congress_amount\"), \"USD\", &prefs)}" }
-            td { "{fallback_text(&row, \"latest_event_date\", \"n/a\")}" }
+            td { "{direction}" }
+            td { "{format_pct(confidence, &prefs)}" }
+            td { "{event_count}" }
+            td { "{congress_purchase_count}" }
+            td { "{congress_sale_count}" }
+            td { class: if net_congress_amount >= 0.0 { "good-text" } else { "bad-text" }, "{format_money(net_congress_amount, \"USD\", &prefs)}" }
+            td { "{latest_event_date}" }
             td {
                 span { class: if status == "ok" { "pill good" } else { "pill bad" }, "{status}" }
                 if status != "ok" {
-                    div { class: "muted", "{text(&row, \"error_text\")}" }
+                    div { class: "muted", "{error_text}" }
                 }
             }
         }
