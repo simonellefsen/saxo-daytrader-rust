@@ -37,22 +37,22 @@ use crate::{
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardExecutionFillPayload, DashboardHermesCounterfactualPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3494,6 +3494,48 @@ fn dashboard_hermes_proposal_quality_from_json(
         .collect()
 }
 
+/// Decodes read-only Hermes counterfactual observations for dashboard display.
+/// The underlying manager/advice documents and any broker mutation paths stay
+/// outside this SSR boundary.
+fn dashboard_hermes_counterfactuals_from_json(
+    counterfactuals: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesCounterfactualPayload>> {
+    counterfactuals
+        .into_iter()
+        .map(|row| {
+            Ok(DashboardHermesCounterfactualPayload {
+                report_id: dashboard_required_i64(&row, "report_id")?,
+                created_at: dashboard_required_string(&row, "created_at")?,
+                symbol: dashboard_required_string(&row, "symbol")?,
+                action: dashboard_required_string(&row, "action")?,
+                source_effect: dashboard_required_string(&row, "source_effect")?,
+                shadow_quantity: serde_json::from_value(
+                    row.get("shadow_quantity")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                reference_price_local: dashboard_optional_f64(&row, "reference_price_local")?,
+                reference_price_at: dashboard_optional_string(&row, "reference_price_at")?,
+                reference_price_source: dashboard_optional_string(&row, "reference_price_source")?,
+                reported_reference_price_local: dashboard_optional_f64(
+                    &row,
+                    "reported_reference_price_local",
+                )?,
+                currency: dashboard_optional_string(&row, "currency")?,
+                status: dashboard_required_string(&row, "status")?,
+                latest_price_local: dashboard_optional_f64(&row, "latest_price_local")?,
+                latest_price_at: dashboard_optional_string(&row, "latest_price_at")?,
+                estimated_return_pct: dashboard_optional_f64(&row, "estimated_return_pct")?,
+                estimated_pnl_local: dashboard_optional_f64(&row, "estimated_pnl_local")?,
+            })
+        })
+        .collect()
+}
+
+fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
 fn dashboard_short_json(value: Option<&JsonValue>) -> String {
     let Some(value) = value else {
         return "n/a".to_string();
@@ -6040,10 +6082,16 @@ impl AppState {
             };
         let hermes_counterfactuals =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
-                self.hermes_counterfactuals(30).await.unwrap_or_else(|err| {
-                    warn!("dashboard Hermes counterfactuals degraded: {err:#}");
-                    Vec::new()
-                })
+                self.hermes_counterfactuals(30)
+                    .await
+                    .and_then(|counterfactuals| {
+                        dashboard_hermes_counterfactuals_from_json(counterfactuals)
+                            .map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed Hermes counterfactuals degraded: {err:#}");
+                        Vec::new()
+                    })
             } else {
                 Vec::new()
             };
@@ -17688,6 +17736,44 @@ mod tests {
         assert!(
             dashboard_hermes_proposal_quality_from_json(vec![json!({
                 "quality_score": 90
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_counterfactuals_keep_broker_payloads_outside_ssr() {
+        let counterfactuals = dashboard_hermes_counterfactuals_from_json(vec![json!({
+            "report_id": 42,
+            "created_at": "2026-08-26T08:30:00Z",
+            "symbol": "EXAMPLE:xnas",
+            "action": "BUY",
+            "source_effect": "reduced",
+            "shadow_quantity": 3.0,
+            "reference_price_local": 100.0,
+            "reference_price_at": "2026-08-26T08:30:00Z",
+            "reference_price_source": "saxo_infoprices",
+            "reported_reference_price_local": 99.0,
+            "currency": "USD",
+            "status": "tracking",
+            "latest_price_local": 110.0,
+            "latest_price_at": "2026-08-26T09:30:00Z",
+            "estimated_return_pct": 0.1,
+            "estimated_pnl_local": 30.0,
+            "broker_payload_json": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable Hermes counterfactual evidence decodes");
+
+        assert_eq!(counterfactuals[0].report_id, 42);
+        assert_eq!(counterfactuals[0].estimated_pnl_local, Some(30.0));
+        assert!(
+            !serde_json::to_string(&counterfactuals)
+                .expect("typed Hermes counterfactual evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_counterfactuals_from_json(vec![json!({
+                "report_id": 42
             })])
             .is_err()
         );

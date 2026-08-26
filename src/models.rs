@@ -69,7 +69,7 @@ pub struct DashboardView {
     pub hermes_proposal_quality: Vec<DashboardHermesProposalQualityPayload>,
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
-    pub hermes_counterfactuals: Vec<JsonValue>,
+    pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
     pub missed_trade_shadows: Vec<JsonValue>,
     pub missed_trade_shadow_evidence: JsonValue,
     pub active_strategy_baseline: JsonValue,
@@ -273,6 +273,31 @@ pub struct DashboardHermesProposalQualityPayload {
     pub exact_duplicate_count: usize,
     pub related_family_count: usize,
     pub gaps: Vec<String>,
+}
+
+/// One observational quote-to-quote outcome for Hermes-reduced trade quantity.
+///
+/// This is explicitly not realised performance: it excludes execution, fees,
+/// FX, and slippage. The read-only payload cannot create, place, cancel, or
+/// modify an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesCounterfactualPayload {
+    pub report_id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub action: String,
+    pub source_effect: String,
+    pub shadow_quantity: f64,
+    pub reference_price_local: Option<f64>,
+    pub reference_price_at: Option<String>,
+    pub reference_price_source: Option<String>,
+    pub reported_reference_price_local: Option<f64>,
+    pub currency: Option<String>,
+    pub status: String,
+    pub latest_price_local: Option<f64>,
+    pub latest_price_at: Option<String>,
+    pub estimated_return_pct: Option<f64>,
+    pub estimated_pnl_local: Option<f64>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

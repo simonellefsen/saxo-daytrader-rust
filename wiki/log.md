@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Hermes counterfactual evidence
+
+- Changed the Counterfactual Tracking table to consume typed quote-to-quote observation fields rather than generic JSON.
+- Manager/advice documents and broker payloads remain outside SSR; malformed counterfactual evidence degrades to an empty local table.
+- These remain observational estimates excluding execution, fees, FX, and slippage; this change cannot create, place, cancel, or modify a Saxo order.
+
 ## [2026-08-26] fix | Load and type Hermes proposal-quality evidence on Overview
 
 - Corrected the Hermes Overview query path: Proposal Quality Review now loads the bounded experiment evidence it scores instead of deriving from the Experiments-only list, which was always empty on Overview.
