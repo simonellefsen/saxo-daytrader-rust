@@ -14,17 +14,18 @@ use crate::{
         DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
         DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -5733,7 +5734,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let advised_reports = data
         .hermes_decision_advice_audit
         .iter()
-        .filter(|row| !text(row, "advice_id").is_empty())
+        .filter(|row| row.advice_id.is_some())
         .count();
     let changed_reports = data
         .hermes_decision_advice_audit
@@ -8468,21 +8469,24 @@ fn json_list_label(value: Option<&JsonValue>) -> String {
 }
 
 #[component]
-fn HermesAdviceAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let advice_status = hermes_advice_status_label(&row);
+fn HermesAdviceAuditRow(
+    row: DashboardHermesDecisionAdviceAuditPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let advice_status = row.advice_status.clone();
     let (impact, impact_tone) = hermes_advice_impact(&row);
     let (order_counts, order_detail) = hermes_advice_order_counts(&row);
-    let summary = fallback_text(&row, "advice_summary", "No advice summary recorded.");
-    let pulse = fallback_text(&row, "analysis_pulse_label", "n/a");
-    let recommendation = fallback_text(&row, "advice_recommendation", "n/a");
-    let manager_status = fallback_text(&row, "manager_status", "not run");
+    let summary = row.advice_summary.clone();
+    let pulse = row.analysis_pulse_label.clone();
+    let recommendation = row.advice_recommendation.clone();
+    let manager_status = row.manager_status.clone();
     let (self_check_label, self_check_tone, self_check_detail) =
         hermes_context_self_check_label(&row);
     rsx! {
         tr {
             td {
-                span { "#{text(&row, \"report_id\")}" }
-                small { class: "muted block", "{format_timestamp(&text(&row, \"report_created_at\"), &prefs)}" }
+                span { "#{row.report_id}" }
+                small { class: "muted block", "{format_timestamp(&row.report_created_at, &prefs)}" }
             }
             td { "{pulse}" }
             td {
@@ -8704,67 +8708,32 @@ fn counterfactual_status_tone(status: &str) -> &'static str {
     }
 }
 
-fn hermes_context_self_check(row: &JsonValue) -> Option<&JsonValue> {
-    row.get("advice_raw_payload_json")
-        .and_then(|value| value.get("context_self_check"))
-        .or_else(|| {
-            row.get("manager_json")
-                .and_then(|value| value.get("hermes_decision_advice"))
-                .and_then(|value| value.get("context_self_check"))
-        })
-}
-
-fn hermes_context_self_check_label(row: &JsonValue) -> (String, &'static str, String) {
-    let Some(check) = hermes_context_self_check(row) else {
+fn hermes_context_self_check_label(
+    row: &DashboardHermesDecisionAdviceAuditPayload,
+) -> (String, &'static str, String) {
+    if !row.self_check_present {
         return (
             "missing".to_string(),
             "warn-status",
             "Hermes advice did not include a context self-check.".to_string(),
         );
-    };
-    let missing = check
-        .get("missing")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if check.get("complete").and_then(JsonValue::as_bool) == Some(true) && missing.is_empty() {
+    }
+    if row.self_check_complete && row.self_check_missing.is_empty() {
         return (
             "complete".to_string(),
             "good-status",
             "Hermes reported that required decision report, Markov, EOD, positions, and experiment context were reviewed.".to_string(),
         );
     }
-    let detail = if missing.is_empty() {
+    let detail = if row.self_check_missing.is_empty() {
         "Hermes context self-check was present but not complete.".to_string()
     } else {
         format!(
             "Hermes context self-check is missing: {}.",
-            missing.join(", ")
+            row.self_check_missing.join(", ")
         )
     };
     ("missing".to_string(), "warn-status", detail)
-}
-
-fn hermes_advice_status_label(row: &JsonValue) -> String {
-    let advice_status = text(row, "advice_status");
-    if !advice_status.is_empty() {
-        return advice_status;
-    }
-    let manager_status = row
-        .get("manager_json")
-        .and_then(|value| value.get("hermes_decision_advice"))
-        .and_then(|value| value.get("status"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
-    if !manager_status.is_empty() {
-        return manager_status.to_string();
-    }
-    "not_seen".to_string()
 }
 
 fn hermes_advice_status_tone(status: &str) -> &'static str {
@@ -8776,165 +8745,126 @@ fn hermes_advice_status_tone(status: &str) -> &'static str {
     }
 }
 
-fn hermes_advice_detail(row: &JsonValue) -> String {
-    let advice_id = text(row, "advice_id");
-    let source_session_id = text(row, "advice_source_session_id");
-    let created_at = text(row, "advice_created_at");
-    if advice_id.is_empty() {
+fn hermes_advice_detail(row: &DashboardHermesDecisionAdviceAuditPayload) -> String {
+    let Some(advice_id) = row.advice_id.as_deref() else {
         return format!(
             "No persisted Hermes decision advice row. Manager advisory status: {}.",
-            hermes_advice_status_label(row)
+            row.advice_status
         );
-    }
+    };
     format!(
         "Advice {} recorded at {} from session {}.",
         advice_id,
-        if created_at.is_empty() {
+        if row
+            .advice_created_at
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+        {
             "unknown time".to_string()
         } else {
-            created_at
+            row.advice_created_at.clone().unwrap_or_default()
         },
-        if source_session_id.is_empty() {
+        if row
+            .advice_source_session_id
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+        {
             "n/a".to_string()
         } else {
-            source_session_id
+            row.advice_source_session_id.clone().unwrap_or_default()
         }
     )
 }
 
-fn hermes_advice_order_counts(row: &JsonValue) -> (String, String) {
-    let items = row
-        .get("order_advice_json")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut allow = 0usize;
-    let mut reduce = 0usize;
-    let mut stand_down = 0usize;
-    let mut review = 0usize;
-    for item in &items {
-        match text(item, "action").trim().to_lowercase().as_str() {
-            "allow" => allow += 1,
-            "reduce" => reduce += 1,
-            "stand_down" => stand_down += 1,
-            "review" => review += 1,
-            _ => {}
-        }
-    }
-    let label = if items.is_empty() {
+fn hermes_advice_order_counts(row: &DashboardHermesDecisionAdviceAuditPayload) -> (String, String) {
+    let label = if row.advice_order_count == 0 {
         "none".to_string()
     } else {
-        format!("{} items", items.len())
+        format!("{} items", row.advice_order_count)
     };
     let detail = format!(
-        "allow: {allow}, reduce: {reduce}, stand_down: {stand_down}, review: {review}; queued: {}, executed: {}, failed: {}",
-        text_or(row, "queued_order_count", "0"),
-        text_or(row, "executed_order_count", "0"),
-        text_or(row, "failed_order_count", "0")
+        "allow: {}, reduce: {}, stand_down: {}, review: {}; queued: {}, executed: {}, failed: {}",
+        row.advice_allow_count,
+        row.advice_reduce_count,
+        row.advice_stand_down_count,
+        row.advice_review_count,
+        row.queued_order_count,
+        row.executed_order_count,
+        row.failed_order_count,
     );
     (label, detail)
 }
 
-fn hermes_advice_delta(row: &JsonValue) -> Option<&JsonValue> {
-    row.get("manager_json")
-        .and_then(|value| value.get("hermes_advice_delta"))
-}
-
-fn hermes_advice_delta_count(delta: &JsonValue, effect: &str) -> usize {
-    delta
-        .get("effect_counts")
-        .and_then(|value| value.get(effect))
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(0) as usize
-}
-
-fn hermes_advice_impact(row: &JsonValue) -> (String, &'static str) {
-    if let Some(delta) = hermes_advice_delta(row) {
-        let context = hermes_advice_delta_count(delta, "context_gate_blocked");
-        let blocked = hermes_advice_delta_count(delta, "blocked_by_order_advice")
-            + hermes_advice_delta_count(delta, "blocked_by_global_stand_down")
-            + hermes_advice_delta_count(delta, "blocked_by_reduce_below_one_share");
-        let review = hermes_advice_delta_count(delta, "review_required_by_global_advice");
-        let reduced = hermes_advice_delta_count(delta, "reduced");
-        let allowed = hermes_advice_delta_count(delta, "allowed");
-        if context > 0 {
-            return (format!("context gate {context}"), "warn-text");
-        }
-        if blocked > 0 || review > 0 || reduced > 0 {
-            let mut parts = Vec::new();
-            if blocked > 0 {
-                parts.push(format!("blocked {blocked}"));
-            }
-            if review > 0 {
-                parts.push(format!("review {review}"));
-            }
-            if reduced > 0 {
-                parts.push(format!("reduced {reduced}"));
-            }
-            return (
-                parts.join(", "),
-                if blocked > 0 { "bad-text" } else { "warn-text" },
-            );
-        }
-        if allowed > 0 {
-            return (format!("allowed {allowed}"), "good-text");
-        }
-        if hermes_advice_delta_count(delta, "record_only_no_op") > 0 {
-            return ("record-only".to_string(), "");
-        }
-    }
-    let recommendation = text(row, "advice_recommendation").trim().to_lowercase();
-    let status = hermes_advice_status_label(row);
-    let mode = row
-        .get("manager_json")
-        .and_then(|value| value.get("hermes_decision_advice"))
-        .and_then(|value| value.get("mode"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("");
-    let context_self_check_complete = hermes_context_self_check(row)
-        .and_then(|check| check.get("complete"))
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    if mode == "conservative" && !context_self_check_complete {
-        return ("context review gate".to_string(), "warn-text");
-    }
-    let items = row
-        .get("order_advice_json")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let conservative_actions = items
-        .iter()
-        .filter(|item| {
-            matches!(
-                text(item, "action").trim().to_lowercase().as_str(),
-                "reduce" | "stand_down" | "review"
-            )
-        })
-        .count();
-    if conservative_actions > 0 {
+fn hermes_advice_impact(row: &DashboardHermesDecisionAdviceAuditPayload) -> (String, &'static str) {
+    if row.impact_context_gate_blocked_count > 0 {
         return (
-            format!("restricted {conservative_actions}"),
-            if items.iter().any(|item| {
-                text(item, "action")
-                    .trim()
-                    .eq_ignore_ascii_case("stand_down")
-            }) {
+            format!("context gate {}", row.impact_context_gate_blocked_count),
+            "warn-text",
+        );
+    }
+    if row.impact_blocked_count > 0
+        || row.impact_review_required_count > 0
+        || row.impact_reduced_count > 0
+    {
+        let mut parts = Vec::new();
+        if row.impact_blocked_count > 0 {
+            parts.push(format!("blocked {}", row.impact_blocked_count));
+        }
+        if row.impact_review_required_count > 0 {
+            parts.push(format!("review {}", row.impact_review_required_count));
+        }
+        if row.impact_reduced_count > 0 {
+            parts.push(format!("reduced {}", row.impact_reduced_count));
+        }
+        return (
+            parts.join(", "),
+            if row.impact_blocked_count > 0 {
                 "bad-text"
             } else {
                 "warn-text"
             },
         );
     }
-    if recommendation == "stand_down" {
+    if row.impact_allowed_count > 0 {
+        return (format!("allowed {}", row.impact_allowed_count), "good-text");
+    }
+    if row.impact_record_only_no_op_count > 0 {
+        return ("record-only".to_string(), "");
+    }
+    if row.advice_mode == "conservative" && !row.self_check_complete {
+        return ("context review gate".to_string(), "warn-text");
+    }
+    let conservative_actions =
+        row.advice_reduce_count + row.advice_stand_down_count + row.advice_review_count;
+    if conservative_actions > 0 {
+        return (
+            format!("restricted {conservative_actions}"),
+            if row.advice_stand_down_count > 0 {
+                "bad-text"
+            } else {
+                "warn-text"
+            },
+        );
+    }
+    if row
+        .advice_recommendation
+        .trim()
+        .eq_ignore_ascii_case("stand_down")
+    {
         return ("global block".to_string(), "bad-text");
     }
-    if recommendation == "review" {
+    if row
+        .advice_recommendation
+        .trim()
+        .eq_ignore_ascii_case("review")
+    {
         return ("review gate".to_string(), "warn-text");
     }
-    if mode == "conservative"
+    if row.advice_mode == "conservative"
         && matches!(
-            status.as_str(),
+            row.advice_status.as_str(),
             "timeout" | "error" | "not_configured" | "submit_failed"
         )
     {
@@ -8943,24 +8873,30 @@ fn hermes_advice_impact(row: &JsonValue) -> (String, &'static str) {
     ("no-op".to_string(), "")
 }
 
-fn hermes_advice_impact_detail(row: &JsonValue) -> String {
+fn hermes_advice_impact_detail(row: &DashboardHermesDecisionAdviceAuditPayload) -> String {
     let (orders, order_detail) = hermes_advice_order_counts(row);
-    let manager = row
-        .get("manager_json")
-        .and_then(|value| value.get("hermes_decision_advice"))
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let context_self_check = hermes_context_self_check(row)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let delta = hermes_advice_delta(row).cloned().unwrap_or(JsonValue::Null);
     format!(
-        "Recommendation: {}. Order advice: {} ({order_detail}). Context self-check: {}. Normalized delta: {}. Manager advice: {}",
-        fallback_text(row, "advice_recommendation", "n/a"),
+        "Recommendation: {}. Order advice: {} ({order_detail}). Context self-check: {}. Impact counts: context gate {}, blocked {}, review {}, reduced {}, allowed {}, record-only {}. Manager status: {}.",
+        row.advice_recommendation,
         orders,
-        compact_json(Some(&context_self_check)),
-        compact_json(Some(&delta)),
-        compact_json(Some(&manager))
+        if row.self_check_present {
+            if row.self_check_complete && row.self_check_missing.is_empty() {
+                "complete".to_string()
+            } else if row.self_check_missing.is_empty() {
+                "incomplete".to_string()
+            } else {
+                format!("missing {}", row.self_check_missing.join(", "))
+            }
+        } else {
+            "missing".to_string()
+        },
+        row.impact_context_gate_blocked_count,
+        row.impact_blocked_count,
+        row.impact_review_required_count,
+        row.impact_reduced_count,
+        row.impact_allowed_count,
+        row.impact_record_only_no_op_count,
+        row.manager_status,
     )
 }
 
@@ -12164,30 +12100,22 @@ mod tests {
 
     #[test]
     fn summarizes_received_hermes_advice_actions() {
-        let row = json!({
-            "advice_id": "hermes-decision-advice-1",
-            "advice_status": "received",
-            "advice_recommendation": "proceed",
-            "order_advice_json": [
-                {"symbol": "AMD:xnas", "action": "allow", "reason": "fresh Markov"},
-                {"symbol": "ARM:xnas", "action": "reduce", "reason": "volatile"}
-            ],
-            "queued_order_count": 2,
-            "executed_order_count": 1,
-            "failed_order_count": 0,
-            "manager_json": {
-                "hermes_decision_advice": {
-                    "mode": "conservative",
-                    "status": "received",
-                    "context_self_check": {
-                        "complete": true,
-                        "missing": []
-                    }
-                }
-            }
-        });
+        let row = DashboardHermesDecisionAdviceAuditPayload {
+            advice_id: Some("hermes-decision-advice-1".to_string()),
+            advice_status: "received".to_string(),
+            advice_recommendation: "proceed".to_string(),
+            advice_order_count: 2,
+            advice_allow_count: 1,
+            advice_reduce_count: 1,
+            self_check_present: true,
+            self_check_complete: true,
+            advice_mode: "conservative".to_string(),
+            queued_order_count: 2,
+            executed_order_count: 1,
+            ..Default::default()
+        };
 
-        assert_eq!(hermes_advice_status_label(&row), "received");
+        assert_eq!(row.advice_status, "received");
         assert_eq!(hermes_advice_status_tone("received"), "good-status");
         assert_eq!(
             hermes_advice_order_counts(&row),
@@ -12205,18 +12133,13 @@ mod tests {
 
     #[test]
     fn flags_conservative_hermes_timeout_as_context_review_gate() {
-        let row = json!({
-            "advice_recommendation": "",
-            "order_advice_json": [],
-            "manager_json": {
-                "hermes_decision_advice": {
-                    "mode": "conservative",
-                    "status": "timeout"
-                }
-            }
-        });
+        let row = DashboardHermesDecisionAdviceAuditPayload {
+            advice_status: "timeout".to_string(),
+            advice_mode: "conservative".to_string(),
+            ..Default::default()
+        };
 
-        assert_eq!(hermes_advice_status_label(&row), "timeout");
+        assert_eq!(row.advice_status, "timeout");
         assert_eq!(
             hermes_advice_impact(&row),
             ("context review gate".to_string(), "warn-text")
@@ -12226,22 +12149,16 @@ mod tests {
 
     #[test]
     fn flags_incomplete_conservative_hermes_context_as_review_gate() {
-        let row = json!({
-            "advice_recommendation": "proceed",
-            "order_advice_json": [{"action": "allow"}],
-            "advice_raw_payload_json": {
-                "context_self_check": {
-                    "complete": false,
-                    "missing": ["current_positions"]
-                }
-            },
-            "manager_json": {
-                "hermes_decision_advice": {
-                    "mode": "conservative",
-                    "status": "received"
-                }
-            }
-        });
+        let row = DashboardHermesDecisionAdviceAuditPayload {
+            advice_status: "received".to_string(),
+            advice_recommendation: "proceed".to_string(),
+            advice_order_count: 1,
+            advice_allow_count: 1,
+            self_check_present: true,
+            self_check_missing: vec!["current_positions".to_string()],
+            advice_mode: "conservative".to_string(),
+            ..Default::default()
+        };
 
         assert_eq!(
             hermes_advice_impact(&row),

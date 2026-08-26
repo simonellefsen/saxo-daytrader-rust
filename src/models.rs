@@ -68,7 +68,7 @@ pub struct DashboardView {
     pub hermes_one_variable_audit: Vec<DashboardHermesOneVariableAuditPayload>,
     pub hermes_proposal_quality: Vec<DashboardHermesProposalQualityPayload>,
     pub hermes_experiments: Vec<JsonValue>,
-    pub hermes_decision_advice_audit: Vec<JsonValue>,
+    pub hermes_decision_advice_audit: Vec<DashboardHermesDecisionAdviceAuditPayload>,
     pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
     pub missed_trade_shadows: Vec<DashboardMissedTradeShadowPayload>,
     pub missed_trade_shadow_evidence: DashboardMissedTradeShadowEvidencePayload,
@@ -273,6 +273,44 @@ pub struct DashboardHermesProposalQualityPayload {
     pub exact_duplicate_count: usize,
     pub related_family_count: usize,
     pub gaps: Vec<String>,
+}
+
+/// Compact, display-safe audit evidence for one Hermes decision-advice run.
+///
+/// The dashboard receives only derived statuses and counts. Raw provider
+/// payloads, persisted advice documents, Trading Manager documents, and broker
+/// mutation data remain outside this SSR boundary. This record is observational
+/// only and cannot change an advice, queue, manager run, or Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesDecisionAdviceAuditPayload {
+    pub report_id: i64,
+    pub report_created_at: String,
+    pub analysis_pulse_label: String,
+    pub advice_id: Option<String>,
+    pub advice_created_at: Option<String>,
+    pub advice_status: String,
+    pub advice_source_session_id: Option<String>,
+    pub advice_recommendation: String,
+    pub advice_summary: String,
+    pub advice_order_count: usize,
+    pub advice_allow_count: usize,
+    pub advice_reduce_count: usize,
+    pub advice_stand_down_count: usize,
+    pub advice_review_count: usize,
+    pub self_check_present: bool,
+    pub self_check_complete: bool,
+    pub self_check_missing: Vec<String>,
+    pub advice_mode: String,
+    pub impact_context_gate_blocked_count: usize,
+    pub impact_blocked_count: usize,
+    pub impact_review_required_count: usize,
+    pub impact_reduced_count: usize,
+    pub impact_allowed_count: usize,
+    pub impact_record_only_no_op_count: usize,
+    pub manager_status: String,
+    pub queued_order_count: usize,
+    pub executed_order_count: usize,
+    pub failed_order_count: usize,
 }
 
 /// One observational quote-to-quote outcome for Hermes-reduced trade quantity.

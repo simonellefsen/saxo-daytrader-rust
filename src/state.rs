@@ -40,26 +40,27 @@ use crate::{
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
-        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
-        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
+        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3501,6 +3502,168 @@ fn dashboard_hermes_proposal_quality_from_json(
         .collect()
 }
 
+/// Decodes derived, advisory-only Hermes decision-audit evidence for the
+/// dashboard. Raw advice/provider payloads and Trading Manager JSON are used
+/// only while constructing this bounded projection and never cross the SSR
+/// boundary.
+fn dashboard_hermes_decision_advice_audit_from_json(
+    audit_rows: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesDecisionAdviceAuditPayload>> {
+    audit_rows
+        .into_iter()
+        .map(|row| {
+            let advice_raw_payload =
+                dashboard_embedded_json(&row, "advice_raw_payload_json").unwrap_or(JsonValue::Null);
+            let manager_json =
+                dashboard_embedded_json(&row, "manager_json").unwrap_or(JsonValue::Null);
+            let manager_advice = manager_json
+                .get("hermes_decision_advice")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let self_check = advice_raw_payload
+                .get("context_self_check")
+                .cloned()
+                .or_else(|| manager_advice.get("context_self_check").cloned())
+                .unwrap_or(JsonValue::Null);
+            let advice_delta = manager_json
+                .get("hermes_advice_delta")
+                .cloned()
+                .unwrap_or(JsonValue::Null);
+            let order_advice =
+                dashboard_embedded_json(&row, "order_advice_json").unwrap_or(JsonValue::Null);
+            let order_advice = order_advice.as_array().cloned().unwrap_or_default();
+            let advice_action_count = |action: &str| {
+                order_advice
+                    .iter()
+                    .filter(|item| {
+                        item.get("action")
+                            .and_then(JsonValue::as_str)
+                            .is_some_and(|value| value.trim().eq_ignore_ascii_case(action))
+                    })
+                    .count()
+            };
+            let advice_status = dashboard_optional_string(&row, "advice_status")?
+                .or_else(|| {
+                    manager_advice
+                        .get("status")
+                        .and_then(JsonValue::as_str)
+                        .map(ToString::to_string)
+                })
+                .unwrap_or_else(|| "not_seen".to_string());
+            let advice_mode = manager_advice
+                .get("mode")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let self_check_missing = self_check
+                .get("missing")
+                .and_then(JsonValue::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(DashboardHermesDecisionAdviceAuditPayload {
+                report_id: dashboard_required_i64(&row, "report_id")?,
+                report_created_at: dashboard_required_string(&row, "report_created_at")?,
+                analysis_pulse_label: dashboard_optional_string(&row, "analysis_pulse_label")?
+                    .unwrap_or_else(|| "n/a".to_string()),
+                advice_id: dashboard_optional_string(&row, "advice_id")?,
+                advice_created_at: dashboard_optional_string(&row, "advice_created_at")?,
+                advice_status,
+                advice_source_session_id: dashboard_optional_string(
+                    &row,
+                    "advice_source_session_id",
+                )?,
+                advice_recommendation: dashboard_optional_string(&row, "advice_recommendation")?
+                    .unwrap_or_else(|| "n/a".to_string()),
+                advice_summary: dashboard_optional_string(&row, "advice_summary")?
+                    .unwrap_or_else(|| "No advice summary recorded.".to_string()),
+                advice_order_count: order_advice.len(),
+                advice_allow_count: advice_action_count("allow"),
+                advice_reduce_count: advice_action_count("reduce"),
+                advice_stand_down_count: advice_action_count("stand_down"),
+                advice_review_count: advice_action_count("review"),
+                self_check_present: self_check.is_object(),
+                self_check_complete: self_check
+                    .get("complete")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false),
+                self_check_missing,
+                advice_mode,
+                impact_context_gate_blocked_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "context_gate_blocked",
+                ),
+                impact_blocked_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "blocked_by_order_advice",
+                ) + dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "blocked_by_global_stand_down",
+                ) + dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "blocked_by_reduce_below_one_share",
+                ),
+                impact_review_required_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "review_required_by_global_advice",
+                ),
+                impact_reduced_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "reduced",
+                ),
+                impact_allowed_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "allowed",
+                ),
+                impact_record_only_no_op_count: dashboard_nested_count(
+                    &advice_delta,
+                    "effect_counts",
+                    "record_only_no_op",
+                ),
+                manager_status: dashboard_optional_string(&row, "manager_status")?
+                    .unwrap_or_else(|| "not run".to_string()),
+                queued_order_count: dashboard_count(&row, "queued_order_count"),
+                executed_order_count: dashboard_count(&row, "executed_order_count"),
+                failed_order_count: dashboard_count(&row, "failed_order_count"),
+            })
+        })
+        .collect()
+}
+
+fn dashboard_count(row: &JsonValue, key: &str) -> usize {
+    row.get(key)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| {
+                    value
+                        .as_i64()
+                        .filter(|value| *value >= 0)
+                        .map(|value| value as u64)
+                })
+                .or_else(|| value.as_str()?.parse::<u64>().ok())
+        })
+        .unwrap_or_default() as usize
+}
+
+fn dashboard_nested_count(row: &JsonValue, parent: &str, key: &str) -> usize {
+    row.get(parent)
+        .map(|nested| dashboard_count(nested, key))
+        .unwrap_or_default()
+}
+
 /// Decodes read-only Hermes counterfactual observations for dashboard display.
 /// The underlying manager/advice documents and any broker mutation paths stay
 /// outside this SSR boundary.
@@ -6414,8 +6577,12 @@ impl AppState {
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
                 self.hermes_decision_advice_audit(20)
                     .await
+                    .and_then(|audit_rows| {
+                        dashboard_hermes_decision_advice_audit_from_json(audit_rows)
+                            .map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard Hermes decision advice audit degraded: {err:#}");
+                        warn!("dashboard typed Hermes decision advice audit degraded: {err:#}");
                         Vec::new()
                     })
             } else {
@@ -18078,6 +18245,60 @@ mod tests {
         assert!(
             dashboard_hermes_proposal_quality_from_json(vec![json!({
                 "quality_score": 90
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_decision_advice_audit_keeps_raw_documents_outside_ssr() {
+        let audit_rows = dashboard_hermes_decision_advice_audit_from_json(vec![json!({
+            "report_id": 42,
+            "report_created_at": "2026-08-26T08:30:00Z",
+            "analysis_pulse_label": "US midday shadow",
+            "advice_id": "hermes-decision-advice-91",
+            "advice_created_at": "2026-08-26T08:31:00Z",
+            "advice_status": "received",
+            "advice_source_session_id": "hermes-us-2026w35",
+            "advice_recommendation": "review",
+            "advice_summary": "Reduce concentrated exposure before queue review.",
+            "order_advice_json": [
+                {"symbol": "EXAMPLE:xnas", "action": "reduce", "reason": "concentration"},
+                {"symbol": "OTHER:xnas", "action": "allow", "reason": "diversified"}
+            ],
+            "advice_raw_payload_json": {
+                "context_self_check": {"complete": false, "missing": ["current_positions"]},
+                "provider_response": {"api_key": "must-not-reach-the-dashboard"}
+            },
+            "manager_status": "completed",
+            "manager_json": {
+                "hermes_decision_advice": {
+                    "mode": "conservative",
+                    "provider_response": {"api_key": "must-not-reach-the-dashboard"}
+                },
+                "hermes_advice_delta": {
+                    "effect_counts": {"reduced": 1, "allowed": 1}
+                },
+                "queue_request": {"api_key": "must-not-reach-the-dashboard"}
+            },
+            "queued_order_count": 2,
+            "executed_order_count": 1,
+            "failed_order_count": 0
+        })])
+        .expect("stable Hermes advice audit decodes");
+
+        assert_eq!(audit_rows[0].report_id, 42);
+        assert_eq!(audit_rows[0].advice_reduce_count, 1);
+        assert_eq!(audit_rows[0].impact_reduced_count, 1);
+        assert_eq!(audit_rows[0].self_check_missing, vec!["current_positions"]);
+        assert!(
+            !serde_json::to_string(&audit_rows)
+                .expect("typed Hermes advice audit serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_decision_advice_audit_from_json(vec![json!({
+                "report_id": 42
             })])
             .is_err()
         );

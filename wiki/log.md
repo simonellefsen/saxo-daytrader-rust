@@ -3,12 +3,18 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-23
+updated: 2026-08-26
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-26] architecture | Type dashboard Hermes decision-advice audit
+
+- Changed the Hermes Decision Advice Audit table to consume retained report/advice metadata, derived self-check/action/impact counts, manager status, and local order totals through a typed Rust contract.
+- Raw provider payloads, persisted advice documents, Trading Manager JSON, and broker mutation data are now used only to derive bounded display evidence and remain outside SSR; malformed evidence degrades to an empty local table.
+- This preserves Hermes as advisory-only and cannot change advice, queues, manager runs, prechecks, or Saxo orders.
 
 ## [2026-08-26] architecture | Type dashboard missed-trade shadow aggregate evidence
 
