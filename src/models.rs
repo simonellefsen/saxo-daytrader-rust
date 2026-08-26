@@ -319,6 +319,20 @@ pub struct DashboardHermesReflectionPayload {
     pub source_session_id: Option<String>,
 }
 
+/// Stable advisory metadata for one Hermes reflection exposed by the protected
+/// API list. Detailed findings, proposed actions, and raw model payloads stay
+/// in the local audit store and the separate internal read models.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct HermesReflectionSummaryPayload {
+    pub id: String,
+    pub created_at: String,
+    pub period_start: String,
+    pub period_end: String,
+    pub goal_version: i64,
+    pub summary: String,
+    pub source_session_id: Option<String>,
+}
+
 /// One compact, derived Hermes lesson waiting for operator review.
 ///
 /// The source reflection action is already redacted before this model is
@@ -1296,12 +1310,12 @@ pub struct SchedulerPayload {
 
 /// Bounded Hermes reflection-list envelope.
 ///
-/// Individual persisted reflections remain compatibility JSON while the Hermes
-/// read model is converted incrementally. This makes the protected advisory
-/// read boundary explicit without changing reflection or proposal behavior.
+/// Individual reflection rows expose only stable advisory metadata. Detailed
+/// findings, actions, and raw model payloads stay outside this protected API
+/// boundary, without changing reflection or proposal behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HermesReflectionsPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<HermesReflectionSummaryPayload>,
 }
 
 /// Bounded Hermes experiment-list envelope.

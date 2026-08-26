@@ -57,15 +57,15 @@ use crate::{
         DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
-        QuiverConflictPayload, StrategyJournalEntryPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        HermesReflectionRequest, HermesReflectionSummaryPayload, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, StrategyJournalEntryPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3388,6 +3388,28 @@ fn dashboard_hermes_reflections_from_json(
                     &reflection,
                     "proposed_actions_json",
                 ),
+                source_session_id: dashboard_optional_string(&reflection, "source_session_id")?,
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable reflection metadata for the protected API list. Detailed
+/// advisory documents remain in the local audit store and do not cross this
+/// boundary.
+pub(crate) fn hermes_reflection_summaries_from_json(
+    reflections: Vec<JsonValue>,
+) -> serde_json::Result<Vec<HermesReflectionSummaryPayload>> {
+    reflections
+        .into_iter()
+        .map(|reflection| {
+            Ok(HermesReflectionSummaryPayload {
+                id: dashboard_required_string(&reflection, "id")?,
+                created_at: dashboard_required_string(&reflection, "created_at")?,
+                period_start: dashboard_required_string(&reflection, "period_start")?,
+                period_end: dashboard_required_string(&reflection, "period_end")?,
+                goal_version: dashboard_required_i64(&reflection, "goal_version")?,
+                summary: dashboard_required_string(&reflection, "summary")?,
                 source_session_id: dashboard_optional_string(&reflection, "source_session_id")?,
             })
         })
@@ -13188,6 +13210,17 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    pub async fn hermes_reflection_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, period_start, period_end, goal_version, summary, source_session_id
+             FROM hermes_reflections
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
     pub async fn hermes_lessons_pending_review(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, period_start, period_end, goal_version, summary, proposed_actions_json, source_session_id
@@ -18838,6 +18871,36 @@ mod tests {
         assert!(
             dashboard_hermes_reflections_from_json(vec![json!({
                 "created_at": "2026-08-26T08:30:00Z"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn hermes_reflection_summaries_exclude_detailed_advisory_documents() {
+        let reflections = hermes_reflection_summaries_from_json(vec![json!({
+            "id": "hermes-reflection-91",
+            "created_at": "2026-08-26T08:30:00Z",
+            "period_start": "2026-08-25",
+            "period_end": "2026-08-26",
+            "goal_version": 4,
+            "summary": "Keep the current SIM experiment advisory-only.",
+            "source_session_id": "hermes-weekly-2026w35",
+            "findings_json": [{"detail": "must-not-reach-the-public-api"}],
+            "proposed_actions_json": [{"action": "must-not-reach-the-public-api"}],
+            "raw_payload_json": {"api_key": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable Hermes reflection summaries decode");
+
+        assert_eq!(reflections[0].goal_version, 4);
+        assert!(
+            !serde_json::to_string(&reflections)
+                .expect("typed Hermes reflection summaries serialize")
+                .contains("must-not-reach-the-public-api")
+        );
+        assert!(
+            hermes_reflection_summaries_from_json(vec![json!({
+                "id": "hermes-reflection-91"
             })])
             .is_err()
         );

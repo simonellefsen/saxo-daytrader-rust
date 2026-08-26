@@ -23,15 +23,15 @@ use crate::{
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
         DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
         HermesExperimentRequest, HermesExperimentTransitionRequest, HermesExperimentsPayload,
-        HermesReflectionRequest, HermesReflectionsPayload, InstrumentQuarantineOverrideRequest,
-        LimitParams, LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
-        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
-        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
-        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
+        HermesReflectionRequest, HermesReflectionSummaryPayload, HermesReflectionsPayload,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
+        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
+        SchedulerPayload, StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -40,8 +40,8 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, portfolio_trades_from_json,
-        strategy_journal_summaries_from_json,
+        AppState, dashboard_positions_from_json, hermes_reflection_summaries_from_json,
+        portfolio_trades_from_json, strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1870,7 +1870,9 @@ fn scheduler_payload(status: JsonValue, cycles: Vec<JsonValue>) -> SchedulerPayl
     SchedulerPayload { status, cycles }
 }
 
-fn hermes_reflections_payload(items: Vec<JsonValue>) -> HermesReflectionsPayload {
+fn hermes_reflections_payload(
+    items: Vec<HermesReflectionSummaryPayload>,
+) -> HermesReflectionsPayload {
     HermesReflectionsPayload { items }
 }
 
@@ -2018,8 +2020,9 @@ async fn hermes_reflections(
     let limit = params.limit.unwrap_or(20);
     json_result(
         state
-            .hermes_reflections(limit)
+            .hermes_reflection_summaries(limit)
             .await
+            .and_then(|items| hermes_reflection_summaries_from_json(items).map_err(Into::into))
             .map(hermes_reflections_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
@@ -2912,10 +2915,15 @@ mod tests {
 
     #[test]
     fn hermes_reflections_response_keeps_the_typed_list_envelope() {
-        let payload = hermes_reflections_payload(vec![json!({
-            "id": "daily-reflection-2026-08-01",
-            "summary": "No one-variable experiment proposed."
-        })]);
+        let payload = hermes_reflections_payload(vec![HermesReflectionSummaryPayload {
+            id: "daily-reflection-2026-08-01".to_string(),
+            created_at: "2026-08-01T20:15:00Z".to_string(),
+            period_start: "2026-08-01".to_string(),
+            period_end: "2026-08-01".to_string(),
+            goal_version: 2,
+            summary: "No one-variable experiment proposed.".to_string(),
+            source_session_id: Some("daily-eod-reflection-2026-08-01".to_string()),
+        }]);
 
         assert_eq!(payload.items.len(), 1);
 
@@ -2926,6 +2934,7 @@ mod tests {
             serialized["items"][0]["summary"],
             "No one-variable experiment proposed."
         );
+        assert!(serialized["items"][0].get("raw_payload_json").is_none());
     }
 
     #[test]

@@ -10,6 +10,11 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type protected Hermes reflection list
+
+- Changed `GET /api/hermes/reflections` to return typed stable reflection identity, timing, goal-version, summary, and source-session metadata only.
+- Detailed findings, proposed actions, and raw model payloads remain in the local audit store and internal read models. The protected watchdog retains its source-session check; this cannot invoke Hermes, create a proposal, change an experiment, queue, precheck, or reach Saxo.
+
 ## [2026-08-26] architecture | Type public strategy-journal list
 
 - Changed `/api/strategy-journal` to return typed, stable identity, timing, cadence, status, summary, and source-report metadata rows.
