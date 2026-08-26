@@ -1212,14 +1212,40 @@ pub struct PortfolioPositionsPayload {
     pub items: Vec<DashboardPositionPayload>,
 }
 
+/// One stable, read-only portfolio trade ledger row exposed by the API.
+///
+/// Notes plus before/after portfolio, decision-context, and broker/provider
+/// documents remain outside this boundary. This record cannot reconcile a
+/// fill, alter accounting, queue a trade, or reach Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PortfolioTradePayload {
+    pub id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub isin: String,
+    pub instrument_name: String,
+    pub side: String,
+    pub quantity: f64,
+    pub price_local: f64,
+    pub currency: String,
+    pub gross_amount_dkk: f64,
+    pub commission_dkk: f64,
+    pub tax_dkk: f64,
+    pub realised_gain_dkk: f64,
+    pub net_amount_dkk: f64,
+    pub mode: String,
+    pub status: String,
+    pub batch_id: String,
+}
+
 /// Bounded portfolio trade-list envelope.
 ///
-/// Individual trade rows remain compatibility JSON while the persisted
-/// portfolio trade read model is converted incrementally. This makes the
-/// public list boundary explicit without changing trade-ledger behavior.
+/// Rows use a stable ledger projection, excluding free-form and retained
+/// context documents. This list cannot reconcile a fill, alter accounting,
+/// queue a trade, or reach Saxo.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PortfolioTradesPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<PortfolioTradePayload>,
 }
 
 /// Bounded strategy-journal list envelope.

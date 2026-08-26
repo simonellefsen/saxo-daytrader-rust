@@ -2579,3 +2579,7 @@ broker mutation was added.
 
 - Changed `/api/portfolio/positions` to reuse the dashboard's stable typed position projection while retaining the count/list envelope.
 - Broker/provider payloads and unbounded advisory detail remain outside this API boundary; malformed data fails closed with no quote refresh, Decision Report, Hermes, queue, or broker side effect.
+## 2026-08-26 — Typed portfolio trades API
+
+- Replaced `/api/portfolio/trades`' `SELECT *` response with an explicit stable trade-ledger allowlist and typed display rows.
+- Notes plus retained before/after portfolio, decision-context, and broker/provider documents remain outside the endpoint; malformed rows fail closed with no fill reconciliation, accounting mutation, Hermes, queue, or Saxo side effect.

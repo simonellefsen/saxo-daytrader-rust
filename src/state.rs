@@ -62,14 +62,14 @@ use crate::{
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
+        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3810,6 +3810,41 @@ fn dashboard_position_decision_from_json(
             .unwrap_or_default()
             .to_string(),
     })
+}
+
+/// Decodes the API's stable portfolio-ledger projection. Free-form notes and
+/// retained portfolio/decision documents are deliberately absent from the
+/// query and cannot cross this read-only boundary.
+pub(crate) fn portfolio_trades_from_json(
+    trades: Vec<JsonValue>,
+) -> serde_json::Result<Vec<PortfolioTradePayload>> {
+    trades
+        .into_iter()
+        .map(|trade| {
+            let number =
+                |key| dashboard_optional_f64(&trade, key).map(|value| value.unwrap_or(0.0));
+            Ok(PortfolioTradePayload {
+                id: dashboard_required_i64(&trade, "id")?,
+                created_at: dashboard_required_string(&trade, "created_at")?,
+                symbol: dashboard_optional_string(&trade, "symbol")?.unwrap_or_default(),
+                isin: dashboard_optional_string(&trade, "isin")?.unwrap_or_default(),
+                instrument_name: dashboard_optional_string(&trade, "instrument_name")?
+                    .unwrap_or_default(),
+                side: dashboard_required_string(&trade, "side")?,
+                quantity: number("quantity")?,
+                price_local: number("price_local")?,
+                currency: dashboard_optional_string(&trade, "currency")?.unwrap_or_default(),
+                gross_amount_dkk: number("gross_amount_dkk")?,
+                commission_dkk: number("commission_dkk")?,
+                tax_dkk: number("tax_dkk")?,
+                realised_gain_dkk: number("realised_gain_dkk")?,
+                net_amount_dkk: number("net_amount_dkk")?,
+                mode: dashboard_optional_string(&trade, "mode")?.unwrap_or_default(),
+                status: dashboard_optional_string(&trade, "status")?.unwrap_or_default(),
+                batch_id: dashboard_optional_string(&trade, "batch_id")?.unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 /// Decodes stable execution-row fields while retaining the existing bounded
@@ -14206,7 +14241,10 @@ impl AppState {
 
     pub async fn portfolio_trades_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
-            "SELECT * FROM trade_ledger ORDER BY created_at DESC, id DESC LIMIT {}",
+            "SELECT id, created_at, symbol, isin, instrument_name, side, quantity, price_local,
+                    currency, gross_amount_dkk, commission_dkk, tax_dkk, realised_gain_dkk,
+                    net_amount_dkk, mode, status, batch_id
+             FROM trade_ledger ORDER BY created_at DESC, id DESC LIMIT {}",
             clamp_limit(limit, 1, 250)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
@@ -18498,6 +18536,48 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(dashboard_positions_from_json(vec![json!({"quantity": 4.0})]).is_err());
+    }
+
+    #[test]
+    fn portfolio_trades_allowlist_excludes_retained_context_documents() {
+        let trades = portfolio_trades_from_json(vec![json!({
+            "id": 42,
+            "created_at": "2026-08-26T12:00:00Z",
+            "symbol": "EXAMPLE:xnas",
+            "isin": "US0000000001",
+            "instrument_name": "Example Corp",
+            "side": "SELL",
+            "quantity": 4.0,
+            "price_local": 105.0,
+            "currency": "USD",
+            "gross_amount_dkk": 2900.0,
+            "commission_dkk": 10.0,
+            "tax_dkk": 0.0,
+            "realised_gain_dkk": 100.0,
+            "net_amount_dkk": 2890.0,
+            "mode": "simulation",
+            "status": "executed",
+            "batch_id": "batch-42",
+            "notes": "must-not-reach-the-trades-api",
+            "decision_context_json": {"api_key": "must-not-reach-the-trades-api"},
+            "portfolio_after_json": {"account": "must-not-reach-the-trades-api"}
+        })])
+        .expect("stable trade ledger row decodes");
+
+        assert_eq!(trades[0].symbol, "EXAMPLE:xnas");
+        assert_eq!(trades[0].realised_gain_dkk, 100.0);
+        assert!(
+            !serde_json::to_string(&trades)
+                .expect("typed trade ledger rows serialize")
+                .contains("must-not-reach-the-trades-api")
+        );
+        assert!(
+            portfolio_trades_from_json(vec![json!({
+                "id": 42,
+                "created_at": "2026-08-26T12:00:00Z"
+            })])
+            .is_err()
+        );
     }
 
     #[test]

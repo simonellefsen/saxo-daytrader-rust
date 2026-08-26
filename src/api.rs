@@ -27,7 +27,7 @@ use crate::{
         LimitParams, LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
         MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
-        PortfolioPositionsPayload, PortfolioTradesPayload,
+        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
         QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
@@ -39,7 +39,7 @@ use crate::{
         precheck_sim_protective_stop, protective_stop_lifecycle_error_is_state_unknown,
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
-    state::{AppState, dashboard_positions_from_json},
+    state::{AppState, dashboard_positions_from_json, portfolio_trades_from_json},
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
     xai_decision,
@@ -1659,12 +1659,13 @@ async fn portfolio_trades(
         state
             .portfolio_trades_items(limit)
             .await
+            .and_then(|items| portfolio_trades_from_json(items).map_err(Into::into))
             .map(portfolio_trades_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
-fn portfolio_trades_payload(items: Vec<JsonValue>) -> PortfolioTradesPayload {
+fn portfolio_trades_payload(items: Vec<PortfolioTradePayload>) -> PortfolioTradesPayload {
     PortfolioTradesPayload { items }
 }
 
@@ -2782,8 +2783,18 @@ mod tests {
     #[test]
     fn portfolio_trades_response_keeps_the_typed_list_envelope() {
         let payload = portfolio_trades_payload(vec![
-            json!({"symbol": "TSLA:xnas", "side": "BUY"}),
-            json!({"symbol": "NOVO-B:xcse", "side": "SELL"}),
+            PortfolioTradePayload {
+                id: 42,
+                symbol: "TSLA:xnas".to_string(),
+                side: "BUY".to_string(),
+                ..PortfolioTradePayload::default()
+            },
+            PortfolioTradePayload {
+                id: 43,
+                symbol: "NOVO-B:xcse".to_string(),
+                side: "SELL".to_string(),
+                ..PortfolioTradePayload::default()
+            },
         ]);
 
         assert_eq!(payload.items.len(), 2);
@@ -2792,6 +2803,11 @@ mod tests {
             serde_json::to_value(payload).expect("portfolio trades payload serializes");
         assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
         assert_eq!(serialized["items"][1]["side"], "SELL");
+        assert!(
+            serialized["items"][0]
+                .get("decision_context_json")
+                .is_none()
+        );
     }
 
     #[test]
