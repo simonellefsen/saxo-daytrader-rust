@@ -37,13 +37,13 @@ use crate::{
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        DashboardExecutionFillPayload, DashboardHermesReflectionPayload, DashboardLatestRunPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3347,6 +3347,44 @@ fn dashboard_cycle_nested_status(cycle_json: &JsonValue, key: &str) -> Option<St
         .map(ToString::to_string)
 }
 
+/// Decodes the compact reflection fields used by the advisory-only Hermes
+/// dashboard section. Provider payloads and detailed findings/actions remain
+/// stored locally; only their aggregate counts cross the SSR boundary.
+fn dashboard_hermes_reflections_from_json(
+    reflections: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesReflectionPayload>> {
+    reflections
+        .into_iter()
+        .map(|reflection| {
+            Ok(DashboardHermesReflectionPayload {
+                created_at: dashboard_required_string(&reflection, "created_at")?,
+                goal_version: dashboard_required_i64(&reflection, "goal_version")?,
+                summary: dashboard_required_string(&reflection, "summary")?,
+                finding_count: dashboard_json_item_count(&reflection, "findings_json"),
+                proposed_action_count: dashboard_json_item_count(
+                    &reflection,
+                    "proposed_actions_json",
+                ),
+                source_session_id: dashboard_optional_string(&reflection, "source_session_id")?,
+            })
+        })
+        .collect()
+}
+
+fn dashboard_required_i64(row: &JsonValue, key: &str) -> serde_json::Result<i64> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn dashboard_json_item_count(row: &JsonValue, key: &str) -> usize {
+    match row.get(key) {
+        Some(JsonValue::Array(items)) => items.len(),
+        Some(JsonValue::Object(map)) => map.len(),
+        Some(JsonValue::String(text)) if !text.trim().is_empty() => 1,
+        Some(value) if !value.is_null() => 1,
+        _ => 0,
+    }
+}
+
 /// Decodes the dashboard's deliberately sanitized Saxo session-status contract.
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
@@ -5784,10 +5822,15 @@ impl AppState {
         };
         let hermes_reflections =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
-                self.hermes_reflections(20).await.unwrap_or_else(|err| {
-                    warn!("dashboard Hermes reflections degraded: {err:#}");
-                    Vec::new()
-                })
+                self.hermes_reflections(20)
+                    .await
+                    .and_then(|reflections| {
+                        dashboard_hermes_reflections_from_json(reflections).map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed Hermes reflections degraded: {err:#}");
+                        Vec::new()
+                    })
             } else {
                 Vec::new()
             };
@@ -17321,6 +17364,38 @@ mod tests {
         assert!(
             dashboard_scheduler_cycles_from_json(vec![json!({
                 "started_at": "2026-08-24T08:30:00Z"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_reflections_keep_raw_payloads_outside_ssr() {
+        let reflections = dashboard_hermes_reflections_from_json(vec![json!({
+            "id": "hermes-reflection-91",
+            "created_at": "2026-08-26T08:30:00Z",
+            "goal_version": 4,
+            "summary": "Keep the current SIM experiment advisory-only.",
+            "findings_json": [{"kind": "risk"}, {"kind": "evidence"}],
+            "proposed_actions_json": [{"action": "review"}],
+            "source_session_id": "hermes-weekly-2026w35",
+            "raw_payload_json": {
+                "api_key": "must-not-reach-the-dashboard",
+                "provider_response": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable Hermes reflection evidence decodes");
+
+        assert_eq!(reflections[0].finding_count, 2);
+        assert_eq!(reflections[0].proposed_action_count, 1);
+        assert!(
+            !serde_json::to_string(&reflections)
+                .expect("typed Hermes reflection evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_reflections_from_json(vec![json!({
+                "created_at": "2026-08-26T08:30:00Z"
             })])
             .is_err()
         );

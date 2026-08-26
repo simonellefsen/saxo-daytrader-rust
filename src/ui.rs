@@ -12,12 +12,13 @@ use crate::{
     },
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -5717,11 +5718,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     // Only the active section's data is loaded server-side, so a section that
     // is not selected renders nothing rather than an empty-looking table.
     let section = data.hermes_section.clone();
-    let latest_reflection = data
-        .hermes_reflections
-        .first()
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let latest_reflection = data.hermes_reflections.first().cloned();
     let pending_experiments = data
         .hermes_experiments
         .iter()
@@ -5747,11 +5744,10 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .iter()
         .filter(|row| text(row, "status") == "stale")
         .count();
-    let latest_created = if latest_reflection.is_null() {
-        "None".to_string()
-    } else {
-        format_timestamp(&text(&latest_reflection, "created_at"), &prefs)
-    };
+    let latest_created = latest_reflection
+        .as_ref()
+        .map(|reflection| format_timestamp(&reflection.created_at, &prefs))
+        .unwrap_or_else(|| "None".to_string());
 
     rsx! {
         section { class: "section stack loose",
@@ -5873,9 +5869,9 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "mini-grid",
                 MetricCard { label: "Latest Reflection", value: latest_created, tone: "" }
-                MetricCard { label: "Goal Version", value: text_or(&latest_reflection, "goal_version", "n/a"), tone: "" }
-                MetricCard { label: "Findings", value: json_item_count(&latest_reflection, "findings_json").to_string(), tone: "" }
-                MetricCard { label: "Actions", value: json_item_count(&latest_reflection, "proposed_actions_json").to_string(), tone: "" }
+                MetricCard { label: "Goal Version", value: latest_reflection.as_ref().map(|reflection| reflection.goal_version.to_string()).unwrap_or_else(|| "n/a".to_string()), tone: "" }
+                MetricCard { label: "Findings", value: latest_reflection.as_ref().map(|reflection| reflection.finding_count.to_string()).unwrap_or_else(|| "0".to_string()), tone: "" }
+                MetricCard { label: "Actions", value: latest_reflection.as_ref().map(|reflection| reflection.proposed_action_count.to_string()).unwrap_or_else(|| "0".to_string()), tone: "" }
             }
             }
             if section == "advice" {
@@ -6016,20 +6012,20 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
-            if latest_reflection.is_null() {
+            if latest_reflection.is_none() {
                 div { class: "event",
                     strong { "No Hermes reflection exists yet." }
                     span { class: "muted", "Run a manual Hermes reflection job or enable the suspended weekly CronJob after its smoke test is approved." }
                 }
-            } else {
+            } else if let Some(reflection) = latest_reflection.as_ref() {
                 div { class: "grid-2",
                     div { class: "event prewrap",
                         strong { "Latest Summary" }
-                        span { "{text_or(&latest_reflection, \"summary\", \"No summary recorded.\")}" }
+                        span { "{reflection.summary}" }
                     }
                     div { class: "event prewrap",
                         strong { "Proposed Actions" }
-                        span { "{compact_json(latest_reflection.get(\"proposed_actions_json\"))}" }
+                        span { "{reflection.proposed_action_count} proposed action(s) recorded. Detailed action payloads remain in the local audit store." }
                     }
                 }
             }
@@ -8001,15 +7997,16 @@ fn ExecutionFillRow(row: DashboardExecutionFillPayload, prefs: LocalizationPrefs
 }
 
 #[component]
-fn HermesReflectionRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
+fn HermesReflectionRow(row: DashboardHermesReflectionPayload, prefs: LocalizationPrefs) -> Element {
+    let source_session_id = row.source_session_id.clone().unwrap_or_default();
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
-            td { "{text_or(&row, \"goal_version\", \"n/a\")}" }
-            td { "{text_or(&row, \"summary\", \"No summary recorded.\")}" }
-            td { "{json_item_count(&row, \"findings_json\")}" }
-            td { "{json_item_count(&row, \"proposed_actions_json\")}" }
-            td { class: "muted", "{text(&row, \"source_session_id\")}" }
+            td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.goal_version}" }
+            td { "{row.summary}" }
+            td { "{row.finding_count}" }
+            td { "{row.proposed_action_count}" }
+            td { class: "muted", "{source_session_id}" }
         }
     }
 }
@@ -8510,16 +8507,6 @@ fn json_list_label(value: Option<&JsonValue>) -> String {
         .take(4)
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn json_item_count(value: &JsonValue, key: &str) -> usize {
-    match value.get(key) {
-        Some(JsonValue::Array(items)) => items.len(),
-        Some(JsonValue::Object(map)) => map.len(),
-        Some(JsonValue::String(text)) if !text.trim().is_empty() => 1,
-        Some(value) if !value.is_null() => 1,
-        _ => 0,
-    }
 }
 
 #[component]

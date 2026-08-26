@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Hermes reflection evidence
+
+- Changed the Hermes Reflections section to consume typed time, goal version, summary, aggregate finding/action counts, and optional source-session reference.
+- Raw Hermes/provider payloads and detailed findings/actions remain in the local audit store; malformed reflection metadata degrades to an empty local table.
+- This preserves the advisory-only Hermes boundary and performs no agent invocation, experiment transition, configuration change, queue, precheck, or broker-order action.
+
 ## [2026-08-24] architecture | Type dashboard scheduler-cycle evidence
 
 - Changed the Execution-tab scheduler history to consume typed cycle time/status, decision/queue/notification fields, and flattened duration plus two local health labels.

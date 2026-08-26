@@ -62,7 +62,7 @@ pub struct DashboardView {
     pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
     pub journal_entries: Vec<JsonValue>,
     pub scheduler_cycles: Vec<DashboardSchedulerCyclePayload>,
-    pub hermes_reflections: Vec<JsonValue>,
+    pub hermes_reflections: Vec<DashboardHermesReflectionPayload>,
     pub hermes_lessons_pending_review: Vec<JsonValue>,
     pub hermes_learning_memory: Vec<JsonValue>,
     pub hermes_one_variable_audit: Vec<JsonValue>,
@@ -183,6 +183,22 @@ pub struct DashboardSchedulerCyclePayload {
     pub duration_ms: Option<u64>,
     pub operational_notifications_status: Option<String>,
     pub portfolio_position_snapshot_integrity_status: Option<String>,
+}
+
+/// Compact advisory-only Hermes reflection evidence rendered in the dashboard.
+///
+/// Raw model payloads and detailed findings/actions remain in the local audit
+/// store. The SSR view retains only the reflection identity and aggregate
+/// counts required for operator review; it cannot invoke Hermes, change an
+/// experiment lifecycle, alter configuration, or access broker capabilities.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesReflectionPayload {
+    pub created_at: String,
+    pub goal_version: i64,
+    pub summary: String,
+    pub finding_count: usize,
+    pub proposed_action_count: usize,
+    pub source_session_id: Option<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.
