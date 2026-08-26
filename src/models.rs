@@ -50,7 +50,7 @@ pub struct DashboardView {
     pub scheduler_page: i64,
     pub scheduler_page_size: i64,
     pub scheduler_cycle_total: i64,
-    pub positions: Vec<JsonValue>,
+    pub positions: Vec<DashboardPositionPayload>,
     pub orders: Vec<JsonValue>,
     pub execution_fills: Vec<DashboardExecutionFillPayload>,
     pub execution_events: Vec<DashboardExecutionEventPayload>,
@@ -143,6 +143,37 @@ pub struct DashboardDecisionReportSummaryPayload {
     pub model: String,
     pub analysis_pulse_key: String,
     pub analysis_pulse_label: String,
+}
+
+/// One read-only portfolio position rendered in the dashboard overview.
+///
+/// The nested decision document stays compatibility JSON because the existing
+/// decision badge and chart retain their detailed advisory metadata. This
+/// record cannot refresh a quote, change a Decision Report, queue, precheck,
+/// or submit a Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardPositionPayload {
+    pub instrument_name: String,
+    pub symbol: String,
+    pub isin: String,
+    pub quantity: f64,
+    pub currency: String,
+    pub paid_price_local: f64,
+    pub open_price_local: f64,
+    pub cost_basis_local: f64,
+    pub current_price_local: f64,
+    pub cost_basis_dkk: f64,
+    pub market_value_dkk: f64,
+    pub unrealised_pnl_dkk: f64,
+    pub daily_pnl_dkk: f64,
+    pub daily_change_pct: f64,
+    pub total_return_pct: f64,
+    pub allocation_pct: f64,
+    pub asset_class: String,
+    pub market_status: String,
+    pub change_pct: f64,
+    pub latest_quote_updated_at: String,
+    pub decision: JsonValue,
 }
 
 /// One compact, reconciled broker-fill observation shown in the dashboard.

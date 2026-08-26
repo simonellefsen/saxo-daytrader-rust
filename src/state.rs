@@ -49,7 +49,7 @@ use crate::{
         DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
         DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
         DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
-        DashboardMissedTradeShadowPayload, DashboardQuiverSignalPayload,
+        DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
         DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
@@ -3682,6 +3682,50 @@ fn dashboard_decision_report_summaries_from_json(
         .collect()
 }
 
+/// Decodes stable overview position fields. The nested advisory decision stays
+/// compatibility JSON for the existing badge and chart only.
+fn dashboard_positions_from_json(
+    positions: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardPositionPayload>> {
+    positions
+        .into_iter()
+        .map(|position| {
+            let number =
+                |key| dashboard_optional_f64(&position, key).map(|value| value.unwrap_or(0.0));
+            Ok(DashboardPositionPayload {
+                instrument_name: dashboard_optional_string(&position, "instrument_name")?
+                    .unwrap_or_default(),
+                symbol: dashboard_required_string(&position, "symbol")?,
+                isin: dashboard_optional_string(&position, "isin")?.unwrap_or_default(),
+                quantity: number("quantity")?,
+                currency: dashboard_optional_string(&position, "currency")?.unwrap_or_default(),
+                paid_price_local: number("paid_price_local")?,
+                open_price_local: number("open_price_local")?,
+                cost_basis_local: number("cost_basis_local")?,
+                current_price_local: number("current_price_local")?,
+                cost_basis_dkk: number("cost_basis_dkk")?,
+                market_value_dkk: number("market_value_dkk")?,
+                unrealised_pnl_dkk: number("unrealised_pnl_dkk")?,
+                daily_pnl_dkk: number("daily_pnl_dkk")?,
+                daily_change_pct: number("daily_change_pct")?,
+                total_return_pct: number("total_return_pct")?,
+                allocation_pct: number("allocation_pct")?,
+                asset_class: dashboard_optional_string(&position, "asset_class")?
+                    .unwrap_or_else(|| "Equity".to_string()),
+                market_status: dashboard_optional_string(&position, "market_status")?
+                    .unwrap_or_default(),
+                change_pct: number("change_pct")?,
+                latest_quote_updated_at: dashboard_optional_string(
+                    &position,
+                    "latest_quote_updated_at",
+                )?
+                .unwrap_or_default(),
+                decision: position.get("decision").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect()
+}
+
 /// Decodes the deterministic, display-only quality rubric for active Hermes
 /// proposals. The underlying experiment documents and their evidence stay
 /// outside the SSR boundary.
@@ -6471,10 +6515,14 @@ impl AppState {
             error!("overview load failed: {err:#}");
             json!({})
         });
-        let positions = self.position_items(25).await.unwrap_or_else(|err| {
-            warn!("dashboard positions degraded: {err:#}");
-            Vec::new()
-        });
+        let positions = self
+            .position_items(25)
+            .await
+            .and_then(|positions| dashboard_positions_from_json(positions).map_err(Into::into))
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed positions degraded: {err:#}");
+                Vec::new()
+            });
         let execution_order_total = if active_view == "execution" {
             self.execution_orders_count().await.unwrap_or_else(|err| {
                 warn!("dashboard execution-order count degraded: {err:#}");
@@ -18216,6 +18264,44 @@ mod tests {
             })])
             .is_err()
         );
+    }
+
+    #[test]
+    fn dashboard_positions_keep_the_outer_portfolio_contract_typed() {
+        let positions = dashboard_positions_from_json(vec![json!({
+            "symbol": "EXAMPLE:xnas",
+            "instrument_name": "Example Corp",
+            "isin": "US0000000001",
+            "quantity": 4.0,
+            "currency": "USD",
+            "paid_price_local": 101.0,
+            "open_price_local": 101.0,
+            "cost_basis_local": 101.0,
+            "current_price_local": 105.0,
+            "cost_basis_dkk": 2800.0,
+            "market_value_dkk": 2900.0,
+            "unrealised_pnl_dkk": 100.0,
+            "daily_pnl_dkk": 25.0,
+            "daily_change_pct": 0.01,
+            "total_return_pct": 0.0357,
+            "allocation_pct": 0.12,
+            "asset_class": "Stock",
+            "market_status": "Saxo broker snapshot",
+            "change_pct": 0.01,
+            "latest_quote_updated_at": "2026-08-26T12:00:00Z",
+            "decision": {"source": {"technical": {"trend_bias": "bullish"}}},
+            "broker_payload": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable portfolio position decodes");
+
+        assert_eq!(positions[0].symbol, "EXAMPLE:xnas");
+        assert_eq!(positions[0].market_value_dkk, 2900.0);
+        assert!(
+            !serde_json::to_string(&positions)
+                .expect("typed portfolio positions serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(dashboard_positions_from_json(vec![json!({"quantity": 4.0})]).is_err());
     }
 
     #[test]

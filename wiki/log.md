@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard portfolio position rows
+
+- Changed the overview position list to consume typed instrument, price, valuation, P/L, allocation, and quote-freshness fields.
+- The nested advisory decision remains compatibility JSON for the existing decision badge and trend chart; broker/provider payloads remain outside SSR.
+- Malformed position metadata degrades to an empty local overview list and cannot refresh quotes, change a Decision Report, queue, precheck, or submit a Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard Decision Report summaries
 
 - Changed the overview and Decisions list to consume typed report identity, lifecycle, model, and pulse metadata from the existing lightweight SQL projection.

@@ -22,13 +22,13 @@ use crate::{
         DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
         DashboardLatestRunPayload, DashboardMarkovSignalPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
-        DashboardQuiverSignalPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -7214,36 +7214,35 @@ fn SummaryMetricCard(label: String, value: String, subtitle: String, tone: Strin
 
 #[component]
 fn PositionRow(
-    row: JsonValue,
+    row: DashboardPositionPayload,
     prefs: LocalizationPrefs,
     decision_stale_after_days: i64,
 ) -> Element {
-    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
-    let currency = text(&row, "currency");
-    let market_value = format_dkk(value_f64(&row, "market_value_dkk"), &prefs);
-    let unrealised_value = value_f64(&row, "unrealised_pnl_dkk");
+    let quantity = format_quantity(row.quantity, &prefs);
+    let currency = row.currency.clone();
+    let market_value = format_dkk(row.market_value_dkk, &prefs);
+    let unrealised_value = row.unrealised_pnl_dkk;
     let total_return_pct = position_total_return_pct(&row);
     let unrealised = format_signed_dkk(unrealised_value, &prefs);
     let total_return = format_signed_pct(total_return_pct, &prefs);
-    let daily_value = value_f64(&row, "daily_pnl_dkk");
+    let daily_value = row.daily_pnl_dkk;
     let daily_pct = position_daily_return_pct(&row);
     let daily = format_signed_dkk(daily_value, &prefs);
     let daily_return = format_signed_pct(daily_pct, &prefs);
-    let allocation = format_pct(value_f64(&row, "allocation_pct"), &prefs);
+    let allocation = format_pct(row.allocation_pct, &prefs);
     let cost_price = format_position_price(position_cost_price_local(&row), &currency, &prefs);
-    let current_price =
-        format_position_price(value_f64(&row, "current_price_local"), &currency, &prefs);
+    let current_price = format_position_price(row.current_price_local, &currency, &prefs);
     rsx! {
         tr {
             td { PositionSymbolCell { row: row.clone(), prefs: prefs.clone() } }
             td {
                 DecisionBadge {
-                    decision: row.get("decision").cloned().unwrap_or(JsonValue::Null),
+                    decision: row.decision.clone(),
                     prefs: prefs.clone(),
                     stale_after_days: decision_stale_after_days,
                 }
             }
-            td { TrendSparkline { row: row.clone() } }
+            td { PositionTrendSparkline { row: row.clone() } }
             td { "{quantity}" }
             td { "{cost_price}" }
             td { "{current_price}" }
@@ -7266,10 +7265,10 @@ fn PositionRow(
 }
 
 #[component]
-fn PositionSymbolCell(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let symbol = text(&row, "symbol");
-    let instrument_name = text(&row, "instrument_name");
-    let currency = text(&row, "currency");
+fn PositionSymbolCell(row: DashboardPositionPayload, prefs: LocalizationPrefs) -> Element {
+    let symbol = row.symbol.clone();
+    let instrument_name = row.instrument_name.clone();
+    let currency = row.currency.clone();
     let modal_id = position_modal_id(&symbol);
     rsx! {
         div { class: "position-symbol-cell",
@@ -7280,28 +7279,27 @@ fn PositionSymbolCell(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 "{symbol}"
             }
             span { class: "position-name", "{instrument_name}" }
-            span { class: "asset-pill", "{asset_label(&row)} · {currency}" }
+            span { class: "asset-pill", "{row.asset_class} · {currency}" }
             PositionDetailModal { row, prefs }
         }
     }
 }
 
 #[component]
-fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let symbol = text(&row, "symbol");
-    let instrument_name = text(&row, "instrument_name");
+fn PositionDetailModal(row: DashboardPositionPayload, prefs: LocalizationPrefs) -> Element {
+    let symbol = row.symbol.clone();
+    let instrument_name = row.instrument_name.clone();
     let modal_id = position_modal_id(&symbol);
     let yahoo_url = yahoo_finance_url(&symbol);
     let tradingview_symbol = tradingview_symbol(&symbol);
-    let currency = text(&row, "currency");
+    let currency = row.currency.clone();
     let cost_price = format_position_price(position_cost_price_local(&row), &currency, &prefs);
-    let open_price = format_position_price(value_f64(&row, "open_price_local"), &currency, &prefs);
-    let current_price =
-        format_position_price(value_f64(&row, "current_price_local"), &currency, &prefs);
+    let open_price = format_position_price(row.open_price_local, &currency, &prefs);
+    let current_price = format_position_price(row.current_price_local, &currency, &prefs);
     let total_return_pct = position_total_return_pct(&row);
     let daily_pct = position_daily_return_pct(&row);
-    let unrealised_value = value_f64(&row, "unrealised_pnl_dkk");
-    let daily_value = value_f64(&row, "daily_pnl_dkk");
+    let unrealised_value = row.unrealised_pnl_dkk;
+    let daily_value = row.daily_pnl_dkk;
     rsx! {
         div { id: "{modal_id}", class: "modal-target",
             a { class: "modal-dismiss", href: "#", "data-modal-close": "true", "Close" }
@@ -7320,14 +7318,14 @@ fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                 div { class: "position-detail-grid",
                     section { class: "detail-panel",
                         h3 { "Gevinst/tab" }
-                        DetailLine { label: "Kostpris", value: format_dkk(value_f64(&row, "cost_basis_dkk"), &prefs), tone: "" }
-                        DetailLine { label: "Aktuel", value: format_dkk(value_f64(&row, "market_value_dkk"), &prefs), tone: "" }
+                        DetailLine { label: "Kostpris", value: format_dkk(row.cost_basis_dkk, &prefs), tone: "" }
+                        DetailLine { label: "Aktuel", value: format_dkk(row.market_value_dkk, &prefs), tone: "" }
                         DetailLine { label: "Afkast", value: format!("{} · {}", format_signed_dkk(unrealised_value, &prefs), format_signed_pct(total_return_pct, &prefs)), tone: if unrealised_value >= 0.0 { "good-text" } else { "bad-text" } }
                         DetailLine { label: "1D", value: format!("{} · {}", format_signed_dkk(daily_value, &prefs), format_signed_pct(daily_pct, &prefs)), tone: if daily_value >= 0.0 { "good-text" } else { "bad-text" } }
                     }
                     section { class: "detail-panel",
                         h3 { "Position" }
-                        DetailLine { label: "Antal", value: format_quantity(value_f64(&row, "quantity"), &prefs), tone: "" }
+                        DetailLine { label: "Antal", value: format_quantity(row.quantity, &prefs), tone: "" }
                         DetailLine { label: "Kostpris pr. aktie", value: cost_price, tone: "" }
                         DetailLine { label: "Åbningskurs", value: open_price, tone: "" }
                         DetailLine { label: "Aktuel kurs", value: current_price, tone: "" }
@@ -7335,9 +7333,9 @@ fn PositionDetailModal(row: JsonValue, prefs: LocalizationPrefs) -> Element {
                     section { class: "detail-panel",
                         h3 { "Om virksomheden" }
                         DetailLine { label: "Symbol", value: symbol.clone(), tone: "" }
-                        DetailLine { label: "ISIN", value: text_or(&row, "isin", "n/a"), tone: "" }
-                        DetailLine { label: "Type", value: asset_label(&row), tone: "" }
-                        DetailLine { label: "Marked", value: text_or(&row, "market_status", "n/a"), tone: "" }
+                        DetailLine { label: "ISIN", value: if row.isin.is_empty() { "n/a".to_string() } else { row.isin.clone() }, tone: "" }
+                        DetailLine { label: "Type", value: row.asset_class.clone(), tone: "" }
+                        DetailLine { label: "Marked", value: if row.market_status.is_empty() { "n/a".to_string() } else { row.market_status.clone() }, tone: "" }
                     }
                     section { class: "detail-panel muted-detail-panel",
                         h3 { "ESG, nyheder og analytikere" }
@@ -7452,6 +7450,49 @@ fn TrendSparkline(row: JsonValue) -> Element {
     let modal_id = modal_id_for_symbol(&symbol);
     let tradingview_symbol = tradingview_symbol(&symbol);
     let trend = sparkline_points(&row);
+    let tone = if trend.positive {
+        "sparkline-line sparkline-good"
+    } else {
+        "sparkline-line sparkline-bad"
+    };
+    rsx! {
+        span {
+            a { class: "sparkline-link", href: "#{modal_id}", title: "Open TradingView chart for {symbol}",
+                svg { class: "sparkline", view_box: "0 0 84 28", role: "img",
+                    polyline { points: "{trend.points}", class: tone }
+                }
+            }
+            div { id: "{modal_id}", class: "modal-target",
+                a { class: "modal-dismiss", href: "#chart-dismissed", "data-modal-close": "true", "Close" }
+                section { class: "chart-modal", role: "dialog", aria_label: "TradingView chart for {symbol}",
+                    div { class: "section-title-row",
+                        h2 { "{symbol}" }
+                        div { class: "button-row",
+                            a { class: "small-button", href: "{tradingview_page_url(&tradingview_symbol)}", target: "_blank", "Open on TradingView" }
+                            a { class: "small-button", href: "#chart-dismissed", "data-modal-close": "true", "Close" }
+                        }
+                    }
+                    div { class: "tradingview-frame-shell", "data-tradingview-shell": "true",
+                        span { class: "tradingview-loading", "Loading TradingView chart..." }
+                        iframe {
+                            class: "tradingview-frame",
+                            src: "about:blank",
+                            "data-tradingview-src": "{tradingview_url(&tradingview_symbol)}",
+                            title: "TradingView chart for {symbol}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PositionTrendSparkline(row: DashboardPositionPayload) -> Element {
+    let symbol = row.symbol.clone();
+    let modal_id = modal_id_for_symbol(&symbol);
+    let tradingview_symbol = tradingview_symbol(&symbol);
+    let trend = position_sparkline_points(&row);
     let tone = if trend.positive {
         "sparkline-line sparkline-good"
     } else {
@@ -9691,7 +9732,7 @@ fn price_monitor_skipped_symbols(summary: &JsonValue, limit: usize) -> String {
 }
 
 fn quote_operation_health(
-    positions: &[JsonValue],
+    positions: &[DashboardPositionPayload],
     monitor: &JsonValue,
     now: DateTime<Utc>,
 ) -> OperationHealthItem {
@@ -9737,7 +9778,7 @@ fn quote_operation_health(
     }
     let latest = positions
         .iter()
-        .filter_map(|row| parse_utc_timestamp(&text(row, "latest_quote_updated_at")))
+        .filter_map(|row| parse_utc_timestamp(&row.latest_quote_updated_at))
         .max();
     let Some(latest) = latest else {
         return OperationHealthItem {
@@ -10394,42 +10435,37 @@ fn short_date(value: &str) -> String {
     value.chars().take(10).collect()
 }
 
-fn position_cost_price_local(row: &JsonValue) -> f64 {
+fn position_cost_price_local(row: &DashboardPositionPayload) -> f64 {
     [
-        value_f64(row, "cost_basis_local"),
-        value_f64(row, "paid_price_local"),
-        value_f64(row, "open_price_local"),
+        row.cost_basis_local,
+        row.paid_price_local,
+        row.open_price_local,
     ]
     .into_iter()
     .find(|value| value.abs() > f64::EPSILON)
     .unwrap_or(0.0)
 }
 
-fn position_total_return_pct(row: &JsonValue) -> f64 {
-    let explicit = value_f64(row, "total_return_pct");
+fn position_total_return_pct(row: &DashboardPositionPayload) -> f64 {
+    let explicit = row.total_return_pct;
     if explicit.abs() > f64::EPSILON {
         return explicit;
     }
-    let cost_basis = value_f64(row, "cost_basis_dkk");
+    let cost_basis = row.cost_basis_dkk;
     if cost_basis.abs() > f64::EPSILON {
-        value_f64(row, "unrealised_pnl_dkk") / cost_basis
+        row.unrealised_pnl_dkk / cost_basis
     } else {
         0.0
     }
 }
 
-fn position_daily_return_pct(row: &JsonValue) -> f64 {
-    if let Some(explicit) = row
-        .get("daily_change_pct")
-        .and_then(JsonValue::as_f64)
-        .filter(|value| value.is_finite())
-    {
-        return explicit;
+fn position_daily_return_pct(row: &DashboardPositionPayload) -> f64 {
+    if row.daily_change_pct.is_finite() {
+        return row.daily_change_pct;
     }
-    let daily = value_f64(row, "daily_pnl_dkk");
-    let prior_value = value_f64(row, "market_value_dkk") - daily;
+    let prior_value = row.market_value_dkk - row.daily_pnl_dkk;
     if prior_value.abs() > f64::EPSILON {
-        daily / prior_value
+        row.daily_pnl_dkk / prior_value
     } else {
         0.0
     }
@@ -10437,10 +10473,6 @@ fn position_daily_return_pct(row: &JsonValue) -> f64 {
 
 fn position_modal_id(symbol: &str) -> String {
     format!("position-{}", modal_id_for_symbol(symbol))
-}
-
-fn asset_label(row: &JsonValue) -> String {
-    text_or(row, "asset_class", "Equity")
 }
 
 struct ChartPaths {
@@ -10619,6 +10651,38 @@ fn sparkline_points(row: &JsonValue) -> Sparkline {
         let y = 20.0 + slope * idx as f64 * (2.2 + strength * 2.4) + wiggle;
         points.push(format!("{x:.1},{:.1}", y.clamp(4.0, 24.0)));
     }
+    Sparkline {
+        points: points.join(" "),
+        positive,
+    }
+}
+
+fn position_sparkline_points(row: &DashboardPositionPayload) -> Sparkline {
+    let decision = row.decision.clone();
+    let technical = decision
+        .get("source")
+        .and_then(|source| source.get("technical"))
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let trend_bias = text(&technical, "trend_bias");
+    let positive = if trend_bias == "bearish" {
+        false
+    } else if trend_bias == "bullish" {
+        true
+    } else {
+        row.change_pct >= 0.0
+    };
+    let slope = if positive { -1.0 } else { 1.0 };
+    let strength = row.change_pct.abs().clamp(0.002, 0.08) / 0.08;
+    let seed = symbol_seed(&row.symbol);
+    let points = (0..6)
+        .map(|idx| {
+            let x = 4.0 + idx as f64 * 15.0;
+            let wiggle = (((seed + idx as u64 * 17) % 11) as f64 - 5.0) * 0.55;
+            let y = 20.0 + slope * idx as f64 * (2.2 + strength * 2.4) + wiggle;
+            format!("{x:.1},{:.1}", y.clamp(4.0, 24.0))
+        })
+        .collect::<Vec<_>>();
     Sparkline {
         points: points.join(" "),
         positive,
@@ -10928,11 +10992,12 @@ mod tests {
     #[test]
     fn position_daily_return_preserves_an_explicit_flat_quote() {
         assert_eq!(
-            position_daily_return_pct(&json!({
-                "daily_change_pct": 0.0,
-                "daily_pnl_dkk": 25.0,
-                "market_value_dkk": 125.0,
-            })),
+            position_daily_return_pct(&DashboardPositionPayload {
+                daily_change_pct: 0.0,
+                daily_pnl_dkk: 25.0,
+                market_value_dkk: 125.0,
+                ..DashboardPositionPayload::default()
+            }),
             0.0
         );
     }
@@ -12058,8 +12123,16 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let positions = vec![
-            json!({"symbol": "AMD:xnas", "latest_quote_updated_at": "2026-06-22T12:00:00Z"}),
-            json!({"symbol": "BAC:xnys", "latest_quote_updated_at": "2026-06-24T11:55:00Z"}),
+            DashboardPositionPayload {
+                symbol: "AMD:xnas".to_string(),
+                latest_quote_updated_at: "2026-06-22T12:00:00Z".to_string(),
+                ..DashboardPositionPayload::default()
+            },
+            DashboardPositionPayload {
+                symbol: "BAC:xnys".to_string(),
+                latest_quote_updated_at: "2026-06-24T11:55:00Z".to_string(),
+                ..DashboardPositionPayload::default()
+            },
         ];
 
         let item = quote_operation_health(&positions, &json!({}), now);
