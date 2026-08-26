@@ -2563,3 +2563,7 @@ broker mutation was added.
 - Changed the End-of-Day dashboard journal list to consume typed stable metadata for retained local entries.
 - Detailed metrics, learnings, and diary documents remain staged compatibility JSON for the existing EOD detail view and read-only benchmark context; malformed outer rows degrade to an empty local journal list.
 - This is a local read-model boundary only and does not invoke Hermes, change scheduler cadence, alter strategy configuration, or mutate a Saxo order.
+## 2026-08-26 — Typed selected Decision Report dashboard envelope
+
+- Replaced the selected Decision Report's generic dashboard JSON envelope with a typed read-only Rust payload for identity, lifecycle, pulse, and queue-authority fields.
+- Kept the normalized report, provider diagnostic documents, and candidate scoring waterfall as explicit compatibility JSON for the existing Decisions detail view; malformed data degrades locally and cannot trigger report generation, Hermes, queueing, or Saxo execution.

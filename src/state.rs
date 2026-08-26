@@ -52,19 +52,19 @@ use crate::{
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
         DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
-        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardSchedulerCyclePayload, DashboardSelectedDecisionPayload,
+        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3343,6 +3343,13 @@ fn dashboard_required_boolish(row: &JsonValue, key: &str) -> serde_json::Result<
     }
 }
 
+fn dashboard_optional_boolish(row: &JsonValue, key: &str) -> serde_json::Result<Option<bool>> {
+    match row.get(key) {
+        None | Some(JsonValue::Null) => Ok(None),
+        Some(_) => dashboard_required_boolish(row, key).map(Some),
+    }
+}
+
 fn dashboard_cycle_duration_ms(cycle_json: &JsonValue) -> Option<u64> {
     cycle_json.get("duration_ms").and_then(|value| {
         value.as_u64().or_else(|| {
@@ -3681,6 +3688,46 @@ fn dashboard_decision_report_summaries_from_json(
             })
         })
         .collect()
+}
+
+/// Decodes the selected Decision Report's stable outer fields. Its detailed
+/// report, provider diagnostics, and candidate waterfall remain explicit
+/// compatibility JSON for the existing read-only Decisions view.
+fn dashboard_selected_decision_from_json(
+    decision: JsonValue,
+) -> serde_json::Result<Option<DashboardSelectedDecisionPayload>> {
+    if decision.is_null() {
+        return Ok(None);
+    }
+
+    Ok(Some(DashboardSelectedDecisionPayload {
+        id: dashboard_required_i64(&decision, "id")?,
+        created_at: dashboard_required_string(&decision, "created_at")?,
+        report_date: dashboard_optional_string(&decision, "report_date")?.unwrap_or_default(),
+        model: dashboard_optional_string(&decision, "model")?.unwrap_or_default(),
+        status: dashboard_required_string(&decision, "status")?,
+        analysis_window_active: dashboard_optional_boolish(&decision, "analysis_window_active")?
+            .unwrap_or(false),
+        response_id: dashboard_optional_string(&decision, "response_id")?.unwrap_or_default(),
+        prompt_text: dashboard_optional_string(&decision, "prompt_text")?.unwrap_or_default(),
+        request_json: dashboard_embedded_json(&decision, "request_json").unwrap_or(JsonValue::Null),
+        response_json: dashboard_embedded_json(&decision, "response_json")
+            .unwrap_or(JsonValue::Null),
+        report_json: dashboard_embedded_json(&decision, "report_json").unwrap_or(JsonValue::Null),
+        error_text: dashboard_optional_string(&decision, "error_text")?
+            .map(|value| compact_debug_text(&value, 420))
+            .unwrap_or_default(),
+        analysis_pulse_key: dashboard_optional_string(&decision, "analysis_pulse_key")?
+            .unwrap_or_default(),
+        analysis_pulse_label: dashboard_optional_string(&decision, "analysis_pulse_label")?
+            .unwrap_or_default(),
+        pulse_mode: dashboard_optional_string(&decision, "pulse_mode")?.unwrap_or_default(),
+        queue_eligible: dashboard_optional_boolish(&decision, "queue_eligible")?.unwrap_or(false),
+        candidate_scoring_waterfall: decision
+            .get("candidate_scoring_waterfall")
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+    }))
 }
 
 /// Decodes stable overview position fields. The nested advisory decision stays
@@ -7414,6 +7461,11 @@ impl AppState {
             dashboard_latest_decision_from_json(latest_decision).unwrap_or_else(|err| {
                 warn!("dashboard typed latest decision degraded: {err:#}");
                 LatestDecisionStatusPayload::default()
+            });
+        let selected_decision = dashboard_selected_decision_from_json(selected_decision)
+            .unwrap_or_else(|err| {
+                warn!("dashboard typed selected Decision Report degraded: {err:#}");
+                None
             });
         let reports =
             dashboard_decision_report_summaries_from_json(reports).unwrap_or_else(|err| {
@@ -18348,6 +18400,57 @@ mod tests {
             dashboard_decision_report_summaries_from_json(vec![json!({
                 "id": 312
             })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_selected_decision_types_the_outer_contract_and_keeps_detail_documents() {
+        let decision = dashboard_selected_decision_from_json(json!({
+            "id": 312,
+            "created_at": "2026-08-26T12:00:00Z",
+            "report_date": "2026-08-26",
+            "model": "openai/gpt-5",
+            "status": "completed",
+            "analysis_window_active": 1,
+            "response_id": "gen-312",
+            "prompt_text": "Review the retained report.",
+            "request_json": "{\"response_format\": {\"type\": \"json_schema\"}}",
+            "response_json": {"id": "gen-312"},
+            "report_json": {"suggested_trades": []},
+            "error_text": null,
+            "analysis_pulse_key": "us_open_followup:2026-08-26",
+            "analysis_pulse_label": "US Open +1h15",
+            "pulse_mode": "execution_eligible",
+            "queue_eligible": "1",
+            "candidate_scoring_waterfall": {"status": "available"}
+        }))
+        .expect("selected Decision Report fixture has the dashboard contract")
+        .expect("fixture is present");
+
+        assert_eq!(decision.id, 312);
+        assert!(decision.analysis_window_active);
+        assert!(decision.queue_eligible);
+        assert_eq!(
+            decision.request_json["response_format"]["type"],
+            json!("json_schema")
+        );
+        assert_eq!(
+            decision.candidate_scoring_waterfall["status"],
+            json!("available")
+        );
+        assert!(
+            dashboard_selected_decision_from_json(JsonValue::Null)
+                .expect("absent selected Decision Report is explicit")
+                .is_none()
+        );
+        assert!(
+            dashboard_selected_decision_from_json(json!({
+                "id": 312,
+                "created_at": "2026-08-26T12:00:00Z",
+                "status": "completed",
+                "queue_eligible": "unknown"
+            }))
             .is_err()
         );
     }

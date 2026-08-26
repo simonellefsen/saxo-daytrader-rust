@@ -24,11 +24,12 @@ use crate::{
         DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
         DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
         DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -4311,11 +4312,11 @@ fn QuiverSignalRow(row: DashboardQuiverSignalPayload, prefs: LocalizationPrefs) 
 
 #[component]
 fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
-    let report = if data.selected_decision.is_null() {
-        latest_decision_status_as_json(&data.latest_decision)
-    } else {
-        data.selected_decision.clone()
-    };
+    let report = data
+        .selected_decision
+        .as_ref()
+        .map(selected_decision_as_json)
+        .unwrap_or_else(|| latest_decision_status_as_json(&data.latest_decision));
     let report_json = report
         .get("report_json")
         .cloned()
@@ -7695,6 +7696,28 @@ fn execution_order_as_json(row: &DashboardExecutionOrderPayload) -> JsonValue {
         "lifecycle_state": row.lifecycle_state,
         "execution_result_json": row.execution_result_json,
         "attribution": row.attribution,
+    })
+}
+
+fn selected_decision_as_json(report: &DashboardSelectedDecisionPayload) -> JsonValue {
+    json!({
+        "id": report.id,
+        "created_at": report.created_at,
+        "report_date": report.report_date,
+        "model": report.model,
+        "status": report.status,
+        "analysis_window_active": report.analysis_window_active,
+        "response_id": report.response_id,
+        "prompt_text": report.prompt_text,
+        "request_json": report.request_json,
+        "response_json": report.response_json,
+        "report_json": report.report_json,
+        "error_text": report.error_text,
+        "analysis_pulse_key": report.analysis_pulse_key,
+        "analysis_pulse_label": report.analysis_pulse_label,
+        "pulse_mode": report.pulse_mode,
+        "queue_eligible": if report.queue_eligible { 1 } else { 0 },
+        "candidate_scoring_waterfall": report.candidate_scoring_waterfall,
     })
 }
 

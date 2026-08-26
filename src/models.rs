@@ -95,7 +95,7 @@ pub struct DashboardView {
     pub trading_manager: TradingManagerPayload,
     pub watchlists: MarketWatchlistsPayload,
     pub latest_decision: LatestDecisionStatusPayload,
-    pub selected_decision: JsonValue,
+    pub selected_decision: Option<DashboardSelectedDecisionPayload>,
     pub decision_gate_replay: DecisionGateReplayPayload,
     pub tuning: TuningPayload,
 }
@@ -143,6 +143,34 @@ pub struct DashboardDecisionReportSummaryPayload {
     pub model: String,
     pub analysis_pulse_key: String,
     pub analysis_pulse_label: String,
+}
+
+/// One selected Decision Report rendered by the Decisions dashboard.
+///
+/// Stable lifecycle and authority fields are typed. The existing normalized
+/// report, provider diagnostics, and scoring waterfall remain explicit
+/// compatibility documents for this detailed read-only view. This record
+/// cannot generate a report, change queue eligibility, reach Hermes, or
+/// mutate a Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardSelectedDecisionPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub report_date: String,
+    pub model: String,
+    pub status: String,
+    pub analysis_window_active: bool,
+    pub response_id: String,
+    pub prompt_text: String,
+    pub request_json: JsonValue,
+    pub response_json: JsonValue,
+    pub report_json: JsonValue,
+    pub error_text: String,
+    pub analysis_pulse_key: String,
+    pub analysis_pulse_label: String,
+    pub pulse_mode: String,
+    pub queue_eligible: bool,
+    pub candidate_scoring_waterfall: JsonValue,
 }
 
 /// One read-only portfolio position rendered in the dashboard overview.
