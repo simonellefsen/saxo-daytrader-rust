@@ -60,7 +60,7 @@ pub struct DashboardView {
     pub reports: Vec<JsonValue>,
     pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
-    pub journal_entries: Vec<JsonValue>,
+    pub journal_entries: Vec<DashboardStrategyJournalEntryPayload>,
     pub scheduler_cycles: Vec<DashboardSchedulerCyclePayload>,
     pub hermes_reflections: Vec<DashboardHermesReflectionPayload>,
     pub hermes_lessons_pending_review: Vec<DashboardHermesLessonPendingReviewPayload>,
@@ -459,6 +459,25 @@ pub struct DashboardDecisionPulseEvidencePayload {
     pub pulses: Vec<DashboardDecisionPulseOutcomeRowPayload>,
     pub minimum_complete_observations: i64,
     pub interpretation: String,
+}
+
+/// One retained local strategy-journal entry for the End-of-Day dashboard.
+///
+/// Stable journal metadata is typed here. Metrics, learnings, and diary bodies
+/// remain staged compatibility JSON because the detailed EOD view deliberately
+/// renders retained local documents and benchmark-readthrough context.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardStrategyJournalEntryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub journal_date: String,
+    pub cadence: String,
+    pub status: String,
+    pub summary: String,
+    pub source_report_id: Option<i64>,
+    pub metrics_json: JsonValue,
+    pub learnings_json: JsonValue,
+    pub diary_json: JsonValue,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

@@ -2505,3 +2505,8 @@ broker mutation was added.
 - Changed the Execution-tab Decision Pulse Outcome Evidence panel to consume typed pulse labels, outcome counts, directional-return summaries, reconciled SELL totals, and normalized lifecycle/Hermes-effect counts.
 - Raw manager documents, broker payloads, fills, ledger rows, scan metadata, and safety markers remain outside SSR; malformed aggregate evidence degrades to the existing unavailable state.
 - BUY forward movement and reconciled SELL accounting remain distinct observational fields; Hermes effects classify recorded advice application only and cannot change Hermes, configuration, gates, queues, prechecks, or Saxo orders.
+## [2026-08-26] architecture | Type dashboard end-of-day journal envelope
+
+- Changed the End-of-Day dashboard journal list to consume typed stable metadata for retained local entries.
+- Detailed metrics, learnings, and diary documents remain staged compatibility JSON for the existing EOD detail view and read-only benchmark context; malformed outer rows degrade to an empty local journal list.
+- This is a local read-model boundary only and does not invoke Hermes, change scheduler cadence, alter strategy configuration, or mutate a Saxo order.

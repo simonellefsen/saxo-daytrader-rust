@@ -6090,32 +6090,26 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
-    let latest = data
-        .journal_entries
-        .first()
-        .cloned()
+    let latest = data.journal_entries.first().cloned();
+    let benchmark_readthrough = latest
+        .as_ref()
+        .map(|journal| end_of_day_benchmark_readthrough(&journal.diary_json))
         .unwrap_or(JsonValue::Null);
-    let benchmark_readthrough = end_of_day_benchmark_readthrough(&latest);
     rsx! {
         section { class: "layout",
             div {
                 section { class: "section",
                     h2 { "End-Of-Day" }
-                    if latest.is_null() {
-                        div { class: "event",
-                            strong { "No end-of-day diary exists yet." }
-                            span { class: "muted", "The scheduler creates one after the configured daily journal time." }
-                        }
-                    } else {
+                    if let Some(latest) = latest.as_ref() {
                         div { class: "mini-grid",
-                            MetricCard { label: "Journal Date", value: text(&latest, "journal_date"), tone: "" }
-                            MetricCard { label: "Cadence", value: text(&latest, "cadence"), tone: "" }
-                            MetricCard { label: "Status", value: text(&latest, "status"), tone: "" }
-                            MetricCard { label: "Source Report", value: text(&latest, "source_report_id"), tone: "" }
+                            MetricCard { label: "Journal Date", value: latest.journal_date.clone(), tone: "" }
+                            MetricCard { label: "Cadence", value: latest.cadence.clone(), tone: "" }
+                            MetricCard { label: "Status", value: latest.status.clone(), tone: "" }
+                            MetricCard { label: "Source Report", value: latest.source_report_id.map(|id| id.to_string()).unwrap_or_default(), tone: "" }
                         }
                         div { class: "event prewrap",
                             strong { "Summary" }
-                            span { "{text(&latest, \"summary\")}" }
+                            span { "{latest.summary}" }
                         }
                         EndOfDayBenchmarkPanel {
                             benchmarks: benchmark_readthrough,
@@ -6124,16 +6118,21 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         div { class: "grid-2",
                             div { class: "event prewrap",
                                 strong { "Metrics" }
-                                span { "{compact_json(latest.get(\"metrics_json\"))}" }
+                                span { "{compact_json(Some(&latest.metrics_json))}" }
                             }
                             div { class: "event prewrap",
                                 strong { "Learnings" }
-                                span { "{compact_json(latest.get(\"learnings_json\"))}" }
+                                span { "{compact_json(Some(&latest.learnings_json))}" }
                             }
                         }
                         div { class: "event prewrap",
                             strong { "Diary JSON" }
-                            span { "{compact_json(latest.get(\"diary_json\"))}" }
+                            span { "{compact_json(Some(&latest.diary_json))}" }
+                        }
+                    } else {
+                        div { class: "event",
+                            strong { "No end-of-day diary exists yet." }
+                            span { class: "muted", "The scheduler creates one after the configured daily journal time." }
                         }
                     }
                 }
@@ -6144,9 +6143,9 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     div { class: "stack",
                         for row in data.journal_entries.iter() {
                             div { class: "event",
-                                strong { "{text(row, \"journal_date\")} - {text(row, \"cadence\")}" }
-                                span { "{format_timestamp(&text(row, \"created_at\"), &prefs)}" }
-                                span { class: "muted", "{text(row, \"status\")}" }
+                                strong { "{row.journal_date} - {row.cadence}" }
+                                span { "{format_timestamp(&row.created_at, &prefs)}" }
+                                span { class: "muted", "{row.status}" }
                             }
                         }
                     }
@@ -6214,14 +6213,12 @@ fn EndOfDayBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> El
     }
 }
 
-fn end_of_day_benchmark_readthrough(journal: &JsonValue) -> JsonValue {
-    let diary = journal
-        .get("diary_json")
-        .and_then(|value| match value {
-            JsonValue::String(raw) => serde_json::from_str::<JsonValue>(raw).ok(),
-            value => Some(value.clone()),
-        })
-        .unwrap_or(JsonValue::Null);
+fn end_of_day_benchmark_readthrough(diary_json: &JsonValue) -> JsonValue {
+    let diary = match diary_json {
+        JsonValue::String(raw) => serde_json::from_str::<JsonValue>(raw).ok(),
+        value => Some(value.clone()),
+    }
+    .unwrap_or(JsonValue::Null);
     diary
         .pointer("/diary/benchmark_readthrough")
         .cloned()
@@ -10956,8 +10953,8 @@ mod tests {
 
     #[test]
     fn end_of_day_benchmark_readthrough_reads_only_the_diary_snapshot() {
-        let journal = json!({
-            "diary_json": serde_json::to_string(&json!({
+        let diary_json = json!(
+            serde_json::to_string(&json!({
                 "diary": {
                     "benchmark_readthrough": {
                         "status": "ready",
@@ -10965,10 +10962,11 @@ mod tests {
                     }
                 },
                 "unrelated": {"status": "ignored"}
-            })).expect("journal JSON serializes")
-        });
+            }))
+            .expect("diary JSON serializes")
+        );
 
-        let readthrough = end_of_day_benchmark_readthrough(&journal);
+        let readthrough = end_of_day_benchmark_readthrough(&diary_json);
         assert_eq!(
             readthrough.get("status").and_then(JsonValue::as_str),
             Some("ready")

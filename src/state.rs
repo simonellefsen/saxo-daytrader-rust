@@ -48,18 +48,18 @@ use crate::{
         DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
         DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
         DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3831,6 +3831,42 @@ fn dashboard_decision_pulse_evidence_unavailable() -> DashboardDecisionPulseEvid
     }
 }
 
+/// Decodes the stable outer fields of retained local EOD journals. Detailed
+/// metrics, learnings, and diary documents remain staged JSON for the EOD
+/// detail view and its read-only benchmark context.
+fn dashboard_strategy_journal_entries_from_json(
+    entries: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardStrategyJournalEntryPayload>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            Ok(DashboardStrategyJournalEntryPayload {
+                id: dashboard_required_i64(&entry, "id")?,
+                created_at: dashboard_required_string(&entry, "created_at")?,
+                journal_date: dashboard_required_string(&entry, "journal_date")?,
+                cadence: dashboard_required_string(&entry, "cadence")?,
+                status: dashboard_required_string(&entry, "status")?,
+                summary: dashboard_required_string(&entry, "summary")?,
+                source_report_id: serde_json::from_value(
+                    entry
+                        .get("source_report_id")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                metrics_json: entry
+                    .get("metrics_json")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                learnings_json: entry
+                    .get("learnings_json")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                diary_json: entry.get("diary_json").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect()
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -6272,10 +6308,15 @@ impl AppState {
                 Vec::new()
             });
         let journal_entries = if dashboard_loads_tab_exclusive_data(&active_view, "eod") {
-            self.strategy_journal_items(20).await.unwrap_or_else(|err| {
-                warn!("dashboard end-of-day journal degraded: {err:#}");
-                Vec::new()
-            })
+            self.strategy_journal_items(20)
+                .await
+                .and_then(|entries| {
+                    dashboard_strategy_journal_entries_from_json(entries).map_err(Into::into)
+                })
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed end-of-day journal degraded: {err:#}");
+                    Vec::new()
+                })
         } else {
             Vec::new()
         };
@@ -18304,6 +18345,38 @@ mod tests {
             dashboard_decision_pulse_evidence_from_json(json!({
                 "status": "collecting"
             }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_strategy_journal_entries_keep_only_staged_detail_documents() {
+        let entries = dashboard_strategy_journal_entries_from_json(vec![json!({
+            "id": 17,
+            "created_at": "2026-08-26T15:30:00Z",
+            "journal_date": "2026-08-26",
+            "cadence": "daily",
+            "status": "completed",
+            "summary": "Bounded EOD summary.",
+            "source_report_id": 42,
+            "metrics_json": {"total_value_dkk": 250000.0},
+            "learnings_json": {"theme": "observation"},
+            "diary_json": {"diary": {"benchmark_readthrough": {"status": "ready"}}},
+            "runtime_session": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable strategy-journal rows decode");
+
+        assert_eq!(entries[0].source_report_id, Some(42));
+        assert_eq!(entries[0].journal_date, "2026-08-26");
+        assert!(
+            !serde_json::to_string(&entries)
+                .expect("typed strategy-journal rows serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_strategy_journal_entries_from_json(vec![json!({
+                "id": 17
+            })])
             .is_err()
         );
     }
