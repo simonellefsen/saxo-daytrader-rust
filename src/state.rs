@@ -38,20 +38,20 @@ use crate::{
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
         DashboardExecutionFillPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3430,6 +3430,46 @@ fn dashboard_hermes_learning_memory_from_json(
         .collect()
 }
 
+/// Decodes the bounded display evidence for the advisory Hermes one-variable
+/// audit. Source snapshots and candidate JSON remain outside the SSR boundary;
+/// values are rendered here only as capped display strings.
+fn dashboard_hermes_one_variable_audit_from_json(
+    audit_rows: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesOneVariableAuditPayload>> {
+    audit_rows
+        .into_iter()
+        .map(|row| {
+            Ok(DashboardHermesOneVariableAuditPayload {
+                kind: dashboard_required_string(&row, "kind")?,
+                created_at: dashboard_optional_string(&row, "created_at")?,
+                status: dashboard_required_string(&row, "status")?,
+                variable: dashboard_optional_string(&row, "variable")?,
+                baseline_value: dashboard_short_json(row.get("baseline_value")),
+                candidate_value: dashboard_short_json(row.get("candidate_value")),
+                reason: dashboard_optional_string(&row, "reason")?,
+                scope: dashboard_optional_string(&row, "scope")?,
+                last_manager_state: dashboard_optional_string(&row, "last_manager_state")?,
+            })
+        })
+        .collect()
+}
+
+fn dashboard_short_json(value: Option<&JsonValue>) -> String {
+    let Some(value) = value else {
+        return "n/a".to_string();
+    };
+    let rendered = match value {
+        JsonValue::String(text) => text.clone(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    };
+    const MAX_CHARS: usize = 220;
+    if rendered.len() > MAX_CHARS {
+        format!("{}...", &rendered[..MAX_CHARS])
+    } else {
+        rendered
+    }
+}
+
 fn dashboard_required_i64(row: &JsonValue, key: &str) -> serde_json::Result<i64> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -6012,8 +6052,12 @@ impl AppState {
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "overview") {
                 self.hermes_one_variable_audit()
                     .await
+                    .and_then(|audit_rows| {
+                        dashboard_hermes_one_variable_audit_from_json(audit_rows)
+                            .map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard Hermes one-variable audit degraded: {err:#}");
+                        warn!("dashboard typed Hermes one-variable audit degraded: {err:#}");
                         Vec::new()
                     })
             } else {
@@ -17526,6 +17570,39 @@ mod tests {
         assert!(
             dashboard_hermes_learning_memory_from_json(vec![json!({
                 "status": "unknown"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_one_variable_audit_keeps_source_json_outside_ssr() {
+        let audit_rows = dashboard_hermes_one_variable_audit_from_json(vec![json!({
+            "kind": "selected_overlay",
+            "created_at": "2026-08-26T08:30:00Z",
+            "status": "selected_for_next_cycle",
+            "variable": "strategy.capital.min_cash_buffer_pct",
+            "baseline_value": 0.05,
+            "candidate_value": 0.02,
+            "reason": "Evaluate a controlled SIM overlay.",
+            "scope": "SIM only",
+            "last_manager_state": "selected for the next eligible manager cycle",
+            "raw_payload_json": {
+                "api_key": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable one-variable audit evidence decodes");
+
+        assert_eq!(audit_rows[0].baseline_value, "0.05");
+        assert_eq!(audit_rows[0].candidate_value, "0.02");
+        assert!(
+            !serde_json::to_string(&audit_rows)
+                .expect("typed one-variable audit evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_one_variable_audit_from_json(vec![json!({
+                "kind": "selected_overlay"
             })])
             .is_err()
         );

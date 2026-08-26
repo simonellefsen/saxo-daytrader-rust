@@ -13,13 +13,13 @@ use crate::{
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesReflectionPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -8084,25 +8084,37 @@ fn HermesLearningMemoryRow(
 }
 
 #[component]
-fn HermesOneVariableAuditRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let kind = match text(&row, "kind").as_str() {
+fn HermesOneVariableAuditRow(
+    row: DashboardHermesOneVariableAuditPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let kind = match row.kind.as_str() {
         "promoted_baseline" => "Promoted baseline",
         "selected_overlay" => "Selected overlay",
         _ => "No active difference",
     };
-    let status = text_or(&row, "status", "n/a");
+    let status = row.status;
     let status_class = match status.as_str() {
         "selected_for_next_cycle" | "record_only" => "status good-status",
         "disabled_live_environment" => "status warn-status",
         _ => "status",
     };
-    let reason = text_or(&row, "reason", "No hypothesis recorded.");
-    let manager_state = text_or(&row, "last_manager_state", "n/a");
-    let recorded_at = text(&row, "created_at");
-    let variable = text_or(&row, "variable", "n/a");
-    let baseline_value = short_json(row.get("baseline_value"));
-    let candidate_value = short_json(row.get("candidate_value"));
-    let scope = text_or(&row, "scope", "");
+    let reason = row
+        .reason
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "No hypothesis recorded.".to_string());
+    let manager_state = row
+        .last_manager_state
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "n/a".to_string());
+    let recorded_at = row.created_at.unwrap_or_default();
+    let variable = row
+        .variable
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "n/a".to_string());
+    let baseline_value = row.baseline_value;
+    let candidate_value = row.candidate_value;
+    let scope = row.scope.unwrap_or_default();
     rsx! {
         tr {
             td {

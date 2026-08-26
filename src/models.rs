@@ -65,7 +65,7 @@ pub struct DashboardView {
     pub hermes_reflections: Vec<DashboardHermesReflectionPayload>,
     pub hermes_lessons_pending_review: Vec<DashboardHermesLessonPendingReviewPayload>,
     pub hermes_learning_memory: Vec<DashboardHermesLearningMemoryPayload>,
-    pub hermes_one_variable_audit: Vec<JsonValue>,
+    pub hermes_one_variable_audit: Vec<DashboardHermesOneVariableAuditPayload>,
     pub hermes_proposal_quality: Vec<JsonValue>,
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
@@ -232,6 +232,25 @@ pub struct DashboardHermesLearningMemoryPayload {
     pub last_seen: String,
     pub expires_at: String,
     pub cadences: Vec<String>,
+}
+
+/// One display-safe audit row for the limited Hermes experiment overlay.
+///
+/// Baseline and candidate values are rendered as bounded strings, rather than
+/// exposing their source JSON. This remains observational evidence: it cannot
+/// approve, activate, promote, or roll back an experiment, alter configuration,
+/// or reach Trading Manager or Saxo execution.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesOneVariableAuditPayload {
+    pub kind: String,
+    pub created_at: Option<String>,
+    pub status: String,
+    pub variable: Option<String>,
+    pub baseline_value: String,
+    pub candidate_value: String,
+    pub reason: Option<String>,
+    pub scope: Option<String>,
+    pub last_manager_state: Option<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.
