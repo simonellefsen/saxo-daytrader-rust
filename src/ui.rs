@@ -15,17 +15,17 @@ use crate::{
         DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
-        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -5729,7 +5729,7 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let pending_experiments = data
         .hermes_experiments
         .iter()
-        .filter(|row| text_or(row, "status", "pending_review") == "pending_review")
+        .filter(|row| row.status == "pending_review")
         .count();
     let advised_reports = data
         .hermes_decision_advice_audit
@@ -8301,11 +8301,11 @@ fn HermesProposalQualityRow(
 }
 
 #[component]
-fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text_or(&row, "status", "pending_review");
+fn HermesExperimentRow(row: DashboardHermesExperimentPayload, prefs: LocalizationPrefs) -> Element {
+    let status = row.status.clone();
     let (age, age_class) = hermes_experiment_age_status(
         &status,
-        &text(&row, "created_at"),
+        &row.created_at,
         Utc::now(),
         HERMES_EXPERIMENT_REVIEW_STALE_DAYS,
     );
@@ -8320,18 +8320,25 @@ fn HermesExperimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
         "expired_stale" => "status warn-status",
         _ => "status",
     };
-    let experiment_id = text(&row, "id");
+    let experiment_id = row.id;
+    let created_at = row.created_at;
+    let changed_variable_path = row.changed_variable_path;
+    let old_value_display = row.old_value_display;
+    let new_value_display = row.new_value_display;
+    let hypothesis = row.hypothesis;
+    let expected_effect = row.expected_effect;
+    let evidence_display = row.evidence_display;
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { "{format_timestamp(&created_at, &prefs)}" }
             td { span { class: "{age_class}", "{age}" } }
             td { span { class: "{status_class}", "{status}" } }
-            td { "{text(&row, \"changed_variable_path\")}" }
-            td { class: "mono", "{short_json(row.get(\"old_value_json\"))}" }
-            td { class: "mono", "{short_json(row.get(\"new_value_json\"))}" }
-            td { "{text_or(&row, \"hypothesis\", \"No hypothesis recorded.\")}" }
-            td { "{text_or(&row, \"expected_effect\", \"n/a\")}" }
-            td { class: "mono", "{short_json(row.get(\"evidence_json\"))}" }
+            td { "{changed_variable_path}" }
+            td { class: "mono", "{old_value_display}" }
+            td { class: "mono", "{new_value_display}" }
+            td { "{hypothesis}" }
+            td { "{expected_effect}" }
+            td { class: "mono", "{evidence_display}" }
             td {
                 div { class: "inline-actions",
                     for (action, label, tone) in hermes_transition_actions(&status) {
@@ -10665,22 +10672,6 @@ fn compact_json(value: Option<&JsonValue>) -> String {
     };
     let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     let max_len = 1600;
-    if rendered.len() > max_len {
-        format!("{}...", &rendered[..max_len])
-    } else {
-        rendered
-    }
-}
-
-fn short_json(value: Option<&JsonValue>) -> String {
-    let Some(value) = value else {
-        return "n/a".to_string();
-    };
-    let rendered = match value {
-        JsonValue::String(text) => text.clone(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
-    };
-    let max_len = 220;
     if rendered.len() > max_len {
         format!("{}...", &rendered[..max_len])
     } else {

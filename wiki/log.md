@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Hermes experiment proposals
+
+- Changed the Hermes Experiment Proposals table to consume explicit proposal display fields and redacted, capped old/new/evidence strings through a typed Rust contract.
+- Approval, metrics, source-session, and raw provider documents remain outside SSR; malformed proposal metadata degrades to an empty local table.
+- The retained proposal ID/status preserve only the existing explicit operator transition form. This display contract cannot approve, activate, promote, reject, queue, precheck, or mutate an order.
+
 ## [2026-08-26] architecture | Type dashboard Hermes decision-advice audit
 
 - Changed the Hermes Decision Advice Audit table to consume retained report/advice metadata, derived self-check/action/impact counts, manager status, and local order totals through a typed Rust contract.

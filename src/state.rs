@@ -41,26 +41,26 @@ use crate::{
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
-        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
-        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
+        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3463,6 +3463,34 @@ fn dashboard_hermes_one_variable_audit_from_json(
         .collect()
 }
 
+/// Decodes only the bounded experiment-proposal fields rendered in the Hermes
+/// dashboard section. Persisted approval, metrics, detailed evidence, source
+/// session, and provider payloads remain outside SSR; JSON display values are
+/// redacted and capped before they become strings.
+fn dashboard_hermes_experiments_from_json(
+    experiments: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesExperimentPayload>> {
+    experiments
+        .into_iter()
+        .map(|experiment| {
+            Ok(DashboardHermesExperimentPayload {
+                id: dashboard_required_string(&experiment, "id")?,
+                created_at: dashboard_required_string(&experiment, "created_at")?,
+                status: dashboard_required_string(&experiment, "status")?,
+                changed_variable_path: dashboard_required_string(
+                    &experiment,
+                    "changed_variable_path",
+                )?,
+                old_value_display: compact_json_redacted(experiment.get("old_value_json"), 220),
+                new_value_display: compact_json_redacted(experiment.get("new_value_json"), 220),
+                hypothesis: dashboard_required_string(&experiment, "hypothesis")?,
+                expected_effect: dashboard_required_string(&experiment, "expected_effect")?,
+                evidence_display: compact_json_redacted(experiment.get("evidence_json"), 220),
+            })
+        })
+        .collect()
+}
+
 /// Decodes the deterministic, display-only quality rubric for active Hermes
 /// proposals. The underlying experiment documents and their evidence stay
 /// outside the SSR boundary.
@@ -6550,10 +6578,15 @@ impl AppState {
             };
         let hermes_experiments =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "experiments") {
-                self.hermes_experiments(20).await.unwrap_or_else(|err| {
-                    warn!("dashboard Hermes experiments degraded: {err:#}");
-                    Vec::new()
-                })
+                self.hermes_experiments(20)
+                    .await
+                    .and_then(|experiments| {
+                        dashboard_hermes_experiments_from_json(experiments).map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed Hermes experiments degraded: {err:#}");
+                        Vec::new()
+                    })
             } else {
                 Vec::new()
             };
@@ -18210,6 +18243,43 @@ mod tests {
         assert!(
             dashboard_hermes_one_variable_audit_from_json(vec![json!({
                 "kind": "selected_overlay"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_experiments_keep_review_documents_outside_ssr() {
+        let experiments = dashboard_hermes_experiments_from_json(vec![json!({
+            "id": "experiment-91",
+            "created_at": "2026-08-26T08:30:00Z",
+            "status": "pending_review",
+            "baseline_id": "baseline-4",
+            "goal_version": 4,
+            "hypothesis": "A smaller SIM cash buffer may improve diversification.",
+            "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+            "old_value_json": {"value": 0.05, "api_key": "must-not-reach-the-dashboard"},
+            "new_value_json": {"value": 0.03, "api_key": "must-not-reach-the-dashboard"},
+            "expected_effect": "More eligible SIM BUY candidates during broad market breadth.",
+            "risk_notes": "May increase exposure during a drawdown.",
+            "evidence_json": {"source": "SIM journal", "api_key": "must-not-reach-the-dashboard"},
+            "approval_json": {"operator": "must-not-reach-the-dashboard"},
+            "metrics_json": {"provider_response": "must-not-reach-the-dashboard"},
+            "source_session_id": "must-not-reach-the-dashboard",
+            "raw_payload_json": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable Hermes experiment display row decodes");
+
+        assert_eq!(experiments[0].id, "experiment-91");
+        assert!(experiments[0].old_value_display.contains("[redacted]"));
+        assert!(
+            !serde_json::to_string(&experiments)
+                .expect("typed Hermes experiment rows serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_experiments_from_json(vec![json!({
+                "id": "experiment-91"
             })])
             .is_err()
         );

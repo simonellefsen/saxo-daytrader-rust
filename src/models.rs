@@ -67,7 +67,7 @@ pub struct DashboardView {
     pub hermes_learning_memory: Vec<DashboardHermesLearningMemoryPayload>,
     pub hermes_one_variable_audit: Vec<DashboardHermesOneVariableAuditPayload>,
     pub hermes_proposal_quality: Vec<DashboardHermesProposalQualityPayload>,
-    pub hermes_experiments: Vec<JsonValue>,
+    pub hermes_experiments: Vec<DashboardHermesExperimentPayload>,
     pub hermes_decision_advice_audit: Vec<DashboardHermesDecisionAdviceAuditPayload>,
     pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
     pub missed_trade_shadows: Vec<DashboardMissedTradeShadowPayload>,
@@ -251,6 +251,26 @@ pub struct DashboardHermesOneVariableAuditPayload {
     pub reason: Option<String>,
     pub scope: Option<String>,
     pub last_manager_state: Option<String>,
+}
+
+/// Display-safe metadata for one operator-reviewed Hermes experiment proposal.
+///
+/// JSON values are redacted and capped before crossing the SSR boundary. The
+/// underlying evidence, approval, metrics, source-session, and provider
+/// documents remain in local storage. The retained ID/status only preserve the
+/// existing explicit operator transition form; this record cannot approve,
+/// activate, promote, reject, or otherwise mutate an experiment itself.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesExperimentPayload {
+    pub id: String,
+    pub created_at: String,
+    pub status: String,
+    pub changed_variable_path: String,
+    pub old_value_display: String,
+    pub new_value_display: String,
+    pub hypothesis: String,
+    pub expected_effect: String,
+    pub evidence_display: String,
 }
 
 /// Deterministic, read-only rubric evidence for one Hermes proposal.
