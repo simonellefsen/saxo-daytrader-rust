@@ -747,6 +747,18 @@ pub struct DashboardStrategyJournalEntryPayload {
     pub diary_json: JsonValue,
 }
 
+/// Stable, read-only metadata for one journal entry exposed by the list API.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct StrategyJournalEntryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub journal_date: String,
+    pub cadence: String,
+    pub status: String,
+    pub summary: String,
+    pub source_report_id: Option<i64>,
+}
+
 /// Read-only evidence used to compare the scheduled decision pulses.
 ///
 /// The first Tuning-tab slice deliberately gives execution-eligible reports
@@ -1250,12 +1262,12 @@ pub struct PortfolioTradesPayload {
 
 /// Bounded strategy-journal list envelope.
 ///
-/// Individual journal rows remain compatibility JSON while the persisted
-/// strategy-learning read model is converted incrementally. This makes the
-/// public list boundary explicit without changing Hermes or execution behavior.
+/// Journal rows expose only stable metadata; detailed metrics, learnings, and
+/// diary documents remain on the internal EOD dashboard read model. This list
+/// cannot change Hermes or execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StrategyJournalPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<StrategyJournalEntryPayload>,
 }
 
 /// Bounded Execution-tab envelope.

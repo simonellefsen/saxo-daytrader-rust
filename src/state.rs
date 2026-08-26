@@ -63,13 +63,14 @@ use crate::{
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
         PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
-        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        QuiverConflictPayload, StrategyJournalEntryPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -4458,6 +4459,62 @@ fn dashboard_strategy_journal_entries_from_json(
             })
         })
         .collect()
+}
+
+pub(crate) fn strategy_journal_summaries_from_json(
+    entries: Vec<JsonValue>,
+) -> serde_json::Result<Vec<StrategyJournalEntryPayload>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            Ok(StrategyJournalEntryPayload {
+                id: dashboard_required_i64(&entry, "id")?,
+                created_at: dashboard_required_string(&entry, "created_at")?,
+                journal_date: dashboard_required_string(&entry, "journal_date")?,
+                cadence: dashboard_required_string(&entry, "cadence")?,
+                status: dashboard_required_string(&entry, "status")?,
+                summary: dashboard_required_string(&entry, "summary")?,
+                source_report_id: serde_json::from_value(
+                    entry
+                        .get("source_report_id")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod strategy_journal_summary_tests {
+    use serde_json::json;
+
+    use super::strategy_journal_summaries_from_json;
+
+    #[test]
+    fn summaries_exclude_retained_detail_documents() {
+        let entries = strategy_journal_summaries_from_json(vec![json!({
+            "id": 17,
+            "created_at": "2026-08-26T15:30:00Z",
+            "journal_date": "2026-08-26",
+            "cadence": "daily",
+            "status": "completed",
+            "summary": "Bounded EOD summary.",
+            "source_report_id": 42,
+            "metrics_json": {"total_value_dkk": 250000.0},
+            "learnings_json": {"theme": "observation"},
+            "diary_json": {"api_key": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable strategy-journal summary rows decode");
+
+        assert_eq!(entries[0].source_report_id, Some(42));
+        assert!(
+            !serde_json::to_string(&entries)
+                .expect("typed strategy-journal summary rows serialize")
+                .contains("must-not-reach-the-public-api")
+        );
+        assert!(strategy_journal_summaries_from_json(vec![json!({"id": 17})]).is_err());
+    }
 }
 
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
@@ -11132,6 +11189,14 @@ impl AppState {
     pub async fn strategy_journal_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT id, created_at, journal_date, cadence, status, summary, metrics_json, learnings_json, source_report_id, diary_json FROM strategy_journal_entries ORDER BY created_at DESC, id DESC LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn strategy_journal_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, journal_date, cadence, status, summary, source_report_id FROM strategy_journal_entries ORDER BY created_at DESC, id DESC LIMIT {}",
             clamp_limit(limit, 1, 100)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())

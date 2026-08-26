@@ -10,6 +10,11 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type public strategy-journal list
+
+- Changed `/api/strategy-journal` to return typed, stable identity, timing, cadence, status, summary, and source-report metadata rows.
+- Detailed metrics, learnings, and diary documents remain on the internal EOD dashboard read model; malformed metadata fails closed at the public API boundary without invoking Hermes, scheduling work, queueing, or reaching Saxo.
+
 ## [2026-08-26] architecture | Type nested portfolio decision display
 
 - Replaced the compatibility decision document in typed portfolio rows with explicit advisory badge and trend fields, redacting and bounding rationale text.

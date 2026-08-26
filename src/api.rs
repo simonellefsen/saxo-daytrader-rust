@@ -31,7 +31,7 @@ use crate::{
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
         QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        StrategyJournalPayload, ViewParams,
+        StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -39,7 +39,10 @@ use crate::{
         precheck_sim_protective_stop, protective_stop_lifecycle_error_is_state_unknown,
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
-    state::{AppState, dashboard_positions_from_json, portfolio_trades_from_json},
+    state::{
+        AppState, dashboard_positions_from_json, portfolio_trades_from_json,
+        strategy_journal_summaries_from_json,
+    },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
     xai_decision,
@@ -1847,7 +1850,7 @@ fn decision_report_list_payload(rows: Vec<JsonValue>) -> Result<DecisionReportLi
     Ok(DecisionReportListPayload { items })
 }
 
-fn strategy_journal_payload(items: Vec<JsonValue>) -> StrategyJournalPayload {
+fn strategy_journal_payload(items: Vec<StrategyJournalEntryPayload>) -> StrategyJournalPayload {
     StrategyJournalPayload { items }
 }
 
@@ -1941,8 +1944,9 @@ async fn strategy_journal(
     let limit = params.limit.unwrap_or(20);
     json_result(
         state
-            .strategy_journal_items(limit)
+            .strategy_journal_summaries(limit)
             .await
+            .and_then(|items| strategy_journal_summaries_from_json(items).map_err(Into::into))
             .map(strategy_journal_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
@@ -2843,16 +2847,34 @@ mod tests {
     #[test]
     fn strategy_journal_response_keeps_the_typed_list_envelope() {
         let payload = strategy_journal_payload(vec![
-            json!({"created_at": "2026-08-01T10:15:00Z", "event": "reflection"}),
-            json!({"created_at": "2026-08-01T16:15:00Z", "event": "outcome"}),
+            StrategyJournalEntryPayload {
+                id: 17,
+                created_at: "2026-08-01T10:15:00Z".to_string(),
+                journal_date: "2026-08-01".to_string(),
+                cadence: "daily".to_string(),
+                status: "completed".to_string(),
+                summary: "reflection".to_string(),
+                source_report_id: Some(42),
+            },
+            StrategyJournalEntryPayload {
+                id: 18,
+                created_at: "2026-08-01T16:15:00Z".to_string(),
+                journal_date: "2026-08-01".to_string(),
+                cadence: "daily".to_string(),
+                status: "completed".to_string(),
+                summary: "outcome".to_string(),
+                source_report_id: None,
+            },
         ]);
 
         assert_eq!(payload.items.len(), 2);
 
         let serialized =
             serde_json::to_value(payload).expect("strategy journal payload serializes");
-        assert_eq!(serialized["items"][0]["event"], "reflection");
-        assert_eq!(serialized["items"][1]["event"], "outcome");
+        assert_eq!(serialized["items"][0]["id"], 17);
+        assert_eq!(serialized["items"][0]["summary"], "reflection");
+        assert_eq!(serialized["items"][1]["summary"], "outcome");
+        assert!(serialized["items"][0].get("metrics_json").is_none());
     }
 
     #[test]
