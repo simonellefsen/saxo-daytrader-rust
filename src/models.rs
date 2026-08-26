@@ -54,7 +54,7 @@ pub struct DashboardView {
     pub orders: Vec<JsonValue>,
     pub execution_fills: Vec<DashboardExecutionFillPayload>,
     pub execution_events: Vec<DashboardExecutionEventPayload>,
-    pub execution_trade_thesis_evidence: JsonValue,
+    pub execution_trade_thesis_evidence: DashboardTradeThesisEvidencePayload,
     pub execution_holding_thesis_reviews: JsonValue,
     pub execution_decision_pulse_evidence: JsonValue,
     pub reports: Vec<JsonValue>,
@@ -354,6 +354,33 @@ pub struct DashboardMissedTradeShadowGatePayload {
     pub source_gate: String,
     pub recorded_shadow_count: i64,
     pub outcome: DashboardMissedTradeShadowOutcomePayload,
+}
+
+/// One forward-return summary for recorded BUY theses with local fill evidence.
+///
+/// This is a post-fill observational measure, not a backtest or a causal
+/// performance claim. It cannot alter Hermes, a manager gate, or a broker order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardTradeThesisOutcomePayload {
+    pub sample_count: i64,
+    pub average_directional_return_pct: Option<f64>,
+    pub positive_return_rate: Option<f64>,
+}
+
+/// Read-only aggregate evidence for recorded BUY theses and later local closes.
+///
+/// It excludes blocked candidates, FX, commissions, tax, slippage, later
+/// position changes, broker adjustments, and any causal claim about a thesis.
+/// It cannot change Hermes, configuration, manager gates, or Saxo orders.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardTradeThesisEvidencePayload {
+    pub status: String,
+    pub recorded_thesis_count: i64,
+    pub filled_thesis_count: i64,
+    pub one_session: DashboardTradeThesisOutcomePayload,
+    pub five_session: DashboardTradeThesisOutcomePayload,
+    pub minimum_complete_observations: i64,
+    pub interpretation: String,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

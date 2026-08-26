@@ -44,7 +44,8 @@ use crate::{
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload,
+        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
         HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
@@ -3631,6 +3632,56 @@ fn dashboard_missed_trade_shadow_evidence_unavailable() -> DashboardMissedTradeS
     }
 }
 
+/// Decodes the deliberately small trade-thesis aggregate. Scan metadata and
+/// raw fill, close, and thesis records remain in their local evidence stores.
+fn dashboard_trade_thesis_evidence_from_json(
+    evidence: JsonValue,
+) -> serde_json::Result<DashboardTradeThesisEvidencePayload> {
+    Ok(DashboardTradeThesisEvidencePayload {
+        status: dashboard_required_string(&evidence, "status")?,
+        recorded_thesis_count: dashboard_required_i64(&evidence, "recorded_thesis_count")?,
+        filled_thesis_count: dashboard_required_i64(&evidence, "filled_thesis_count")?,
+        one_session: dashboard_trade_thesis_outcome_from_json(
+            evidence
+                .get("one_session")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+        five_session: dashboard_trade_thesis_outcome_from_json(
+            evidence
+                .get("five_session")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+        minimum_complete_observations: dashboard_required_i64(
+            &evidence,
+            "minimum_complete_observations",
+        )?,
+        interpretation: dashboard_required_string(&evidence, "interpretation")?,
+    })
+}
+
+fn dashboard_trade_thesis_outcome_from_json(
+    outcome: JsonValue,
+) -> serde_json::Result<DashboardTradeThesisOutcomePayload> {
+    Ok(DashboardTradeThesisOutcomePayload {
+        sample_count: dashboard_required_i64(&outcome, "sample_count")?,
+        average_directional_return_pct: dashboard_optional_f64(
+            &outcome,
+            "average_directional_return_pct",
+        )?,
+        positive_return_rate: dashboard_optional_f64(&outcome, "positive_return_rate")?,
+    })
+}
+
+fn dashboard_trade_thesis_evidence_unavailable() -> DashboardTradeThesisEvidencePayload {
+    DashboardTradeThesisEvidencePayload {
+        status: "unavailable".to_string(),
+        interpretation: "Trade-thesis outcome evidence is unavailable right now.".to_string(),
+        ..DashboardTradeThesisEvidencePayload::default()
+    }
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -5898,21 +5949,20 @@ impl AppState {
         } else {
             Vec::new()
         };
-        let execution_trade_thesis_evidence = if dashboard_loads_tab_exclusive_data(
-            &active_view,
-            "execution",
-        ) {
-            self.trade_thesis_outcome_evidence().await.unwrap_or_else(|err| {
-                    warn!("dashboard trade-thesis evidence degraded: {err:#}");
-                    json!({
-                        "status": "unavailable",
-                        "safety": "read_only_local_execution_fills_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
-                        "interpretation": "Trade-thesis outcome evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
+        let execution_trade_thesis_evidence =
+            if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+                self.trade_thesis_outcome_evidence()
+                    .await
+                    .and_then(|evidence| {
+                        dashboard_trade_thesis_evidence_from_json(evidence).map_err(Into::into)
                     })
-                })
-        } else {
-            JsonValue::Null
-        };
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed trade-thesis evidence degraded: {err:#}");
+                        dashboard_trade_thesis_evidence_unavailable()
+                    })
+            } else {
+                DashboardTradeThesisEvidencePayload::default()
+            };
         let execution_holding_thesis_reviews = if dashboard_loads_tab_exclusive_data(
             &active_view,
             "execution",
@@ -17951,6 +18001,43 @@ mod tests {
         );
         assert!(
             dashboard_missed_trade_shadow_evidence_from_json(json!({
+                "status": "collecting"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_trade_thesis_evidence_keeps_raw_records_outside_ssr() {
+        let evidence = dashboard_trade_thesis_evidence_from_json(json!({
+            "status": "collecting",
+            "recorded_thesis_count": 3,
+            "filled_thesis_count": 2,
+            "one_session": {
+                "sample_count": 2,
+                "average_directional_return_pct": 0.025,
+                "positive_return_rate": 0.5
+            },
+            "five_session": {
+                "sample_count": 1,
+                "average_directional_return_pct": -0.01,
+                "positive_return_rate": 0.0
+            },
+            "minimum_complete_observations": 20,
+            "interpretation": "Read-only post-fill evidence only.",
+            "raw_theses": [{"api_key": "must-not-reach-the-dashboard"}]
+        }))
+        .expect("stable trade-thesis aggregate decodes");
+
+        assert_eq!(evidence.one_session.sample_count, 2);
+        assert_eq!(evidence.five_session.positive_return_rate, Some(0.0));
+        assert!(
+            !serde_json::to_string(&evidence)
+                .expect("typed trade-thesis aggregate serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_trade_thesis_evidence_from_json(json!({
                 "status": "collecting"
             }))
             .is_err()

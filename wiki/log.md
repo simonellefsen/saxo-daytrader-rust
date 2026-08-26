@@ -2490,3 +2490,8 @@ broker mutation was added.
 
 - OpenRouter's synchronous completion path now uses the same record-only shadow-outcome finalizer as xAI's deferred completion path. Every newly completed eligible shadow report therefore persists its candidate context, captures its immediate read-only Saxo reference quote, and records the constrained Hermes observation without acquiring manager, queue, precheck, or order authority.
 - The scheduler also performs a bounded, idempotent repair pass for older completed shadow reports that were missing a ledger row. A historical report is never assigned a later quote as if it were its report-time baseline: repaired candidates are explicitly marked `reference_not_captured_retroactively`, excluded from outcome maturation, and shown separately from captured references in Tuning. This preserves auditability instead of manufacturing forward-return evidence.
+## [2026-08-26] architecture | Type dashboard trade-thesis outcome evidence
+
+- Changed the Execution-tab Trade Thesis Outcome Evidence card to consume typed aggregate status, recorded/fill coverage, and one/five-session directional-return summaries.
+- Raw thesis, fill, close, scan, and safety-marker data remain outside SSR; malformed aggregate evidence degrades to the existing unavailable state.
+- The aggregation remains observational only, excludes blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and causal claims, and cannot mutate Hermes, configuration, manager gates, or Saxo orders.

@@ -17,11 +17,12 @@ use crate::{
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
         DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
         DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -6552,34 +6553,31 @@ fn HoldingThesisReviewPanel(reviews: JsonValue, prefs: LocalizationPrefs) -> Ele
 }
 
 #[component]
-fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&evidence, "status").replace('_', " ");
-    let recorded_count = value_i64(&evidence, "recorded_thesis_count");
-    let filled_count = value_i64(&evidence, "filled_thesis_count");
-    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
-    let outcome_label = |outcome: &JsonValue| {
-        let sample_count = value_i64(outcome, "sample_count");
-        let average = outcome
-            .get("average_directional_return_pct")
-            .and_then(JsonValue::as_f64)
+fn TradeThesisOutcomeEvidencePanel(
+    evidence: DashboardTradeThesisEvidencePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let raw_status = evidence.status.clone();
+    let status = raw_status.replace('_', " ");
+    let recorded_count = evidence.recorded_thesis_count;
+    let filled_count = evidence.filled_thesis_count;
+    let minimum_complete = evidence.minimum_complete_observations;
+    let outcome_label = |sample_count: i64,
+                         average_directional_return_pct: Option<f64>,
+                         positive_return_rate: Option<f64>| {
+        let average = average_directional_return_pct
             .map(|value| format_signed_pct(value, &prefs))
             .unwrap_or_else(|| "pending".to_string());
-        let positive_rate = outcome
-            .get("positive_return_rate")
-            .and_then(JsonValue::as_f64)
+        let positive_rate = positive_return_rate
             .map(|value| format_pct(value, &prefs))
             .unwrap_or_else(|| "pending".to_string());
         format!(
             "{average} avg directional return · {positive_rate} positive · {sample_count} samples"
         )
     };
-    let one_session = evidence.get("one_session").unwrap_or(&JsonValue::Null);
-    let five_session = evidence.get("five_session").unwrap_or(&JsonValue::Null);
-    let interpretation = text_or(
-        &evidence,
-        "interpretation",
-        "Read-only post-fill evidence only.",
-    );
+    let one_session = evidence.one_session;
+    let five_session = evidence.five_session;
+    let interpretation = evidence.interpretation;
     rsx! {
         section { class: "section stack",
             div { class: "section-title-row compact",
@@ -6589,9 +6587,9 @@ fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs
                 }
                 span { class: "status", "{status}" }
             }
-            if text(&evidence, "status") == "no_recorded_theses" {
+            if raw_status == "no_recorded_theses" {
                 span { class: "muted", "No BUY admitted since thesis recording was deployed. New BUY admissions will add evidence automatically." }
-            } else if text(&evidence, "status") == "unavailable" {
+            } else if raw_status == "unavailable" {
                 span { class: "muted", "Trade-thesis outcome evidence is unavailable right now." }
             } else {
                 div { class: "quality-score-row",
@@ -6600,8 +6598,8 @@ fn TradeThesisOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs
                     span { class: "status", "{minimum_complete} five-session samples needed" }
                 }
                 div { class: "grid-2",
-                    div { class: "event", strong { "1 session" } span { class: "muted block", "{outcome_label(one_session)}" } }
-                    div { class: "event", strong { "5 sessions" } span { class: "muted block", "{outcome_label(five_session)}" } }
+                    div { class: "event", strong { "1 session" } span { class: "muted block", "{outcome_label(one_session.sample_count, one_session.average_directional_return_pct, one_session.positive_return_rate)}" } }
+                    div { class: "event", strong { "5 sessions" } span { class: "muted block", "{outcome_label(five_session.sample_count, five_session.average_directional_return_pct, five_session.positive_return_rate)}" } }
                 }
                 p { class: "muted", "{interpretation}" }
             }
