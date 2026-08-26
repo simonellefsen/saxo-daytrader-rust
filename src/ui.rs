@@ -13,21 +13,22 @@ use crate::{
     models::{
         DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
         DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
-        DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowPayload, DashboardQuiverSignalPayload,
-        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
+        DashboardExecutionFillPayload, DashboardHermesBaselineEvidencePackPayload,
+        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
+        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
+        DashboardQuiverSignalPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -4351,28 +4352,21 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .iter()
         .find(|row| {
             matches!(
-                text(row, "status").as_str(),
+                row.status.as_str(),
                 "xai_deferred" | "dry_run_xai_deferred" | "pending"
             )
         })
         .cloned();
     let report_generation_pending = pending_report.is_some() || data.manual_report_in_flight;
-    let pending_report_id = pending_report
-        .as_ref()
-        .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
-        .unwrap_or(0);
+    let pending_report_id = pending_report.as_ref().map(|row| row.id).unwrap_or(0);
     // Baseline for the completion poll: the newest report at render time.
     // The poll only navigates when the latest report differs from this,
     // so a spawned manual run cannot cause a reload loop while it works.
-    let baseline_report_id = data
-        .reports
-        .first()
-        .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
-        .unwrap_or(0);
+    let baseline_report_id = data.reports.first().map(|row| row.id).unwrap_or(0);
     let baseline_report_status = data
         .reports
         .first()
-        .map(|row| text(row, "status"))
+        .map(|row| row.status.clone())
         .unwrap_or_default();
     let generate_label = if report_generation_pending {
         "Generating Report..."
@@ -5142,48 +5136,42 @@ struct DecisionReportDebugPayload {
 }
 
 fn decision_pulse_health(
-    reports: &[JsonValue],
+    reports: &[DashboardDecisionReportSummaryPayload],
     pulse_key_prefix: &str,
     label: &str,
 ) -> DecisionPulseHealth {
     let latest = reports.iter().find(|row| {
-        text(row, "analysis_pulse_key")
+        row.analysis_pulse_key
             .to_lowercase()
             .starts_with(pulse_key_prefix)
     });
     let last_success = reports.iter().find(|row| {
-        text(row, "analysis_pulse_key")
+        row.analysis_pulse_key
             .to_lowercase()
             .starts_with(pulse_key_prefix)
-            && matches!(text(row, "status").as_str(), "completed" | "xai_fallback")
+            && matches!(row.status.as_str(), "completed" | "xai_fallback")
     });
     let latest_status = latest
-        .map(|row| fallback_text(row, "status", "missing"))
+        .map(|row| row.status.clone())
         .unwrap_or_else(|| "missing".to_string());
 
     DecisionPulseHealth {
         label: label.to_string(),
         latest_tone: decision_status_text_tone(&latest_status),
         latest_status,
-        latest_created_at: latest
-            .map(|row| text(row, "created_at"))
-            .unwrap_or_default(),
-        latest_id: latest
-            .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
-            .unwrap_or(0),
+        latest_created_at: latest.map(|row| row.created_at.clone()).unwrap_or_default(),
+        latest_id: latest.map(|row| row.id).unwrap_or(0),
         last_success_at: last_success
-            .map(|row| text(row, "created_at"))
+            .map(|row| row.created_at.clone())
             .unwrap_or_default(),
-        last_success_id: last_success
-            .and_then(|row| row.get("id").and_then(JsonValue::as_i64))
-            .unwrap_or(0),
+        last_success_id: last_success.map(|row| row.id).unwrap_or(0),
         last_failure_at: String::new(),
         last_failure_id: 0,
         last_failure_status: String::new(),
         attempts_7d: reports
             .iter()
             .filter(|row| {
-                text(row, "analysis_pulse_key")
+                row.analysis_pulse_key
                     .to_lowercase()
                     .starts_with(pulse_key_prefix)
             })
@@ -5651,32 +5639,27 @@ fn SymbolSentimentRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn DecisionReportRow(row: JsonValue, prefs: LocalizationPrefs, selected_id: i64) -> Element {
-    let id = row.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
-    let report_json = row.get("report_json").cloned().unwrap_or(JsonValue::Null);
-    let selected = if report_json.is_null() {
-        "-".to_string()
+fn DecisionReportRow(
+    row: DashboardDecisionReportSummaryPayload,
+    prefs: LocalizationPrefs,
+    selected_id: i64,
+) -> Element {
+    let id = row.id;
+    let created_at = row.created_at;
+    let status = row.status;
+    let strategy = if row.analysis_pulse_label.is_empty() {
+        row.model
     } else {
-        json_array(&report_json, "selected_assets")
-            .len()
-            .max(json_array(&report_json, "candidate_assets").len())
-            .to_string()
-    };
-    let trades = if report_json.is_null() {
-        "-".to_string()
-    } else {
-        json_array(&report_json, "suggested_trades")
-            .len()
-            .to_string()
+        row.analysis_pulse_label
     };
     let active = id == selected_id;
     rsx! {
         tr { class: if active { "selected-row" } else { "" },
-            td { a { href: "/?view=decisions&report_id={id}", "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" } }
-            td { "{text(&row, \"status\")}" }
-            td { "{fallback_text(&row, \"analysis_pulse_label\", &text(&row, \"model\"))}" }
-            td { "{selected}" }
-            td { "{trades}" }
+            td { a { href: "/?view=decisions&report_id={id}", "{format_timestamp(&created_at, &prefs)}" } }
+            td { "{status}" }
+            td { "{strategy}" }
+            td { "-" }
+            td { "-" }
         }
     }
 }
@@ -8369,10 +8352,10 @@ fn HermesExperimentRow(row: DashboardHermesExperimentPayload, prefs: Localizatio
 }
 
 #[component]
-fn DecisionCard(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let id = text(&row, "id");
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
-    let status = text(&row, "status");
+fn DecisionCard(row: DashboardDecisionReportSummaryPayload, prefs: LocalizationPrefs) -> Element {
+    let id = row.id;
+    let created_at = format_timestamp(&row.created_at, &prefs);
+    let status = row.status;
     rsx! {
         div { class: "event",
             strong { "Decision #{id}" }
@@ -12448,24 +12431,27 @@ mod tests {
     #[test]
     fn derives_decision_pulse_health_from_recent_reports() {
         let reports = vec![
-            json!({
-                "id": 12,
-                "created_at": "2026-06-24T14:45:00Z",
-                "status": "xai_error",
-                "analysis_pulse_key": "us_open_followup:2026-06-24",
-            }),
-            json!({
-                "id": 11,
-                "created_at": "2026-06-23T14:45:00Z",
-                "status": "xai_fallback",
-                "analysis_pulse_key": "us_open_followup:2026-06-23",
-            }),
-            json!({
-                "id": 10,
-                "created_at": "2026-06-24T08:15:00Z",
-                "status": "completed",
-                "analysis_pulse_key": "europe_open_followup:2026-06-24",
-            }),
+            DashboardDecisionReportSummaryPayload {
+                id: 12,
+                created_at: "2026-06-24T14:45:00Z".to_string(),
+                status: "xai_error".to_string(),
+                analysis_pulse_key: "us_open_followup:2026-06-24".to_string(),
+                ..DashboardDecisionReportSummaryPayload::default()
+            },
+            DashboardDecisionReportSummaryPayload {
+                id: 11,
+                created_at: "2026-06-23T14:45:00Z".to_string(),
+                status: "xai_fallback".to_string(),
+                analysis_pulse_key: "us_open_followup:2026-06-23".to_string(),
+                ..DashboardDecisionReportSummaryPayload::default()
+            },
+            DashboardDecisionReportSummaryPayload {
+                id: 10,
+                created_at: "2026-06-24T08:15:00Z".to_string(),
+                status: "completed".to_string(),
+                analysis_pulse_key: "europe_open_followup:2026-06-24".to_string(),
+                ..DashboardDecisionReportSummaryPayload::default()
+            },
         ];
 
         let us = decision_pulse_health(&reports, "us_open_followup:", "US Open +1h15");

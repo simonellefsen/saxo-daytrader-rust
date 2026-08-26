@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Decision Report summaries
+
+- Changed the overview and Decisions list to consume typed report identity, lifecycle, model, and pulse metadata from the existing lightweight SQL projection.
+- Full report, prompt, request, response, error, and debug documents remain on the selected-report and lazy debug paths; malformed list metadata degrades to an empty local list.
+- This preserves the existing Decision Report selection and pulse-status fallback behavior and cannot generate a report, change queue eligibility, invoke Hermes, or mutate a Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard Quiver signal rows
 
 - Changed the paginated Quiver signals table to consume explicit rendered market, Congress aggregate, date, status, and bounded sanitized-error fields.

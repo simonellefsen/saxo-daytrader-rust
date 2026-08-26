@@ -39,30 +39,31 @@ use crate::{
         CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
-        DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
-        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
-        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardQuiverSignalPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
+        DashboardExecutionFillPayload, DashboardHermesBaselineEvidencePackPayload,
+        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
+        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
+        DashboardMissedTradeShadowPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardStrategyJournalEntryPayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3654,6 +3655,28 @@ fn dashboard_quiver_signals_from_json(
                     .unwrap_or_else(|| "n/a".to_string()),
                 status: dashboard_required_string(&signal, "status")?,
                 error_text,
+            })
+        })
+        .collect()
+}
+
+/// Decodes the bounded Decision Report summary list. Detailed report/provider
+/// documents remain on the selected-report and lazy debug paths.
+fn dashboard_decision_report_summaries_from_json(
+    reports: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardDecisionReportSummaryPayload>> {
+    reports
+        .into_iter()
+        .map(|report| {
+            Ok(DashboardDecisionReportSummaryPayload {
+                id: dashboard_required_i64(&report, "id")?,
+                created_at: dashboard_required_string(&report, "created_at")?,
+                status: dashboard_required_string(&report, "status")?,
+                model: dashboard_optional_string(&report, "model")?.unwrap_or_default(),
+                analysis_pulse_key: dashboard_optional_string(&report, "analysis_pulse_key")?
+                    .unwrap_or_default(),
+                analysis_pulse_label: dashboard_optional_string(&report, "analysis_pulse_label")?
+                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -7257,6 +7280,11 @@ impl AppState {
             dashboard_latest_decision_from_json(latest_decision).unwrap_or_else(|err| {
                 warn!("dashboard typed latest decision degraded: {err:#}");
                 LatestDecisionStatusPayload::default()
+            });
+        let reports =
+            dashboard_decision_report_summaries_from_json(reports).unwrap_or_else(|err| {
+                warn!("dashboard typed Decision Report summaries degraded: {err:#}");
+                Vec::new()
             });
         let summary = overview
             .get("portfolio_summary")
@@ -18156,6 +18184,38 @@ mod tests {
                 .is_none()
         );
         assert!(dashboard_latest_decision_from_json(json!({"status": 42})).is_err());
+    }
+
+    #[test]
+    fn dashboard_decision_report_summaries_keep_detail_documents_outside_ssr() {
+        let reports = dashboard_decision_report_summaries_from_json(vec![json!({
+            "id": 312,
+            "created_at": "2026-08-26T12:00:00Z",
+            "status": "completed",
+            "model": "openai/gpt-5",
+            "analysis_pulse_key": "us_open_followup:2026-08-26",
+            "analysis_pulse_label": "US Open +1h15",
+            "report_json": {"api_key": "must-not-reach-the-dashboard"},
+            "request_json": {"token": "must-not-reach-the-dashboard"},
+            "response_json": {"provider": "must-not-reach-the-dashboard"},
+            "prompt_text": "must-not-reach-the-dashboard",
+            "error_text": "must-not-reach-the-dashboard"
+        })])
+        .expect("stable Decision Report summary decodes");
+
+        assert_eq!(reports[0].id, 312);
+        assert_eq!(reports[0].analysis_pulse_label, "US Open +1h15");
+        assert!(
+            !serde_json::to_string(&reports)
+                .expect("typed Decision Report summaries serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_decision_report_summaries_from_json(vec![json!({
+                "id": 312
+            })])
+            .is_err()
+        );
     }
 
     #[test]

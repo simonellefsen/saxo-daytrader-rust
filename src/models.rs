@@ -57,7 +57,7 @@ pub struct DashboardView {
     pub execution_trade_thesis_evidence: DashboardTradeThesisEvidencePayload,
     pub execution_holding_thesis_reviews: DashboardHoldingThesisReviewsPayload,
     pub execution_decision_pulse_evidence: DashboardDecisionPulseEvidencePayload,
-    pub reports: Vec<JsonValue>,
+    pub reports: Vec<DashboardDecisionReportSummaryPayload>,
     pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
     pub journal_entries: Vec<DashboardStrategyJournalEntryPayload>,
@@ -128,6 +128,21 @@ pub struct DecisionPulseStatusPayload {
     pub last_success: Option<DecisionPulseReportStatusPayload>,
     pub last_failure: Option<DecisionPulseReportStatusPayload>,
     pub attempts_7d: i64,
+}
+
+/// One compact Decision Report summary rendered in the overview and list view.
+///
+/// Full report, prompt, request, response, and debug documents stay behind the
+/// selected-report and lazy debug paths. This metadata cannot generate a
+/// report, change queue eligibility, reach Hermes, or mutate a Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardDecisionReportSummaryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub status: String,
+    pub model: String,
+    pub analysis_pulse_key: String,
+    pub analysis_pulse_label: String,
 }
 
 /// One compact, reconciled broker-fill observation shown in the dashboard.
