@@ -36,27 +36,30 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesCounterfactualPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
-        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        CashBufferSettings, DashboardAiSettingsPayload,
+        DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
+        DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
+        DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3728,7 +3731,111 @@ fn dashboard_holding_thesis_reviews_unavailable() -> DashboardHoldingThesisRevie
     }
 }
 
+/// Decodes the bounded execution-attributed decision-pulse aggregates. Manager
+/// documents, broker payloads, raw fills, and raw ledger rows remain in their
+/// local audit paths.
+fn dashboard_decision_pulse_evidence_from_json(
+    evidence: JsonValue,
+) -> serde_json::Result<DashboardDecisionPulseEvidencePayload> {
+    Ok(DashboardDecisionPulseEvidencePayload {
+        status: dashboard_required_string(&evidence, "status")?,
+        overall: dashboard_decision_pulse_outcome_from_json(
+            evidence.get("overall").cloned().unwrap_or(JsonValue::Null),
+        )?,
+        pulses: evidence
+            .get("pulses")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .ok_or_else(|| serde_json::Error::io(std::io::Error::other("missing pulses")))?
+            .into_iter()
+            .map(|pulse| {
+                Ok(DashboardDecisionPulseOutcomeRowPayload {
+                    pulse_label: dashboard_required_string(&pulse, "pulse_label")?,
+                    outcome: dashboard_decision_pulse_outcome_from_json(
+                        pulse.get("outcome").cloned().unwrap_or(JsonValue::Null),
+                    )?,
+                })
+            })
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        minimum_complete_observations: dashboard_required_i64(
+            &evidence,
+            "minimum_complete_observations",
+        )?,
+        interpretation: dashboard_required_string(&evidence, "interpretation")?,
+    })
+}
+
+fn dashboard_decision_pulse_outcome_from_json(
+    outcome: JsonValue,
+) -> serde_json::Result<DashboardDecisionPulseOutcomePayload> {
+    let realised_sell = outcome
+        .get("realised_sell")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    Ok(DashboardDecisionPulseOutcomePayload {
+        attributed_order_count: dashboard_required_i64(&outcome, "attributed_order_count")?,
+        hermes_reviewed_order_count: dashboard_required_i64(
+            &outcome,
+            "hermes_reviewed_order_count",
+        )?,
+        one_session: dashboard_decision_pulse_directional_outcome_from_json(
+            outcome
+                .get("one_session")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+        five_session: dashboard_decision_pulse_directional_outcome_from_json(
+            outcome
+                .get("five_session")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+        reconciled_sell_order_count: dashboard_required_i64(
+            &outcome,
+            "reconciled_sell_order_count",
+        )?,
+        realised_sell_gain_dkk: dashboard_required_f64(&realised_sell, "realised_gain_dkk")?,
+        execution_status_counts: serde_json::from_value(
+            outcome
+                .get("execution_status_counts")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+        hermes_effect_counts: serde_json::from_value(
+            outcome
+                .get("hermes_effect_counts")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+        )?,
+    })
+}
+
+fn dashboard_decision_pulse_directional_outcome_from_json(
+    outcome: JsonValue,
+) -> serde_json::Result<DashboardDecisionPulseDirectionalOutcomePayload> {
+    Ok(DashboardDecisionPulseDirectionalOutcomePayload {
+        sample_count: dashboard_required_i64(&outcome, "sample_count")?,
+        average_directional_return_pct: dashboard_optional_f64(
+            &outcome,
+            "average_directional_return_pct",
+        )?,
+        positive_return_rate: dashboard_optional_f64(&outcome, "positive_return_rate")?,
+    })
+}
+
+fn dashboard_decision_pulse_evidence_unavailable() -> DashboardDecisionPulseEvidencePayload {
+    DashboardDecisionPulseEvidencePayload {
+        status: "unavailable".to_string(),
+        interpretation: "Decision-pulse outcome evidence is unavailable right now.".to_string(),
+        ..DashboardDecisionPulseEvidencePayload::default()
+    }
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn dashboard_required_f64(row: &JsonValue, key: &str) -> serde_json::Result<f64> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
 
@@ -6023,21 +6130,20 @@ impl AppState {
             } else {
                 DashboardHoldingThesisReviewsPayload::default()
             };
-        let execution_decision_pulse_evidence = if dashboard_loads_tab_exclusive_data(
-            &active_view,
-            "execution",
-        ) {
-            self.decision_pulse_outcome_evidence().await.unwrap_or_else(|err| {
-                warn!("dashboard decision-pulse outcome evidence degraded: {err:#}");
-                json!({
-                    "status": "unavailable",
-                    "safety": "read_only_local_execution_orders_fills_ledger_and_daily_indicator_closes_no_saxo_provider_hermes_or_order_mutation",
-                    "interpretation": "Decision-pulse outcome evidence could not be loaded. It does not affect gates, Hermes, configuration, or Saxo orders.",
-                })
-            })
-        } else {
-            JsonValue::Null
-        };
+        let execution_decision_pulse_evidence =
+            if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+                self.decision_pulse_outcome_evidence()
+                    .await
+                    .and_then(|evidence| {
+                        dashboard_decision_pulse_evidence_from_json(evidence).map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed decision-pulse evidence degraded: {err:#}");
+                        dashboard_decision_pulse_evidence_unavailable()
+                    })
+            } else {
+                DashboardDecisionPulseEvidencePayload::default()
+            };
         let execution_protection = if dashboard_loads_tab_exclusive_data(&active_view, "execution")
         {
             let coverage = self.protective_stop_coverage().await.unwrap_or_else(|err| {
@@ -18122,6 +18228,81 @@ mod tests {
         assert!(
             dashboard_holding_thesis_reviews_from_json(json!({
                 "status": "review_due"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_decision_pulse_evidence_keeps_raw_records_outside_ssr() {
+        let outcome = json!({
+            "attributed_order_count": 3,
+            "hermes_reviewed_order_count": 2,
+            "one_session": {
+                "sample_count": 2,
+                "average_directional_return_pct": 0.02,
+                "positive_return_rate": 0.5
+            },
+            "five_session": {
+                "sample_count": 1,
+                "average_directional_return_pct": -0.01,
+                "positive_return_rate": 0.0
+            },
+            "reconciled_sell_order_count": 1,
+            "realised_sell": {
+                "realised_gain_dkk": 125.0,
+                "commission_dkk": 14.0,
+                "tax_dkk": 35.0
+            },
+            "execution_status_counts": {"executed": 2, "broker_working": 1},
+            "hermes_effect_counts": {"allow": 2},
+            "manager_json": {"api_key": "must-not-reach-the-dashboard"}
+        });
+        let evidence = dashboard_decision_pulse_evidence_from_json(json!({
+            "status": "collecting",
+            "overall": outcome,
+            "pulses": [{
+                "pulse_key": "europe_open",
+                "pulse_label": "EU Open",
+                "outcome": {
+                    "attributed_order_count": 1,
+                    "hermes_reviewed_order_count": 1,
+                    "one_session": {
+                        "sample_count": 1,
+                        "average_directional_return_pct": 0.02,
+                        "positive_return_rate": 1.0
+                    },
+                    "five_session": {
+                        "sample_count": 0,
+                        "average_directional_return_pct": null,
+                        "positive_return_rate": null
+                    },
+                    "reconciled_sell_order_count": 0,
+                    "realised_sell": {
+                        "realised_gain_dkk": 0.0,
+                        "commission_dkk": 0.0,
+                        "tax_dkk": 0.0
+                    },
+                    "execution_status_counts": {"executed": 1},
+                    "hermes_effect_counts": {"allow": 1}
+                }
+            }],
+            "minimum_complete_observations": 20,
+            "interpretation": "Read-only pulse outcome evidence only.",
+            "raw_observations": [{"api_key": "must-not-reach-the-dashboard"}]
+        }))
+        .expect("stable decision-pulse aggregate decodes");
+
+        assert_eq!(evidence.overall.attributed_order_count, 3);
+        assert_eq!(evidence.pulses[0].outcome.realised_sell_gain_dkk, 0.0);
+        assert!(
+            !serde_json::to_string(&evidence)
+                .expect("typed decision-pulse aggregate serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_decision_pulse_evidence_from_json(json!({
+                "status": "collecting"
             }))
             .is_err()
         );

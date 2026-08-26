@@ -11,7 +11,9 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
+        DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
+        DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
@@ -6604,50 +6606,39 @@ fn TradeThesisOutcomeEvidencePanel(
 }
 
 #[component]
-fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&evidence, "status").replace('_', " ");
-    let overall = evidence.get("overall").unwrap_or(&JsonValue::Null);
-    let attributed_orders = value_i64(overall, "attributed_order_count");
-    let hermes_reviewed = value_i64(overall, "hermes_reviewed_order_count");
-    let minimum_complete = value_i64(&evidence, "minimum_complete_observations");
-    let outcome_label = |outcome: &JsonValue| {
-        let sample_count = value_i64(outcome, "sample_count");
+fn DecisionPulseOutcomeEvidencePanel(
+    evidence: DashboardDecisionPulseEvidencePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let raw_status = evidence.status.clone();
+    let status = raw_status.replace('_', " ");
+    let overall = evidence.overall;
+    let attributed_orders = overall.attributed_order_count;
+    let hermes_reviewed = overall.hermes_reviewed_order_count;
+    let minimum_complete = evidence.minimum_complete_observations;
+    let outcome_label = |outcome: &DashboardDecisionPulseDirectionalOutcomePayload| {
+        let sample_count = outcome.sample_count;
         let average = outcome
-            .get("average_directional_return_pct")
-            .and_then(JsonValue::as_f64)
+            .average_directional_return_pct
             .map(|value| format_signed_pct(value, &prefs))
             .unwrap_or_else(|| "pending".to_string());
         let positive_rate = outcome
-            .get("positive_return_rate")
-            .and_then(JsonValue::as_f64)
+            .positive_return_rate
             .map(|value| format_pct(value, &prefs))
             .unwrap_or_else(|| "pending".to_string());
         format!("{average} forward movement · {positive_rate} positive · {sample_count} samples")
     };
-    let realised_label = |outcome: &JsonValue| {
-        let reconciled = value_i64(outcome, "reconciled_sell_order_count");
-        let realised = outcome
-            .get("realised_sell")
-            .and_then(|value| value.get("realised_gain_dkk"))
-            .and_then(JsonValue::as_f64)
-            .map(|value| format_money(value, "DKK", &prefs))
-            .unwrap_or_else(|| "pending".to_string());
+    let realised_label = |outcome: &DashboardDecisionPulseOutcomePayload| {
+        let reconciled = outcome.reconciled_sell_order_count;
+        let realised = format_money(outcome.realised_sell_gain_dkk, "DKK", &prefs);
         format!("{realised} local ledger gain · {reconciled} reconciled SELLs")
     };
-    let hermes_effect_label = |outcome: &JsonValue| {
-        let Some(counts) = outcome
-            .get("hermes_effect_counts")
-            .and_then(JsonValue::as_object)
-        else {
-            return "no recorded effect".to_string();
-        };
-        let labels = counts
+    let hermes_effect_label = |outcome: &DashboardDecisionPulseOutcomePayload| {
+        let labels = outcome
+            .hermes_effect_counts
             .iter()
             .filter_map(|(effect, count)| {
-                count
-                    .as_i64()
-                    .filter(|count| *count > 0)
-                    .map(|count| format!("{}: {count}", effect.replace('_', " ")))
+                (*count > 0).then(|| format!("{}: {count}", effect.replace('_', " ")))
             })
             .collect::<Vec<_>>();
         if labels.is_empty() {
@@ -6656,20 +6647,12 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
             labels.join(" · ")
         }
     };
-    let execution_status_label = |outcome: &JsonValue| {
-        let Some(counts) = outcome
-            .get("execution_status_counts")
-            .and_then(JsonValue::as_object)
-        else {
-            return "no recorded state".to_string();
-        };
-        let labels = counts
+    let execution_status_label = |outcome: &DashboardDecisionPulseOutcomePayload| {
+        let labels = outcome
+            .execution_status_counts
             .iter()
             .filter_map(|(status, count)| {
-                count
-                    .as_i64()
-                    .filter(|count| *count > 0)
-                    .map(|count| format!("{}: {count}", status.replace('_', " ")))
+                (*count > 0).then(|| format!("{}: {count}", status.replace('_', " ")))
             })
             .collect::<Vec<_>>();
         if labels.is_empty() {
@@ -6678,16 +6661,8 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
             labels.join(" · ")
         }
     };
-    let pulses = evidence
-        .get("pulses")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let interpretation = text_or(
-        &evidence,
-        "interpretation",
-        "Read-only decision-pulse outcome evidence only.",
-    );
+    let pulses = evidence.pulses;
+    let interpretation = evidence.interpretation;
     rsx! {
         section { class: "section stack",
             div { class: "section-title-row compact",
@@ -6697,9 +6672,9 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                 }
                 span { class: "status", "{status}" }
             }
-            if text(&evidence, "status") == "no_attributable_orders" {
+            if raw_status == "no_attributable_orders" {
                 span { class: "muted", "No report-linked or portfolio-sync orders have been recorded yet." }
-            } else if text(&evidence, "status") == "unavailable" {
+            } else if raw_status == "unavailable" {
                 span { class: "muted", "Decision-pulse outcome evidence is unavailable right now." }
             } else {
                 div { class: "quality-score-row",
@@ -6710,11 +6685,11 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                 div { class: "grid-2",
                     div { class: "event",
                         strong { "All BUYs · 1 session" }
-                        span { class: "muted block", "{outcome_label(overall.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
+                        span { class: "muted block", "{outcome_label(&overall.one_session)}" }
                     }
                     div { class: "event",
                         strong { "All BUYs · 5 sessions" }
-                        span { class: "muted block", "{outcome_label(overall.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
+                        span { class: "muted block", "{outcome_label(&overall.five_session)}" }
                     }
                 }
                 div { class: "table-wrap",
@@ -6722,19 +6697,14 @@ fn DecisionPulseOutcomeEvidencePanel(evidence: JsonValue, prefs: LocalizationPre
                         thead { tr { th { "Pulse" } th { "Orders" } th { "BUY 1 session" } th { "BUY 5 sessions" } th { "SELL realised" } th { "Order state" } th { "Hermes effect" } } }
                         tbody {
                             for row in pulses {
-                                {
-                                    let outcome = row.get("outcome").unwrap_or(&JsonValue::Null);
-                                    rsx! {
-                                        tr {
-                                            td { strong { "{fallback_text(&row, \"pulse_label\", \"Other / legacy\")}" } }
-                                            td { "{value_i64(outcome, \"attributed_order_count\")}" }
-                                            td { "{outcome_label(outcome.get(\"one_session\").unwrap_or(&JsonValue::Null))}" }
-                                            td { "{outcome_label(outcome.get(\"five_session\").unwrap_or(&JsonValue::Null))}" }
-                                            td { "{realised_label(outcome)}" }
-                                            td { "{execution_status_label(outcome)}" }
-                                            td { "{hermes_effect_label(outcome)}" }
-                                        }
-                                    }
+                                tr {
+                                    td { strong { "{row.pulse_label}" } }
+                                    td { "{row.outcome.attributed_order_count}" }
+                                    td { "{outcome_label(&row.outcome.one_session)}" }
+                                    td { "{outcome_label(&row.outcome.five_session)}" }
+                                    td { "{realised_label(&row.outcome)}" }
+                                    td { "{execution_status_label(&row.outcome)}" }
+                                    td { "{hermes_effect_label(&row.outcome)}" }
                                 }
                             }
                         }

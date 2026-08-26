@@ -2500,3 +2500,8 @@ broker mutation was added.
 - Changed the Execution-tab Holding Thesis Reviews queue to consume typed review status, held/review coverage, staleness policy, and bounded display rows.
 - Raw position snapshots, execution/fill records, thesis documents, and safety metadata remain outside SSR; malformed review evidence degrades to the existing unavailable state.
 - The queue remains a read-only fresh-decision comparison prompt, not an exit signal, sizing instruction, manager gate, or broker action.
+## [2026-08-26] architecture | Type dashboard decision-pulse outcome evidence
+
+- Changed the Execution-tab Decision Pulse Outcome Evidence panel to consume typed pulse labels, outcome counts, directional-return summaries, reconciled SELL totals, and normalized lifecycle/Hermes-effect counts.
+- Raw manager documents, broker payloads, fills, ledger rows, scan metadata, and safety markers remain outside SSR; malformed aggregate evidence degrades to the existing unavailable state.
+- BUY forward movement and reconciled SELL accounting remain distinct observational fields; Hermes effects classify recorded advice application only and cannot change Hermes, configuration, gates, queues, prechecks, or Saxo orders.

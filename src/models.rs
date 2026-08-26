@@ -56,7 +56,7 @@ pub struct DashboardView {
     pub execution_events: Vec<DashboardExecutionEventPayload>,
     pub execution_trade_thesis_evidence: DashboardTradeThesisEvidencePayload,
     pub execution_holding_thesis_reviews: DashboardHoldingThesisReviewsPayload,
-    pub execution_decision_pulse_evidence: JsonValue,
+    pub execution_decision_pulse_evidence: DashboardDecisionPulseEvidencePayload,
     pub reports: Vec<JsonValue>,
     pub manual_report_in_flight: bool,
     pub decision_pulse_statuses: Vec<DecisionPulseStatusPayload>,
@@ -410,6 +410,54 @@ pub struct DashboardHoldingThesisReviewsPayload {
     pub review_count: i64,
     pub decision_stale_after_days: i64,
     pub reviews: Vec<DashboardHoldingThesisReviewPayload>,
+    pub interpretation: String,
+}
+
+/// Equal-weighted forward price movement for reconciled BUY fills.
+///
+/// This is an observed local-close comparison, not unrealised P/L or a
+/// performance attribution claim.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardDecisionPulseDirectionalOutcomePayload {
+    pub sample_count: i64,
+    pub average_directional_return_pct: Option<f64>,
+    pub positive_return_rate: Option<f64>,
+}
+
+/// Read-only execution outcome summary for one report pulse.
+///
+/// BUY directional movement and reconciled SELL local-ledger accounting remain
+/// deliberately separate. Hermes effects classify stored advice application,
+/// never its causal performance impact.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardDecisionPulseOutcomePayload {
+    pub attributed_order_count: i64,
+    pub hermes_reviewed_order_count: i64,
+    pub one_session: DashboardDecisionPulseDirectionalOutcomePayload,
+    pub five_session: DashboardDecisionPulseDirectionalOutcomePayload,
+    pub reconciled_sell_order_count: i64,
+    pub realised_sell_gain_dkk: f64,
+    pub execution_status_counts: BTreeMap<String, i64>,
+    pub hermes_effect_counts: BTreeMap<String, i64>,
+}
+
+/// One displayable decision-pulse outcome row.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardDecisionPulseOutcomeRowPayload {
+    pub pulse_label: String,
+    pub outcome: DashboardDecisionPulseOutcomePayload,
+}
+
+/// Read-only, execution-attributed outcome evidence grouped by report pulse.
+///
+/// It excludes manager documents and broker payloads. It cannot change Hermes,
+/// configuration, manager gates, queues, prechecks, or Saxo orders.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardDecisionPulseEvidencePayload {
+    pub status: String,
+    pub overall: DashboardDecisionPulseOutcomePayload,
+    pub pulses: Vec<DashboardDecisionPulseOutcomeRowPayload>,
+    pub minimum_complete_observations: i64,
     pub interpretation: String,
 }
 
