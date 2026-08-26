@@ -70,7 +70,7 @@ pub struct DashboardView {
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
     pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
-    pub missed_trade_shadows: Vec<JsonValue>,
+    pub missed_trade_shadows: Vec<DashboardMissedTradeShadowPayload>,
     pub missed_trade_shadow_evidence: JsonValue,
     pub active_strategy_baseline: JsonValue,
     pub hermes_baseline_evidence_pack: JsonValue,
@@ -287,6 +287,31 @@ pub struct DashboardHermesCounterfactualPayload {
     pub symbol: String,
     pub action: String,
     pub source_effect: String,
+    pub shadow_quantity: f64,
+    pub reference_price_local: Option<f64>,
+    pub reference_price_at: Option<String>,
+    pub reference_price_source: Option<String>,
+    pub reported_reference_price_local: Option<f64>,
+    pub currency: Option<String>,
+    pub status: String,
+    pub latest_price_local: Option<f64>,
+    pub latest_price_at: Option<String>,
+    pub estimated_return_pct: Option<f64>,
+    pub estimated_pnl_local: Option<f64>,
+}
+
+/// One observational outcome for a BUY blocked by a deterministic manager gate.
+///
+/// This records a missed-trade shadow, not a recommendation to override the
+/// gate or execute the trade. It excludes execution, fees, FX, and slippage,
+/// and cannot create, place, cancel, or modify an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardMissedTradeShadowPayload {
+    pub report_id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub action: String,
+    pub source_gate: String,
     pub shadow_quantity: f64,
     pub reference_price_local: Option<f64>,
     pub reference_price_at: Option<String>,

@@ -15,12 +15,13 @@ use crate::{
         DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -8636,24 +8637,35 @@ fn HermesCounterfactualRow(
 }
 
 #[component]
-fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let currency = fallback_text(&row, "currency", "DKK");
-    let reference = optional_json_number(&row, "reference_price_local")
+fn MissedTradeShadowRow(
+    row: DashboardMissedTradeShadowPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let currency = row.currency.clone().unwrap_or_else(|| "DKK".to_string());
+    let reference = row
+        .reference_price_local
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let reference_source = fallback_text(&row, "reference_price_source", "unverified");
-    let reported_reference = optional_json_number(&row, "reported_reference_price_local")
+    let reference_source = row
+        .reference_price_source
+        .unwrap_or_else(|| "unverified".to_string());
+    let reported_reference = row
+        .reported_reference_price_local
         .map(|value| format_money(value, &currency, &prefs));
-    let latest = optional_json_number(&row, "latest_price_local")
+    let latest = row
+        .latest_price_local
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let estimated_return = optional_json_number(&row, "estimated_return_pct")
+    let estimated_return = row
+        .estimated_return_pct
         .map(|value| format_percent(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let estimated_pnl = optional_json_number(&row, "estimated_pnl_local")
+    let estimated_pnl = row
+        .estimated_pnl_local
         .map(|value| format_money(value, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let return_tone = optional_json_number(&row, "estimated_return_pct")
+    let return_tone = row
+        .estimated_return_pct
         .map(|value| {
             if value > 0.0 {
                 "good-text"
@@ -8664,26 +8676,32 @@ fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
         })
         .unwrap_or("");
-    let status = fallback_text(&row, "status", "unknown");
-    let gate = fallback_text(&row, "source_gate", "unknown").replace('_', " ");
-    let action = fallback_text(&row, "action", "n/a");
+    let status = row.status;
+    let gate = row.source_gate.replace('_', " ");
+    let action = row.action;
+    let report_id = row.report_id;
+    let created_at = row.created_at;
+    let symbol = row.symbol;
+    let shadow_quantity = row.shadow_quantity;
+    let reference_price_at = row.reference_price_at.unwrap_or_default();
+    let latest_price_at = row.latest_price_at.unwrap_or_default();
     rsx! {
         tr {
             td {
-                span { "#{text(&row, \"report_id\")}" }
-                small { class: "muted block", "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+                span { "#{report_id}" }
+                small { class: "muted block", "{format_timestamp(&created_at, &prefs)}" }
             }
             td {
-                strong { "{text(&row, \"symbol\")}" }
+                strong { "{symbol}" }
                 small { class: "muted block", "{action}" }
             }
             td { "{gate}" }
-            td { "{format_quantity(value_f64(&row, \"shadow_quantity\"), &prefs)}" }
+            td { "{format_quantity(shadow_quantity, &prefs)}" }
             td {
                 span { "{reference}" }
                 small { class: "muted block", "{reference_source}" }
-                if !text(&row, "reference_price_at").is_empty() {
-                    small { class: "muted block", "{format_timestamp(&text(&row, \"reference_price_at\"), &prefs)}" }
+                if !reference_price_at.is_empty() {
+                    small { class: "muted block", "{format_timestamp(&reference_price_at, &prefs)}" }
                 }
                 if let Some(reported_reference) = reported_reference {
                     small { class: "muted block", "Report context: {reported_reference}" }
@@ -8691,8 +8709,8 @@ fn MissedTradeShadowRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
             }
             td {
                 span { "{latest}" }
-                if !text(&row, "latest_price_at").is_empty() {
-                    small { class: "muted block", "{format_timestamp(&text(&row, \"latest_price_at\"), &prefs)}" }
+                if !latest_price_at.is_empty() {
+                    small { class: "muted block", "{format_timestamp(&latest_price_at, &prefs)}" }
                 }
             }
             td { class: "{return_tone}", "{estimated_return}" }

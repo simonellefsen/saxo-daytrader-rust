@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard missed-trade shadow evidence
+
+- Changed the Missed Trade Shadows table to consume typed quote-to-quote observation fields and its distinct manager-gate reason.
+- Manager-gate audit data and broker payloads remain outside SSR; malformed shadow evidence degrades to an empty local table.
+- These remain observational estimates, not a recommendation to override a gate or execute a trade; they exclude execution, fees, FX, and slippage and cannot mutate Saxo orders.
+
 ## [2026-08-26] architecture | Type dashboard Hermes counterfactual evidence
 
 - Changed the Counterfactual Tracking table to consume typed quote-to-quote observation fields rather than generic JSON.

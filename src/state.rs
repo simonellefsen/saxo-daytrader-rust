@@ -40,7 +40,8 @@ use crate::{
         DashboardExecutionFillPayload, DashboardHermesCounterfactualPayload,
         DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
         DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
         DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
         DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
         DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
@@ -3532,6 +3533,44 @@ fn dashboard_hermes_counterfactuals_from_json(
         .collect()
 }
 
+/// Decodes the read-only missed-trade shadow observations displayed beside
+/// Hermes counterfactuals. The manager-gate audit and broker mutation paths
+/// remain outside the SSR boundary.
+fn dashboard_missed_trade_shadows_from_json(
+    shadows: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardMissedTradeShadowPayload>> {
+    shadows
+        .into_iter()
+        .map(|row| {
+            Ok(DashboardMissedTradeShadowPayload {
+                report_id: dashboard_required_i64(&row, "report_id")?,
+                created_at: dashboard_required_string(&row, "created_at")?,
+                symbol: dashboard_required_string(&row, "symbol")?,
+                action: dashboard_required_string(&row, "action")?,
+                source_gate: dashboard_required_string(&row, "source_gate")?,
+                shadow_quantity: serde_json::from_value(
+                    row.get("shadow_quantity")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                reference_price_local: dashboard_optional_f64(&row, "reference_price_local")?,
+                reference_price_at: dashboard_optional_string(&row, "reference_price_at")?,
+                reference_price_source: dashboard_optional_string(&row, "reference_price_source")?,
+                reported_reference_price_local: dashboard_optional_f64(
+                    &row,
+                    "reported_reference_price_local",
+                )?,
+                currency: dashboard_optional_string(&row, "currency")?,
+                status: dashboard_required_string(&row, "status")?,
+                latest_price_local: dashboard_optional_f64(&row, "latest_price_local")?,
+                latest_price_at: dashboard_optional_string(&row, "latest_price_at")?,
+                estimated_return_pct: dashboard_optional_f64(&row, "estimated_return_pct")?,
+                estimated_pnl_local: dashboard_optional_f64(&row, "estimated_pnl_local")?,
+            })
+        })
+        .collect()
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -6099,8 +6138,11 @@ impl AppState {
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "advice") {
                 self.missed_trade_shadows(MISSED_TRADE_SHADOW_LIMIT)
                     .await
+                    .and_then(|shadows| {
+                        dashboard_missed_trade_shadows_from_json(shadows).map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard missed-trade shadows degraded: {err:#}");
+                        warn!("dashboard typed missed-trade shadows degraded: {err:#}");
                         Vec::new()
                     })
             } else {
@@ -17774,6 +17816,44 @@ mod tests {
         assert!(
             dashboard_hermes_counterfactuals_from_json(vec![json!({
                 "report_id": 42
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_missed_trade_shadows_keep_gate_audit_payloads_outside_ssr() {
+        let shadows = dashboard_missed_trade_shadows_from_json(vec![json!({
+            "report_id": 43,
+            "created_at": "2026-08-26T08:30:00Z",
+            "symbol": "EXAMPLE:xnas",
+            "action": "BUY",
+            "source_gate": "cash_budget",
+            "shadow_quantity": 2.0,
+            "reference_price_local": 101.0,
+            "reference_price_at": "2026-08-26T08:30:00Z",
+            "reference_price_source": "saxo_infoprices",
+            "reported_reference_price_local": 100.0,
+            "currency": "USD",
+            "status": "tracking",
+            "latest_price_local": 110.0,
+            "latest_price_at": "2026-08-26T09:30:00Z",
+            "estimated_return_pct": 0.089,
+            "estimated_pnl_local": 18.0,
+            "manager_gate_audit_json": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable missed-trade shadow evidence decodes");
+
+        assert_eq!(shadows[0].source_gate, "cash_budget");
+        assert_eq!(shadows[0].estimated_pnl_local, Some(18.0));
+        assert!(
+            !serde_json::to_string(&shadows)
+                .expect("typed missed-trade shadow evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_missed_trade_shadows_from_json(vec![json!({
+                "report_id": 43
             })])
             .is_err()
         );
