@@ -66,7 +66,7 @@ pub struct DashboardView {
     pub hermes_lessons_pending_review: Vec<DashboardHermesLessonPendingReviewPayload>,
     pub hermes_learning_memory: Vec<DashboardHermesLearningMemoryPayload>,
     pub hermes_one_variable_audit: Vec<DashboardHermesOneVariableAuditPayload>,
-    pub hermes_proposal_quality: Vec<JsonValue>,
+    pub hermes_proposal_quality: Vec<DashboardHermesProposalQualityPayload>,
     pub hermes_experiments: Vec<JsonValue>,
     pub hermes_decision_advice_audit: Vec<JsonValue>,
     pub hermes_counterfactuals: Vec<JsonValue>,
@@ -251,6 +251,28 @@ pub struct DashboardHermesOneVariableAuditPayload {
     pub reason: Option<String>,
     pub scope: Option<String>,
     pub last_manager_state: Option<String>,
+}
+
+/// Deterministic, read-only rubric evidence for one Hermes proposal.
+///
+/// The dashboard retains only the scores, boolean review checks, duplicate
+/// counts, and bounded gap labels it renders. Persisted experiment documents,
+/// evidence payloads, and lifecycle controls remain outside this view.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesProposalQualityPayload {
+    pub created_at: Option<String>,
+    pub experiment_status: String,
+    pub variable: String,
+    pub quality_score: i64,
+    pub quality_status: String,
+    pub evidence_present: bool,
+    pub evidence_has_named_sources: bool,
+    pub measurable_effect: bool,
+    pub values_changed: bool,
+    pub risk_notes_present: bool,
+    pub exact_duplicate_count: usize,
+    pub related_family_count: usize,
+    pub gaps: Vec<String>,
 }
 
 /// Read-only evidence used to compare the scheduled decision pulses.

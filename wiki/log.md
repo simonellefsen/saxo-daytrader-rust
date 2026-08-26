@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] fix | Load and type Hermes proposal-quality evidence on Overview
+
+- Corrected the Hermes Overview query path: Proposal Quality Review now loads the bounded experiment evidence it scores instead of deriving from the Experiments-only list, which was always empty on Overview.
+- Changed the rendered rows to a typed rubric contract containing only displayable scores, checks, duplicate counts, and gap labels; persisted experiment/evidence documents remain outside SSR.
+- This preserves the advisory-only Hermes boundary and performs no proposal approval, lifecycle transition, configuration change, queue, precheck, or broker-order action.
+
 ## [2026-08-26] architecture | Type dashboard Hermes one-variable audit evidence
 
 - Changed the Hermes One-Variable Audit table to consume typed audit metadata and bounded display strings for baseline/candidate values.

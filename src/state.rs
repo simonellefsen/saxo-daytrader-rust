@@ -39,19 +39,20 @@ use crate::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
         DashboardExecutionFillPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
-        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, ProtectiveStopCoveragePayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardRunSchedulesPayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, HermesDecisionAdviceRequest,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3454,6 +3455,45 @@ fn dashboard_hermes_one_variable_audit_from_json(
         .collect()
 }
 
+/// Decodes the deterministic, display-only quality rubric for active Hermes
+/// proposals. The underlying experiment documents and their evidence stay
+/// outside the SSR boundary.
+fn dashboard_hermes_proposal_quality_from_json(
+    quality_rows: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesProposalQualityPayload>> {
+    quality_rows
+        .into_iter()
+        .map(|row| {
+            Ok(DashboardHermesProposalQualityPayload {
+                created_at: dashboard_optional_string(&row, "created_at")?,
+                experiment_status: dashboard_required_string(&row, "experiment_status")?,
+                variable: dashboard_required_string(&row, "variable")?,
+                quality_score: dashboard_required_i64(&row, "quality_score")?,
+                quality_status: dashboard_required_string(&row, "quality_status")?,
+                evidence_present: dashboard_required_boolish(&row, "evidence_present")?,
+                evidence_has_named_sources: dashboard_required_boolish(
+                    &row,
+                    "evidence_has_named_sources",
+                )?,
+                measurable_effect: dashboard_required_boolish(&row, "measurable_effect")?,
+                values_changed: dashboard_required_boolish(&row, "values_changed")?,
+                risk_notes_present: dashboard_required_boolish(&row, "risk_notes_present")?,
+                exact_duplicate_count: serde_json::from_value(
+                    row.get("exact_duplicate_count")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                related_family_count: serde_json::from_value(
+                    row.get("related_family_count")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                gaps: serde_json::from_value(row.get("gaps").cloned().unwrap_or(JsonValue::Null))?,
+            })
+        })
+        .collect()
+}
+
 fn dashboard_short_json(value: Option<&JsonValue>) -> String {
     let Some(value) = value else {
         return "n/a".to_string();
@@ -5973,7 +6013,17 @@ impl AppState {
             };
         let hermes_proposal_quality =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "overview") {
-                hermes_proposal_quality_from_experiments(&hermes_experiments)
+                self.hermes_experiments(20)
+                    .await
+                    .map(|experiments| hermes_proposal_quality_from_experiments(&experiments))
+                    .and_then(|quality_rows| {
+                        dashboard_hermes_proposal_quality_from_json(quality_rows)
+                            .map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed Hermes proposal quality degraded: {err:#}");
+                        Vec::new()
+                    })
             } else {
                 Vec::new()
             };
@@ -17603,6 +17653,41 @@ mod tests {
         assert!(
             dashboard_hermes_one_variable_audit_from_json(vec![json!({
                 "kind": "selected_overlay"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_proposal_quality_keeps_only_rubric_evidence() {
+        let quality_rows = dashboard_hermes_proposal_quality_from_json(vec![json!({
+            "created_at": "2026-08-26T08:30:00Z",
+            "experiment_status": "pending_review",
+            "variable": "strategy.capital.min_cash_buffer_pct",
+            "quality_score": 90,
+            "quality_status": "review_ready",
+            "evidence_present": true,
+            "evidence_has_named_sources": true,
+            "measurable_effect": true,
+            "values_changed": true,
+            "risk_notes_present": true,
+            "exact_duplicate_count": 0,
+            "related_family_count": 0,
+            "gaps": [],
+            "evidence_json": {"api_key": "must-not-reach-the-dashboard"}
+        })])
+        .expect("stable Hermes quality rubric decodes");
+
+        assert_eq!(quality_rows[0].quality_score, 90);
+        assert!(quality_rows[0].evidence_has_named_sources);
+        assert!(
+            !serde_json::to_string(&quality_rows)
+                .expect("typed proposal quality serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_proposal_quality_from_json(vec![json!({
+                "quality_score": 90
             })])
             .is_err()
         );

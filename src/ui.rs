@@ -13,13 +13,14 @@ use crate::{
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
         DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -8274,48 +8275,34 @@ fn HermesBaselineEvidenceWindowRow(
 }
 
 #[component]
-fn HermesProposalQualityRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let quality_status = text_or(&row, "quality_status", "needs_evidence");
+fn HermesProposalQualityRow(
+    row: DashboardHermesProposalQualityPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let quality_status = row.quality_status;
     let quality_class = match quality_status.as_str() {
         "review_ready" => "status good-status",
         "duplicate_risk" => "status bad-status",
         _ => "status warn-status",
     };
-    let evidence = match (
-        row.get("evidence_present").and_then(JsonValue::as_bool),
-        row.get("evidence_has_named_sources")
-            .and_then(JsonValue::as_bool),
-    ) {
-        (Some(true), Some(true)) => "attached + named",
-        (Some(true), _) => "attached",
+    let evidence = match (row.evidence_present, row.evidence_has_named_sources) {
+        (true, true) => "attached + named",
+        (true, _) => "attached",
         _ => "missing",
     };
-    let measurement = if row
-        .get("measurable_effect")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
+    let measurement = if row.measurable_effect {
         "defined"
     } else {
         "missing"
     };
-    let safety = match (
-        row.get("values_changed").and_then(JsonValue::as_bool),
-        row.get("risk_notes_present").and_then(JsonValue::as_bool),
-    ) {
-        (Some(true), Some(true)) => "values + risk notes",
-        (Some(true), _) => "risk notes missing",
-        (_, Some(true)) => "values unchanged",
+    let safety = match (row.values_changed, row.risk_notes_present) {
+        (true, true) => "values + risk notes",
+        (true, _) => "risk notes missing",
+        (_, true) => "values unchanged",
         _ => "incomplete",
     };
-    let exact_duplicates = row
-        .get("exact_duplicate_count")
-        .and_then(JsonValue::as_i64)
-        .unwrap_or(0);
-    let related_duplicates = row
-        .get("related_family_count")
-        .and_then(JsonValue::as_i64)
-        .unwrap_or(0);
+    let exact_duplicates = row.exact_duplicate_count;
+    let related_duplicates = row.related_family_count;
     let duplicate_risk = if exact_duplicates > 0 {
         format!("exact: {exact_duplicates}")
     } else if related_duplicates > 0 {
@@ -8323,22 +8310,16 @@ fn HermesProposalQualityRow(row: JsonValue, prefs: LocalizationPrefs) -> Element
     } else {
         "none".to_string()
     };
-    let gaps = row
-        .get("gaps")
-        .and_then(JsonValue::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .collect::<Vec<_>>()
-                .join("; ")
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "None".to_string());
-    let variable = text_or(&row, "variable", "n/a");
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
-    let experiment_status = text_or(&row, "experiment_status", "n/a");
-    let quality_score = text_or(&row, "quality_score", "0");
+    let gaps = row.gaps.join("; ");
+    let gaps = if gaps.is_empty() {
+        "None".to_string()
+    } else {
+        gaps
+    };
+    let variable = row.variable;
+    let created_at = format_timestamp(&row.created_at.unwrap_or_default(), &prefs);
+    let experiment_status = row.experiment_status;
+    let quality_score = row.quality_score;
     rsx! {
         tr {
             td {
