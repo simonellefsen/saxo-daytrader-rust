@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Markov signal rows
+
+- Changed the paginated Markov signals table to consume explicit rendered fields, including a flattened stationary distribution and bounded sanitized error text.
+- Transition matrices, forecasts, raw payloads, and provider diagnostics remain outside SSR; malformed rows degrade to the existing empty local page.
+- This preserves existing filters and pagination and cannot refresh Markov data or alter a Decision Report, manager gate, queue, precheck, or Saxo order.
+
 ## [2026-08-26] architecture | Type dashboard Hermes baseline evidence
 
 - Changed the Hermes Baselines view to consume typed promoted-baseline metadata, redacted/capped configuration display text, exact-overlay activity counts, and bounded local observation windows.

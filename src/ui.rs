@@ -20,13 +20,14 @@ use crate::{
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
         DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -4059,8 +4060,8 @@ fn MarkovView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let signal = value_f64(&row, "signed_signal");
+fn MarkovSignalRow(row: DashboardMarkovSignalPayload, prefs: LocalizationPrefs) -> Element {
+    let signal = row.signed_signal;
     let tone = if signal > 0.0 {
         "good-text"
     } else if signal < 0.0 {
@@ -4068,23 +4069,39 @@ fn MarkovSignalRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     } else {
         ""
     };
-    let status = text(&row, "status");
+    let status = row.status;
+    let symbol = row.symbol;
+    let instrument_name = row.instrument_name;
+    let current_state = row.current_state;
+    let direction = row.direction;
+    let bull_prob = row.bull_prob;
+    let sideways_prob = row.sideways_prob;
+    let bear_prob = row.bear_prob;
+    let stationary_distribution = format!(
+        "B {} / S {} / Bear {}",
+        format_pct(row.stationary_bull_prob, &prefs),
+        format_pct(row.stationary_sideways_prob, &prefs),
+        format_pct(row.stationary_bear_prob, &prefs),
+    );
+    let rolling_return = row.rolling_return;
+    let sample_count = row.sample_count;
+    let error_text = row.error_text;
     rsx! {
         tr {
-            td { SymbolLink { symbol: text(&row, "symbol"), instrument_name: text(&row, "instrument_name") } }
-            td { "{fallback_text(&row, \"current_state\", \"n/a\")}" }
+            td { SymbolLink { symbol, instrument_name } }
+            td { "{current_state}" }
             td { class: tone, "{format_signed_pct(signal, &prefs)}" }
-            td { "{fallback_text(&row, \"direction\", \"n/a\")}" }
-            td { "{format_pct(value_f64(&row, \"bull_prob\"), &prefs)}" }
-            td { "{format_pct(value_f64(&row, \"sideways_prob\"), &prefs)}" }
-            td { "{format_pct(value_f64(&row, \"bear_prob\"), &prefs)}" }
-            td { "{distribution_label(row.get(\"stationary_json\"), &prefs)}" }
-            td { class: if value_f64(&row, "rolling_return") >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_pct(value_f64(&row, \"rolling_return\"), &prefs)}" }
-            td { "{text(&row, \"sample_count\")}" }
+            td { "{direction}" }
+            td { "{format_pct(bull_prob, &prefs)}" }
+            td { "{format_pct(sideways_prob, &prefs)}" }
+            td { "{format_pct(bear_prob, &prefs)}" }
+            td { "{stationary_distribution}" }
+            td { class: if rolling_return >= 0.0 { "good-text" } else { "bad-text" }, "{format_signed_pct(rolling_return, &prefs)}" }
+            td { "{sample_count}" }
             td {
                 span { class: if status == "ok" { "pill good" } else { "pill bad" }, "{status}" }
                 if status != "ok" {
-                    div { class: "muted", "{text(&row, \"error_text\")}" }
+                    div { class: "muted", "{error_text}" }
                 }
             }
         }
@@ -10712,18 +10729,6 @@ fn format_optional_percentage_points(value: Option<f64>, prefs: &LocalizationPre
         .filter(|value| value.is_finite())
         .map(|value| format_pct(value / 100.0, prefs))
         .unwrap_or_else(|| "n/a".to_string())
-}
-
-fn distribution_label(value: Option<&JsonValue>, prefs: &LocalizationPrefs) -> String {
-    let Some(value) = value else {
-        return "n/a".to_string();
-    };
-    format!(
-        "B {} / S {} / Bear {}",
-        format_pct(value_f64(value, "Bull"), prefs),
-        format_pct(value_f64(value, "Sideways"), prefs),
-        format_pct(value_f64(value, "Bear"), prefs)
-    )
 }
 
 #[cfg(test)]

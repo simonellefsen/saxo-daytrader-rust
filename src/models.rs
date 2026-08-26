@@ -74,7 +74,7 @@ pub struct DashboardView {
     pub missed_trade_shadow_evidence: DashboardMissedTradeShadowEvidencePayload,
     pub active_strategy_baseline: Option<DashboardActiveStrategyBaselinePayload>,
     pub hermes_baseline_evidence_pack: DashboardHermesBaselineEvidencePackPayload,
-    pub markov_signals: Vec<JsonValue>,
+    pub markov_signals: Vec<DashboardMarkovSignalPayload>,
     pub latest_markov_run: DashboardLatestRunPayload,
     pub quiver_signals: Vec<JsonValue>,
     pub latest_quiver_run: DashboardLatestRunPayload,
@@ -316,6 +316,30 @@ pub struct DashboardHermesBaselineEvidencePackPayload {
     pub failed_order_count: usize,
     pub experiment_evaluation: DashboardHermesBaselineEvidenceWindowPayload,
     pub post_promotion: DashboardHermesBaselineEvidenceWindowPayload,
+}
+
+/// One bounded, read-only Markov signal row for the paginated dashboard table.
+///
+/// Transition matrices, forecasts, raw payloads, and provider diagnostics stay
+/// outside SSR. This observation cannot refresh a run or influence a manager
+/// gate, Decision Report, queue, precheck, or Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardMarkovSignalPayload {
+    pub symbol: String,
+    pub instrument_name: String,
+    pub current_state: String,
+    pub signed_signal: f64,
+    pub direction: String,
+    pub bull_prob: f64,
+    pub sideways_prob: f64,
+    pub bear_prob: f64,
+    pub stationary_bull_prob: f64,
+    pub stationary_sideways_prob: f64,
+    pub stationary_bear_prob: f64,
+    pub rolling_return: f64,
+    pub sample_count: i64,
+    pub status: String,
+    pub error_text: String,
 }
 
 /// Deterministic, read-only rubric evidence for one Hermes proposal.
