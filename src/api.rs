@@ -19,12 +19,12 @@ use crate::{
     localization::LocalizationPrefs,
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DashboardDecisionReportSummaryPayload, DecisionGateReplayPayload,
-        DecisionLatestPayload, DecisionPulseReportStatusPayload, DecisionReportListPayload,
-        DrawdownGuardOverrideRequest, ExecutionPayload, HermesExperimentRequest,
-        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
-        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
+        DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
+        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
+        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesExperimentsPayload,
+        HermesReflectionRequest, HermesReflectionsPayload, InstrumentQuarantineOverrideRequest,
+        LimitParams, LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
         MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
         OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
         PortfolioPositionsPayload, PortfolioTradesPayload,
@@ -39,7 +39,7 @@ use crate::{
         precheck_sim_protective_stop, protective_stop_lifecycle_error_is_state_unknown,
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
-    state::AppState,
+    state::{AppState, dashboard_positions_from_json},
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
     xai_decision,
@@ -1610,12 +1610,13 @@ async fn portfolio_positions(
         state
             .position_items(limit)
             .await
+            .and_then(|items| dashboard_positions_from_json(items).map_err(Into::into))
             .map(portfolio_positions_payload)
             .and_then(|payload| serde_json::to_value(payload).map_err(Into::into)),
     )
 }
 
-fn portfolio_positions_payload(items: Vec<JsonValue>) -> PortfolioPositionsPayload {
+fn portfolio_positions_payload(items: Vec<DashboardPositionPayload>) -> PortfolioPositionsPayload {
     PortfolioPositionsPayload {
         total: items.len(),
         items,
@@ -2758,8 +2759,14 @@ mod tests {
     #[test]
     fn portfolio_positions_response_keeps_the_typed_counted_list_envelope() {
         let payload = portfolio_positions_payload(vec![
-            json!({"symbol": "TSLA:xnas"}),
-            json!({"symbol": "NOVO-B:xcse"}),
+            DashboardPositionPayload {
+                symbol: "TSLA:xnas".to_string(),
+                ..DashboardPositionPayload::default()
+            },
+            DashboardPositionPayload {
+                symbol: "NOVO-B:xcse".to_string(),
+                ..DashboardPositionPayload::default()
+            },
         ]);
 
         assert_eq!(payload.total, 2);
@@ -2769,6 +2776,7 @@ mod tests {
             serde_json::to_value(payload).expect("portfolio positions payload serializes");
         assert_eq!(serialized["total"], 2);
         assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
+        assert!(serialized["items"][0].get("broker_payload").is_none());
     }
 
     #[test]

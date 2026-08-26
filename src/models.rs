@@ -1202,13 +1202,14 @@ pub struct DecisionReportListPayload {
 
 /// Bounded portfolio position-list envelope.
 ///
-/// Individual position rows remain compatibility JSON while the portfolio
-/// read model is converted incrementally. This type fixes the public
-/// count/list contract without changing Saxo or execution behavior.
+/// Each row is a stable read-only position projection. Broker/provider
+/// documents and unbounded advisory detail stay outside this API boundary.
+/// This list cannot refresh a quote, change a Decision Report, queue,
+/// precheck, or submit a Saxo order.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PortfolioPositionsPayload {
     pub total: usize,
-    pub items: Vec<JsonValue>,
+    pub items: Vec<DashboardPositionPayload>,
 }
 
 /// Bounded portfolio trade-list envelope.

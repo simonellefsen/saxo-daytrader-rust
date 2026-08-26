@@ -2575,3 +2575,7 @@ broker mutation was added.
 
 - Changed `/api/decision/reports` to use the compact summary query and typed `DashboardDecisionReportSummaryPayload` rows while retaining the `{ items }` response envelope.
 - Full prompt, request, response, normalized report, and error documents no longer cross that list endpoint; malformed rows fail closed at the read-only API boundary with no report, Hermes, queue, or broker side effect.
+## 2026-08-26 — Typed portfolio positions API
+
+- Changed `/api/portfolio/positions` to reuse the dashboard's stable typed position projection while retaining the count/list envelope.
+- Broker/provider payloads and unbounded advisory detail remain outside this API boundary; malformed data fails closed with no quote refresh, Decision Report, Hermes, queue, or broker side effect.

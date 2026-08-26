@@ -3732,7 +3732,7 @@ fn dashboard_selected_decision_from_json(
 
 /// Decodes stable overview position fields. The nested advisory decision stays
 /// compatibility JSON for the existing badge and chart only.
-fn dashboard_positions_from_json(
+pub(crate) fn dashboard_positions_from_json(
     positions: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardPositionPayload>> {
     positions
