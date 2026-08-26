@@ -2495,3 +2495,8 @@ broker mutation was added.
 - Changed the Execution-tab Trade Thesis Outcome Evidence card to consume typed aggregate status, recorded/fill coverage, and one/five-session directional-return summaries.
 - Raw thesis, fill, close, scan, and safety-marker data remain outside SSR; malformed aggregate evidence degrades to the existing unavailable state.
 - The aggregation remains observational only, excludes blocked candidates, FX, commission, tax, slippage, later position changes, broker adjustments, and causal claims, and cannot mutate Hermes, configuration, manager gates, or Saxo orders.
+## [2026-08-26] architecture | Type dashboard holding-thesis reviews
+
+- Changed the Execution-tab Holding Thesis Reviews queue to consume typed review status, held/review coverage, staleness policy, and bounded display rows.
+- Raw position snapshots, execution/fill records, thesis documents, and safety metadata remain outside SSR; malformed review evidence degrades to the existing unavailable state.
+- The queue remains a read-only fresh-decision comparison prompt, not an exit signal, sizing instruction, manager gate, or broker action.

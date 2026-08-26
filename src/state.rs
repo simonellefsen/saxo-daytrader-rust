@@ -40,7 +40,8 @@ use crate::{
         DashboardExecutionFillPayload, DashboardHermesCounterfactualPayload,
         DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
         DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
@@ -3682,6 +3683,51 @@ fn dashboard_trade_thesis_evidence_unavailable() -> DashboardTradeThesisEvidence
     }
 }
 
+/// Decodes the display-only holding-thesis review queue. Raw position
+/// snapshots, execution/fill records, thesis documents, and safety metadata
+/// remain in their local stores.
+fn dashboard_holding_thesis_reviews_from_json(
+    reviews: JsonValue,
+) -> serde_json::Result<DashboardHoldingThesisReviewsPayload> {
+    Ok(DashboardHoldingThesisReviewsPayload {
+        status: dashboard_required_string(&reviews, "status")?,
+        held_position_count: dashboard_required_i64(&reviews, "held_position_count")?,
+        review_count: dashboard_required_i64(&reviews, "review_count")?,
+        decision_stale_after_days: dashboard_required_i64(&reviews, "decision_stale_after_days")?,
+        reviews: reviews
+            .get("reviews")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .ok_or_else(|| serde_json::Error::io(std::io::Error::other("missing reviews")))?
+            .into_iter()
+            .map(|review| {
+                Ok(DashboardHoldingThesisReviewPayload {
+                    symbol: dashboard_required_string(&review, "symbol")?,
+                    instrument_name: dashboard_optional_string(&review, "instrument_name")?,
+                    status: dashboard_required_string(&review, "status")?,
+                    tracked_entry_at: dashboard_required_string(&review, "tracked_entry_at")?,
+                    age_days: dashboard_required_i64(&review, "age_days")?,
+                    intended_holding_window: dashboard_required_string(
+                        &review,
+                        "intended_holding_window",
+                    )?,
+                    entry_rationale: dashboard_required_string(&review, "entry_rationale")?,
+                    invalidation: dashboard_required_string(&review, "invalidation")?,
+                })
+            })
+            .collect::<serde_json::Result<Vec<_>>>()?,
+        interpretation: dashboard_required_string(&reviews, "interpretation")?,
+    })
+}
+
+fn dashboard_holding_thesis_reviews_unavailable() -> DashboardHoldingThesisReviewsPayload {
+    DashboardHoldingThesisReviewsPayload {
+        status: "unavailable".to_string(),
+        interpretation: "Holding-thesis review data is unavailable right now.".to_string(),
+        ..DashboardHoldingThesisReviewsPayload::default()
+    }
+}
+
 fn dashboard_optional_f64(row: &JsonValue, key: &str) -> serde_json::Result<Option<f64>> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -5963,21 +6009,20 @@ impl AppState {
             } else {
                 DashboardTradeThesisEvidencePayload::default()
             };
-        let execution_holding_thesis_reviews = if dashboard_loads_tab_exclusive_data(
-            &active_view,
-            "execution",
-        ) {
-            self.holding_thesis_reviews().await.unwrap_or_else(|err| {
-                warn!("dashboard holding-thesis reviews degraded: {err:#}");
-                json!({
-                    "status": "unavailable",
-                    "safety": "read_only_local_broker_position_snapshot_execution_order_thesis_and_fill_audit_no_saxo_provider_hermes_or_order_mutation",
-                    "interpretation": "Holding-thesis reviews could not be loaded. They do not affect gates, Hermes, configuration, or Saxo orders.",
-                })
-            })
-        } else {
-            JsonValue::Null
-        };
+        let execution_holding_thesis_reviews =
+            if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
+                self.holding_thesis_reviews()
+                    .await
+                    .and_then(|reviews| {
+                        dashboard_holding_thesis_reviews_from_json(reviews).map_err(Into::into)
+                    })
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard typed holding-thesis reviews degraded: {err:#}");
+                        dashboard_holding_thesis_reviews_unavailable()
+                    })
+            } else {
+                DashboardHoldingThesisReviewsPayload::default()
+            };
         let execution_decision_pulse_evidence = if dashboard_loads_tab_exclusive_data(
             &active_view,
             "execution",
@@ -18039,6 +18084,44 @@ mod tests {
         assert!(
             dashboard_trade_thesis_evidence_from_json(json!({
                 "status": "collecting"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_holding_thesis_reviews_keep_raw_records_outside_ssr() {
+        let reviews = dashboard_holding_thesis_reviews_from_json(json!({
+            "status": "review_due",
+            "held_position_count": 4,
+            "review_count": 1,
+            "decision_stale_after_days": 7,
+            "reviews": [{
+                "symbol": "AMD:xnas",
+                "instrument_name": "Advanced Micro Devices",
+                "status": "thesis_window_elapsed",
+                "tracked_entry_at": "2026-08-01T14:30:00Z",
+                "age_days": 25,
+                "intended_holding_window": "next_2_weeks",
+                "entry_rationale": "Compact rationale.",
+                "invalidation": "Compact invalidation.",
+                "position_snapshot": {"api_key": "must-not-reach-the-dashboard"}
+            }],
+            "interpretation": "Read-only review queue only.",
+            "raw_theses": [{"api_key": "must-not-reach-the-dashboard"}]
+        }))
+        .expect("stable holding-thesis reviews decode");
+
+        assert_eq!(reviews.reviews[0].symbol, "AMD:xnas");
+        assert_eq!(reviews.reviews[0].age_days, 25);
+        assert!(
+            !serde_json::to_string(&reviews)
+                .expect("typed holding-thesis reviews serialize")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_holding_thesis_reviews_from_json(json!({
+                "status": "review_due"
             }))
             .is_err()
         );

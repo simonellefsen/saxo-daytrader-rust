@@ -15,14 +15,14 @@ use crate::{
         DashboardHermesCounterfactualPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
         DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -6475,21 +6475,17 @@ fn ExecutionView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn HoldingThesisReviewPanel(reviews: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&reviews, "status").replace('_', " ");
-    let review_rows = reviews
-        .get("reviews")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let review_count = value_i64(&reviews, "review_count");
-    let held_count = value_i64(&reviews, "held_position_count");
-    let stale_after_days = value_i64(&reviews, "decision_stale_after_days");
-    let interpretation = text_or(
-        &reviews,
-        "interpretation",
-        "Read-only holding-thesis review only.",
-    );
+fn HoldingThesisReviewPanel(
+    reviews: DashboardHoldingThesisReviewsPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let raw_status = reviews.status.clone();
+    let status = raw_status.replace('_', " ");
+    let review_rows = reviews.reviews;
+    let review_count = reviews.review_count;
+    let held_count = reviews.held_position_count;
+    let stale_after_days = reviews.decision_stale_after_days;
+    let interpretation = reviews.interpretation;
     rsx! {
         section { class: "section stack",
             div { class: "section-title-row compact",
@@ -6499,7 +6495,7 @@ fn HoldingThesisReviewPanel(reviews: JsonValue, prefs: LocalizationPrefs) -> Ele
                 }
                 span { class: "status", "{status}" }
             }
-            if text(&reviews, "status") == "unavailable" {
+            if raw_status == "unavailable" {
                 span { class: "muted", "Holding-thesis review data is unavailable right now." }
             } else {
                 div { class: "quality-score-row",
@@ -6523,21 +6519,21 @@ fn HoldingThesisReviewPanel(reviews: JsonValue, prefs: LocalizationPrefs) -> Ele
                                 for row in review_rows {
                                     tr {
                                         td {
-                                            strong { "{text(&row, \"symbol\")}" }
-                                            if !text(&row, "instrument_name").is_empty() {
-                                                span { class: "muted block", "{text(&row, \"instrument_name\")}" }
+                                            strong { "{row.symbol}" }
+                                            if let Some(instrument_name) = row.instrument_name.as_deref().filter(|name| !name.is_empty()) {
+                                                span { class: "muted block", "{instrument_name}" }
                                             }
                                         }
-                                        td { "{text(&row, \"status\").replace('_', \" \")}" }
-                                        td { "{format_timestamp(&text(&row, \"tracked_entry_at\"), &prefs)}" }
-                                        td { "{value_i64(&row, \"age_days\")} days" }
+                                        td { "{row.status.replace('_', \" \")}" }
+                                        td { "{format_timestamp(&row.tracked_entry_at, &prefs)}" }
+                                        td { "{row.age_days} days" }
                                         td {
-                                            "{text(&row, \"intended_holding_window\").replace('_', \" \")}"
-                                            if !text(&row, "entry_rationale").is_empty() {
-                                                details { summary { "Entry rationale" } p { class: "detail-pre", "{text(&row, \"entry_rationale\")}" } }
+                                            "{row.intended_holding_window.replace('_', \" \") }"
+                                            if !row.entry_rationale.is_empty() {
+                                                details { summary { "Entry rationale" } p { class: "detail-pre", "{row.entry_rationale}" } }
                                             }
-                                            if !text(&row, "invalidation").is_empty() {
-                                                details { summary { "Recorded invalidation" } p { class: "detail-pre", "{text(&row, \"invalidation\")}" } }
+                                            if !row.invalidation.is_empty() {
+                                                details { summary { "Recorded invalidation" } p { class: "detail-pre", "{row.invalidation}" } }
                                             }
                                         }
                                     }

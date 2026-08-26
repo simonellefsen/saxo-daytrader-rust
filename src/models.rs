@@ -55,7 +55,7 @@ pub struct DashboardView {
     pub execution_fills: Vec<DashboardExecutionFillPayload>,
     pub execution_events: Vec<DashboardExecutionEventPayload>,
     pub execution_trade_thesis_evidence: DashboardTradeThesisEvidencePayload,
-    pub execution_holding_thesis_reviews: JsonValue,
+    pub execution_holding_thesis_reviews: DashboardHoldingThesisReviewsPayload,
     pub execution_decision_pulse_evidence: JsonValue,
     pub reports: Vec<JsonValue>,
     pub manual_report_in_flight: bool,
@@ -380,6 +380,36 @@ pub struct DashboardTradeThesisEvidencePayload {
     pub one_session: DashboardTradeThesisOutcomePayload,
     pub five_session: DashboardTradeThesisOutcomePayload,
     pub minimum_complete_observations: i64,
+    pub interpretation: String,
+}
+
+/// One bounded holding-thesis review row shown to an operator.
+///
+/// The rationale and invalidation strings were compacted locally before this
+/// model is built. Raw position snapshots, orders, fills, and thesis documents
+/// remain outside the dashboard boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHoldingThesisReviewPayload {
+    pub symbol: String,
+    pub instrument_name: Option<String>,
+    pub status: String,
+    pub tracked_entry_at: String,
+    pub age_days: i64,
+    pub intended_holding_window: String,
+    pub entry_rationale: String,
+    pub invalidation: String,
+}
+
+/// Read-only queue of held symbols whose recorded BUY thesis needs comparison
+/// with fresh decision evidence. It is not an exit signal, sizing instruction,
+/// manager gate, or broker action.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHoldingThesisReviewsPayload {
+    pub status: String,
+    pub held_position_count: i64,
+    pub review_count: i64,
+    pub decision_stale_after_days: i64,
+    pub reviews: Vec<DashboardHoldingThesisReviewPayload>,
     pub interpretation: String,
 }
 
