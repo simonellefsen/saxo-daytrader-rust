@@ -12,13 +12,13 @@ use crate::{
     },
     models::{
         DashboardAiSettingsPayload, DashboardExecutionEventPayload, DashboardExecutionFillPayload,
-        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesReflectionPayload,
+        DashboardLatestRunPayload, DashboardRunSchedulePayload, DashboardSaxoAuthPayload,
+        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -8012,15 +8012,18 @@ fn HermesReflectionRow(row: DashboardHermesReflectionPayload, prefs: Localizatio
 }
 
 #[component]
-fn HermesLessonPendingReviewRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let lesson = text_or(&row, "lesson", "No proposed action text recorded.");
-    let reflection_summary = text_or(
-        &row,
-        "reflection_summary",
-        "No reflection summary recorded.",
-    );
-    let period_start = text(&row, "period_start");
-    let period_end = text(&row, "period_end");
+fn HermesLessonPendingReviewRow(
+    row: DashboardHermesLessonPendingReviewPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let lesson = row.lesson;
+    let reflection_summary = row
+        .reflection_summary
+        .unwrap_or_else(|| "No reflection summary recorded.".to_string());
+    let period_start = row.period_start.unwrap_or_default();
+    let period_end = row.period_end.unwrap_or_default();
+    let created_at = row.created_at.unwrap_or_default();
+    let source_session_id = row.source_session_id.unwrap_or_default();
     let period = match (period_start.is_empty(), period_end.is_empty()) {
         (false, false) if period_start == period_end => period_start,
         (false, false) => format!("{period_start} to {period_end}"),
@@ -8030,11 +8033,11 @@ fn HermesLessonPendingReviewRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     };
     rsx! {
         tr {
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
+            td { "{format_timestamp(&created_at, &prefs)}" }
             td { class: "muted", "{period}" }
             td { span { class: "event-message", title: "{lesson}", "{truncate_chars(&lesson, 220)}" } }
             td { class: "muted", span { class: "event-message", title: "{reflection_summary}", "{truncate_chars(&reflection_summary, 180)}" } }
-            td { class: "muted", "{text(&row, \"source_session_id\")}" }
+            td { class: "muted", "{source_session_id}" }
         }
     }
 }

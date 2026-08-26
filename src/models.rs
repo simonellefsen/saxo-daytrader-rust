@@ -63,7 +63,7 @@ pub struct DashboardView {
     pub journal_entries: Vec<JsonValue>,
     pub scheduler_cycles: Vec<DashboardSchedulerCyclePayload>,
     pub hermes_reflections: Vec<DashboardHermesReflectionPayload>,
-    pub hermes_lessons_pending_review: Vec<JsonValue>,
+    pub hermes_lessons_pending_review: Vec<DashboardHermesLessonPendingReviewPayload>,
     pub hermes_learning_memory: Vec<JsonValue>,
     pub hermes_one_variable_audit: Vec<JsonValue>,
     pub hermes_proposal_quality: Vec<JsonValue>,
@@ -198,6 +198,22 @@ pub struct DashboardHermesReflectionPayload {
     pub summary: String,
     pub finding_count: usize,
     pub proposed_action_count: usize,
+    pub source_session_id: Option<String>,
+}
+
+/// One compact, derived Hermes lesson waiting for operator review.
+///
+/// The source reflection action is already redacted before this model is
+/// constructed. The dashboard receives only the display-safe lesson and its
+/// local reflection context; it cannot approve a lesson, invoke Hermes, alter
+/// an experiment, change configuration, or access Trading Manager or Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesLessonPendingReviewPayload {
+    pub created_at: Option<String>,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub lesson: String,
+    pub reflection_summary: Option<String>,
     pub source_session_id: Option<String>,
 }
 

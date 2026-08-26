@@ -37,13 +37,14 @@ use crate::{
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CashBufferSettings, DashboardAiSettingsPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardHermesReflectionPayload, DashboardLatestRunPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSchedulerCyclePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        DashboardExecutionFillPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesReflectionPayload, DashboardLatestRunPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardView, DataFreshnessSourcePayload, DecisionGateReplayPayload,
+        DecisionPulseStatusPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesReflectionRequest,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3371,6 +3372,27 @@ fn dashboard_hermes_reflections_from_json(
         .collect()
 }
 
+/// Decodes the already-redacted, derived Hermes lesson queue for the
+/// advisory-only dashboard section. It carries no raw reflection payload or
+/// detailed proposed-action document across the SSR boundary.
+fn dashboard_hermes_lessons_pending_review_from_json(
+    lessons: Vec<JsonValue>,
+) -> serde_json::Result<Vec<DashboardHermesLessonPendingReviewPayload>> {
+    lessons
+        .into_iter()
+        .map(|lesson| {
+            Ok(DashboardHermesLessonPendingReviewPayload {
+                created_at: dashboard_optional_string(&lesson, "created_at")?,
+                period_start: dashboard_optional_string(&lesson, "period_start")?,
+                period_end: dashboard_optional_string(&lesson, "period_end")?,
+                lesson: dashboard_required_string(&lesson, "lesson")?,
+                reflection_summary: dashboard_optional_string(&lesson, "reflection_summary")?,
+                source_session_id: dashboard_optional_string(&lesson, "source_session_id")?,
+            })
+        })
+        .collect()
+}
+
 fn dashboard_required_i64(row: &JsonValue, key: &str) -> serde_json::Result<i64> {
     serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
@@ -5838,8 +5860,12 @@ impl AppState {
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "reflections") {
                 self.hermes_lessons_pending_review(LESSONS_PENDING_REVIEW_LIMIT as i64)
                     .await
+                    .and_then(|lessons| {
+                        dashboard_hermes_lessons_pending_review_from_json(lessons)
+                            .map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard Hermes lessons pending review degraded: {err:#}");
+                        warn!("dashboard typed Hermes lessons pending review degraded: {err:#}");
                         Vec::new()
                     })
             } else {
@@ -17395,6 +17421,36 @@ mod tests {
         );
         assert!(
             dashboard_hermes_reflections_from_json(vec![json!({
+                "created_at": "2026-08-26T08:30:00Z"
+            })])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dashboard_hermes_lessons_keep_derived_actions_typed_and_sanitized() {
+        let lessons = dashboard_hermes_lessons_pending_review_from_json(vec![json!({
+            "created_at": "2026-08-26T08:30:00Z",
+            "period_start": "2026-08-25",
+            "period_end": "2026-08-26",
+            "lesson": "Review the simulated stop coverage before changing policy.",
+            "reflection_summary": "Coverage evidence is incomplete.",
+            "source_session_id": "hermes-weekly-2026w35",
+            "raw_payload_json": {
+                "api_key": "must-not-reach-the-dashboard",
+                "provider_response": "must-not-reach-the-dashboard"
+            }
+        })])
+        .expect("stable Hermes lesson evidence decodes");
+
+        assert_eq!(lessons[0].period_end.as_deref(), Some("2026-08-26"));
+        assert!(
+            !serde_json::to_string(&lessons)
+                .expect("typed Hermes lesson evidence serializes")
+                .contains("must-not-reach-the-dashboard")
+        );
+        assert!(
+            dashboard_hermes_lessons_pending_review_from_json(vec![json!({
                 "created_at": "2026-08-26T08:30:00Z"
             })])
             .is_err()

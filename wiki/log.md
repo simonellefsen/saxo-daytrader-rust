@@ -10,6 +10,12 @@ updated: 2026-08-23
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Hermes lesson evidence
+
+- Changed the Hermes Lessons Pending Review table to consume typed, already-redacted lesson text plus optional period, reflection-summary, and source-session metadata.
+- Raw reflection/provider payloads and detailed proposed-action documents remain in the local audit store; malformed lesson metadata degrades to an empty local table.
+- This preserves the advisory-only Hermes boundary and performs no lesson approval, agent invocation, experiment transition, configuration change, queue, precheck, or broker-order action.
+
 ## [2026-08-26] architecture | Type dashboard Hermes reflection evidence
 
 - Changed the Hermes Reflections section to consume typed time, goal version, summary, aggregate finding/action counts, and optional source-session reference.
