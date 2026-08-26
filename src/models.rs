@@ -72,8 +72,8 @@ pub struct DashboardView {
     pub hermes_counterfactuals: Vec<DashboardHermesCounterfactualPayload>,
     pub missed_trade_shadows: Vec<DashboardMissedTradeShadowPayload>,
     pub missed_trade_shadow_evidence: DashboardMissedTradeShadowEvidencePayload,
-    pub active_strategy_baseline: JsonValue,
-    pub hermes_baseline_evidence_pack: JsonValue,
+    pub active_strategy_baseline: Option<DashboardActiveStrategyBaselinePayload>,
+    pub hermes_baseline_evidence_pack: DashboardHermesBaselineEvidencePackPayload,
     pub markov_signals: Vec<JsonValue>,
     pub latest_markov_run: DashboardLatestRunPayload,
     pub quiver_signals: Vec<JsonValue>,
@@ -271,6 +271,51 @@ pub struct DashboardHermesExperimentPayload {
     pub hypothesis: String,
     pub expected_effect: String,
     pub evidence_display: String,
+}
+
+/// Display-safe metadata for the promoted baseline audit record.
+///
+/// The persisted prompt and source documents stay local. Configuration is
+/// rendered only as a redacted, capped string for operator inspection; this
+/// record is not a configuration input and cannot activate or alter a baseline.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardActiveStrategyBaselinePayload {
+    pub id: String,
+    pub goal_version: i64,
+    pub activated_at: String,
+    pub config_display: String,
+}
+
+/// One bounded local-observation window for the Hermes baseline evidence view.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesBaselineEvidenceWindowPayload {
+    pub observation_count: usize,
+    pub start_total_market_value_dkk: Option<f64>,
+    pub end_total_market_value_dkk: Option<f64>,
+    pub start_cash_utilization_pct: Option<f64>,
+    pub end_cash_utilization_pct: Option<f64>,
+    pub return_pct: Option<f64>,
+    pub max_drawdown_pct: Option<f64>,
+    pub sharpe_zero_rf_annualized: Option<f64>,
+}
+
+/// Read-only local evidence for a promoted Hermes baseline.
+///
+/// This carries aggregate exact-overlay activity and observational portfolio
+/// windows only. Raw baseline/experiment/manager/broker documents stay outside
+/// SSR. It cannot change an experiment, baseline, configuration, queue, or
+/// Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct DashboardHermesBaselineEvidencePackPayload {
+    pub status: String,
+    pub baseline_id: Option<String>,
+    pub baseline_variable: Option<String>,
+    pub baseline_activated_at: Option<String>,
+    pub manager_run_count: usize,
+    pub report_count: usize,
+    pub failed_order_count: usize,
+    pub experiment_evaluation: DashboardHermesBaselineEvidenceWindowPayload,
+    pub post_promotion: DashboardHermesBaselineEvidenceWindowPayload,
 }
 
 /// Deterministic, read-only rubric evidence for one Hermes proposal.

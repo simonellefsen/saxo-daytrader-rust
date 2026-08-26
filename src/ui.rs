@@ -14,6 +14,7 @@ use crate::{
         DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
         DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
         DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
@@ -5777,8 +5778,8 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         span { class: "pill", "One-variable: {data.hermes_one_variable_audit.len()}" }
                         span { class: "pill", "Quality reviews: {data.hermes_proposal_quality.len()}" }
                     }
-                    if section == "baselines" && !data.hermes_baseline_evidence_pack.is_null() {
-                        span { class: "pill", "Baseline evidence: {text_or(&data.hermes_baseline_evidence_pack, \"status\", \"n/a\")}" }
+                    if section == "baselines" && !data.hermes_baseline_evidence_pack.status.is_empty() {
+                        span { class: "pill", "Baseline evidence: {data.hermes_baseline_evidence_pack.status}" }
                     }
                     if section == "experiments" {
                         span { class: "pill", "Experiments: {data.hermes_experiments.len()}" }
@@ -5806,13 +5807,13 @@ fn HermesView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 }
             }
             if section == "baselines" {
-            if !data.active_strategy_baseline.is_null() {
+            if let Some(baseline) = data.active_strategy_baseline.as_ref() {
                 div { class: "event prewrap",
                     strong { "Active Baseline Audit Record" }
                     span {
-                        "{text(&data.active_strategy_baseline, \"id\")} · goal v{text_or(&data.active_strategy_baseline, \"goal_version\", \"n/a\")} · {format_timestamp(&text(&data.active_strategy_baseline, \"activated_at\"), &prefs)}"
+                        "{baseline.id} · goal v{baseline.goal_version} · {format_timestamp(&baseline.activated_at, &prefs)}"
                     }
-                    span { "{compact_json(data.active_strategy_baseline.get(\"config_json\"))}" }
+                    span { "{baseline.config_display}" }
                 }
             } else {
                 div { class: "event",
@@ -8097,8 +8098,15 @@ fn HermesOneVariableAuditRow(
 }
 
 #[component]
-fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text_or(&pack, "status", "unavailable");
+fn HermesBaselineEvidencePack(
+    pack: DashboardHermesBaselineEvidencePackPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = if pack.status.is_empty() {
+        "unavailable".to_string()
+    } else {
+        pack.status.clone()
+    };
     let status_class = match status.as_str() {
         "observing" => "status good-status",
         "awaiting_post_promotion_observation" | "source_experiment_unavailable" => {
@@ -8106,40 +8114,26 @@ fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Elem
         }
         _ => "status",
     };
-    let baseline = pack.get("baseline").cloned().unwrap_or(JsonValue::Null);
-    let experiment = pack.get("experiment").cloned().unwrap_or(JsonValue::Null);
-    let activity = pack
-        .get("affected_activity")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let evaluation = experiment
-        .get("evaluation_window")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let post_promotion = pack
-        .get("post_promotion")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let baseline_id = text_or(&baseline, "id", "n/a");
-    let variable = text_or(&baseline, "variable", "n/a");
-    let activated_at = format_timestamp(&text(&baseline, "activated_at"), &prefs);
-    let experiment_return = format_optional_percentage_points(
-        evaluation.get("return_pct").and_then(JsonValue::as_f64),
+    let baseline_id = pack
+        .baseline_id
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let variable = pack
+        .baseline_variable
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let activated_at = format_timestamp(
+        pack.baseline_activated_at.as_deref().unwrap_or_default(),
         &prefs,
     );
-    let post_return = format_optional_percentage_points(
-        post_promotion.get("return_pct").and_then(JsonValue::as_f64),
-        &prefs,
-    );
-    let post_drawdown = format_optional_percentage_points(
-        post_promotion
-            .get("max_drawdown_pct")
-            .and_then(JsonValue::as_f64),
-        &prefs,
-    );
-    let post_sharpe = post_promotion
-        .get("sharpe_zero_rf_annualized")
-        .and_then(JsonValue::as_f64)
+    let experiment_return =
+        format_optional_percentage_points(pack.experiment_evaluation.return_pct, &prefs);
+    let post_return = format_optional_percentage_points(pack.post_promotion.return_pct, &prefs);
+    let post_drawdown =
+        format_optional_percentage_points(pack.post_promotion.max_drawdown_pct, &prefs);
+    let post_sharpe = pack
+        .post_promotion
+        .sharpe_zero_rf_annualized
         .map(|value| format_number(value, 2, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     rsx! {
@@ -8157,14 +8151,14 @@ fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Elem
                     span { class: "{status_class}", "{status}" }
                 }
                 div { class: "mini-grid",
-                    MetricCard { label: "Overlay manager runs", value: text_or(&activity, "manager_run_count", "0"), tone: "" }
-                    MetricCard { label: "Linked reports", value: text_or(&activity, "report_count", "0"), tone: "" }
-                    MetricCard { label: "Execution failures", value: text_or(&activity, "failed_order_count", "0"), tone: if value_i64(&activity, "failed_order_count") > 0 { "bad-text" } else { "good-text" } }
+                    MetricCard { label: "Overlay manager runs", value: "{pack.manager_run_count}", tone: "" }
+                    MetricCard { label: "Linked reports", value: "{pack.report_count}", tone: "" }
+                    MetricCard { label: "Execution failures", value: "{pack.failed_order_count}", tone: if pack.failed_order_count > 0 { "bad-text" } else { "good-text" } }
                     MetricCard { label: "Experiment return", value: experiment_return, tone: "" }
                     MetricCard { label: "Post-promotion return", value: post_return, tone: "" }
                     MetricCard { label: "Post-promotion drawdown", value: post_drawdown, tone: "" }
                     MetricCard { label: "Post-promotion Sharpe", value: post_sharpe, tone: "" }
-                    MetricCard { label: "Post observations", value: text_or(&post_promotion, "observation_count", "0"), tone: "" }
+                    MetricCard { label: "Post observations", value: "{pack.post_promotion.observation_count}", tone: "" }
                 }
                 div { class: "table-wrap",
                     table {
@@ -8179,8 +8173,8 @@ fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Elem
                             }
                         }
                         tbody {
-                            HermesBaselineEvidenceWindowRow { label: "Experiment evaluation", metrics: evaluation, prefs: prefs.clone() }
-                            HermesBaselineEvidenceWindowRow { label: "After promotion", metrics: post_promotion, prefs: prefs.clone() }
+                            HermesBaselineEvidenceWindowRow { label: "Experiment evaluation", metrics: pack.experiment_evaluation.clone(), prefs: prefs.clone() }
+                            HermesBaselineEvidenceWindowRow { label: "After promotion", metrics: pack.post_promotion.clone(), prefs: prefs.clone() }
                         }
                     }
                 }
@@ -8192,36 +8186,22 @@ fn HermesBaselineEvidencePack(pack: JsonValue, prefs: LocalizationPrefs) -> Elem
 #[component]
 fn HermesBaselineEvidenceWindowRow(
     label: &'static str,
-    metrics: JsonValue,
+    metrics: DashboardHermesBaselineEvidenceWindowPayload,
     prefs: LocalizationPrefs,
 ) -> Element {
-    let observation_count = text_or(&metrics, "observation_count", "0");
+    let observation_count = metrics.observation_count;
     let start_value = metrics
-        .get("start_total_market_value_dkk")
-        .and_then(JsonValue::as_f64)
+        .start_total_market_value_dkk
         .map(|value| format_dkk(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let end_value = metrics
-        .get("end_total_market_value_dkk")
-        .and_then(JsonValue::as_f64)
+        .end_total_market_value_dkk
         .map(|value| format_dkk(value, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
-    let start_cash_use = format_optional_percentage_points(
-        metrics
-            .get("start_cash_utilization_pct")
-            .and_then(JsonValue::as_f64),
-        &prefs,
-    );
-    let end_cash_use = format_optional_percentage_points(
-        metrics
-            .get("end_cash_utilization_pct")
-            .and_then(JsonValue::as_f64),
-        &prefs,
-    );
-    let drawdown = format_optional_percentage_points(
-        metrics.get("max_drawdown_pct").and_then(JsonValue::as_f64),
-        &prefs,
-    );
+    let start_cash_use =
+        format_optional_percentage_points(metrics.start_cash_utilization_pct, &prefs);
+    let end_cash_use = format_optional_percentage_points(metrics.end_cash_utilization_pct, &prefs);
+    let drawdown = format_optional_percentage_points(metrics.max_drawdown_pct, &prefs);
     rsx! {
         tr {
             td { "{label}" }

@@ -10,6 +10,12 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-26] architecture | Type dashboard Hermes baseline evidence
+
+- Changed the Hermes Baselines view to consume typed promoted-baseline metadata, redacted/capped configuration display text, exact-overlay activity counts, and bounded local observation windows.
+- Prompt/source, experiment, manager, broker, and other retained documents remain outside SSR; malformed evidence degrades to the existing unavailable or empty local state.
+- This preserves the read-only, non-causal evidence boundary and cannot change experiment or baseline lifecycle, configuration, queues, prechecks, or Saxo orders.
+
 ## [2026-08-26] architecture | Type dashboard Hermes experiment proposals
 
 - Changed the Hermes Experiment Proposals table to consume explicit proposal display fields and redacted, capped old/new/evidence strings through a typed Rust contract.

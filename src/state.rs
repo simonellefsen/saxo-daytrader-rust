@@ -36,10 +36,11 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CashBufferSettings, DashboardAiSettingsPayload,
+        CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
         DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
         DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
@@ -3491,6 +3492,87 @@ fn dashboard_hermes_experiments_from_json(
         .collect()
 }
 
+/// Decodes the active baseline's limited display record. Prompt/source data
+/// never reaches SSR, and configuration is redacted before being capped for
+/// read-only operator inspection.
+fn dashboard_active_strategy_baseline_from_json(
+    baseline: JsonValue,
+) -> serde_json::Result<Option<DashboardActiveStrategyBaselinePayload>> {
+    if baseline.is_null() {
+        return Ok(None);
+    }
+    let config = dashboard_embedded_json(&baseline, "config_json").unwrap_or(JsonValue::Null);
+    Ok(Some(DashboardActiveStrategyBaselinePayload {
+        id: dashboard_required_string(&baseline, "id")?,
+        goal_version: dashboard_required_i64(&baseline, "goal_version")?,
+        activated_at: dashboard_required_string(&baseline, "activated_at")?,
+        config_display: compact_json_redacted(Some(&config), DEBUG_PAYLOAD_MAX_CHARS),
+    }))
+}
+
+/// Decodes the local, non-causal baseline evidence pack into precisely the
+/// fields the dashboard renders. Raw baseline, experiment, manager, and broker
+/// documents are intentionally not represented in the typed SSR payload.
+fn dashboard_hermes_baseline_evidence_pack_from_json(
+    pack: JsonValue,
+) -> serde_json::Result<DashboardHermesBaselineEvidencePackPayload> {
+    let baseline = pack.get("baseline").cloned().unwrap_or(JsonValue::Null);
+    let activity = pack
+        .get("affected_activity")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let experiment = pack.get("experiment").cloned().unwrap_or(JsonValue::Null);
+    let evaluation = experiment
+        .get("evaluation_window")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let post_promotion = pack
+        .get("post_promotion")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    Ok(DashboardHermesBaselineEvidencePackPayload {
+        status: dashboard_required_string(&pack, "status")?,
+        baseline_id: dashboard_optional_string(&baseline, "id")?,
+        baseline_variable: dashboard_optional_string(&baseline, "variable")?,
+        baseline_activated_at: dashboard_optional_string(&baseline, "activated_at")?,
+        manager_run_count: dashboard_count(&activity, "manager_run_count"),
+        report_count: dashboard_count(&activity, "report_count"),
+        failed_order_count: dashboard_count(&activity, "failed_order_count"),
+        experiment_evaluation: dashboard_hermes_baseline_evidence_window_from_json(evaluation),
+        post_promotion: dashboard_hermes_baseline_evidence_window_from_json(post_promotion),
+    })
+}
+
+fn dashboard_hermes_baseline_evidence_window_from_json(
+    window: JsonValue,
+) -> DashboardHermesBaselineEvidenceWindowPayload {
+    DashboardHermesBaselineEvidenceWindowPayload {
+        observation_count: dashboard_count(&window, "observation_count"),
+        start_total_market_value_dkk: dashboard_optional_f64(
+            &window,
+            "start_total_market_value_dkk",
+        )
+        .ok()
+        .flatten(),
+        end_total_market_value_dkk: dashboard_optional_f64(&window, "end_total_market_value_dkk")
+            .ok()
+            .flatten(),
+        start_cash_utilization_pct: dashboard_optional_f64(&window, "start_cash_utilization_pct")
+            .ok()
+            .flatten(),
+        end_cash_utilization_pct: dashboard_optional_f64(&window, "end_cash_utilization_pct")
+            .ok()
+            .flatten(),
+        return_pct: dashboard_optional_f64(&window, "return_pct").ok().flatten(),
+        max_drawdown_pct: dashboard_optional_f64(&window, "max_drawdown_pct")
+            .ok()
+            .flatten(),
+        sharpe_zero_rf_annualized: dashboard_optional_f64(&window, "sharpe_zero_rf_annualized")
+            .ok()
+            .flatten(),
+    }
+}
+
 /// Decodes the deterministic, display-only quality rubric for active Hermes
 /// proposals. The underlying experiment documents and their evidence stay
 /// outside the SSR boundary.
@@ -6665,7 +6747,7 @@ impl AppState {
             } else {
                 DashboardMissedTradeShadowEvidencePayload::default()
             };
-        let active_strategy_baseline =
+        let active_strategy_baseline_raw =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "baselines") {
                 self.active_strategy_baseline().await.unwrap_or_else(|err| {
                     warn!("dashboard active strategy baseline degraded: {err:#}");
@@ -6674,19 +6756,28 @@ impl AppState {
             } else {
                 JsonValue::Null
             };
+        let active_strategy_baseline =
+            dashboard_active_strategy_baseline_from_json(active_strategy_baseline_raw.clone())
+                .unwrap_or_else(|err| {
+                    warn!("dashboard typed active strategy baseline degraded: {err:#}");
+                    None
+                });
         let hermes_baseline_evidence_pack =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "baselines") {
-                self.hermes_baseline_evidence_pack(&active_strategy_baseline)
+                self.hermes_baseline_evidence_pack(&active_strategy_baseline_raw)
                     .await
+                    .and_then(|pack| {
+                        dashboard_hermes_baseline_evidence_pack_from_json(pack).map_err(Into::into)
+                    })
                     .unwrap_or_else(|err| {
-                        warn!("dashboard Hermes baseline evidence pack degraded: {err:#}");
-                        json!({
-                            "status": "unavailable",
-                            "safety": "read_only_observational_not_causal",
-                        })
+                        warn!("dashboard typed Hermes baseline evidence pack degraded: {err:#}");
+                        DashboardHermesBaselineEvidencePackPayload {
+                            status: "unavailable".to_string(),
+                            ..Default::default()
+                        }
                     })
             } else {
-                JsonValue::Null
+                DashboardHermesBaselineEvidencePackPayload::default()
             };
         let hermes_one_variable_audit =
             if dashboard_loads_hermes_section(&active_view, &hermes_section, "overview") {
@@ -18246,6 +18337,66 @@ mod tests {
             })])
             .is_err()
         );
+    }
+
+    #[test]
+    fn dashboard_hermes_baseline_evidence_keeps_audit_documents_outside_ssr() {
+        let baseline = dashboard_active_strategy_baseline_from_json(json!({
+            "id": "baseline-91",
+            "created_at": "2026-08-20T08:30:00Z",
+            "activated_at": "2026-08-26T08:30:00Z",
+            "status": "active",
+            "goal_version": 4,
+            "config_json": {
+                "changed_variable_path": "strategy.capital.min_cash_buffer_pct",
+                "api_key": "must-not-reach-the-dashboard"
+            },
+            "prompt_json": {"provider_response": "must-not-reach-the-dashboard"},
+            "source": "must-not-reach-the-dashboard"
+        }))
+        .expect("active baseline display record decodes")
+        .expect("active baseline exists");
+        let pack = dashboard_hermes_baseline_evidence_pack_from_json(json!({
+            "status": "observing",
+            "safety": "must-not-reach-the-dashboard",
+            "baseline": {
+                "id": "baseline-91",
+                "activated_at": "2026-08-26T08:30:00Z",
+                "variable": "strategy.capital.min_cash_buffer_pct",
+                "source_experiment_id": "must-not-reach-the-dashboard"
+            },
+            "experiment": {
+                "evaluation_window": {
+                    "observation_count": 4,
+                    "return_pct": 0.03,
+                    "raw_payload": "must-not-reach-the-dashboard"
+                }
+            },
+            "affected_activity": {
+                "manager_run_count": 2,
+                "report_count": 2,
+                "failed_order_count": 1,
+                "manager_json": {"api_key": "must-not-reach-the-dashboard"}
+            },
+            "post_promotion": {
+                "observation_count": 3,
+                "max_drawdown_pct": -0.01,
+                "broker_payload": "must-not-reach-the-dashboard"
+            }
+        }))
+        .expect("baseline evidence display pack decodes");
+
+        assert_eq!(baseline.id, "baseline-91");
+        assert!(baseline.config_display.contains("[redacted]"));
+        assert_eq!(pack.manager_run_count, 2);
+        assert_eq!(pack.post_promotion.observation_count, 3);
+        let serialized =
+            serde_json::to_string(&(baseline, pack)).expect("typed baseline evidence serializes");
+        assert!(!serialized.contains("must-not-reach-the-dashboard"));
+        assert!(
+            dashboard_active_strategy_baseline_from_json(json!({"id": "baseline-91"})).is_err()
+        );
+        assert!(dashboard_hermes_baseline_evidence_pack_from_json(json!({})).is_err());
     }
 
     #[test]
