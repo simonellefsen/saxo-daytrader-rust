@@ -20,13 +20,13 @@ use crate::{
     models::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
         CashBufferSettings, DecisionGateReplayPayload, DecisionLatestPayload,
-        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
-        HermesExperimentRequest, HermesExperimentTransitionRequest, HermesExperimentsPayload,
-        HermesReflectionRequest, HermesReflectionsPayload, InstrumentQuarantineOverrideRequest,
-        LimitParams, LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
-        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
-        PortfolioPositionsPayload, PortfolioTradesPayload,
+        DecisionPulseReportStatusPayload, DecisionReportListPayload, DrawdownGuardOverrideRequest,
+        ExecutionPayload, HermesExperimentRequest, HermesExperimentTransitionRequest,
+        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionsPayload,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradesPayload,
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
         QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
@@ -1795,18 +1795,27 @@ fn ai_prompts_payload(
 
 async fn decision_latest(State(state): State<Arc<AppState>>) -> Json<DecisionLatestPayload> {
     let report = state
-        .decision_report_items(1)
+        .decision_report_summaries(1)
         .await
         .unwrap_or_else(|err| {
             warn!("latest decision lookup failed: {err:#}");
             Vec::new()
         })
         .into_iter()
-        .next();
+        .next()
+        .and_then(|row| match serde_json::from_value(row) {
+            Ok(report) => Some(report),
+            Err(err) => {
+                warn!("latest decision lifecycle metadata degraded: {err:#}");
+                None
+            }
+        });
     Json(decision_latest_payload(report))
 }
 
-fn decision_latest_payload(report: Option<JsonValue>) -> DecisionLatestPayload {
+fn decision_latest_payload(
+    report: Option<DecisionPulseReportStatusPayload>,
+) -> DecisionLatestPayload {
     DecisionLatestPayload {
         report,
         next_report: None,
@@ -2693,20 +2702,20 @@ mod tests {
 
     #[test]
     fn decision_latest_response_keeps_the_typed_polling_envelope() {
-        let payload = decision_latest_payload(Some(json!({"id": 42, "status": "completed"})));
+        let payload = decision_latest_payload(Some(DecisionPulseReportStatusPayload {
+            id: 42,
+            created_at: "2026-08-26T12:00:00Z".to_string(),
+            status: "completed".to_string(),
+        }));
 
-        assert_eq!(
-            payload
-                .report
-                .as_ref()
-                .and_then(|report| report["id"].as_i64()),
-            Some(42)
-        );
+        assert_eq!(payload.report.as_ref().map(|report| report.id), Some(42));
         assert!(payload.next_report.is_none());
 
         let serialized = serde_json::to_value(payload).expect("latest decision payload serializes");
         assert_eq!(serialized["report"]["status"], "completed");
         assert!(serialized["next_report"].is_null());
+        assert!(serialized["report"].get("prompt_text").is_none());
+        assert!(serialized["report"].get("report_json").is_none());
     }
 
     #[test]

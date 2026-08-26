@@ -1176,13 +1176,14 @@ pub struct AiPromptItem {
 
 /// Small latest-report lookup contract for polling clients.
 ///
-/// Decision Report rows remain compatibility JSON because they originate in
-/// the persisted provider/report pipeline. This type fixes the public envelope
-/// without changing report generation or Trading Manager behavior.
+/// The polling client receives only the lifecycle reference it needs to detect
+/// a completed report. Full report/provider documents remain on the dedicated
+/// detailed report and redacted debug paths. This type cannot change report
+/// generation or Trading Manager behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DecisionLatestPayload {
-    pub report: Option<JsonValue>,
-    pub next_report: Option<JsonValue>,
+    pub report: Option<DecisionPulseReportStatusPayload>,
+    pub next_report: Option<DecisionPulseReportStatusPayload>,
 }
 
 /// Bounded Decision Report list envelope.

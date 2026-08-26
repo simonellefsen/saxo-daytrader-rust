@@ -2567,3 +2567,7 @@ broker mutation was added.
 
 - Replaced the selected Decision Report's generic dashboard JSON envelope with a typed read-only Rust payload for identity, lifecycle, pulse, and queue-authority fields.
 - Kept the normalized report, provider diagnostic documents, and candidate scoring waterfall as explicit compatibility JSON for the existing Decisions detail view; malformed data degrades locally and cannot trigger report generation, Hermes, queueing, or Saxo execution.
+## 2026-08-26 — Typed Decision Report completion polling
+
+- Changed `/api/decision/latest` to use the compact Decision Report summary query and a typed lifecycle-only payload (id, creation time, status).
+- Full prompt, request, response, and normalized report documents remain on the existing detailed-report and sanitized debug paths; a malformed summary is treated as unavailable with no report, queue, Hermes, or broker side effect.
