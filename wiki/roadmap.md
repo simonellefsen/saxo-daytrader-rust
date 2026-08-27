@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-27: Typed and narrowed the public Saxo auth-status endpoint to health-only lifecycle metadata. It retains environment, token/refresh lifecycle, expiry, reauthorization, and stable status fields; local session paths and free-form loader errors stay within trusted internal diagnostics. This is read-only and changes no OAuth refresh, session storage, precheck, placement, cancellation, or reconciliation behavior.
 - 2026-08-27: Typed and narrowed the public Saxo session-status endpoint to health-only metadata. It retains environment, token/refresh lifecycle, expiry, reauthorization state, auth mode, and non-secret key-presence signals; local session paths, free-form errors, default-account identifiers, and client display metadata stay internal. This is read-only and changes no OAuth refresh, session storage, precheck, placement, cancellation, or reconciliation behavior.
 - 2026-08-27: Typed the public per-order execution-event timeline. It keeps only chronological lifecycle and allowlisted broker-status/substatus/quantity/price/order-reference evidence; raw Saxo payloads, account identifiers, and local audit signatures remain outside the API. This is read-only observation and cannot replay, reconcile, precheck, queue, place, cancel, or replace an order.
 - 2026-08-27: Typed the public AI Prompts endpoint's latest-report metadata and switched its read to the existing summary projection. Prompt text, request/response/provider documents, report JSON, and free-form errors remain on their dedicated internal paths; malformed metadata degrades to absent. This cannot generate a report, invoke Hermes, change a queue, or reach Saxo.

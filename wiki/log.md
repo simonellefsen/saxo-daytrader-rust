@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] security | Type and narrow public Saxo auth status
+
+- Changed `GET /api/saxo/auth/status` from the wider internal auth object to a typed health-only projection. It retains environment, token/refresh lifecycle, expiry, reauthorization, and stable status fields.
+- Local session-storage paths and free-form loader errors remain available only to trusted internal diagnostics. The endpoint is still read-only; no OAuth refresh, session storage, precheck, placement, cancellation, or reconciliation behavior changed.
+
 ## [2026-08-27] security | Type and narrow public Saxo session status
 
 - Changed `GET /api/saxo/session` from compatibility JSON to a typed health-only contract. It retains environment, token/refresh lifecycle, expiry, reauthorization state, auth mode, and non-secret client/account-key presence signals.

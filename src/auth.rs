@@ -58,6 +58,51 @@ pub struct SaxoAuthStatus {
     pub error: Option<String>,
 }
 
+/// Strictly sanitized auth health for `GET /api/saxo/auth/status`.
+///
+/// The internal `SaxoAuthStatus` retains local diagnostic context for trusted
+/// runtime consumers. This public projection carries only the stable lifecycle
+/// state needed by an operator and cannot disclose local storage locations or
+/// free-form loader errors.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SaxoAuthApiStatus {
+    pub connected: bool,
+    pub environment: String,
+    pub configured_environment: String,
+    pub token_valid: bool,
+    pub refresh_token_valid: bool,
+    pub expires_at: Option<String>,
+    pub expires_in_minutes: Option<i64>,
+    pub refresh_expires_at: Option<String>,
+    pub refresh_expires_in_minutes: Option<i64>,
+    pub last_refreshed_at: Option<String>,
+    pub refreshing: bool,
+    pub needs_reauth: bool,
+    pub status: String,
+    pub status_text: String,
+}
+
+impl From<SaxoAuthStatus> for SaxoAuthApiStatus {
+    fn from(status: SaxoAuthStatus) -> Self {
+        Self {
+            connected: status.connected,
+            environment: status.environment,
+            configured_environment: status.configured_environment,
+            token_valid: status.token_valid,
+            refresh_token_valid: status.refresh_token_valid,
+            expires_at: status.expires_at,
+            expires_in_minutes: status.expires_in_minutes,
+            refresh_expires_at: status.refresh_expires_at,
+            refresh_expires_in_minutes: status.refresh_expires_in_minutes,
+            last_refreshed_at: status.last_refreshed_at,
+            refreshing: status.refreshing,
+            needs_reauth: status.needs_reauth,
+            status: status.status,
+            status_text: status.status_text,
+        }
+    }
+}
+
 /// Strictly sanitized session status for `GET /api/saxo/session`.
 ///
 /// This surface is intentionally narrower than the auth module's internal
@@ -1122,5 +1167,23 @@ app:
         assert!(!serialized.contains("client_id_display"));
         assert!(!serialized.contains("account_key\""));
         assert!(serialized.contains("account_key_present"));
+    }
+
+    #[test]
+    fn auth_api_status_omits_storage_paths_and_free_form_errors() {
+        let path = PathBuf::from("/tmp/daytrader/saxo_session.json");
+        let status = SaxoAuthApiStatus::from(base_status(
+            &YamlValue::Null,
+            &path,
+            Some("load failed at /tmp/daytrader/saxo_session.json".to_string()),
+        ));
+
+        assert!(status.needs_reauth);
+        assert_eq!(status.status, "missing_session");
+        let serialized = serde_json::to_string(&status).expect("auth API status serializes");
+        assert!(!serialized.contains("saxo_session.json"));
+        assert!(!serialized.contains("load failed"));
+        assert!(!serialized.contains("session_path"));
+        assert!(!serialized.contains("\"error\""));
     }
 }

@@ -15243,6 +15243,10 @@ impl AppState {
             .expect("Saxo auth status must serialize")
     }
 
+    pub async fn saxo_auth_api_status(&self) -> auth::SaxoAuthApiStatus {
+        self.saxo_auth_status().await.into()
+    }
+
     pub async fn saxo_session_status(&self) -> auth::SaxoSessionApiStatus {
         if let Err(err) = self.sync_saxo_session_storage().await {
             warn!("Saxo session restore before session API failed: {err:#}");
