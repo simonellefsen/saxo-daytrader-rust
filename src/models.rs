@@ -507,6 +507,55 @@ pub struct HermesExperimentSummaryPayload {
     pub source_session_id: Option<String>,
 }
 
+/// Protected, advisory-only Hermes runtime capabilities.
+///
+/// The allowlists are explicit so an operator can verify the agent's boundary
+/// without interpreting a generic document. The goal contract remains staged
+/// JSON because it intentionally evolves alongside configuration enforcement
+/// records; this capability record cannot invoke Hermes or mutate a broker.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesCapabilitiesPayload {
+    pub status: String,
+    pub runtime: String,
+    pub namespace: String,
+    pub database_namespace: String,
+    pub safe_endpoints: Vec<String>,
+    pub read_models: Vec<String>,
+    pub restricted_writes: Vec<String>,
+    pub decision_advice: HermesDecisionAdviceCapabilitiesPayload,
+    pub supported_experiment_overlays: HermesExperimentOverlayCapabilitiesPayload,
+    pub forbidden: Vec<String>,
+    pub notes: Vec<String>,
+    pub goal_contract: JsonValue,
+}
+
+/// The narrow set of advice Hermes may record for a Decision Report.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesDecisionAdviceCapabilitiesPayload {
+    pub scope: String,
+    pub write_tool: String,
+    pub allowed_recommendations: Vec<String>,
+    pub allowed_order_actions: Vec<String>,
+    pub required_context_self_check: HermesContextSelfCheckCapabilitiesPayload,
+    pub safety: String,
+}
+
+/// Required evidence declarations for the advisory self-check.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextSelfCheckCapabilitiesPayload {
+    pub fields: Vec<String>,
+    pub format: String,
+    pub required_sources: Vec<String>,
+}
+
+/// The one-variable, SIM/paper-only experiment overlay boundary.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesExperimentOverlayCapabilitiesPayload {
+    pub scope: String,
+    pub statuses: Vec<String>,
+    pub variables: Vec<String>,
+}
+
 /// Display-safe metadata for the promoted baseline audit record.
 ///
 /// The persisted prompt and source documents stay local. Configuration is

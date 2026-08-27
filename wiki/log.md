@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type protected Hermes capabilities
+
+- Changed `GET /api/hermes/capabilities` from a generic JSON document to a typed advisory-boundary contract. Stable endpoint, read-model, restricted-write, advice self-check, experiment-overlay, forbidden-capability, and note lists are now compiler-checked.
+- The evolving configuration-derived goal contract deliberately remains a staged document. This endpoint remains protected and read-only; Hermes cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints.
+
 ## [2026-08-27] security | Type and narrow public Saxo auth status
 
 - Changed `GET /api/saxo/auth/status` from the wider internal auth object to a typed health-only projection. It retains environment, token/refresh lifecycle, expiry, reauthorization, and stable status fields.

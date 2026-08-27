@@ -58,21 +58,24 @@ use crate::{
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
         ExecutionOrderEventTimelineEntryPayload, ExecutionOrderSummaryPayload,
-        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesExperimentSummaryPayload,
-        HermesReflectionRequest, HermesReflectionSummaryPayload, LatestDecisionStatusPayload,
-        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
-        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        HermesCapabilitiesPayload, HermesContextSelfCheckCapabilitiesPayload,
+        HermesDecisionAdviceCapabilitiesPayload, HermesDecisionAdviceRequest,
+        HermesExperimentOverlayCapabilitiesPayload, HermesExperimentRequest,
+        HermesExperimentSummaryPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
+        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
+        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
+        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
+        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
+        QuiverConflictPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -11948,97 +11951,136 @@ fn hermes_goal_contract_from_config(config: &YamlValue) -> JsonValue {
     })
 }
 
+fn hermes_capabilities_payload(goal_contract: JsonValue) -> HermesCapabilitiesPayload {
+    HermesCapabilitiesPayload {
+        status: "ok".to_string(),
+        runtime: "saxo-rust".to_string(),
+        namespace: "saxo".to_string(),
+        database_namespace: "saxo".to_string(),
+        safe_endpoints: [
+            "/api/hermes/capabilities",
+            "/api/hermes/context",
+            "/api/hermes/reflections",
+            "/api/hermes/experiments",
+            "/api/hermes/experiments/{id}/transition",
+            "/api/health",
+            "/api/overview",
+            "/api/markov/signals",
+            "/api/decision/latest",
+            "/api/decision/reports",
+            "/api/scheduler",
+            "/api/execution",
+            "/api/strategy-journal",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        read_models: [
+            "overview",
+            "scheduler_status",
+            "scheduler_cycle_history",
+            "decision_reports.report_json",
+            "strategy_journal_entries",
+            "execution_orders",
+            "execution_order_events",
+            "execution_fills",
+            "portfolio_value_history",
+            "markov_signal_runs",
+            "markov_asset_signals",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        restricted_writes: [
+            "hermes_reflections",
+            "strategy_experiments",
+            "hermes_decision_advice",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        decision_advice: HermesDecisionAdviceCapabilitiesPayload {
+            scope: "per_decision_report_trading_manager_preflight".to_string(),
+            write_tool: "create_decision_advice".to_string(),
+            allowed_recommendations: ["proceed", "stand_down", "review"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            allowed_order_actions: ["allow", "reduce", "stand_down", "review"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            required_context_self_check: HermesContextSelfCheckCapabilitiesPayload {
+                fields: hermes_context_self_check_required_fields()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                format: "Include context_self_check with one boolean per field, optional sources, notes, and missing context explanations.".to_string(),
+                required_sources: [
+                    "get_decision_reports",
+                    "get_markov_signals",
+                    "get_end_of_day_reports",
+                    "get_context",
+                    "list_reflections",
+                    "list_experiments",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            },
+            safety: "advisory only; cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints".to_string(),
+        },
+        supported_experiment_overlays: HermesExperimentOverlayCapabilitiesPayload {
+            scope: "paper_or_saxo_sim_only".to_string(),
+            statuses: ["approved_sim", "active_sim", "approved_paper", "active_paper"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            // Every entry must be a key the runtime actually reads. A dead
+            // setting cannot be a valid SIM experiment variable.
+            variables: SUPPORTED_EXPERIMENT_VARIABLES
+                .iter()
+                .map(|path| (*path).to_string())
+                .collect(),
+        },
+        forbidden: [
+            "saxo_sessions",
+            "Saxo OAuth token/session reads",
+            "order precheck/place/replace/cancel",
+            "live order approval",
+            "Kubernetes secret mutation",
+            "live broker baseline activation",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        notes: [
+            "Hermes proposals are recommend-only until reviewed by the daytrader UI/operator flow.",
+            "Promoted baselines are audit records; they do not activate live broker behavior.",
+            "Strategy experiments must change exactly one variable while one_variable_only is true.",
+            "Markov method signals are advisory analytics and do not place or approve orders.",
+            "Gate replay is a read-only historical target-gate comparison; a target-gate clear is not a full approval.",
+            "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
+            "Public editorial-research items are attributable secondary context only and do not place, approve, block, size, or otherwise modify orders.",
+            "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
+            "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
+            "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports.",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        goal_contract,
+    }
+}
+
 impl AppState {
+    pub fn hermes_capabilities(&self) -> HermesCapabilitiesPayload {
+        hermes_capabilities_payload(self.hermes_goal_contract_value())
+    }
+
     pub fn hermes_capabilities_value(&self) -> JsonValue {
-        json!({
-            "status": "ok",
-            "runtime": "saxo-rust",
-            "namespace": "saxo",
-            "database_namespace": "saxo",
-            "safe_endpoints": [
-                "/api/hermes/capabilities",
-                "/api/hermes/context",
-                "/api/hermes/reflections",
-                "/api/hermes/experiments",
-                "/api/hermes/experiments/{id}/transition",
-                "/api/health",
-                "/api/overview",
-                "/api/markov/signals",
-                "/api/decision/latest",
-                "/api/decision/reports",
-                "/api/scheduler",
-                "/api/execution",
-                "/api/strategy-journal"
-            ],
-            "read_models": [
-                "overview",
-                "scheduler_status",
-                "scheduler_cycle_history",
-                "decision_reports.report_json",
-                "strategy_journal_entries",
-                "execution_orders",
-                "execution_order_events",
-                "execution_fills",
-                "portfolio_value_history",
-                "markov_signal_runs",
-                "markov_asset_signals"
-            ],
-            "restricted_writes": [
-                "hermes_reflections",
-                "strategy_experiments",
-                "hermes_decision_advice"
-            ],
-            "decision_advice": {
-                "scope": "per_decision_report_trading_manager_preflight",
-                "write_tool": "create_decision_advice",
-                "allowed_recommendations": ["proceed", "stand_down", "review"],
-                "allowed_order_actions": ["allow", "reduce", "stand_down", "review"],
-                "required_context_self_check": {
-                    "fields": hermes_context_self_check_required_fields(),
-                    "format": "Include context_self_check with one boolean per field, optional sources, notes, and missing context explanations.",
-                    "required_sources": [
-                        "get_decision_reports",
-                        "get_markov_signals",
-                        "get_end_of_day_reports",
-                        "get_context",
-                        "list_reflections",
-                        "list_experiments"
-                    ]
-                },
-                "safety": "advisory only; cannot add trades, increase size, approve live orders, or call Saxo mutation endpoints"
-            },
-            "supported_experiment_overlays": {
-                "scope": "paper_or_saxo_sim_only",
-                "statuses": ["approved_sim", "active_sim", "approved_paper", "active_paper"],
-                // Every entry must be a key the runtime actually reads.
-                // `strategy.swing.cash_buffer_pct` was removed on 2026-07-25:
-                // the config-contract audit proved nothing reads it, so an
-                // experiment on it could be proposed, run in SIM, observed, and
-                // promoted while changing nothing at all.
-                "variables": SUPPORTED_EXPERIMENT_VARIABLES
-            },
-            "forbidden": [
-                "saxo_sessions",
-                "Saxo OAuth token/session reads",
-                "order precheck/place/replace/cancel",
-                "live order approval",
-                "Kubernetes secret mutation",
-                "live broker baseline activation"
-            ],
-            "notes": [
-                "Hermes proposals are recommend-only until reviewed by the daytrader UI/operator flow.",
-                "Promoted baselines are audit records; they do not activate live broker behavior.",
-                "Strategy experiments must change exactly one variable while one_variable_only is true.",
-                "Markov method signals are advisory analytics and do not place or approve orders.",
-                "Gate replay is a read-only historical target-gate comparison; a target-gate clear is not a full approval.",
-                "QuiverQuant alternative-data signals are advisory analytics and do not place or approve orders.",
-                "Public editorial-research items are attributable secondary context only and do not place, approve, block, size, or otherwise modify orders.",
-                "Scheduled decision reports target two daily open-followup pulses: Nordic/EU open +1h15 and US open +1h15.",
-                "Daily end-of-day reports are exposed as sanitized strategy journal rows.",
-                "The Hermes adapter intentionally excludes raw request_json/response_json payloads from decision reports."
-            ],
-            "goal_contract": self.hermes_goal_contract_value()
-        })
+        serde_json::to_value(self.hermes_capabilities())
+            .expect("Hermes capabilities must serialize")
     }
 
     pub async fn hermes_context(&self, limit: i64) -> Result<JsonValue> {
@@ -21897,6 +21939,34 @@ market_data:
             !SUPPORTED_EXPERIMENT_VARIABLES.contains(&"strategy.swing.cash_buffer_pct"),
             "the dead cash-buffer path must not return"
         );
+    }
+
+    #[test]
+    fn typed_hermes_capabilities_keep_advisory_boundaries_explicit() {
+        let payload = hermes_capabilities_payload(json!({"mode": "recommend_only"}));
+
+        assert_eq!(payload.status, "ok");
+        assert_eq!(payload.decision_advice.write_tool, "create_decision_advice");
+        assert!(
+            payload
+                .supported_experiment_overlays
+                .variables
+                .iter()
+                .any(|path| path == "strategy.capital.min_cash_buffer_pct")
+        );
+        assert!(
+            payload
+                .forbidden
+                .iter()
+                .any(|capability| capability == "order precheck/place/replace/cancel")
+        );
+        assert!(
+            payload
+                .safe_endpoints
+                .iter()
+                .all(|endpoint| endpoint.starts_with("/api/"))
+        );
+        assert_eq!(payload.goal_contract["mode"], "recommend_only");
     }
 
     #[tokio::test]
