@@ -24,18 +24,19 @@ use crate::{
         DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
         ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
         ExecutionOrderEventTimelinePayload, ExecutionOrderSummaryPayload, ExecutionPayload,
-        HermesCapabilitiesPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
-        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
-        HermesReflectionSummaryPayload, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
-        StrategyJournalPayload, ViewParams,
+        HermesCapabilitiesPayload, HermesContextPayload, HermesExperimentRequest,
+        HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
+        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
+        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
+        ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -2059,7 +2060,10 @@ async fn hermes_context(
         return response;
     }
     let limit = params.limit.unwrap_or(20);
-    json_result(state.hermes_context(limit).await)
+    match state.hermes_context(limit).await {
+        Ok(payload) => Json::<HermesContextPayload>(payload).into_response(),
+        Err(err) => json_result(Err(err)),
+    }
 }
 
 async fn hermes_reflections(

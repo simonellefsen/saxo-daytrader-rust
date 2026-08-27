@@ -556,6 +556,95 @@ pub struct HermesExperimentOverlayCapabilitiesPayload {
     pub variables: Vec<String>,
 }
 
+/// Protected, read-only context assembled for Hermes advisory work.
+///
+/// Stable context-section boundaries are typed while detailed retained
+/// evidence remains staged JSON. This payload is informational only: it does
+/// not invoke Hermes, alter a strategy experiment, queue work, or reach Saxo.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextPayload {
+    pub status: String,
+    pub generated_at: String,
+    pub capabilities: HermesCapabilitiesPayload,
+    pub goal_contract: JsonValue,
+    pub overview: JsonValue,
+    pub scheduler: HermesContextSchedulerPayload,
+    pub decisions: HermesContextDecisionsPayload,
+    pub end_of_day: HermesContextEndOfDayPayload,
+    pub strategy_journal: HermesContextItemsPayload,
+    pub execution: HermesContextExecutionPayload,
+    pub performance: HermesContextPerformancePayload,
+    pub markov_method: JsonValue,
+    pub quiver_signals: JsonValue,
+    pub quiver_conflicts: JsonValue,
+    pub editorial_research: JsonValue,
+    pub daily_indicators: JsonValue,
+    pub hermes: HermesContextHermesPayload,
+    pub safety: HermesContextSafetyPayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextSchedulerPayload {
+    pub status: JsonValue,
+    pub cycles: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextDecisionsPayload {
+    pub cadence: String,
+    pub pulses: JsonValue,
+    pub reports: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextEndOfDayPayload {
+    pub cadence: String,
+    pub reports: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextItemsPayload {
+    pub items: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextExecutionPayload {
+    pub orders: Vec<JsonValue>,
+    pub failures: Vec<JsonValue>,
+    pub events: Vec<JsonValue>,
+    pub fills: Vec<JsonValue>,
+    pub protective_stop_coverage: JsonValue,
+    pub holding_thesis_reviews: JsonValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextPerformancePayload {
+    pub range: String,
+    pub history: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextHermesPayload {
+    pub experiments: Vec<JsonValue>,
+    pub active_strategy_baseline: JsonValue,
+    pub gate_replay: JsonValue,
+    pub learning_memory: HermesContextLearningMemoryPayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextLearningMemoryPayload {
+    pub active: Vec<JsonValue>,
+    pub stale_count: usize,
+    pub policy: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HermesContextSafetyPayload {
+    pub saxo_sessions_excluded: bool,
+    pub broker_mutations_excluded: bool,
+    pub raw_oauth_payloads_excluded: bool,
+}
+
 /// Display-safe metadata for the promoted baseline audit record.
 ///
 /// The persisted prompt and source documents stay local. Configuration is

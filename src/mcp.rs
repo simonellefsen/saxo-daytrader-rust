@@ -145,7 +145,7 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .get("limit")
                 .and_then(JsonValue::as_i64)
                 .unwrap_or(20);
-            state.hermes_context(limit).await?
+            state.hermes_context_value(limit).await?
         }
         "list_reflections" => {
             let limit = arguments

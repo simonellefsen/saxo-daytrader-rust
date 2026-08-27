@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type protected Hermes context envelope
+
+- Changed `GET /api/hermes/context` and the Hermes-safe MCP context tool to construct the same typed read-only envelope. Stable context sections, pulse/EOD cadence, performance range, capability declaration, and exclusion guarantees are now compiler-checked.
+- Detailed retained read models remain staged JSON because their schemas evolve independently. The endpoint and MCP tool remain protected/advisory-only and exclude Saxo sessions, raw OAuth payloads, and broker mutations.
+
 ## [2026-08-27] architecture | Type protected Hermes capabilities
 
 - Changed `GET /api/hermes/capabilities` from a generic JSON document to a typed advisory-boundary contract. Stable endpoint, read-model, restricted-write, advice self-check, experiment-overlay, forbidden-capability, and note lists are now compiler-checked.

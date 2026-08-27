@@ -58,12 +58,15 @@ use crate::{
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
         ExecutionOrderEventTimelineEntryPayload, ExecutionOrderSummaryPayload,
-        HermesCapabilitiesPayload, HermesContextSelfCheckCapabilitiesPayload,
-        HermesDecisionAdviceCapabilitiesPayload, HermesDecisionAdviceRequest,
-        HermesExperimentOverlayCapabilitiesPayload, HermesExperimentRequest,
-        HermesExperimentSummaryPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        HermesCapabilitiesPayload, HermesContextDecisionsPayload, HermesContextEndOfDayPayload,
+        HermesContextExecutionPayload, HermesContextHermesPayload, HermesContextItemsPayload,
+        HermesContextLearningMemoryPayload, HermesContextPayload, HermesContextPerformancePayload,
+        HermesContextSafetyPayload, HermesContextSchedulerPayload,
+        HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
+        HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
+        HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
+        HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -12083,7 +12086,7 @@ impl AppState {
             .expect("Hermes capabilities must serialize")
     }
 
-    pub async fn hermes_context(&self, limit: i64) -> Result<JsonValue> {
+    pub async fn hermes_context(&self, limit: i64) -> Result<HermesContextPayload> {
         let limit = clamp_limit(limit, 1, 50);
         let overview = self.overview_payload().await.unwrap_or_else(|err| {
             warn!("Hermes overview context degraded: {err:#}");
@@ -12180,61 +12183,66 @@ impl AppState {
                 json!({"status": "degraded", "detail": err.to_string()})
             });
 
-        Ok(json!({
-            "status": "ok",
-            "generated_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            "capabilities": self.hermes_capabilities_value(),
-            "goal_contract": self.hermes_goal_contract_value(),
-            "overview": overview,
-            "scheduler": {
-                "status": scheduler_status,
-                "cycles": scheduler_cycles
+        Ok(HermesContextPayload {
+            status: "ok".to_string(),
+            generated_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            capabilities: self.hermes_capabilities(),
+            goal_contract: self.hermes_goal_contract_value(),
+            overview,
+            scheduler: HermesContextSchedulerPayload {
+                status: scheduler_status,
+                cycles: scheduler_cycles,
             },
-            "decisions": {
-                "cadence": "two_daily_open_followups",
-                "pulses": crate::xai_decision::decision_pulse_summary(self).get("pulses").cloned().unwrap_or_else(|| json!([])),
-                "reports": decision_reports
+            decisions: HermesContextDecisionsPayload {
+                cadence: "two_daily_open_followups".to_string(),
+                pulses: crate::xai_decision::decision_pulse_summary(self)
+                    .get("pulses")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                reports: decision_reports,
             },
-            "end_of_day": {
-                "cadence": "daily",
-                "reports": end_of_day_reports
+            end_of_day: HermesContextEndOfDayPayload {
+                cadence: "daily".to_string(),
+                reports: end_of_day_reports,
             },
-            "strategy_journal": {
-                "items": journals
+            strategy_journal: HermesContextItemsPayload { items: journals },
+            execution: HermesContextExecutionPayload {
+                orders: execution_orders,
+                failures: execution_failures,
+                events: execution_events,
+                fills: execution_fills,
+                protective_stop_coverage,
+                holding_thesis_reviews,
             },
-            "execution": {
-                "orders": execution_orders,
-                "failures": execution_failures,
-                "events": execution_events,
-                "fills": execution_fills,
-                "protective_stop_coverage": protective_stop_coverage,
-                "holding_thesis_reviews": holding_thesis_reviews
+            performance: HermesContextPerformancePayload {
+                range: "1M".to_string(),
+                history: performance,
             },
-            "performance": {
-                "range": "1M",
-                "history": performance
+            markov_method: markov,
+            quiver_signals: quiver,
+            quiver_conflicts,
+            editorial_research,
+            daily_indicators,
+            hermes: HermesContextHermesPayload {
+                experiments: active_experiments,
+                active_strategy_baseline,
+                gate_replay,
+                learning_memory: HermesContextLearningMemoryPayload {
+                    active: active_learning_memory,
+                    stale_count: stale_learning_memory_count,
+                    policy: "repeated reflection actions become stable after two distinct reflections; emerging lessons expire after 7d and stable lessons after 21d".to_string(),
+                },
             },
-            "markov_method": markov,
-            "quiver_signals": quiver,
-            "quiver_conflicts": quiver_conflicts,
-            "editorial_research": editorial_research,
-            "daily_indicators": daily_indicators,
-            "hermes": {
-                "experiments": active_experiments,
-                "active_strategy_baseline": active_strategy_baseline,
-                "gate_replay": gate_replay,
-                "learning_memory": {
-                    "active": active_learning_memory,
-                    "stale_count": stale_learning_memory_count,
-                    "policy": "repeated reflection actions become stable after two distinct reflections; emerging lessons expire after 7d and stable lessons after 21d"
-                }
+            safety: HermesContextSafetyPayload {
+                saxo_sessions_excluded: true,
+                broker_mutations_excluded: true,
+                raw_oauth_payloads_excluded: true,
             },
-            "safety": {
-                "saxo_sessions_excluded": true,
-                "broker_mutations_excluded": true,
-                "raw_oauth_payloads_excluded": true
-            }
-        }))
+        })
+    }
+
+    pub async fn hermes_context_value(&self, limit: i64) -> Result<JsonValue> {
+        serde_json::to_value(self.hermes_context(limit).await?).map_err(Into::into)
     }
 
     pub async fn hermes_decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -21967,6 +21975,76 @@ market_data:
                 .all(|endpoint| endpoint.starts_with("/api/"))
         );
         assert_eq!(payload.goal_contract["mode"], "recommend_only");
+    }
+
+    #[test]
+    fn typed_hermes_context_keeps_section_and_safety_boundaries_explicit() {
+        let payload = HermesContextPayload {
+            status: "ok".to_string(),
+            generated_at: "2026-08-27T08:00:00Z".to_string(),
+            capabilities: hermes_capabilities_payload(json!({"mode": "recommend_only"})),
+            goal_contract: json!({"mode": "recommend_only"}),
+            overview: json!({"status": "ok"}),
+            scheduler: HermesContextSchedulerPayload {
+                status: json!({"status": "ok"}),
+                cycles: vec![json!({"status": "ok"})],
+            },
+            decisions: HermesContextDecisionsPayload {
+                cadence: "two_daily_open_followups".to_string(),
+                pulses: json!([]),
+                reports: vec![json!({"id": 42})],
+            },
+            end_of_day: HermesContextEndOfDayPayload {
+                cadence: "daily".to_string(),
+                reports: Vec::new(),
+            },
+            strategy_journal: HermesContextItemsPayload { items: Vec::new() },
+            execution: HermesContextExecutionPayload {
+                orders: Vec::new(),
+                failures: Vec::new(),
+                events: Vec::new(),
+                fills: Vec::new(),
+                protective_stop_coverage: json!({"status": "ok"}),
+                holding_thesis_reviews: json!({"status": "ok"}),
+            },
+            performance: HermesContextPerformancePayload {
+                range: "1M".to_string(),
+                history: Vec::new(),
+            },
+            markov_method: json!({"status": "ok"}),
+            quiver_signals: json!({"status": "ok"}),
+            quiver_conflicts: json!([]),
+            editorial_research: json!({"status": "ok"}),
+            daily_indicators: json!({"status": "ok"}),
+            hermes: HermesContextHermesPayload {
+                experiments: Vec::new(),
+                active_strategy_baseline: JsonValue::Null,
+                gate_replay: json!({"status": "ok"}),
+                learning_memory: HermesContextLearningMemoryPayload {
+                    active: Vec::new(),
+                    stale_count: 0,
+                    policy: "bounded".to_string(),
+                },
+            },
+            safety: HermesContextSafetyPayload {
+                saxo_sessions_excluded: true,
+                broker_mutations_excluded: true,
+                raw_oauth_payloads_excluded: true,
+            },
+        };
+
+        let serialized = serde_json::to_value(payload).expect("Hermes context serializes");
+        assert_eq!(
+            serialized["decisions"]["cadence"],
+            "two_daily_open_followups"
+        );
+        assert_eq!(serialized["performance"]["range"], "1M");
+        assert_eq!(serialized["safety"]["saxo_sessions_excluded"], true);
+        assert_eq!(serialized["safety"]["broker_mutations_excluded"], true);
+        assert_eq!(
+            serialized["capabilities"]["decision_advice"]["write_tool"],
+            "create_decision_advice"
+        );
     }
 
     #[tokio::test]
