@@ -1571,15 +1571,12 @@ async fn saxo_session(State(state): State<Arc<AppState>>) -> Json<auth::SaxoSess
 
 async fn saxo_session_refresh(State(state): State<Arc<AppState>>) -> Response {
     match state.refresh_saxo_session().await {
-        Ok(value) => {
+        Ok(status) => {
             info!(
-                status = value
-                    .get("status")
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or("unknown"),
+                status = %status.status,
                 "Saxo session refresh endpoint completed"
             );
-            Json(value).into_response()
+            Json(status).into_response()
         }
         Err(err) => {
             warn!("Saxo session refresh endpoint failed: {err:#}");

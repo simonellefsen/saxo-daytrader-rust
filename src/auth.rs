@@ -386,9 +386,9 @@ fn session_api_status(
     }
 }
 
-pub async fn refresh_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
+pub async fn refresh_session(config: &YamlValue, config_path: &PathBuf) -> Result<SaxoAuthStatus> {
     ensure_access_token(config, config_path).await?;
-    Ok(status_value(auth_status(config, config_path, false).await))
+    Ok(auth_status(config, config_path, false).await)
 }
 
 pub fn logout_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {

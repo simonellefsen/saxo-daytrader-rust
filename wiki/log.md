@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] security | Narrow Saxo session refresh response
+
+- Changed `POST /api/saxo/session/refresh` to return the same typed, sanitized session-health contract as the read-only session-status endpoint after a successful refresh and durable-session persistence.
+- Local session paths and free-form auth errors remain internal. The scheduler now reads typed lifecycle fields and serializes the same sanitized status into its retained cycle evidence; refresh lease handling, token renewal, durable persistence, invalid-session audit persistence, and all broker/execution behavior are unchanged.
+
 ## [2026-08-27] architecture | Type asset ladder history placeholder
 
 - Changed the public asset-ladder-history endpoint from a generic stub document to a typed read-only placeholder contract. Its optional position now uses the bounded dashboard position projection, and malformed matching rows degrade to absent position evidence.

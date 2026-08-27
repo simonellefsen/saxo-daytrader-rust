@@ -15304,14 +15304,14 @@ impl AppState {
         auth::session_api(&self.config, &self.config_path).await
     }
 
-    pub async fn refresh_saxo_session(&self) -> Result<JsonValue> {
+    pub async fn refresh_saxo_session(&self) -> Result<auth::SaxoSessionApiStatus> {
         let lease_owner = self
             .prepare_saxo_session_refresh_lease_if_needed("refresh")
             .await?;
         let result = match auth::refresh_session(&self.config, &self.config_path).await {
-            Ok(status) => {
+            Ok(_) => {
                 self.persist_saxo_session_file_to_db("refresh").await?;
-                Ok(status)
+                Ok(auth::session_api(&self.config, &self.config_path).await)
             }
             Err(err) => {
                 if let Err(persist_err) = self

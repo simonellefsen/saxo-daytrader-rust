@@ -511,36 +511,22 @@ fn bounded_timeout_seconds(value: Option<&str>, default_seconds: u64) -> u64 {
 async fn maintain_saxo_session(state: &AppState) -> JsonValue {
     match state.refresh_saxo_session().await {
         Ok(status) => {
-            let status_key = status
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            let status_text = status
-                .get("status_text")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Saxo session checked");
-            let needs_reauth = status
-                .get("needs_reauth")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            let connected = status
-                .get("connected")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if needs_reauth {
+            if status.needs_reauth {
                 warn!(
-                    status = %status_key,
-                    connected,
-                    "Saxo session maintenance requires re-authentication: {status_text}"
+                    status = %status.status,
+                    connected = status.connected,
+                    "Saxo session maintenance requires re-authentication: {}",
+                    status.status_text
                 );
             } else {
                 info!(
-                    status = %status_key,
-                    connected,
-                    "Saxo session maintenance completed: {status_text}"
+                    status = %status.status,
+                    connected = status.connected,
+                    "Saxo session maintenance completed: {}",
+                    status.status_text
                 );
             }
-            status
+            serde_json::to_value(status).expect("sanitized Saxo session status must serialize")
         }
         Err(err) => {
             warn!("Saxo session maintenance failed: {err:#}");
