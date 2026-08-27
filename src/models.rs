@@ -2408,14 +2408,32 @@ pub struct MarkovSignalsPayload {
 
 /// Bounded Quiver signal-list envelope.
 ///
-/// The latest-run summary and individual signal rows remain compatibility JSON
-/// while the persisted Quiver read model is converted incrementally. Keeping
-/// the outer response typed preserves the established public API boundary
-/// without changing collection or downstream advisory behavior.
+/// Stable collector lifecycle metadata and individual signal rows are
+/// allowlisted. Collector configuration and summary documents, source-status,
+/// top-event, and provider diagnostics remain outside this public API. This
+/// observation cannot refresh a collection or influence a Decision Report,
+/// manager gate, queue, precheck, or Saxo order.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct QuiverSignalsPayload {
-    pub latest_run: JsonValue,
-    pub items: Vec<JsonValue>,
+    pub latest_run: SignalRunSummaryPayload,
+    pub items: Vec<DashboardQuiverSignalPayload>,
+}
+
+/// Allowlisted lifecycle metadata for a public Markov or Quiver collector run.
+///
+/// The collector's configuration and summary documents are intentionally
+/// omitted: they can contain evolving provider and analytical detail that is
+/// not needed to identify whether a read-only signal list is current.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SignalRunSummaryPayload {
+    pub available: bool,
+    pub id: Option<String>,
+    pub created_at: Option<String>,
+    pub run_date: String,
+    pub status: String,
+    pub asset_count: i64,
+    pub success_count: i64,
+    pub error_count: i64,
 }
 
 #[derive(Debug, Deserialize)]

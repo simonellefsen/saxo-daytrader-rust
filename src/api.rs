@@ -46,12 +46,13 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, decision_report_summaries_from_json,
-        execution_event_summaries_from_json, execution_fill_summaries_from_json,
-        execution_order_event_timeline_entries_from_json, execution_order_summaries_from_json,
-        hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
-        portfolio_trades_from_json, scheduler_cycle_summaries_from_json,
-        scheduler_status_summary_from_json, strategy_journal_summaries_from_json,
+        AppState, dashboard_positions_from_json, dashboard_quiver_signals_from_json,
+        decision_report_summaries_from_json, execution_event_summaries_from_json,
+        execution_fill_summaries_from_json, execution_order_event_timeline_entries_from_json,
+        execution_order_summaries_from_json, hermes_experiment_summaries_from_json,
+        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
+        scheduler_cycle_summaries_from_json, scheduler_status_summary_from_json,
+        signal_run_summary_from_json, strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1749,13 +1750,18 @@ async fn quiver_signals(
         async {
             let latest_run = state.latest_quiver_run().await.unwrap_or(JsonValue::Null);
             let items = state.quiver_signals(limit).await?;
+            let latest_run = signal_run_summary_from_json(latest_run)?;
+            let items = dashboard_quiver_signals_from_json(items)?;
             serde_json::to_value(quiver_signals_payload(latest_run, items)).map_err(Into::into)
         }
         .await,
     )
 }
 
-fn quiver_signals_payload(latest_run: JsonValue, items: Vec<JsonValue>) -> QuiverSignalsPayload {
+fn quiver_signals_payload(
+    latest_run: crate::models::SignalRunSummaryPayload,
+    items: Vec<crate::models::DashboardQuiverSignalPayload>,
+) -> QuiverSignalsPayload {
     QuiverSignalsPayload { latest_run, items }
 }
 
@@ -2952,16 +2958,43 @@ mod tests {
     #[test]
     fn quiver_signals_response_keeps_the_typed_run_and_list_envelope() {
         let payload = quiver_signals_payload(
-            json!({"id": 23, "status": "completed"}),
-            vec![json!({"symbol": "TSLA:xnas", "signal": "buy"})],
+            crate::models::SignalRunSummaryPayload {
+                available: true,
+                id: Some("23".to_string()),
+                created_at: Some("2026-08-27T08:30:00Z".to_string()),
+                run_date: "2026-08-27".to_string(),
+                status: "completed".to_string(),
+                asset_count: 1,
+                success_count: 1,
+                error_count: 0,
+            },
+            vec![crate::models::DashboardQuiverSignalPayload {
+                symbol: "TSLA:xnas".to_string(),
+                ticker: "TSLA".to_string(),
+                instrument_name: "Tesla".to_string(),
+                signal: 0.7,
+                direction: "bullish".to_string(),
+                confidence: 0.8,
+                event_count: 2,
+                congress_purchase_count: 2,
+                congress_sale_count: 0,
+                net_congress_amount: 100_000.0,
+                latest_event_date: "2026-08-26".to_string(),
+                status: "ok".to_string(),
+                error_text: "[redacted]".to_string(),
+            }],
         );
 
-        assert_eq!(payload.latest_run["id"], 23);
+        assert_eq!(payload.latest_run.id.as_deref(), Some("23"));
         assert_eq!(payload.items.len(), 1);
 
         let serialized = serde_json::to_value(payload).expect("Quiver signals payload serializes");
         assert_eq!(serialized["latest_run"]["status"], "completed");
-        assert_eq!(serialized["items"][0]["signal"], "buy");
+        assert_eq!(serialized["items"][0]["signal"], 0.7);
+        assert!(serialized["latest_run"].get("config_json").is_none());
+        assert!(serialized["latest_run"].get("summary_json").is_none());
+        assert!(serialized["items"][0].get("source_status_json").is_none());
+        assert!(serialized["items"][0].get("top_events_json").is_none());
     }
 
     #[test]

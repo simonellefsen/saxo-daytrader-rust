@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type public Quiver signal list
+
+- Changed `GET /api/quiver/signals` from a generic collector/run document to an allowlisted typed lifecycle and rendered-signal projection.
+- Collector configuration/summary documents, source-status/top-event documents, and provider diagnostics remain in internal read models. Malformed rows fail closed at the public boundary; collection, Decision Reports, manager gates, queues, and Saxo behavior are unchanged.
+
 ## [2026-08-27] security | Narrow Saxo session refresh response
 
 - Changed `POST /api/saxo/session/refresh` to return the same typed, sanitized session-health contract as the read-only session-status endpoint after a successful refresh and durable-session persistence.

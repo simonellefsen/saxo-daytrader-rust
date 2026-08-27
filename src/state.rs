@@ -3712,7 +3712,7 @@ fn dashboard_markov_signals_from_json(
 
 /// Decodes the rendered Quiver signal table fields while keeping source-status,
 /// top-event, and provider diagnostics on their dedicated read-only paths.
-fn dashboard_quiver_signals_from_json(
+pub(crate) fn dashboard_quiver_signals_from_json(
     signals: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardQuiverSignalPayload>> {
     signals
@@ -4809,6 +4809,25 @@ fn dashboard_latest_run_from_json(run: JsonValue) -> serde_json::Result<Dashboar
     let mut run: DashboardLatestRunPayload = serde_json::from_value(run)?;
     run.available = true;
     Ok(run)
+}
+
+/// Decodes a collector run into the public lifecycle-only summary. Detailed
+/// configuration and summary documents are intentionally retained only by the
+/// dashboard/internal read models.
+pub(crate) fn signal_run_summary_from_json(
+    run: JsonValue,
+) -> serde_json::Result<crate::models::SignalRunSummaryPayload> {
+    let run = dashboard_latest_run_from_json(run)?;
+    Ok(crate::models::SignalRunSummaryPayload {
+        available: run.available,
+        id: run.id,
+        created_at: run.created_at,
+        run_date: run.run_date,
+        status: run.status,
+        asset_count: run.asset_count,
+        success_count: run.success_count,
+        error_count: run.error_count,
+    })
 }
 
 /// Decodes held-position Quiver conflict evidence for the Quiver dashboard.
@@ -20102,6 +20121,31 @@ mod tests {
             !dashboard_latest_run_from_json(JsonValue::Null)
                 .expect("no latest run is explicit")
                 .available
+        );
+    }
+
+    #[test]
+    fn public_signal_run_summary_omits_collector_documents() {
+        let summary = signal_run_summary_from_json(json!({
+            "id": "run-42",
+            "created_at": "2026-08-23T13:00:00Z",
+            "run_date": "2026-08-23",
+            "status": "completed",
+            "asset_count": 20,
+            "success_count": 19,
+            "error_count": 1,
+            "config_json": {"api_key": "must-not-reach-public-api"},
+            "summary_json": {"provider_response": "must-not-reach-public-api"}
+        }))
+        .expect("public signal run summary decodes");
+
+        assert!(summary.available);
+        assert_eq!(summary.id.as_deref(), Some("run-42"));
+        assert_eq!(summary.success_count, 19);
+        assert!(
+            !serde_json::to_string(&summary)
+                .expect("public signal run summary serializes")
+                .contains("must-not-reach-public-api")
         );
     }
 
