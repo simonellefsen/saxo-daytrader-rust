@@ -344,6 +344,35 @@ pub struct ExecutionEventSummaryPayload {
     pub broker_status: Option<String>,
 }
 
+/// One stable broker-lifecycle event rendered in a single-order timeline.
+///
+/// The timeline retains only the allowlisted fields useful for reviewing an
+/// order's lifecycle. Raw Saxo responses, account identifiers, and local audit
+/// signatures remain outside this public API boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ExecutionOrderEventTimelineEntryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub event_type: String,
+    pub broker_status: Option<String>,
+    pub broker_substatus: Option<String>,
+    pub broker_quantity: Option<f64>,
+    pub broker_price_local: Option<f64>,
+    pub broker_order_id: Option<String>,
+}
+
+/// Read-only lifecycle timeline for one local execution order.
+///
+/// This is broker observation evidence only. It cannot replay, reconcile,
+/// precheck, queue, place, cancel, replace, or otherwise mutate an order.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ExecutionOrderEventTimelinePayload {
+    pub status: String,
+    pub execution_order_id: i64,
+    pub event_count: usize,
+    pub events: Vec<ExecutionOrderEventTimelineEntryPayload>,
+}
+
 /// Compact local scheduler-cycle evidence rendered on the Execution tab.
 ///
 /// The retained cycle document can contain detailed provider and operations

@@ -57,22 +57,22 @@ use crate::{
         DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
         DecisionReportDebugPayloads, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
-        ExecutionOrderSummaryPayload, HermesDecisionAdviceRequest, HermesExperimentRequest,
-        HermesExperimentSummaryPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
-        LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
-        QuiverConflictPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        ExecutionOrderEventTimelineEntryPayload, ExecutionOrderSummaryPayload,
+        HermesDecisionAdviceRequest, HermesExperimentRequest, HermesExperimentSummaryPayload,
+        HermesReflectionRequest, HermesReflectionSummaryPayload, LatestDecisionStatusPayload,
+        MarketStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
+        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -4041,6 +4041,39 @@ pub(crate) fn execution_event_summaries_from_json(
                 execution_order_id: dashboard_required_i64(&event, "execution_order_id")?,
                 event_type: dashboard_required_string(&event, "event_type")?,
                 broker_status: dashboard_optional_string(&event, "broker_status")?,
+            })
+        })
+        .collect()
+}
+
+/// Decodes the existing allowlisted lifecycle-event timeline into its public
+/// typed contract. The state query deliberately omits raw Saxo payloads and
+/// account identifiers before this conversion runs.
+pub(crate) fn execution_order_event_timeline_entries_from_json(
+    events: Vec<JsonValue>,
+) -> serde_json::Result<Vec<ExecutionOrderEventTimelineEntryPayload>> {
+    events
+        .into_iter()
+        .map(|event| {
+            Ok(ExecutionOrderEventTimelineEntryPayload {
+                id: dashboard_required_i64(&event, "id")?,
+                created_at: dashboard_required_string(&event, "created_at")?,
+                event_type: dashboard_required_string(&event, "event_type")?,
+                broker_status: dashboard_optional_string(&event, "broker_status")?,
+                broker_substatus: dashboard_optional_string(&event, "broker_substatus")?,
+                broker_quantity: serde_json::from_value(
+                    event
+                        .get("broker_quantity")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                broker_price_local: serde_json::from_value(
+                    event
+                        .get("broker_price_local")
+                        .cloned()
+                        .unwrap_or(JsonValue::Null),
+                )?,
+                broker_order_id: dashboard_optional_string(&event, "broker_order_id")?,
             })
         })
         .collect()
@@ -22153,7 +22186,9 @@ market_data:
             .expect("load order events");
 
         assert_eq!(events.len(), 2, "must scope to the requested order only");
-        let serialized = serde_json::to_string(&events).expect("serialize");
+        let timeline = execution_order_event_timeline_entries_from_json(events)
+            .expect("typed timeline entries decode");
+        let serialized = serde_json::to_string(&timeline).expect("serialize");
         assert!(
             !serialized.contains("broker-token"),
             "raw broker payload must never be served: {serialized}"
@@ -22163,9 +22198,9 @@ market_data:
             "account identifier must never be served: {serialized}"
         );
         // Oldest first: the timeline reads placement -> terminal state.
-        assert_eq!(events[0]["event_type"], "placed");
-        assert_eq!(events[1]["event_type"], "filled");
-        assert_eq!(events[1]["broker_price_local"], 193.12);
+        assert_eq!(timeline[0].event_type, "placed");
+        assert_eq!(timeline[1].event_type, "filled");
+        assert_eq!(timeline[1].broker_price_local, Some(193.12));
     }
 
     /// Rows 1-3 are the real production shapes: a USD sale across a falling

@@ -22,7 +22,8 @@ use crate::{
         CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
         DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
-        ExecutionFillSummaryPayload, ExecutionOrderSummaryPayload, ExecutionPayload,
+        ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
+        ExecutionOrderEventTimelinePayload, ExecutionOrderSummaryPayload, ExecutionPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
         HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
         HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
@@ -45,10 +46,10 @@ use crate::{
     state::{
         AppState, dashboard_positions_from_json, decision_report_summaries_from_json,
         execution_event_summaries_from_json, execution_fill_summaries_from_json,
-        execution_order_summaries_from_json, hermes_experiment_summaries_from_json,
-        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
-        scheduler_cycle_summaries_from_json, scheduler_status_summary_from_json,
-        strategy_journal_summaries_from_json,
+        execution_order_event_timeline_entries_from_json, execution_order_summaries_from_json,
+        hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
+        portfolio_trades_from_json, scheduler_cycle_summaries_from_json,
+        scheduler_status_summary_from_json, strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1880,6 +1881,18 @@ fn execution_payload(
     }
 }
 
+fn execution_order_event_timeline_payload(
+    execution_order_id: i64,
+    events: Vec<ExecutionOrderEventTimelineEntryPayload>,
+) -> ExecutionOrderEventTimelinePayload {
+    ExecutionOrderEventTimelinePayload {
+        status: "ok".to_string(),
+        execution_order_id,
+        event_count: events.len(),
+        events,
+    }
+}
+
 fn scheduler_payload(
     status: Option<SchedulerStatusSummaryPayload>,
     cycles: Vec<crate::models::DashboardSchedulerCyclePayload>,
@@ -1924,14 +1937,15 @@ async fn execution_order_events(
     State(state): State<Arc<AppState>>,
     Path(order_id): Path<i64>,
 ) -> Response {
-    match state.execution_order_events(order_id, 200).await {
-        Ok(events) => Json(json!({
-            "status": "ok",
-            "execution_order_id": order_id,
-            "event_count": events.len(),
-            "events": events
-        }))
-        .into_response(),
+    match state
+        .execution_order_events(order_id, 200)
+        .await
+        .and_then(|events| {
+            execution_order_event_timeline_entries_from_json(events).map_err(Into::into)
+        }) {
+        Ok(events) => {
+            Json(execution_order_event_timeline_payload(order_id, events)).into_response()
+        }
         Err(err) => json_result(Err(err)),
     }
 }
@@ -2995,6 +3009,32 @@ mod tests {
                 .is_none()
         );
         assert!(serialized["events"][0].get("raw_payload_json").is_none());
+    }
+
+    #[test]
+    fn execution_order_event_timeline_keeps_the_typed_read_only_envelope() {
+        let payload = execution_order_event_timeline_payload(
+            42,
+            vec![ExecutionOrderEventTimelineEntryPayload {
+                id: 18,
+                created_at: "2026-08-27T08:00:01Z".to_string(),
+                event_type: "precheck_completed".to_string(),
+                broker_status: Some("Ok".to_string()),
+                broker_substatus: None,
+                broker_quantity: Some(4.0),
+                broker_price_local: Some(320.0),
+                broker_order_id: Some("SAXO-42".to_string()),
+            }],
+        );
+
+        assert_eq!(payload.execution_order_id, 42);
+        assert_eq!(payload.event_count, 1);
+
+        let serialized = serde_json::to_value(payload).expect("timeline payload serializes");
+        assert_eq!(serialized["events"][0]["event_type"], "precheck_completed");
+        assert_eq!(serialized["events"][0]["broker_quantity"], 4.0);
+        assert!(serialized["events"][0].get("raw_payload_json").is_none());
+        assert!(serialized["events"][0].get("account_uid").is_none());
     }
 
     #[test]

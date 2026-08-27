@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type public per-order execution timeline
+
+- Changed `GET /api/execution/orders/{order_id}/events` to return a typed, allowlisted lifecycle timeline while preserving its chronological order and broker-status, substatus, quantity, price, and broker-order-reference evidence.
+- Raw Saxo payloads, account identifiers, and local audit signatures remain outside the API. This remains observation only and cannot replay, reconcile, precheck, queue, place, cancel, or replace an order.
+
 ## [2026-08-27] architecture | Type public AI prompts latest-report metadata
 
 - Changed `/api/prompts` to load and return only the existing stable Decision Report lifecycle summary; it no longer reads the full persisted report merely to show the latest item.
