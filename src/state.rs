@@ -65,9 +65,9 @@ use crate::{
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
         PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
-        QuiverConflictPayload, StrategyJournalEntryPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        QuiverConflictPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3280,18 +3280,38 @@ fn dashboard_execution_event_failure_stage(event: &JsonValue) -> Option<String> 
     }
 }
 
-/// Flattens only the scheduler-cycle fields rendered in the Execution tab.
-/// Retained `cycle_json` can contain detailed provider and operational
-/// diagnostics, so it is parsed locally and never becomes part of the SSR
-/// payload. The parser accepts both the legacy JSON-string form and the
+/// Flattens only stable scheduler-cycle fields for the dashboard and public
+/// API. Retained `cycle_json` can contain detailed provider and operational
+/// diagnostics, so it is parsed locally and never becomes part of either
+/// response. The parser accepts both the legacy JSON-string form and the
 /// database adapter's parsed-object form.
-fn dashboard_scheduler_cycles_from_json(
+pub(crate) fn scheduler_cycle_summaries_from_json(
     cycles: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardSchedulerCyclePayload>> {
     cycles
         .into_iter()
         .map(dashboard_scheduler_cycle_from_json)
         .collect()
+}
+
+/// Decodes the stable scheduler-status metadata used by the public API.
+///
+/// A missing status row is a normal startup condition and remains `None`.
+/// A malformed stored row fails closed so callers can show an unavailable
+/// status without exposing the retained cycle document or local process data.
+pub(crate) fn scheduler_status_summary_from_json(
+    status: JsonValue,
+) -> serde_json::Result<Option<SchedulerStatusSummaryPayload>> {
+    if status.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(SchedulerStatusSummaryPayload {
+        started_at: dashboard_required_string(&status, "started_at")?,
+        last_heartbeat_at: dashboard_required_string(&status, "last_heartbeat_at")?,
+        last_cycle_started_at: dashboard_optional_string(&status, "last_cycle_started_at")?,
+        last_cycle_completed_at: dashboard_optional_string(&status, "last_cycle_completed_at")?,
+        last_cycle_status: dashboard_required_string(&status, "last_cycle_status")?,
+    }))
 }
 
 fn dashboard_scheduler_cycle_from_json(
@@ -7120,7 +7140,7 @@ impl AppState {
         let scheduler_cycles = if dashboard_loads_tab_exclusive_data(&active_view, "execution") {
             self.scheduler_cycles_page(SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page.offset)
                 .await
-                .and_then(|cycles| dashboard_scheduler_cycles_from_json(cycles).map_err(Into::into))
+                .and_then(|cycles| scheduler_cycle_summaries_from_json(cycles).map_err(Into::into))
                 .unwrap_or_else(|err| {
                     warn!("dashboard typed scheduler cycles degraded: {err:#}");
                     Vec::new()
@@ -11376,8 +11396,36 @@ impl AppState {
             .unwrap_or(JsonValue::Null))
     }
 
+    /// Narrow scheduler status projection for the public operational API.
+    ///
+    /// `last_cycle_json` can retain provider and execution diagnostics, while
+    /// `scheduler_pid` is local process metadata, so neither crosses this
+    /// boundary.
+    pub async fn scheduler_status_summary(&self) -> Result<JsonValue> {
+        Ok(self
+            .first_json("SELECT started_at, last_heartbeat_at, last_cycle_started_at, last_cycle_completed_at, last_cycle_status FROM scheduler_status WHERE singleton_key = 'main' LIMIT 1")
+            .await?
+            .unwrap_or(JsonValue::Null))
+    }
+
     pub async fn scheduler_cycles(&self, limit: i64) -> Result<Vec<JsonValue>> {
         self.scheduler_cycles_page(limit, 0).await
+    }
+
+    /// Narrow scheduler-cycle projection for the public operational API.
+    ///
+    /// The retained `cycle_json` is decoded locally into its fixed display
+    /// fields before serialization; broker alerts and other persisted columns
+    /// remain outside this API boundary.
+    pub async fn scheduler_cycle_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT started_at, status, generated_decision, queue_status, notifications_status, cycle_json
+             FROM scheduler_cycle_history
+             ORDER BY started_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 100)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
     pub async fn scheduler_cycles_page(&self, limit: i64, offset: i64) -> Result<Vec<JsonValue>> {
@@ -19027,8 +19075,8 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_scheduler_cycles_keep_raw_cycle_documents_outside_ssr() {
-        let cycles = dashboard_scheduler_cycles_from_json(vec![json!({
+    fn scheduler_cycle_summaries_keep_raw_cycle_documents_outside_responses() {
+        let cycles = scheduler_cycle_summaries_from_json(vec![json!({
             "started_at": "2026-08-24T08:30:00Z",
             "status": "ok",
             "generated_decision": 1,
@@ -19057,10 +19105,41 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(
-            dashboard_scheduler_cycles_from_json(vec![json!({
+            scheduler_cycle_summaries_from_json(vec![json!({
                 "started_at": "2026-08-24T08:30:00Z"
             })])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn scheduler_status_summary_keeps_cycle_document_and_process_data_outside_api() {
+        let status = scheduler_status_summary_from_json(json!({
+            "started_at": "2026-08-27T06:00:00Z",
+            "last_heartbeat_at": "2026-08-27T08:30:00Z",
+            "last_cycle_started_at": "2026-08-27T08:29:00Z",
+            "last_cycle_completed_at": "2026-08-27T08:30:00Z",
+            "last_cycle_status": "ok",
+            "last_cycle_json": {
+                "provider_payload": "must-not-reach-the-public-api"
+            },
+            "scheduler_pid": 42
+        }))
+        .expect("stable scheduler status decodes")
+        .expect("scheduler status exists");
+
+        assert_eq!(status.last_cycle_status, "ok");
+        let serialized = serde_json::to_string(&status).expect("scheduler status serializes");
+        assert!(!serialized.contains("must-not-reach-the-public-api"));
+        assert!(!serialized.contains("scheduler_pid"));
+        assert!(
+            scheduler_status_summary_from_json(JsonValue::Null)
+                .expect("missing scheduler status is valid")
+                .is_none()
+        );
+        assert!(
+            scheduler_status_summary_from_json(json!({"started_at": "2026-08-27T06:00:00Z"}))
+                .is_err()
         );
     }
 

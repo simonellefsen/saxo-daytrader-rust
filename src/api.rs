@@ -33,7 +33,8 @@ use crate::{
         ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
         ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
         QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        StrategyJournalEntryPayload, StrategyJournalPayload, ViewParams,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
+        ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -45,7 +46,8 @@ use crate::{
         AppState, dashboard_positions_from_json, execution_event_summaries_from_json,
         execution_fill_summaries_from_json, execution_order_summaries_from_json,
         hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
-        portfolio_trades_from_json, strategy_journal_summaries_from_json,
+        portfolio_trades_from_json, scheduler_cycle_summaries_from_json,
+        scheduler_status_summary_from_json, strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1870,7 +1872,10 @@ fn execution_payload(
     }
 }
 
-fn scheduler_payload(status: JsonValue, cycles: Vec<JsonValue>) -> SchedulerPayload {
+fn scheduler_payload(
+    status: Option<SchedulerStatusSummaryPayload>,
+    cycles: Vec<crate::models::DashboardSchedulerCyclePayload>,
+) -> SchedulerPayload {
     SchedulerPayload { status, cycles }
 }
 
@@ -1997,14 +2002,22 @@ async fn scheduler(
     Query(params): Query<LimitParams>,
 ) -> Response {
     let limit = params.limit.unwrap_or(20);
-    let status = state.scheduler_status_value().await.unwrap_or_else(|err| {
-        warn!("scheduler status lookup failed: {err:#}");
-        JsonValue::Null
-    });
-    let cycles = state.scheduler_cycles(limit).await.unwrap_or_else(|err| {
-        warn!("scheduler cycles lookup failed: {err:#}");
-        Vec::new()
-    });
+    let status = state
+        .scheduler_status_summary()
+        .await
+        .and_then(|value| scheduler_status_summary_from_json(value).map_err(Into::into))
+        .unwrap_or_else(|err| {
+            warn!("scheduler status degraded: {err:#}");
+            None
+        });
+    let cycles = state
+        .scheduler_cycle_summaries(limit)
+        .await
+        .and_then(|rows| scheduler_cycle_summaries_from_json(rows).map_err(Into::into))
+        .unwrap_or_else(|err| {
+            warn!("scheduler cycles degraded: {err:#}");
+            Vec::new()
+        });
     Json(scheduler_payload(status, cycles)).into_response()
 }
 
@@ -2962,16 +2975,42 @@ mod tests {
     #[test]
     fn scheduler_response_keeps_the_typed_status_and_cycle_envelope() {
         let payload = scheduler_payload(
-            json!({"last_cycle_status": "ok", "next_due_at": "2026-08-01T17:15:00Z"}),
-            vec![json!({"id": 9, "status": "ok"})],
+            Some(SchedulerStatusSummaryPayload {
+                started_at: "2026-08-01T06:00:00Z".to_string(),
+                last_heartbeat_at: "2026-08-01T08:30:00Z".to_string(),
+                last_cycle_started_at: Some("2026-08-01T08:29:00Z".to_string()),
+                last_cycle_completed_at: Some("2026-08-01T08:30:00Z".to_string()),
+                last_cycle_status: "ok".to_string(),
+            }),
+            vec![crate::models::DashboardSchedulerCyclePayload {
+                started_at: "2026-08-01T08:29:00Z".to_string(),
+                status: "ok".to_string(),
+                generated_decision: true,
+                queue_status: "queued".to_string(),
+                notifications_status: Some("ok".to_string()),
+                duration_ms: Some(60_000),
+                operational_notifications_status: Some("ok".to_string()),
+                portfolio_position_snapshot_integrity_status: Some("ok".to_string()),
+            }],
         );
 
-        assert_eq!(payload.status["last_cycle_status"], "ok");
+        assert_eq!(
+            payload
+                .status
+                .as_ref()
+                .map(|status| status.last_cycle_status.as_str()),
+            Some("ok")
+        );
         assert_eq!(payload.cycles.len(), 1);
 
         let serialized = serde_json::to_value(payload).expect("scheduler payload serializes");
-        assert_eq!(serialized["status"]["next_due_at"], "2026-08-01T17:15:00Z");
+        assert_eq!(
+            serialized["status"]["last_heartbeat_at"],
+            "2026-08-01T08:30:00Z"
+        );
         assert_eq!(serialized["cycles"][0]["status"], "ok");
+        assert!(serialized["status"].get("last_cycle_json").is_none());
+        assert!(serialized["cycles"][0].get("cycle_json").is_none());
     }
 
     #[test]

@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-27] architecture | Type public scheduler API
+
+- Changed `/api/scheduler` to return a typed scheduler-status snapshot and bounded, allowlisted cycle evidence rather than generic database rows.
+- Retained cycle/provider documents, broker-alert columns, and local process metadata remain in the audit store. Status and cycle-list failures degrade independently and this cannot schedule work, change queues, invoke a provider, or mutate a Saxo order.
 
 ## [2026-08-27] architecture | Type public execution list
 

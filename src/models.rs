@@ -1370,15 +1370,30 @@ pub struct ExecutionPayload {
     pub events: Vec<ExecutionEventSummaryPayload>,
 }
 
+/// Stable scheduler-status metadata exposed by the API.
+///
+/// The retained status document can contain detailed cycle/provider diagnostics
+/// and local process metadata. This contract exposes only the scheduler timing
+/// and lifecycle fields needed for operational observation; it cannot schedule
+/// work, change a queue, or mutate a broker order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SchedulerStatusSummaryPayload {
+    pub started_at: String,
+    pub last_heartbeat_at: String,
+    pub last_cycle_started_at: Option<String>,
+    pub last_cycle_completed_at: Option<String>,
+    pub last_cycle_status: String,
+}
+
 /// Bounded scheduler-status envelope.
 ///
-/// The scheduler status snapshot and persisted cycle rows remain compatibility
-/// JSON while the scheduler read model is converted incrementally. This makes
-/// the public read-only boundary explicit without changing scheduler behavior.
+/// Scheduler status and persisted cycle rows expose only stable operational
+/// metadata. Detailed cycle/provider documents and local process metadata stay
+/// in the audit store, without changing scheduler behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SchedulerPayload {
-    pub status: JsonValue,
-    pub cycles: Vec<JsonValue>,
+    pub status: Option<SchedulerStatusSummaryPayload>,
+    pub cycles: Vec<DashboardSchedulerCyclePayload>,
 }
 
 /// Bounded Hermes reflection-list envelope.
