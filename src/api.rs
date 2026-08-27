@@ -43,11 +43,12 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, execution_event_summaries_from_json,
-        execution_fill_summaries_from_json, execution_order_summaries_from_json,
-        hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
-        portfolio_trades_from_json, scheduler_cycle_summaries_from_json,
-        scheduler_status_summary_from_json, strategy_journal_summaries_from_json,
+        AppState, dashboard_positions_from_json, decision_report_summaries_from_json,
+        execution_event_summaries_from_json, execution_fill_summaries_from_json,
+        execution_order_summaries_from_json, hermes_experiment_summaries_from_json,
+        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
+        scheduler_cycle_summaries_from_json, scheduler_status_summary_from_json,
+        strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1777,20 +1778,27 @@ fn market_watchlists_degraded_payload(generated_at: String) -> MarketWatchlistsP
 
 async fn prompts(State(state): State<Arc<AppState>>) -> Json<AiPromptsPayload> {
     let latest = state
-        .decision_report_items(1)
+        .decision_report_summaries(1)
         .await
         .unwrap_or_else(|err| {
             warn!("prompt latest decision lookup failed: {err:#}");
             Vec::new()
         })
         .into_iter()
-        .next();
+        .next()
+        .and_then(|row| match decision_report_summaries_from_json(vec![row]) {
+            Ok(mut reports) => reports.pop(),
+            Err(err) => {
+                warn!("prompt latest decision metadata degraded: {err:#}");
+                None
+            }
+        });
     Json(ai_prompts_payload(Utc::now().to_rfc3339(), latest))
 }
 
 fn ai_prompts_payload(
     generated_at: String,
-    latest_decision_report: Option<JsonValue>,
+    latest_decision_report: Option<DashboardDecisionReportSummaryPayload>,
 ) -> AiPromptsPayload {
     AiPromptsPayload {
         generated_at,
@@ -2732,7 +2740,14 @@ mod tests {
     fn ai_prompts_response_keeps_the_typed_operator_envelope() {
         let payload = ai_prompts_payload(
             "2026-08-01T09:15:00Z".to_string(),
-            Some(json!({"id": 42, "status": "completed"})),
+            Some(DashboardDecisionReportSummaryPayload {
+                id: 42,
+                created_at: "2026-08-01T09:00:00Z".to_string(),
+                status: "completed".to_string(),
+                model: "openai/gpt-5".to_string(),
+                analysis_pulse_key: "eu_open".to_string(),
+                analysis_pulse_label: "EU Opening Decision Report".to_string(),
+            }),
         );
 
         assert_eq!(payload.items.len(), 1);
@@ -2744,6 +2759,16 @@ mod tests {
         assert_eq!(serialized["items"][0]["status"], "not_ported");
         assert_eq!(serialized["latest_decision_report"]["id"], 42);
         assert!(serialized["latest_trading_manager_run"].is_null());
+        assert!(
+            serialized["latest_decision_report"]
+                .get("prompt_text")
+                .is_none()
+        );
+        assert!(
+            serialized["latest_decision_report"]
+                .get("report_json")
+                .is_none()
+        );
     }
 
     #[test]

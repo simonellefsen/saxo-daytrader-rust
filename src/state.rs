@@ -3738,9 +3738,10 @@ fn dashboard_quiver_signals_from_json(
         .collect()
 }
 
-/// Decodes the bounded Decision Report summary list. Detailed report/provider
-/// documents remain on the selected-report and lazy debug paths.
-fn dashboard_decision_report_summaries_from_json(
+/// Decodes bounded Decision Report summaries for the dashboard and public API.
+/// Detailed report/provider documents remain on the selected-report and lazy
+/// debug paths.
+pub(crate) fn decision_report_summaries_from_json(
     reports: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardDecisionReportSummaryPayload>> {
     reports
@@ -7710,11 +7711,10 @@ impl AppState {
                 warn!("dashboard typed selected Decision Report degraded: {err:#}");
                 None
             });
-        let reports =
-            dashboard_decision_report_summaries_from_json(reports).unwrap_or_else(|err| {
-                warn!("dashboard typed Decision Report summaries degraded: {err:#}");
-                Vec::new()
-            });
+        let reports = decision_report_summaries_from_json(reports).unwrap_or_else(|err| {
+            warn!("dashboard typed Decision Report summaries degraded: {err:#}");
+            Vec::new()
+        });
         let summary = overview
             .get("portfolio_summary")
             .and_then(JsonValue::as_object)
@@ -10909,14 +10909,6 @@ impl AppState {
             report_id.max(0)
         );
         self.first_json(&sql).await
-    }
-
-    pub async fn decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
-        let sql = format!(
-            "SELECT {DECISION_REPORT_DETAIL_COLUMNS} FROM decision_reports ORDER BY created_at DESC, id DESC LIMIT {}",
-            clamp_limit(limit, 1, 100)
-        );
-        Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
     pub async fn decision_report_item(&self, report_id: i64) -> Result<Option<JsonValue>> {
@@ -18713,8 +18705,8 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_decision_report_summaries_keep_detail_documents_outside_ssr() {
-        let reports = dashboard_decision_report_summaries_from_json(vec![json!({
+    fn decision_report_summaries_keep_detail_documents_outside_responses() {
+        let reports = decision_report_summaries_from_json(vec![json!({
             "id": 312,
             "created_at": "2026-08-26T12:00:00Z",
             "status": "completed",
@@ -18737,7 +18729,7 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(
-            dashboard_decision_report_summaries_from_json(vec![json!({
+            decision_report_summaries_from_json(vec![json!({
                 "id": 312
             })])
             .is_err()

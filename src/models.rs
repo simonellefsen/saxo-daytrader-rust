@@ -1257,15 +1257,15 @@ pub struct RuntimeHealth {
 }
 
 /// Compact operator-facing summary of the currently available AI prompt
-/// surfaces. Provider-shaped report data remains compatibility JSON because it
-/// is persisted from the report pipeline; this envelope fixes the public API
-/// contract without exposing a new provider or execution path.
+/// surfaces. Latest report metadata is bounded to the same lifecycle summary
+/// used elsewhere in the dashboard; prompt and provider documents stay on
+/// their dedicated read-only paths.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AiPromptsPayload {
     pub generated_at: String,
     pub items: Vec<AiPromptItem>,
-    pub latest_decision_report: Option<JsonValue>,
-    pub latest_trading_manager_run: Option<JsonValue>,
+    pub latest_decision_report: Option<DashboardDecisionReportSummaryPayload>,
+    pub latest_trading_manager_run: Option<AiPromptTradingManagerRunPayload>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1274,6 +1274,17 @@ pub struct AiPromptItem {
     pub title: String,
     pub status: String,
     pub description: String,
+}
+
+/// Reserved typed lifecycle summary for a future Rust prompt builder's latest
+/// Trading Manager run. It is currently always absent; making that absence
+/// typed prevents future provider/manager documents from crossing this API
+/// boundary by default.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiPromptTradingManagerRunPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub status: String,
 }
 
 /// Small latest-report lookup contract for polling clients.

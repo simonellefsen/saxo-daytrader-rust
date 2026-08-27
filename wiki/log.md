@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type public AI prompts latest-report metadata
+
+- Changed `/api/prompts` to load and return only the existing stable Decision Report lifecycle summary; it no longer reads the full persisted report merely to show the latest item.
+- Prompt text, request/response/provider documents, report JSON, and free-form errors remain on their dedicated internal paths. A malformed latest summary degrades to absent metadata and this cannot generate a report, invoke Hermes, change a queue, or reach Saxo.
+
 ## [2026-08-27] architecture | Type public scheduler API
 
 - Changed `/api/scheduler` to return a typed scheduler-status snapshot and bounded, allowlisted cycle evidence rather than generic database rows.
