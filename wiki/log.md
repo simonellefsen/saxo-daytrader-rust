@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type asset ladder history placeholder
+
+- Changed the public asset-ladder-history endpoint from a generic stub document to a typed read-only placeholder contract. Its optional position now uses the bounded dashboard position projection, and malformed matching rows degrade to absent position evidence.
+- The explicit `not_ported` ladder state, empty chart/marker/line/level evidence, and non-mutating semantics are unchanged. This cannot refresh broker data, queue work, precheck, place, cancel, replace, or reconcile a Saxo order.
+
 ## [2026-08-27] architecture | Type protected Hermes context envelope
 
 - Changed `GET /api/hermes/context` and the Hermes-safe MCP context tool to construct the same typed read-only envelope. Stable context sections, pulse/EOD cadence, performance range, capability declaration, and exclusion guarantees are now compiler-checked.

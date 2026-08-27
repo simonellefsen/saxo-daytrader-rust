@@ -18,25 +18,26 @@ use crate::{
     config::{public_base_path, yaml_string},
     localization::LocalizationPrefs,
     models::{
-        AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
-        CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
-        DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
-        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
-        ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
-        ExecutionOrderEventTimelinePayload, ExecutionOrderSummaryPayload, ExecutionPayload,
-        HermesCapabilitiesPayload, HermesContextPayload, HermesExperimentRequest,
-        HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
-        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
-        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
-        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
-        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
-        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
-        ViewParams,
+        AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest,
+        AssetLadderChartPayload, AssetLadderHistoryPayload, AssetLadderSummaryPayload,
+        CashBufferRequest, CashBufferSettings, DashboardDecisionReportSummaryPayload,
+        DashboardPositionPayload, DecisionGateReplayPayload, DecisionLatestPayload,
+        DecisionPulseReportStatusPayload, DecisionReportListPayload, DrawdownGuardOverrideRequest,
+        ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
+        ExecutionOrderEventTimelineEntryPayload, ExecutionOrderEventTimelinePayload,
+        ExecutionOrderSummaryPayload, ExecutionPayload, HermesCapabilitiesPayload,
+        HermesContextPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
+        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
+        HermesReflectionSummaryPayload, HermesReflectionsPayload,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
+        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
+        SchedulerPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
+        StrategyJournalPayload, ViewParams,
     },
     saxo_error::classify_execution_error,
     saxo_order::{
@@ -1646,20 +1647,43 @@ async fn asset_ladder_history(
         .await
         .unwrap_or_default()
         .into_iter()
-        .find(|row| row.get("symbol").and_then(JsonValue::as_str) == Some(symbol.as_str()));
-    Json(json!({
-        "symbol": symbol,
-        "range_key": range_key,
-        "position": position,
-        "ladder_summary": {"status": "not_ported", "active_orders": 0},
-        "chart": {"points": [], "error": null, "source": "rust", "has_real_data": false, "first_event_at": null},
-        "markers": [],
-        "active_lines": [],
-        "ladder_levels": [],
-        "ladder_parameters": {},
-        "legend": []
-    }))
-    .into_response()
+        .find(|row| row.get("symbol").and_then(JsonValue::as_str) == Some(symbol.as_str()))
+        .and_then(|row| match dashboard_positions_from_json(vec![row]) {
+            Ok(mut positions) => positions.pop(),
+            Err(err) => {
+                warn!(symbol = %symbol, "asset ladder position degraded: {err:#}");
+                None
+            }
+        });
+    Json(asset_ladder_history_payload(symbol, range_key, position)).into_response()
+}
+
+fn asset_ladder_history_payload(
+    symbol: String,
+    range_key: String,
+    position: Option<DashboardPositionPayload>,
+) -> AssetLadderHistoryPayload {
+    AssetLadderHistoryPayload {
+        symbol,
+        range_key,
+        position,
+        ladder_summary: AssetLadderSummaryPayload {
+            status: "not_ported".to_string(),
+            active_orders: 0,
+        },
+        chart: AssetLadderChartPayload {
+            points: Vec::new(),
+            error: None,
+            source: "rust".to_string(),
+            has_real_data: false,
+            first_event_at: None,
+        },
+        markers: Vec::new(),
+        active_lines: Vec::new(),
+        ladder_levels: Vec::new(),
+        ladder_parameters: json!({}),
+        legend: Vec::new(),
+    }
 }
 
 async fn portfolio_trades(
@@ -2787,6 +2811,27 @@ mod tests {
                 .get("report_json")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn asset_ladder_history_keeps_the_read_only_not_ported_contract() {
+        let payload = asset_ladder_history_payload(
+            "ACME:xnas".to_string(),
+            "SESSION".to_string(),
+            Some(DashboardPositionPayload {
+                symbol: "ACME:xnas".to_string(),
+                ..DashboardPositionPayload::default()
+            }),
+        );
+
+        let serialized = serde_json::to_value(payload).expect("asset ladder payload serializes");
+        assert_eq!(serialized["symbol"], "ACME:xnas");
+        assert_eq!(serialized["range_key"], "SESSION");
+        assert_eq!(serialized["position"]["symbol"], "ACME:xnas");
+        assert_eq!(serialized["ladder_summary"]["status"], "not_ported");
+        assert_eq!(serialized["ladder_summary"]["active_orders"], 0);
+        assert_eq!(serialized["chart"]["has_real_data"], false);
+        assert_eq!(serialized["markers"], json!([]));
     }
 
     #[test]

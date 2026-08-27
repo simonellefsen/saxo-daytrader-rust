@@ -220,6 +220,41 @@ pub struct DashboardPositionDecisionPayload {
     pub trend_bias: String,
 }
 
+/// Read-only, currently unported ladder-history view for one held symbol.
+///
+/// It deliberately reports the stable placeholder contract until the Rust
+/// ladder implementation exists. The optional position reuses the bounded
+/// dashboard projection; no raw broker row, order payload, or mutation path is
+/// exposed here.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AssetLadderHistoryPayload {
+    pub symbol: String,
+    pub range_key: String,
+    pub position: Option<DashboardPositionPayload>,
+    pub ladder_summary: AssetLadderSummaryPayload,
+    pub chart: AssetLadderChartPayload,
+    pub markers: Vec<JsonValue>,
+    pub active_lines: Vec<JsonValue>,
+    pub ladder_levels: Vec<JsonValue>,
+    pub ladder_parameters: JsonValue,
+    pub legend: Vec<JsonValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AssetLadderSummaryPayload {
+    pub status: String,
+    pub active_orders: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AssetLadderChartPayload {
+    pub points: Vec<JsonValue>,
+    pub error: Option<String>,
+    pub source: String,
+    pub has_real_data: bool,
+    pub first_event_at: Option<String>,
+}
+
 /// One read-only execution queue row rendered in the overview and Execution tab.
 ///
 /// The existing lifecycle result and attribution documents remain compatibility
