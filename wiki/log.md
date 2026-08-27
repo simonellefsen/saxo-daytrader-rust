@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] security | Type and narrow public Saxo session status
+
+- Changed `GET /api/saxo/session` from compatibility JSON to a typed health-only contract. It retains environment, token/refresh lifecycle, expiry, reauthorization state, auth mode, and non-secret client/account-key presence signals.
+- Local session-storage paths, free-form session errors, default-account identifiers, and client display metadata no longer cross the API boundary. The endpoint remains read-only; no OAuth refresh, session storage, precheck, placement, cancellation, or reconciliation behavior changed.
+
 ## [2026-08-27] architecture | Type public per-order execution timeline
 
 - Changed `GET /api/execution/orders/{order_id}/events` to return a typed, allowlisted lifecycle timeline while preserving its chronological order and broker-status, substatus, quantity, price, and broker-order-reference evidence.

@@ -1563,8 +1563,8 @@ async fn saxo_auth_callback(
     }
 }
 
-async fn saxo_session(State(state): State<Arc<AppState>>) -> Json<JsonValue> {
-    Json(state.saxo_session_value().await)
+async fn saxo_session(State(state): State<Arc<AppState>>) -> Json<auth::SaxoSessionApiStatus> {
+    Json(state.saxo_session_status().await)
 }
 
 async fn saxo_session_refresh(State(state): State<Arc<AppState>>) -> Response {

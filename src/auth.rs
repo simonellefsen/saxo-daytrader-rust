@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::{Rng, distributions::Alphanumeric};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
@@ -56,6 +56,33 @@ pub struct SaxoAuthStatus {
     pub status_text: String,
     pub session_path: String,
     pub error: Option<String>,
+}
+
+/// Strictly sanitized session status for `GET /api/saxo/session`.
+///
+/// This surface is intentionally narrower than the auth module's internal
+/// status: it omits local storage paths, free-form session errors, account
+/// identifiers, and client display metadata. It reports health only and cannot
+/// refresh, disconnect, or otherwise mutate the Saxo session.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SaxoSessionApiStatus {
+    pub connected: bool,
+    pub environment: String,
+    pub configured_environment: String,
+    pub token_valid: bool,
+    pub refresh_token_valid: bool,
+    pub expires_at: Option<String>,
+    pub expires_in_minutes: Option<i64>,
+    pub refresh_expires_at: Option<String>,
+    pub refresh_expires_in_minutes: Option<i64>,
+    pub last_refreshed_at: Option<String>,
+    pub refreshing: bool,
+    pub needs_reauth: bool,
+    pub status: String,
+    pub status_text: String,
+    pub auth_mode: Option<String>,
+    pub client_key_present: bool,
+    pub account_key_present: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -263,33 +290,54 @@ pub async fn auth_status(
     }
 }
 
-pub async fn session_api(config: &YamlValue, config_path: &PathBuf) -> JsonValue {
+pub async fn session_api(config: &YamlValue, config_path: &PathBuf) -> SaxoSessionApiStatus {
     let path = session_path(config, config_path);
     match load_session(&path) {
-        Ok(session) => {
-            let mut status = status_value(session_status(config, &path, &session));
-            if let Some(obj) = status.as_object_mut() {
-                obj.insert("auth_mode".to_string(), json!(session.auth_mode));
-                obj.insert(
-                    "client_key_present".to_string(),
-                    json!(session.client_key.as_ref().is_some_and(|v| !v.is_empty())),
-                );
-                obj.insert(
-                    "account_key_present".to_string(),
-                    json!(session.account_key.as_ref().is_some_and(|v| !v.is_empty())),
-                );
-                obj.insert(
-                    "default_account_id".to_string(),
-                    json!(session.default_account_id),
-                );
-                obj.insert(
-                    "client_id_display".to_string(),
-                    json!(session.client_id_display),
-                );
-            }
-            status
-        }
-        Err(err) => status_value(base_status(config, &path, Some(err.to_string()))),
+        Ok(session) => session_api_status(
+            session_status(config, &path, &session),
+            Some(session.auth_mode),
+            session
+                .client_key
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+            session
+                .account_key
+                .as_ref()
+                .is_some_and(|value| !value.is_empty()),
+        ),
+        Err(err) => session_api_status(
+            base_status(config, &path, Some(err.to_string())),
+            None,
+            false,
+            false,
+        ),
+    }
+}
+
+fn session_api_status(
+    status: SaxoAuthStatus,
+    auth_mode: Option<String>,
+    client_key_present: bool,
+    account_key_present: bool,
+) -> SaxoSessionApiStatus {
+    SaxoSessionApiStatus {
+        connected: status.connected,
+        environment: status.environment,
+        configured_environment: status.configured_environment,
+        token_valid: status.token_valid,
+        refresh_token_valid: status.refresh_token_valid,
+        expires_at: status.expires_at,
+        expires_in_minutes: status.expires_in_minutes,
+        refresh_expires_at: status.refresh_expires_at,
+        refresh_expires_in_minutes: status.refresh_expires_in_minutes,
+        last_refreshed_at: status.last_refreshed_at,
+        refreshing: status.refreshing,
+        needs_reauth: status.needs_reauth,
+        status: status.status,
+        status_text: status.status_text,
+        auth_mode,
+        client_key_present,
+        account_key_present,
     }
 }
 
@@ -1049,5 +1097,30 @@ app:
         assert!(serialized.get("access_token").is_none());
         assert!(serialized.get("refresh_token").is_none());
         assert!(serialized.get("account_key").is_none());
+    }
+
+    #[test]
+    fn session_api_status_omits_storage_and_account_adjacent_metadata() {
+        let path = PathBuf::from("/tmp/daytrader/saxo_session.json");
+        let status = session_api_status(
+            base_status(
+                &YamlValue::Null,
+                &path,
+                Some("load failed at /tmp/daytrader/saxo_session.json".to_string()),
+            ),
+            Some("pkce".to_string()),
+            true,
+            true,
+        );
+
+        assert!(status.needs_reauth);
+        assert_eq!(status.auth_mode.as_deref(), Some("pkce"));
+        let serialized = serde_json::to_string(&status).expect("session API status serializes");
+        assert!(!serialized.contains("saxo_session.json"));
+        assert!(!serialized.contains("load failed"));
+        assert!(!serialized.contains("default_account_id"));
+        assert!(!serialized.contains("client_id_display"));
+        assert!(!serialized.contains("account_key\""));
+        assert!(serialized.contains("account_key_present"));
     }
 }
