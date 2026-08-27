@@ -46,13 +46,14 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, dashboard_quiver_signals_from_json,
-        decision_report_summaries_from_json, execution_event_summaries_from_json,
-        execution_fill_summaries_from_json, execution_order_event_timeline_entries_from_json,
-        execution_order_summaries_from_json, hermes_experiment_summaries_from_json,
-        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
-        scheduler_cycle_summaries_from_json, scheduler_status_summary_from_json,
-        signal_run_summary_from_json, strategy_journal_summaries_from_json,
+        AppState, dashboard_markov_signals_from_json, dashboard_positions_from_json,
+        dashboard_quiver_signals_from_json, decision_report_summaries_from_json,
+        execution_event_summaries_from_json, execution_fill_summaries_from_json,
+        execution_order_event_timeline_entries_from_json, execution_order_summaries_from_json,
+        hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
+        portfolio_trades_from_json, scheduler_cycle_summaries_from_json,
+        scheduler_status_summary_from_json, signal_run_summary_from_json,
+        strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1731,13 +1732,18 @@ async fn markov_signals(
         async {
             let latest_run = state.latest_markov_run().await.unwrap_or(JsonValue::Null);
             let items = state.markov_signals(limit).await?;
+            let latest_run = signal_run_summary_from_json(latest_run)?;
+            let items = dashboard_markov_signals_from_json(items)?;
             serde_json::to_value(markov_signals_payload(latest_run, items)).map_err(Into::into)
         }
         .await,
     )
 }
 
-fn markov_signals_payload(latest_run: JsonValue, items: Vec<JsonValue>) -> MarkovSignalsPayload {
+fn markov_signals_payload(
+    latest_run: crate::models::SignalRunSummaryPayload,
+    items: Vec<crate::models::DashboardMarkovSignalPayload>,
+) -> MarkovSignalsPayload {
     MarkovSignalsPayload { latest_run, items }
 }
 
@@ -2943,16 +2949,57 @@ mod tests {
     #[test]
     fn markov_signals_response_keeps_the_typed_run_and_list_envelope() {
         let payload = markov_signals_payload(
-            json!({"id": 19, "status": "completed"}),
-            vec![json!({"symbol": "TSLA:xnas", "signal": "long"})],
+            crate::models::SignalRunSummaryPayload {
+                available: true,
+                id: Some("19".to_string()),
+                created_at: Some("2026-08-27T08:30:00Z".to_string()),
+                run_date: "2026-08-27".to_string(),
+                status: "completed".to_string(),
+                asset_count: 1,
+                success_count: 1,
+                error_count: 0,
+            },
+            vec![crate::models::DashboardMarkovSignalPayload {
+                symbol: "TSLA:xnas".to_string(),
+                instrument_name: "Tesla".to_string(),
+                current_state: "Bull".to_string(),
+                signed_signal: 0.7,
+                direction: "bullish".to_string(),
+                bull_prob: 0.7,
+                sideways_prob: 0.2,
+                bear_prob: 0.1,
+                stationary_bull_prob: 0.6,
+                stationary_sideways_prob: 0.3,
+                stationary_bear_prob: 0.1,
+                rolling_return: 0.05,
+                sample_count: 120,
+                status: "ok".to_string(),
+                error_text: "[redacted]".to_string(),
+            }],
         );
 
-        assert_eq!(payload.latest_run["id"], 19);
+        assert_eq!(payload.latest_run.id.as_deref(), Some("19"));
         assert_eq!(payload.items.len(), 1);
 
         let serialized = serde_json::to_value(payload).expect("Markov signals payload serializes");
         assert_eq!(serialized["latest_run"]["status"], "completed");
         assert_eq!(serialized["items"][0]["symbol"], "TSLA:xnas");
+        assert_eq!(serialized["items"][0]["stationary_bull_prob"], 0.6);
+        assert!(serialized["latest_run"].get("config_json").is_none());
+        assert!(serialized["latest_run"].get("summary_json").is_none());
+        assert!(serialized["items"][0].get("stationary_json").is_none());
+        assert!(
+            serialized["items"][0]
+                .get("transition_counts_json")
+                .is_none()
+        );
+        assert!(
+            serialized["items"][0]
+                .get("transition_matrix_json")
+                .is_none()
+        );
+        assert!(serialized["items"][0].get("forecasts_json").is_none());
+        assert!(serialized["items"][0].get("raw_payload_json").is_none());
     }
 
     #[test]

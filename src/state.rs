@@ -3661,7 +3661,7 @@ fn dashboard_hermes_baseline_evidence_window_from_json(
 
 /// Decodes the rendered Markov signal table fields while keeping the retained
 /// model artifacts and raw/provider diagnostics on their dedicated paths.
-fn dashboard_markov_signals_from_json(
+pub(crate) fn dashboard_markov_signals_from_json(
     signals: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardMarkovSignalPayload>> {
     signals

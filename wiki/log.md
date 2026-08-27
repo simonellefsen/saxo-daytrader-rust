@@ -10,6 +10,11 @@ updated: 2026-08-27
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type public Markov signal list
+
+- Changed `GET /api/markov/signals` from a generic collector/run document to an allowlisted typed lifecycle and rendered regime/probability projection.
+- Collector configuration/summary documents, transition counts/matrices, forecasts, raw payloads, and provider diagnostics remain in internal read models. Malformed rows fail closed at the public boundary; regime collection, Decision Reports, manager gates, queues, and Saxo behavior are unchanged.
+
 ## [2026-08-27] architecture | Type public Quiver signal list
 
 - Changed `GET /api/quiver/signals` from a generic collector/run document to an allowlisted typed lifecycle and rendered-signal projection.

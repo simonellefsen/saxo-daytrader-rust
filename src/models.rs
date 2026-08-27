@@ -2396,14 +2396,15 @@ pub struct DecisionGateReplayPayload {
 
 /// Bounded Markov signal-list envelope.
 ///
-/// The latest-run summary and individual signal rows remain compatibility JSON
-/// while the persisted Markov read model is converted incrementally. Keeping
-/// the outer response typed preserves the established public API boundary
-/// without changing regime calculation or downstream advisory behavior.
+/// Stable collector lifecycle metadata and individual signal rows are
+/// allowlisted. Collector configuration and summary documents, transition
+/// matrices, forecasts, raw payloads, and provider diagnostics remain outside
+/// this public API. This observation cannot refresh a regime run or influence
+/// a Decision Report, manager gate, queue, precheck, or Saxo order.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MarkovSignalsPayload {
-    pub latest_run: JsonValue,
-    pub items: Vec<JsonValue>,
+    pub latest_run: SignalRunSummaryPayload,
+    pub items: Vec<DashboardMarkovSignalPayload>,
 }
 
 /// Bounded Quiver signal-list envelope.
