@@ -56,7 +56,8 @@ use crate::{
         DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
         DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, HermesDecisionAdviceRequest, HermesExperimentRequest,
+        DecisionReportDebugPayloads, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
+        ExecutionOrderSummaryPayload, HermesDecisionAdviceRequest, HermesExperimentRequest,
         HermesExperimentSummaryPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
         LatestDecisionStatusPayload, MarketStatusPayload, MarketWatchlistsPayload,
         OverviewIntegrityPayload, PerformanceBenchmarksPayload,
@@ -3937,6 +3938,88 @@ fn dashboard_execution_orders_from_json(
                 execution_result_json: dashboard_embedded_json(&order, "execution_result_json")
                     .unwrap_or(JsonValue::Null),
                 attribution: order.get("attribution").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable execution-order metadata for the public API. Detailed
+/// lifecycle results and attribution remain in the local audit store.
+pub(crate) fn execution_order_summaries_from_json(
+    orders: Vec<JsonValue>,
+) -> serde_json::Result<Vec<ExecutionOrderSummaryPayload>> {
+    orders
+        .into_iter()
+        .map(|order| {
+            let number =
+                |key| dashboard_optional_f64(&order, key).map(|value| value.unwrap_or(0.0));
+            Ok(ExecutionOrderSummaryPayload {
+                id: dashboard_required_i64(&order, "id")?,
+                created_at: dashboard_required_string(&order, "created_at")?,
+                symbol: dashboard_required_string(&order, "symbol")?,
+                action: dashboard_required_string(&order, "action")?,
+                order_type: dashboard_optional_string(&order, "order_type")?.unwrap_or_default(),
+                mode: dashboard_optional_string(&order, "mode")?.unwrap_or_default(),
+                status: dashboard_required_string(&order, "status")?,
+                adapter: dashboard_optional_string(&order, "adapter")?.unwrap_or_default(),
+                quantity: number("quantity")?,
+                price_local: number("price_local")?,
+                limit_price_local: number("limit_price_local")?,
+                stop_price_local: number("stop_price_local")?,
+                currency: dashboard_optional_string(&order, "currency")?.unwrap_or_default(),
+                estimated_value_dkk: number("estimated_value_dkk")?,
+                strategy_type: dashboard_optional_string(&order, "strategy_type")?
+                    .unwrap_or_default(),
+                strategy_role: dashboard_optional_string(&order, "strategy_role")?
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable reconciled-fill metadata for the public API. Raw Saxo fill
+/// payloads remain in the local audit store.
+pub(crate) fn execution_fill_summaries_from_json(
+    fills: Vec<JsonValue>,
+) -> serde_json::Result<Vec<ExecutionFillSummaryPayload>> {
+    fills
+        .into_iter()
+        .map(|fill| {
+            let number = |key| dashboard_optional_f64(&fill, key).map(|value| value.unwrap_or(0.0));
+            Ok(ExecutionFillSummaryPayload {
+                id: dashboard_required_i64(&fill, "id")?,
+                created_at: dashboard_required_string(&fill, "created_at")?,
+                execution_order_id: dashboard_required_i64(&fill, "execution_order_id")?,
+                broker_order_id: dashboard_optional_string(&fill, "broker_order_id")?,
+                symbol: dashboard_required_string(&fill, "symbol")?,
+                side: dashboard_required_string(&fill, "side")?,
+                fill_status: dashboard_required_string(&fill, "fill_status")?,
+                cumulative_quantity: number("cumulative_quantity")?,
+                delta_quantity: number("delta_quantity")?,
+                average_price_local: number("average_price_local")?,
+                currency: dashboard_required_string(&fill, "currency")?,
+                ledger_id: serde_json::from_value(
+                    fill.get("ledger_id").cloned().unwrap_or(JsonValue::Null),
+                )?,
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable lifecycle metadata for the public API. Raw broker responses
+/// remain in the local audit store.
+pub(crate) fn execution_event_summaries_from_json(
+    events: Vec<JsonValue>,
+) -> serde_json::Result<Vec<ExecutionEventSummaryPayload>> {
+    events
+        .into_iter()
+        .map(|event| {
+            Ok(ExecutionEventSummaryPayload {
+                id: dashboard_required_i64(&event, "id")?,
+                created_at: dashboard_required_string(&event, "created_at")?,
+                execution_order_id: dashboard_required_i64(&event, "execution_order_id")?,
+                event_type: dashboard_required_string(&event, "event_type")?,
+                broker_status: dashboard_optional_string(&event, "broker_status")?,
             })
         })
         .collect()
@@ -9558,6 +9641,19 @@ impl AppState {
         self.execution_orders_page(limit, 0).await
     }
 
+    pub async fn execution_order_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, symbol, action, order_type, mode, status, adapter, quantity,
+                    price_local, limit_price_local, stop_price_local, currency, estimated_value_dkk,
+                    strategy_type, strategy_role
+             FROM execution_orders
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 500)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
     pub(crate) async fn protective_stop_coverage(&self) -> Result<JsonValue> {
         let positions = self
             .select_json(
@@ -10720,6 +10816,18 @@ impl AppState {
         Ok(self.select_json(&sql).await.unwrap_or_default())
     }
 
+    pub async fn execution_fill_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, execution_order_id, broker_order_id, symbol, side, fill_status,
+                    cumulative_quantity, delta_quantity, average_price_local, currency, ledger_id
+             FROM execution_fills
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 500)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
     /// Broker lifecycle events for one order, oldest first.
     ///
     /// The column list is an allowlist, not a `SELECT *` minus a few fields:
@@ -10751,6 +10859,17 @@ impl AppState {
     pub async fn execution_events(&self, limit: i64) -> Result<Vec<JsonValue>> {
         let sql = format!(
             "SELECT * FROM execution_order_events ORDER BY created_at DESC, id DESC LIMIT {}",
+            clamp_limit(limit, 1, 500)
+        );
+        Ok(self.select_json(&sql).await.unwrap_or_default())
+    }
+
+    pub async fn execution_event_summaries(&self, limit: i64) -> Result<Vec<JsonValue>> {
+        let sql = format!(
+            "SELECT id, created_at, execution_order_id, event_type, broker_status
+             FROM execution_order_events
+             ORDER BY created_at DESC, id DESC
+             LIMIT {}",
             clamp_limit(limit, 1, 500)
         );
         Ok(self.select_json(&sql).await.unwrap_or_default())
@@ -18841,6 +18960,70 @@ mod tests {
             })])
             .is_err()
         );
+    }
+
+    #[test]
+    fn execution_summaries_exclude_broker_and_attribution_documents() {
+        let orders = execution_order_summaries_from_json(vec![json!({
+            "id": 91,
+            "created_at": "2026-08-27T08:00:00Z",
+            "symbol": "EXAMPLE:xnas",
+            "action": "BUY",
+            "order_type": "Market",
+            "mode": "live",
+            "status": "broker_working",
+            "adapter": "saxo",
+            "quantity": 4.0,
+            "price_local": 320.0,
+            "limit_price_local": null,
+            "stop_price_local": null,
+            "currency": "USD",
+            "estimated_value_dkk": 9000.0,
+            "strategy_type": "swing",
+            "strategy_role": "entry",
+            "error_text": "Saxo response included sk-must-not-reach-the-public-api-1234567890",
+            "execution_result_json": {"AccountKey": "must-not-reach-the-public-api"},
+            "attribution": {"manager_json": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable execution order summaries decode");
+        let fills = execution_fill_summaries_from_json(vec![json!({
+            "id": 92,
+            "created_at": "2026-08-27T08:00:05Z",
+            "execution_order_id": 91,
+            "broker_order_id": "SAXO-91",
+            "symbol": "EXAMPLE:xnas",
+            "side": "BUY",
+            "fill_status": "FinalFill",
+            "cumulative_quantity": 4.0,
+            "delta_quantity": 4.0,
+            "average_price_local": 320.0,
+            "currency": "USD",
+            "ledger_id": 811,
+            "raw_payload_json": {"AccountKey": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable execution fill summaries decode");
+        let events = execution_event_summaries_from_json(vec![json!({
+            "id": 93,
+            "created_at": "2026-08-27T08:00:01Z",
+            "execution_order_id": 91,
+            "event_type": "precheck_completed",
+            "broker_status": "Ok",
+            "raw_payload_json": {"AccountKey": "must-not-reach-the-public-api"}
+        })])
+        .expect("stable execution event summaries decode");
+
+        assert_eq!(fills[0].ledger_id, Some(811));
+        assert_eq!(events[0].event_type, "precheck_completed");
+        let serialized = serde_json::to_string(&json!({
+            "orders": orders,
+            "fills": fills,
+            "events": events,
+        }))
+        .expect("typed execution summaries serialize");
+        assert!(!serialized.contains("must-not-reach-the-public-api"));
+        assert!(execution_order_summaries_from_json(vec![json!({"id": 91})]).is_err());
+        assert!(execution_fill_summaries_from_json(vec![json!({"id": 92})]).is_err());
+        assert!(execution_event_summaries_from_json(vec![json!({"id": 93})]).is_err());
     }
 
     #[test]

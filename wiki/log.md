@@ -10,6 +10,11 @@ updated: 2026-08-26
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-27] architecture | Type public execution list
+
+- Changed `/api/execution` to return typed, allowlisted order, reconciled-fill, and lifecycle-event summaries rather than generic persisted rows.
+- Broker payloads, lifecycle-result documents, attribution, and free-form broker errors stay in the local audit store; each list preserves its existing independent degraded-to-empty behavior. This cannot claim, precheck, place, cancel, replace, reconcile, or otherwise mutate a Saxo order.
+
 ## [2026-08-26] architecture | Type protected Hermes experiment list
 
 - Changed `GET /api/hermes/experiments` to return typed stable identity, lifecycle, baseline, goal-version, changed-path, and source-session metadata only.

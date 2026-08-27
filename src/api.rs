@@ -21,7 +21,8 @@ use crate::{
         AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest, CashBufferRequest,
         CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
-        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionPayload,
+        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
+        ExecutionFillSummaryPayload, ExecutionOrderSummaryPayload, ExecutionPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
         HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
         HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
@@ -41,9 +42,10 @@ use crate::{
         reconcile_sim_protective_stop_lifecycle_test, run_saxo_execution_queue,
     },
     state::{
-        AppState, dashboard_positions_from_json, hermes_experiment_summaries_from_json,
-        hermes_reflection_summaries_from_json, portfolio_trades_from_json,
-        strategy_journal_summaries_from_json,
+        AppState, dashboard_positions_from_json, execution_event_summaries_from_json,
+        execution_fill_summaries_from_json, execution_order_summaries_from_json,
+        hermes_experiment_summaries_from_json, hermes_reflection_summaries_from_json,
+        portfolio_trades_from_json, strategy_journal_summaries_from_json,
     },
     trading_manager::run_trading_manager_cycle,
     ui::render_index,
@@ -1857,9 +1859,9 @@ fn strategy_journal_payload(items: Vec<StrategyJournalEntryPayload>) -> Strategy
 }
 
 fn execution_payload(
-    orders: Vec<JsonValue>,
-    fills: Vec<JsonValue>,
-    events: Vec<JsonValue>,
+    orders: Vec<ExecutionOrderSummaryPayload>,
+    fills: Vec<ExecutionFillSummaryPayload>,
+    events: Vec<ExecutionEventSummaryPayload>,
 ) -> ExecutionPayload {
     ExecutionPayload {
         orders,
@@ -1963,18 +1965,30 @@ async fn execution(
     Query(params): Query<LimitParams>,
 ) -> Response {
     let limit = params.limit.unwrap_or(100);
-    let orders = state.execution_orders(limit).await.unwrap_or_else(|err| {
-        warn!("execution orders degraded: {err:#}");
-        Vec::new()
-    });
-    let fills = state.execution_fills(limit).await.unwrap_or_else(|err| {
-        warn!("execution fills degraded: {err:#}");
-        Vec::new()
-    });
-    let events = state.execution_events(limit).await.unwrap_or_else(|err| {
-        warn!("execution events degraded: {err:#}");
-        Vec::new()
-    });
+    let orders = state
+        .execution_order_summaries(limit)
+        .await
+        .and_then(|rows| execution_order_summaries_from_json(rows).map_err(Into::into))
+        .unwrap_or_else(|err| {
+            warn!("execution orders degraded: {err:#}");
+            Vec::new()
+        });
+    let fills = state
+        .execution_fill_summaries(limit)
+        .await
+        .and_then(|rows| execution_fill_summaries_from_json(rows).map_err(Into::into))
+        .unwrap_or_else(|err| {
+            warn!("execution fills degraded: {err:#}");
+            Vec::new()
+        });
+    let events = state
+        .execution_event_summaries(limit)
+        .await
+        .and_then(|rows| execution_event_summaries_from_json(rows).map_err(Into::into))
+        .unwrap_or_else(|err| {
+            warn!("execution events degraded: {err:#}");
+            Vec::new()
+        });
     Json(execution_payload(orders, fills, events)).into_response()
 }
 
@@ -2888,9 +2902,45 @@ mod tests {
     #[test]
     fn execution_response_keeps_the_typed_read_only_envelope() {
         let payload = execution_payload(
-            vec![json!({"id": 42, "status": "broker_working"})],
-            vec![json!({"id": 7, "symbol": "TSLA:xnas"})],
-            vec![json!({"event_type": "precheck_completed"})],
+            vec![ExecutionOrderSummaryPayload {
+                id: 42,
+                created_at: "2026-08-27T08:00:00Z".to_string(),
+                symbol: "TSLA:xnas".to_string(),
+                action: "BUY".to_string(),
+                order_type: "Market".to_string(),
+                mode: "live".to_string(),
+                status: "broker_working".to_string(),
+                adapter: "saxo".to_string(),
+                quantity: 4.0,
+                price_local: 320.0,
+                limit_price_local: 0.0,
+                stop_price_local: 0.0,
+                currency: "USD".to_string(),
+                estimated_value_dkk: 9000.0,
+                strategy_type: "swing".to_string(),
+                strategy_role: "entry".to_string(),
+            }],
+            vec![ExecutionFillSummaryPayload {
+                id: 7,
+                created_at: "2026-08-27T08:00:05Z".to_string(),
+                execution_order_id: 42,
+                broker_order_id: Some("SAXO-7".to_string()),
+                symbol: "TSLA:xnas".to_string(),
+                side: "BUY".to_string(),
+                fill_status: "partial".to_string(),
+                cumulative_quantity: 2.0,
+                delta_quantity: 2.0,
+                average_price_local: 320.0,
+                currency: "USD".to_string(),
+                ledger_id: None,
+            }],
+            vec![ExecutionEventSummaryPayload {
+                id: 18,
+                created_at: "2026-08-27T08:00:01Z".to_string(),
+                execution_order_id: 42,
+                event_type: "precheck_completed".to_string(),
+                broker_status: Some("Ok".to_string()),
+            }],
         );
 
         assert_eq!(payload.orders.len(), 1);
@@ -2901,6 +2951,12 @@ mod tests {
         assert_eq!(serialized["orders"][0]["status"], "broker_working");
         assert_eq!(serialized["fills"][0]["symbol"], "TSLA:xnas");
         assert_eq!(serialized["events"][0]["event_type"], "precheck_completed");
+        assert!(
+            serialized["orders"][0]
+                .get("execution_result_json")
+                .is_none()
+        );
+        assert!(serialized["events"][0].get("raw_payload_json").is_none());
     }
 
     #[test]

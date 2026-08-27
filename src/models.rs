@@ -285,6 +285,65 @@ pub struct DashboardExecutionEventPayload {
     pub failure_stage: Option<String>,
 }
 
+/// Stable, read-only execution-order metadata exposed by the API.
+///
+/// Detailed lifecycle results, attribution, and broker documents remain in the
+/// local audit store. This summary cannot claim, precheck, place, cancel,
+/// replace, or reconcile a Saxo order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ExecutionOrderSummaryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub action: String,
+    pub order_type: String,
+    pub mode: String,
+    pub status: String,
+    pub adapter: String,
+    pub quantity: f64,
+    pub price_local: f64,
+    pub limit_price_local: f64,
+    pub stop_price_local: f64,
+    pub currency: String,
+    pub estimated_value_dkk: f64,
+    pub strategy_type: String,
+    pub strategy_role: String,
+}
+
+/// Stable, reconciled fill metadata exposed by the API.
+///
+/// Raw Saxo fill payloads remain in the local audit store. This observation
+/// cannot reconcile, replay, or mutate an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ExecutionFillSummaryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub execution_order_id: i64,
+    pub broker_order_id: Option<String>,
+    pub symbol: String,
+    pub side: String,
+    pub fill_status: String,
+    pub cumulative_quantity: f64,
+    pub delta_quantity: f64,
+    pub average_price_local: f64,
+    pub currency: String,
+    pub ledger_id: Option<i64>,
+}
+
+/// Stable execution lifecycle metadata exposed by the API.
+///
+/// Raw broker responses and free-form broker errors remain in the local audit
+/// store. This evidence cannot replay, reconcile, precheck, queue, or submit
+/// an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ExecutionEventSummaryPayload {
+    pub id: i64,
+    pub created_at: String,
+    pub execution_order_id: i64,
+    pub event_type: String,
+    pub broker_status: Option<String>,
+}
+
 /// Compact local scheduler-cycle evidence rendered on the Execution tab.
 ///
 /// The retained cycle document can contain detailed provider and operations
@@ -1302,13 +1361,13 @@ pub struct StrategyJournalPayload {
 ///
 /// Persisted order, fill, and event rows remain compatibility JSON while the
 /// execution read model is ported incrementally. This makes the public
-/// read-only boundary explicit without changing broker synchronization or
-/// execution behavior.
+/// broker/lifecycle/attribution documents remain outside this API boundary,
+/// without changing broker synchronization or execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ExecutionPayload {
-    pub orders: Vec<JsonValue>,
-    pub fills: Vec<JsonValue>,
-    pub events: Vec<JsonValue>,
+    pub orders: Vec<ExecutionOrderSummaryPayload>,
+    pub fills: Vec<ExecutionFillSummaryPayload>,
+    pub events: Vec<ExecutionEventSummaryPayload>,
 }
 
 /// Bounded scheduler-status envelope.
