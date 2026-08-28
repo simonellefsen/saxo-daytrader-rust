@@ -1995,6 +1995,46 @@ pub struct TradingManagerBlockedBuyGatePayload {
     pub count: i64,
 }
 
+/// Allowlisted operator record associated with a monthly-loss breaker run.
+///
+/// Notes are local operator context only. This read model contains no setting
+/// mutation authority, account identity, or broker document.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerMonthlyLossBreakerOverridePayload {
+    #[serde(default)]
+    pub month_key: String,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// Allowlisted monthly-loss circuit-breaker evidence rendered in Overview.
+///
+/// It explains a completed Trading Manager run but cannot change the active
+/// circuit-breaker policy, queue work, precheck an order, or reach Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerMonthlyLossBreakerPayload {
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub threshold_breached: bool,
+    #[serde(default)]
+    pub override_active: bool,
+    #[serde(default)]
+    pub month_pnl_dkk: f64,
+    #[serde(default)]
+    pub threshold_dkk: f64,
+    #[serde(default)]
+    pub soft_reduction_active: bool,
+    #[serde(default)]
+    pub soft_threshold_dkk: f64,
+    #[serde(default)]
+    pub soft_buy_multiplier: f64,
+    #[serde(default, rename = "override")]
+    pub override_record: TradingManagerMonthlyLossBreakerOverridePayload,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position, exception, and recorded SIM-test details remain compatibility

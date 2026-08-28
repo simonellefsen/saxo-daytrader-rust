@@ -36,8 +36,9 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
-        TradingManagerInstrumentQuarantinePayload, TradingManagerPayload, TradingManagerRunPayload,
-        TuningExecutionPulseOutcome, TuningPulseComparison,
+        TradingManagerInstrumentQuarantinePayload, TradingManagerMonthlyLossBreakerPayload,
+        TradingManagerPayload, TradingManagerRunPayload, TuningExecutionPulseOutcome,
+        TuningPulseComparison,
     },
 };
 
@@ -2252,8 +2253,10 @@ fn cash_deployment_summary(
     let breaker = manager
         .get("monthly_loss_circuit_breaker")
         .cloned()
-        .unwrap_or(JsonValue::Null);
-    let breaker_override = breaker.get("override").cloned().unwrap_or(JsonValue::Null);
+        .and_then(|value| {
+            serde_json::from_value::<TradingManagerMonthlyLossBreakerPayload>(value).ok()
+        })
+        .unwrap_or_default();
     let drawdown = manager
         .get("drawdown_guardrail")
         .cloned()
@@ -2297,32 +2300,17 @@ fn cash_deployment_summary(
             })
             .filter(|row| !row.gate_code.trim().is_empty())
             .collect(),
-        breaker_active: breaker
-            .get("active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        breaker_threshold_breached: breaker
-            .get("threshold_breached")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        breaker_override_active: breaker
-            .get("override_active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        breaker_month_pnl_dkk: value_f64(&breaker, "month_pnl_dkk"),
-        breaker_threshold_dkk: value_f64(&breaker, "threshold_dkk"),
-        breaker_soft_reduction_active: breaker
-            .get("soft_reduction_active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        breaker_soft_threshold_dkk: value_f64(&breaker, "soft_threshold_dkk"),
-        breaker_soft_buy_multiplier: value_f64(&breaker, "soft_buy_multiplier"),
-        breaker_override_month_key: text(&breaker_override, "month_key"),
-        breaker_override_updated_at: format_timestamp(
-            &text(&breaker_override, "updated_at"),
-            prefs,
-        ),
-        breaker_override_notes: text(&breaker_override, "notes"),
+        breaker_active: breaker.active,
+        breaker_threshold_breached: breaker.threshold_breached,
+        breaker_override_active: breaker.override_active,
+        breaker_month_pnl_dkk: breaker.month_pnl_dkk,
+        breaker_threshold_dkk: breaker.threshold_dkk,
+        breaker_soft_reduction_active: breaker.soft_reduction_active,
+        breaker_soft_threshold_dkk: breaker.soft_threshold_dkk,
+        breaker_soft_buy_multiplier: breaker.soft_buy_multiplier,
+        breaker_override_month_key: breaker.override_record.month_key,
+        breaker_override_updated_at: format_timestamp(&breaker.override_record.updated_at, prefs),
+        breaker_override_notes: breaker.override_record.notes,
         drawdown_status: text(&drawdown, "status"),
         drawdown_active: drawdown
             .get("active")
@@ -12475,7 +12463,9 @@ mod tests {
                     "override": {
                         "enabled": true,
                         "month_key": "2026-07",
-                        "updated_at": "2026-07-10T07:55:00Z"
+                        "updated_at": "2026-07-10T07:55:00Z",
+                        "notes": "Operator reviewed the reduced-risk plan.",
+                        "raw_broker_document": {"account": "must not render"}
                     }
                 }
             }
@@ -12491,6 +12481,33 @@ mod tests {
         assert_eq!(summary.breaker_override_month_key, "2026-07");
         assert_eq!(summary.breaker_month_pnl_dkk, -12000.0);
         assert_eq!(summary.breaker_threshold_dkk, -10000.0);
+        assert_eq!(
+            summary.breaker_override_notes,
+            "Operator reviewed the reduced-risk plan."
+        );
+    }
+
+    #[test]
+    fn monthly_loss_breaker_projection_omits_unallowlisted_fields() {
+        let breaker = serde_json::from_value::<TradingManagerMonthlyLossBreakerPayload>(json!({
+            "active": true,
+            "threshold_breached": true,
+            "month_pnl_dkk": -12_000.0,
+            "override": {
+                "month_key": "2026-07",
+                "raw_broker_document": {"account": "must not serialize"}
+            },
+            "raw_manager_detail": {"rule_trace": "must not serialize"}
+        }))
+        .expect("typed monthly-loss breaker accepts allowlisted evidence");
+
+        let serialized = serde_json::to_value(&breaker)
+            .expect("typed monthly-loss breaker serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_manager_detail"));
+        assert!(!serialized.contains("raw_broker_document"));
+        assert!(breaker.active);
+        assert_eq!(breaker.override_record.month_key, "2026-07");
     }
 
     #[test]

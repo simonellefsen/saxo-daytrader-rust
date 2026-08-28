@@ -2729,3 +2729,9 @@ broker mutation was added.
 - Changed Cash Deployment's ranked blocked-BUY gate display to consume typed, allowlisted gate codes and aggregate counts.
 - Candidate, broker, and rule-evaluation documents remain staged in the Trading Manager diagnostics; malformed or blank rows drop individually without hiding valid diagnostic rows.
 - This remains read-only historical manager evidence and cannot change cash policy, report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
+
+## [2026-08-28] architecture | Type Cash Deployment monthly-loss breaker evidence
+
+- Changed Cash Deployment's monthly-loss circuit-breaker display to consume a typed, allowlisted restriction, threshold, soft-reduction, and local override projection.
+- Rule-trace and broker documents remain staged in the Trading Manager diagnostics; the projection has no ability to alter circuit-breaker policy or an operator override.
+- This remains read-only completed-run evidence and cannot change report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
