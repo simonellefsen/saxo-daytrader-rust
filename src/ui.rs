@@ -36,9 +36,9 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
-        TradingManagerInstrumentQuarantinePayload, TradingManagerMonthlyLossBreakerPayload,
-        TradingManagerPayload, TradingManagerRunPayload, TuningExecutionPulseOutcome,
-        TuningPulseComparison,
+        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
+        TradingManagerMonthlyLossBreakerPayload, TradingManagerPayload, TradingManagerRunPayload,
+        TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2260,8 +2260,10 @@ fn cash_deployment_summary(
     let drawdown = manager
         .get("drawdown_guardrail")
         .cloned()
-        .unwrap_or(JsonValue::Null);
-    let drawdown_override = drawdown.get("override").cloned().unwrap_or(JsonValue::Null);
+        .and_then(|value| {
+            serde_json::from_value::<TradingManagerDrawdownGuardrailPayload>(value).ok()
+        })
+        .unwrap_or_default();
     let status = fallback_text(
         &diagnostics,
         "status",
@@ -2311,32 +2313,20 @@ fn cash_deployment_summary(
         breaker_override_month_key: breaker.override_record.month_key,
         breaker_override_updated_at: format_timestamp(&breaker.override_record.updated_at, prefs),
         breaker_override_notes: breaker.override_record.notes,
-        drawdown_status: text(&drawdown, "status"),
-        drawdown_active: drawdown
-            .get("active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        drawdown_soft_reduction_active: drawdown
-            .get("soft_reduction_active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        drawdown_override_active: drawdown
-            .get("override_active")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
-        drawdown_pct: value_f64(&drawdown, "drawdown_pct"),
-        drawdown_halt_pct: value_f64(&drawdown, "halt_pct"),
-        drawdown_soft_reduce_pct: value_f64(&drawdown, "soft_reduce_pct"),
-        drawdown_soft_buy_multiplier: value_f64(&drawdown, "soft_buy_multiplier"),
-        drawdown_peak_value_dkk: value_f64(&drawdown, "peak_value_dkk"),
-        drawdown_current_value_dkk: value_f64(&drawdown, "current_value_dkk"),
-        drawdown_peak_at: format_timestamp(&text(&drawdown, "peak_at"), prefs),
-        drawdown_lookback_days: value_i64(&drawdown, "lookback_days"),
-        drawdown_override_updated_at: format_timestamp(
-            &text(&drawdown_override, "updated_at"),
-            prefs,
-        ),
-        drawdown_override_notes: text(&drawdown_override, "notes"),
+        drawdown_status: drawdown.status,
+        drawdown_active: drawdown.active,
+        drawdown_soft_reduction_active: drawdown.soft_reduction_active,
+        drawdown_override_active: drawdown.override_active,
+        drawdown_pct: drawdown.drawdown_pct,
+        drawdown_halt_pct: drawdown.halt_pct,
+        drawdown_soft_reduce_pct: drawdown.soft_reduce_pct,
+        drawdown_soft_buy_multiplier: drawdown.soft_buy_multiplier,
+        drawdown_peak_value_dkk: drawdown.peak_value_dkk,
+        drawdown_current_value_dkk: drawdown.current_value_dkk,
+        drawdown_peak_at: format_timestamp(&drawdown.peak_at, prefs),
+        drawdown_lookback_days: drawdown.lookback_days,
+        drawdown_override_updated_at: format_timestamp(&drawdown.override_record.updated_at, prefs),
+        drawdown_override_notes: drawdown.override_record.notes,
         description: fallback_text(
             &diagnostics,
             "description",
@@ -12529,7 +12519,11 @@ mod tests {
                     "peak_at": "2026-06-14T21:00:00Z",
                     "lookback_days": 90,
                     "override_active": false,
-                    "override": {"enabled": false}
+                    "override": {
+                        "enabled": false,
+                        "raw_broker_document": {"account": "must not render"}
+                    },
+                    "raw_manager_detail": {"rule_trace": "must not render"}
                 }
             }
         });
@@ -12545,6 +12539,29 @@ mod tests {
         assert_eq!(summary.drawdown_halt_pct, 0.20);
         assert_eq!(summary.drawdown_peak_value_dkk, 318400.0);
         assert_eq!(summary.drawdown_lookback_days, 90);
+    }
+
+    #[test]
+    fn drawdown_guardrail_projection_omits_unallowlisted_fields() {
+        let guardrail = serde_json::from_value::<TradingManagerDrawdownGuardrailPayload>(json!({
+            "status": "halt",
+            "active": true,
+            "drawdown_pct": 0.22,
+            "override": {
+                "updated_at": "2026-07-26T08:00:00Z",
+                "raw_broker_document": {"account": "must not serialize"}
+            },
+            "raw_manager_detail": {"rule_trace": "must not serialize"}
+        }))
+        .expect("typed drawdown guardrail accepts allowlisted evidence");
+
+        let serialized = serde_json::to_value(&guardrail)
+            .expect("typed drawdown guardrail serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_manager_detail"));
+        assert!(!serialized.contains("raw_broker_document"));
+        assert!(guardrail.active);
+        assert_eq!(guardrail.status, "halt");
     }
 
     #[test]

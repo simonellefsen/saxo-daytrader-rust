@@ -2035,6 +2035,52 @@ pub struct TradingManagerMonthlyLossBreakerPayload {
     pub override_record: TradingManagerMonthlyLossBreakerOverridePayload,
 }
 
+/// Allowlisted operator record associated with a drawdown-guardrail run.
+///
+/// Notes are local operator context only. This read model cannot alter the
+/// drawdown restriction or its operator override.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerDrawdownGuardrailOverridePayload {
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// Allowlisted portfolio-drawdown guardrail evidence rendered in Overview.
+///
+/// It explains a completed Trading Manager run but cannot alter the guardrail,
+/// queue work, precheck an order, or reach Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerDrawdownGuardrailPayload {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub soft_reduction_active: bool,
+    #[serde(default)]
+    pub override_active: bool,
+    #[serde(default)]
+    pub drawdown_pct: f64,
+    #[serde(default)]
+    pub halt_pct: f64,
+    #[serde(default)]
+    pub soft_reduce_pct: f64,
+    #[serde(default)]
+    pub soft_buy_multiplier: f64,
+    #[serde(default)]
+    pub peak_value_dkk: f64,
+    #[serde(default)]
+    pub current_value_dkk: f64,
+    #[serde(default)]
+    pub peak_at: String,
+    #[serde(default)]
+    pub lookback_days: i64,
+    #[serde(default, rename = "override")]
+    pub override_record: TradingManagerDrawdownGuardrailOverridePayload,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position, exception, and recorded SIM-test details remain compatibility
