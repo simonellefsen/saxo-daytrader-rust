@@ -2723,3 +2723,9 @@ broker mutation was added.
 
 - Replaced `/api/portfolio/trades`' `SELECT *` response with an explicit stable trade-ledger allowlist and typed display rows.
 - Notes plus retained before/after portfolio, decision-context, and broker/provider documents remain outside the endpoint; malformed rows fail closed with no fill reconciliation, accounting mutation, Hermes, queue, or Saxo side effect.
+
+## [2026-08-28] architecture | Type Cash Deployment blocked-BUY gate rows
+
+- Changed Cash Deployment's ranked blocked-BUY gate display to consume typed, allowlisted gate codes and aggregate counts.
+- Candidate, broker, and rule-evaluation documents remain staged in the Trading Manager diagnostics; malformed or blank rows drop individually without hiding valid diagnostic rows.
+- This remains read-only historical manager evidence and cannot change cash policy, report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.

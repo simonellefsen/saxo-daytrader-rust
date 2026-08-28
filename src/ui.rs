@@ -35,7 +35,7 @@ use crate::{
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
         TradingManagerInstrumentQuarantinePayload, TradingManagerPayload, TradingManagerRunPayload,
         TuningExecutionPulseOutcome, TuningPulseComparison,
     },
@@ -2075,7 +2075,7 @@ struct CashDeploymentSummary {
     approved_buy_count: i64,
     skipped_buy_count: i64,
     candidate_buy_count: i64,
-    blocked_buy_gates: Vec<JsonValue>,
+    blocked_buy_gates: Vec<TradingManagerBlockedBuyGatePayload>,
     breaker_active: bool,
     breaker_threshold_breached: bool,
     breaker_override_active: bool,
@@ -2290,8 +2290,13 @@ fn cash_deployment_summary(
         blocked_buy_gates: diagnostics
             .get("blocked_buy_gates")
             .and_then(JsonValue::as_array)
-            .cloned()
-            .unwrap_or_default(),
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                serde_json::from_value::<TradingManagerBlockedBuyGatePayload>(row.clone()).ok()
+            })
+            .filter(|row| !row.gate_code.trim().is_empty())
+            .collect(),
         breaker_active: breaker
             .get("active")
             .and_then(JsonValue::as_bool)
@@ -2352,14 +2357,13 @@ fn cash_deployment_summary(
     }
 }
 
-fn cash_deployment_blocked_gate_summary(gates: &[JsonValue]) -> String {
+fn cash_deployment_blocked_gate_summary(gates: &[TradingManagerBlockedBuyGatePayload]) -> String {
     gates
         .iter()
         .take(4)
         .map(|gate| {
-            let code = fallback_text(gate, "gate_code", "other").replace('_', " ");
-            let count = value_i64(gate, "count");
-            format!("{code}: {count}")
+            let code = gate.gate_code.replace('_', " ");
+            format!("{code}: {}", gate.count)
         })
         .collect::<Vec<_>>()
         .join(" · ")
@@ -12383,6 +12387,9 @@ mod tests {
                     "buy_candidate_count": 4,
                     "approved_buy_count": 0,
                     "skipped_buy_count": 4,
+                    "blocked_buy_gates": [
+                        {"gate_code": "cash_budget", "count": 3, "raw_broker_detail": "must not render"}
+                    ],
                     "capital_budget": {
                         "available_buy_budget_dkk": 12500.0,
                         "excess_cash_pct": 0.08
@@ -12403,16 +12410,54 @@ mod tests {
         assert_eq!(summary.candidate_buy_count, 4);
         assert_eq!(summary.approved_buy_count, 0);
         assert_eq!(summary.skipped_buy_count, 4);
+        assert_eq!(summary.blocked_buy_gates.len(), 1);
+        assert_eq!(summary.blocked_buy_gates[0].gate_code, "cash_budget");
+        assert_eq!(summary.blocked_buy_gates[0].count, 3);
+        assert!(
+            !serde_json::to_value(&summary.blocked_buy_gates)
+                .expect("typed BUY blocks serialize")
+                .to_string()
+                .contains("raw_broker_detail")
+        );
         assert!(summary.description.contains("blocked"));
     }
 
     #[test]
     fn cash_deployment_blocked_gate_summary_is_bounded_and_readable() {
         let summary = cash_deployment_blocked_gate_summary(&[
-            json!({"gate_code": "cash_budget", "count": 3}),
-            json!({"gate_code": "market_open", "count": 1}),
+            TradingManagerBlockedBuyGatePayload {
+                gate_code: "cash_budget".to_string(),
+                count: 3,
+            },
+            TradingManagerBlockedBuyGatePayload {
+                gate_code: "market_open".to_string(),
+                count: 1,
+            },
         ]);
         assert_eq!(summary, "cash budget: 3 · market open: 1");
+    }
+
+    #[test]
+    fn cash_deployment_drops_malformed_or_blank_buy_block_gates() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "manager_json": {
+                    "reinvestment_diagnostics": {
+                        "blocked_buy_gates": [
+                            {"gate_code": "market_open", "count": 2},
+                            {"gate_code": "cash_budget", "count": "two"},
+                            {"count": 1}
+                        ]
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+        assert_eq!(summary.blocked_buy_gates.len(), 1);
+        assert_eq!(summary.blocked_buy_gates[0].gate_code, "market_open");
+        assert_eq!(summary.blocked_buy_gates[0].count, 2);
     }
 
     #[test]

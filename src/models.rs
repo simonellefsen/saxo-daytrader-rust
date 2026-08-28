@@ -1982,6 +1982,19 @@ pub struct TradingManagerInstrumentQuarantinePayload {
     pub sample_error: String,
 }
 
+/// Allowlisted aggregate reason that blocked a candidate BUY in a manager run.
+///
+/// This is read-only diagnostic context for Cash Deployment. It deliberately
+/// excludes candidate, broker, and rule-evaluation documents retained in the
+/// staged manager JSON.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerBlockedBuyGatePayload {
+    #[serde(default)]
+    pub gate_code: String,
+    #[serde(default)]
+    pub count: i64,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position, exception, and recorded SIM-test details remain compatibility
