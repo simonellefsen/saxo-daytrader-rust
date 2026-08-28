@@ -73,14 +73,15 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
         ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
-        ProtectiveStopPrecheckPayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
-        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        ProtectiveStopLifecycleTestPayload, ProtectiveStopPrecheckPayload, QuiverConflictPayload,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3254,6 +3255,27 @@ fn protective_stop_precheck_payloads(rows: Vec<JsonValue>) -> Vec<ProtectiveStop
                 result_label,
                 safety,
             }
+        })
+        .collect()
+}
+
+/// Projects lifecycle records into their dashboard/action-link contract.
+///
+/// The output carries no broker response document. Its local id remains only a
+/// pointer for existing handlers, which reload the record before reconciling
+/// or cancelling anything at Saxo.
+fn protective_stop_lifecycle_test_payloads(
+    rows: Vec<JsonValue>,
+) -> Vec<ProtectiveStopLifecycleTestPayload> {
+    rows.into_iter()
+        .map(|row| ProtectiveStopLifecycleTestPayload {
+            id: value_i64(&row, "id"),
+            created_at: json_text(&row, "created_at"),
+            symbol: json_text(&row, "symbol"),
+            quantity: value_f64(&row, "quantity"),
+            stop_price_local: value_f64(&row, "stop_price_local"),
+            status: json_text(&row, "status"),
+            broker_order_id: json_text(&row, "broker_order_id"),
         })
         .collect()
 }
@@ -9900,7 +9922,7 @@ impl AppState {
             );
             object.insert(
                 "recent_lifecycle_tests".to_string(),
-                JsonValue::Array(lifecycle_tests),
+                serde_json::to_value(protective_stop_lifecycle_test_payloads(lifecycle_tests))?,
             );
         }
         Ok(coverage)
@@ -18991,6 +19013,39 @@ mod tests {
         assert!(!serialized.contains("raw_saxo_response"));
         assert!(!serialized.contains("raw_broker_document"));
         assert!(!serialized.contains("result_json"));
+    }
+
+    #[test]
+    fn protective_stop_lifecycle_payloads_allowlist_action_link_fields() {
+        let payloads = protective_stop_lifecycle_test_payloads(vec![json!({
+            "id": 43,
+            "created_at": "2026-08-28T12:10:00Z",
+            "updated_at": "2026-08-28T12:12:00Z",
+            "source_precheck_id": 42,
+            "environment": "sim",
+            "symbol": "NOVO-B:xcse",
+            "quantity": 12,
+            "stop_price_local": 780.0,
+            "status": "broker_working",
+            "broker_order_id": "SIM-123",
+            "external_reference": "must stay internal",
+            "request_id": "must stay internal",
+            "placement_result_json": {"raw_saxo_response": {"account": "must stay internal"}},
+            "cancellation_result_json": {"raw_saxo_response": {"account": "must stay internal"}},
+            "reconciliation_json": {"raw_saxo_response": {"account": "must stay internal"}}
+        })]);
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].id, 43);
+        assert_eq!(payloads[0].status, "broker_working");
+        assert_eq!(payloads[0].broker_order_id, "SIM-123");
+        let serialized = serde_json::to_value(&payloads)
+            .expect("typed lifecycle payload serializes")
+            .to_string();
+        assert!(!serialized.contains("source_precheck_id"));
+        assert!(!serialized.contains("external_reference"));
+        assert!(!serialized.contains("request_id"));
+        assert!(!serialized.contains("raw_saxo_response"));
     }
 
     #[test]

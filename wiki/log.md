@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type Protective Stop Coverage lifecycle tests
+
+- Changed the Execution SIM lifecycle-test rows from generic persisted JSON to an allowlisted local ID, requested stop, lifecycle status, and visible broker-order reference projection.
+- Placement, cancellation, reconciliation, request, and broker-response documents remain internal. Existing reconcile/cancel forms retain their handler-side SIM reload and explicit cancellation acknowledgement safeguards; no queue or Saxo behavior changed.
+
 ## [2026-08-28] architecture | Type Protective Stop Coverage SIM prechecks
 
 - Changed the Execution recent-SIM-precheck rows from generic persisted JSON to an allowlisted local ID, requested stop, status, compact result-label, and safety projection.

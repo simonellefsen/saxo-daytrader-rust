@@ -2299,6 +2299,30 @@ pub struct ProtectiveStopPrecheckPayload {
     pub safety: String,
 }
 
+/// Allowlisted state of a manual SIM protective-stop lifecycle test.
+///
+/// The local test id is used only by the existing reconcile/cancel handlers,
+/// which reload it and enforce their separate SIM and acknowledgement checks.
+/// Placement, cancellation, reconciliation, and broker-response documents stay
+/// outside this dashboard contract.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopLifecycleTestPayload {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub quantity: f64,
+    #[serde(default)]
+    pub stop_price_local: f64,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub broker_order_id: String,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position and exception display/form fields are allowlisted. Detailed
@@ -2311,7 +2335,7 @@ pub struct ProtectiveStopCoveragePayload {
     pub positions: Vec<ProtectiveStopCoveragePositionPayload>,
     pub exceptions: Vec<ProtectiveStopCoverageExceptionPayload>,
     pub recent_prechecks: Vec<ProtectiveStopPrecheckPayload>,
-    pub recent_lifecycle_tests: Vec<JsonValue>,
+    pub recent_lifecycle_tests: Vec<ProtectiveStopLifecycleTestPayload>,
     pub safety: String,
     pub interpretation: String,
 }

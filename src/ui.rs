@@ -37,8 +37,8 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoverageExceptionPayload, ProtectiveStopCoveragePayload,
-        ProtectiveStopCoveragePositionPayload, ProtectiveStopPrecheckPayload,
-        QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
+        ProtectiveStopCoveragePositionPayload, ProtectiveStopLifecycleTestPayload,
+        ProtectiveStopPrecheckPayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
         TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
         TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
@@ -7025,17 +7025,29 @@ fn ProtectiveStopPrecheckRow(
 
 #[component]
 fn ProtectiveStopLifecycleTestRow(
-    row: JsonValue,
+    row: ProtectiveStopLifecycleTestPayload,
     prefs: LocalizationPrefs,
     sim_enabled: bool,
 ) -> Element {
-    let id = value_i64(&row, "id");
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
-    let symbol = text_or(&row, "symbol", "n/a");
-    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
-    let stop_price = format_number(value_f64(&row, "stop_price_local"), 4, &prefs);
-    let status = text_or(&row, "status", "unknown");
-    let broker_order_id = text_or(&row, "broker_order_id", "pending");
+    let id = row.id;
+    let created_at = format_timestamp(&row.created_at, &prefs);
+    let symbol = if row.symbol.is_empty() {
+        "n/a".to_string()
+    } else {
+        row.symbol
+    };
+    let quantity = format_quantity(row.quantity, &prefs);
+    let stop_price = format_number(row.stop_price_local, 4, &prefs);
+    let status = if row.status.is_empty() {
+        "unknown".to_string()
+    } else {
+        row.status
+    };
+    let broker_order_id = if row.broker_order_id.is_empty() {
+        "pending".to_string()
+    } else {
+        row.broker_order_id
+    };
     let status_class = match status.as_str() {
         "cancelled" | "broker_working" | "placement_submitted" => "status good",
         "placement_failed" | "cancellation_failed" | "failed" | "broker_state_unknown" => {
