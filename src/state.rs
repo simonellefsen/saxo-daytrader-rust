@@ -18874,7 +18874,20 @@ mod tests {
                 "active_stop_price_local": 780.0,
                 "raw_broker_document": {"account": "must not reach dashboard"}
             }],
-            "exceptions": [{"symbol": "NOVO-B:xcse", "reason": "missing_stop"}],
+            "exceptions": [{
+                "symbol": "NOVO-B:xcse",
+                "unprotected_quantity": 12,
+                "reason": "missing_stop",
+                "proposed_stop": {
+                    "stop_price_local": 780.0,
+                    "reference_close": 800.0,
+                    "atr14": 10.0,
+                    "atr_multiple": 2.0,
+                    "distance_pct": 2.5,
+                    "raw_indicator_document": {"must": "stay staged"}
+                },
+                "raw_broker_document": {"account": "must not reach dashboard"}
+            }],
             "recent_prechecks": [],
             "recent_lifecycle_tests": [],
             "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
@@ -18888,10 +18901,19 @@ mod tests {
         assert_eq!(coverage.positions[0].symbol, "NOVO-B:xcse");
         assert_eq!(coverage.positions[0].active_stop_price_local, Some(780.0));
         assert_eq!(coverage.exceptions.len(), 1);
+        assert_eq!(coverage.exceptions[0].unprotected_quantity, 12.0);
+        assert_eq!(
+            coverage.exceptions[0]
+                .proposed_stop
+                .as_ref()
+                .map(|proposal| proposal.stop_price_local),
+            Some(780.0)
+        );
         let serialized = serde_json::to_value(&coverage)
             .expect("typed protective-stop coverage serializes")
             .to_string();
         assert!(!serialized.contains("raw_broker_document"));
+        assert!(!serialized.contains("raw_indicator_document"));
         assert_eq!(
             dashboard_protective_stop_coverage_not_loaded().status,
             "not_loaded"

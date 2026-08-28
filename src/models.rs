@@ -2227,17 +2227,63 @@ pub struct ProtectiveStopCoveragePositionPayload {
     pub planned_stop_price_local: Option<f64>,
 }
 
+/// Allowlisted computed protective-stop proposal for the manual SIM workflow.
+///
+/// These values are derived solely from already-persisted daily indicators.
+/// They are not tick-normalized and remain only a suggestion until the
+/// existing explicit confirmation, precheck, and placement path is used.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopProposedStopPayload {
+    #[serde(default)]
+    pub stop_price_local: f64,
+    #[serde(default)]
+    pub reference_close: f64,
+    #[serde(default)]
+    pub atr14: f64,
+    #[serde(default)]
+    pub atr_multiple: f64,
+    #[serde(default)]
+    pub distance_pct: f64,
+}
+
+/// Allowlisted protective-stop exception displayed by the manual SIM workflow.
+///
+/// The checkbox carries only the symbol; existing handlers reload the local
+/// coverage state and retain their separate confirmation, precheck, and Saxo
+/// placement safeguards. Broker and indicator source documents stay staged.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopCoverageExceptionPayload {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub broker_quantity: f64,
+    #[serde(default)]
+    pub confirmed_covered_quantity: f64,
+    #[serde(default)]
+    pub unprotected_quantity: f64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub proposed_stop: Option<ProtectiveStopProposedStopPayload>,
+    #[serde(default)]
+    pub operator_action: String,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
-/// Per-position, exception, and recorded SIM-test details remain staged JSON
-/// because their fields depend on broker state and lifecycle evidence. This
-/// read model neither invokes Saxo nor changes any order state.
+/// Per-position and exception display/form fields are allowlisted. Detailed
+/// broker and lifecycle documents remain staged JSON. This read model neither
+/// invokes Saxo nor changes any order state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProtectiveStopCoveragePayload {
     pub status: String,
     pub summary: ProtectiveStopCoverageSummaryPayload,
     pub positions: Vec<ProtectiveStopCoveragePositionPayload>,
-    pub exceptions: Vec<JsonValue>,
+    pub exceptions: Vec<ProtectiveStopCoverageExceptionPayload>,
     pub recent_prechecks: Vec<JsonValue>,
     pub recent_lifecycle_tests: Vec<JsonValue>,
     pub safety: String,

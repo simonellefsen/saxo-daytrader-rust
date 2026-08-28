@@ -36,10 +36,10 @@ use crate::{
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, ProtectiveStopCoveragePositionPayload,
-        QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
-        TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
-        TradingManagerInstrumentQuarantinePayload,
+        ProtectiveStopCoverageExceptionPayload, ProtectiveStopCoveragePayload,
+        ProtectiveStopCoveragePositionPayload, QuiverConflictPayload,
+        TradingManagerBlockedBuyGatePayload, TradingManagerCashBudgetPayload,
+        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
         TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
@@ -7136,45 +7136,53 @@ fn ProtectiveStopCoverageRow(
 
 #[component]
 fn ProtectiveStopExceptionRow(
-    row: JsonValue,
+    row: ProtectiveStopCoverageExceptionPayload,
     prefs: LocalizationPrefs,
     sim_enabled: bool,
 ) -> Element {
-    let symbol = text_or(&row, "symbol", "n/a");
-    let quantity = format_quantity(value_f64(&row, "unprotected_quantity"), &prefs);
-    let reason = text_or(&row, "reason", "Coverage needs review.");
-    let operator_action = text_or(
-        &row,
-        "operator_action",
-        "Review the persisted broker position and stop evidence.",
-    );
-    // Computed from stored indicator close and ATR14. It is a suggestion for
-    // the manual SIM workflow, not a queued or scheduled order.
-    let proposed = row.get("proposed_stop").cloned().unwrap_or(JsonValue::Null);
-    let proposed_stop = if proposed.is_null() {
+    let symbol = if row.symbol.is_empty() {
         "n/a".to_string()
     } else {
+        row.symbol.clone()
+    };
+    let quantity = format_quantity(row.unprotected_quantity, &prefs);
+    let reason = if row.reason.is_empty() {
+        "Coverage needs review.".to_string()
+    } else {
+        row.reason.clone()
+    };
+    let operator_action = if row.operator_action.is_empty() {
+        "Review the persisted broker position and stop evidence.".to_string()
+    } else {
+        row.operator_action.clone()
+    };
+    // Computed from stored indicator close and ATR14. It is a suggestion for
+    // the manual SIM workflow, not a queued or scheduled order.
+    let proposed = row.proposed_stop;
+    let proposed_stop = if let Some(proposed) = proposed.as_ref() {
         format!(
             "{} ({}% below {})",
-            format_number(value_f64(&proposed, "stop_price_local"), 2, &prefs),
-            format_number(value_f64(&proposed, "distance_pct"), 1, &prefs),
-            format_number(value_f64(&proposed, "reference_close"), 2, &prefs)
+            format_number(proposed.stop_price_local, 2, &prefs),
+            format_number(proposed.distance_pct, 1, &prefs),
+            format_number(proposed.reference_close, 2, &prefs)
         )
-    };
-    let proposed_title = if proposed.is_null() {
-        "No proposal: the latest daily indicator run has no usable close and ATR14 for this symbol."
-            .to_string()
     } else {
+        "n/a".to_string()
+    };
+    let proposed_title = if let Some(proposed) = proposed.as_ref() {
         format!(
             "close {} minus ATR14 {} x {}. Not tick-normalized; the precheck and placement paths round to Saxo's tick scheme. Computed from stored indicators — no Saxo call, and nothing is placed.",
-            format_number(value_f64(&proposed, "reference_close"), 2, &prefs),
-            format_number(value_f64(&proposed, "atr14"), 2, &prefs),
-            format_number(value_f64(&proposed, "atr_multiple"), 2, &prefs)
+            format_number(proposed.reference_close, 2, &prefs),
+            format_number(proposed.atr14, 2, &prefs),
+            format_number(proposed.atr_multiple, 2, &prefs)
         )
+    } else {
+        "No proposal: the latest daily indicator run has no usable close and ATR14 for this symbol."
+            .to_string()
     };
     // Only a row with a computed level can be placed; without one there is
     // nothing to send, so the checkbox is omitted rather than shown inert.
-    let placeable = sim_enabled && !proposed.is_null();
+    let placeable = sim_enabled && proposed.is_some();
     rsx! {
         tr {
             td {

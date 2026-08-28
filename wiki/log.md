@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type Protective Stop Coverage exception rows
+
+- Changed the Execution protection-exception rows and their computed proposal display from generic JSON to an allowlisted symbol, uncovered quantity, reason, operator guidance, and stored-indicator price/ATR projection.
+- Broker and indicator source documents remain internal. The checkbox still submits only a symbol to the established explicit SIM confirmation, reload, precheck, and placement path; no coverage computation, lifecycle, queue, cancellation, reconciliation, or Saxo behavior changed.
+
 ## [2026-08-28] architecture | Type Overview Instrument Quarantine rows
 
 - Changed the Overview's active instrument-quarantine rows from generic JSON to allowlisted symbol, action, failure category/count, expiry, override, and bounded sample-error evidence.
