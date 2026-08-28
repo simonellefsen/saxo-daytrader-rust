@@ -1658,7 +1658,7 @@ pub struct MarketWatchlistUniversePayload {
     pub extra_symbols_added: i64,
 }
 
-/// Stable category metadata with staged quote/decision-derived rows.
+/// Stable category metadata with allowlisted watchlist rows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistCategoryPayload {
     #[serde(default)]
@@ -1670,7 +1670,37 @@ pub struct MarketWatchlistCategoryPayload {
     #[serde(default)]
     pub total_universe: i64,
     #[serde(default)]
-    pub items: Vec<JsonValue>,
+    pub items: Vec<MarketWatchlistRowPayload>,
+}
+
+/// Stable display shell for one watchlist symbol.
+///
+/// Decision evidence and technical-support evidence remain nested staged JSON
+/// while those provider-derived schemas continue to evolve. The outer quote,
+/// identity, market, and lifecycle fields are allowlisted so arbitrary source
+/// documents do not cross the public Watchlists boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistRowPayload {
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub instrument_name: String,
+    #[serde(default)]
+    pub exchange: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub current_price_local: Option<f64>,
+    #[serde(default)]
+    pub change_pct: Option<f64>,
+    #[serde(default)]
+    pub quote_status: String,
+    #[serde(default)]
+    pub decision: JsonValue,
+    #[serde(default)]
+    pub technical_risk: JsonValue,
 }
 
 /// Bounded market-status envelope.

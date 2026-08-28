@@ -29,10 +29,10 @@ use crate::{
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
         MarketExchangeStatusPayload, MarketPriceMonitorPayload,
         MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
-        MarketWatchlistCategoryPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        MarketWatchlistCategoryPayload, MarketWatchlistRowPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -3814,7 +3814,7 @@ fn WatchlistCategory(
     let quoted_names = items
         .iter()
         .filter(|row| {
-            !text(row, "currency").is_empty() || value_f64(row, "current_price_local") > 0.0
+            !row.currency.is_empty() || row.current_price_local.is_some_and(|price| price > 0.0)
         })
         .count();
     rsx! {
@@ -3829,13 +3829,13 @@ fn WatchlistCategory(
             div { class: "watch-summary-grid",
                 div { class: "event flat",
                     span { class: "muted", "Daily Leader" }
-                    strong { class: "good-text", "{text(&leader, \"symbol\")}" }
-                    span { "{format_pct(value_f64(&leader, \"change_pct\"), &prefs)} · {format_local_money(value_f64(&leader, \"current_price_local\"), &text(&leader, \"currency\"), &prefs)}" }
+                    strong { class: "good-text", "{leader.symbol}" }
+                    span { "{format_pct(leader.change_pct.unwrap_or(0.0), &prefs)} · {format_local_money(leader.current_price_local.unwrap_or(0.0), &leader.currency, &prefs)}" }
                 }
                 div { class: "event flat",
                     span { class: "muted", "Daily Laggard" }
-                    strong { class: "bad-text", "{text(&laggard, \"symbol\")}" }
-                    span { "{format_pct(value_f64(&laggard, \"change_pct\"), &prefs)} · {format_local_money(value_f64(&laggard, \"current_price_local\"), &text(&laggard, \"currency\"), &prefs)}" }
+                    strong { class: "bad-text", "{laggard.symbol}" }
+                    span { "{format_pct(laggard.change_pct.unwrap_or(0.0), &prefs)} · {format_local_money(laggard.current_price_local.unwrap_or(0.0), &laggard.currency, &prefs)}" }
                 }
                 div { class: "event flat",
                     span { class: "muted", "Quoted Names" }
@@ -3849,20 +3849,20 @@ fn WatchlistCategory(
                     tbody {
                         for row in items.iter() {
                             tr {
-                                td { SymbolLink { symbol: text(row, "symbol"), instrument_name: text(row, "instrument_name") } }
-                                td { "{text(row, \"instrument_name\")}" }
+                                td { SymbolLink { symbol: row.symbol.clone(), instrument_name: row.instrument_name.clone() } }
+                                td { "{row.instrument_name}" }
                                 td {
                                     DecisionBadge {
-                                        decision: row.get("decision").cloned().unwrap_or(JsonValue::Null),
+                                        decision: row.decision.clone(),
                                         prefs: prefs.clone(),
                                         stale_after_days: decision_stale_after_days,
                                     }
                                 }
                                 td { TrendSparkline { row: row.clone() } }
                                 td { WatchlistSupportRisk { row: row.clone(), prefs: prefs.clone() } }
-                                td { "{text(row, \"exchange\")}" }
-                                td { "{text(row, \"currency\")}" }
-                                td { "{format_local_money(value_f64(row, \"current_price_local\"), &text(row, \"currency\"), &prefs)}" }
+                                td { "{row.exchange}" }
+                                td { "{row.currency}" }
+                                td { "{format_local_money(row.current_price_local.unwrap_or(0.0), &row.currency, &prefs)}" }
                                 td { WatchlistDailyChange { row: row.clone(), prefs: prefs.clone() } }
                                 td { WatchlistQuoteStatus { row: row.clone() } }
                             }
@@ -3875,8 +3875,8 @@ fn WatchlistCategory(
 }
 
 #[component]
-fn WatchlistDailyChange(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let Some(change_pct) = optional_f64(&row, "change_pct") else {
+fn WatchlistDailyChange(row: MarketWatchlistRowPayload, prefs: LocalizationPrefs) -> Element {
+    let Some(change_pct) = row.change_pct else {
         return rsx! { span { class: "muted", title: "No current Saxo price-monitor quote is available, so a daily move cannot be calculated.", "n/a" } };
     };
     let tone = if change_pct >= 0.0 {
@@ -3888,7 +3888,7 @@ fn WatchlistDailyChange(row: JsonValue, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn WatchlistQuoteStatus(row: JsonValue) -> Element {
+fn WatchlistQuoteStatus(row: MarketWatchlistRowPayload) -> Element {
     let (label, tone, detail) = watchlist_quote_status(&row);
     rsx! {
         span { class: "status {tone}", title: "{detail}", "{label}" }
@@ -3896,11 +3896,8 @@ fn WatchlistQuoteStatus(row: JsonValue) -> Element {
 }
 
 #[component]
-fn WatchlistSupportRisk(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let support = row
-        .get("technical_risk")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+fn WatchlistSupportRisk(row: MarketWatchlistRowPayload, prefs: LocalizationPrefs) -> Element {
+    let support = row.technical_risk;
     if text(&support, "status") != "ok"
         || support
             .get("nearest_support")
@@ -3910,8 +3907,11 @@ fn WatchlistSupportRisk(row: JsonValue, prefs: LocalizationPrefs) -> Element {
     {
         return rsx! { span { class: "muted", "No support data" } };
     }
-    let currency = text(&row, "currency");
-    let nearest = format_local_money(value_f64(&support, "nearest_support"), &currency, &prefs);
+    let nearest = format_local_money(
+        value_f64(&support, "nearest_support"),
+        &row.currency,
+        &prefs,
+    );
     let break_risk = fallback_text(&support, "break_risk_label", "n/a");
     let risk_class = match break_risk.as_str() {
         "high" => "bad-text",
@@ -3922,7 +3922,7 @@ fn WatchlistSupportRisk(row: JsonValue, prefs: LocalizationPrefs) -> Element {
         .get("next_support")
         .and_then(JsonValue::as_f64)
         .filter(|value| *value > 0.0)
-        .map(|value| format_local_money(value, &currency, &prefs))
+        .map(|value| format_local_money(value, &row.currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let detail = format!(
         "Nearest support {nearest}; downside to support {}; next support {next}; downside after a break {}; break risk {}; confidence {}; returned history {} across {} clustered pivot touches. Read-only context, not an automatic trading gate.",
@@ -7464,8 +7464,8 @@ fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs, stale_after_days
 }
 
 #[component]
-fn TrendSparkline(row: JsonValue) -> Element {
-    let symbol = text(&row, "symbol");
+fn TrendSparkline(row: MarketWatchlistRowPayload) -> Element {
+    let symbol = row.symbol.clone();
     let modal_id = modal_id_for_symbol(&symbol);
     let tradingview_symbol = tradingview_symbol(&symbol);
     let trend = sparkline_points(&row);
@@ -9041,25 +9041,22 @@ fn hermes_transition_actions(status: &str) -> Vec<(&'static str, &'static str, &
     }
 }
 
-fn leader_row(items: &[JsonValue], high: bool) -> JsonValue {
+fn leader_row(items: &[MarketWatchlistRowPayload], high: bool) -> MarketWatchlistRowPayload {
     let mut rows = items
         .iter()
-        .filter(|row| {
-            row.get("change_pct")
-                .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
-                .is_some()
-        })
+        .filter(|row| row.change_pct.is_some())
         .cloned()
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
-        value_f64(left, "change_pct")
-            .partial_cmp(&value_f64(right, "change_pct"))
+        left.change_pct
+            .unwrap_or(0.0)
+            .partial_cmp(&right.change_pct.unwrap_or(0.0))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     if high {
-        rows.pop().unwrap_or(JsonValue::Null)
+        rows.pop().unwrap_or_default()
     } else {
-        rows.into_iter().next().unwrap_or(JsonValue::Null)
+        rows.into_iter().next().unwrap_or_default()
     }
 }
 
@@ -9069,14 +9066,15 @@ fn coverage_label(category: &MarketWatchlistCategoryPayload) -> String {
     format!("{:.0}%", (items / target * 100.0).min(100.0))
 }
 
-fn watchlist_quote_status(row: &JsonValue) -> (&'static str, &'static str, &'static str) {
-    match fallback_text(
-        row,
-        "quote_status",
-        &fallback_text(row, "status", "current_source"),
-    )
-    .as_str()
-    {
+fn watchlist_quote_status(
+    row: &MarketWatchlistRowPayload,
+) -> (&'static str, &'static str, &'static str) {
+    let status = if row.quote_status.is_empty() {
+        "current_source"
+    } else {
+        row.quote_status.as_str()
+    };
+    match status {
         "ok" => (
             "Quote current",
             "good-status",
@@ -10694,11 +10692,11 @@ struct Sparkline {
     positive: bool,
 }
 
-fn sparkline_points(row: &JsonValue) -> Sparkline {
-    let change_pct = value_f64(row, "change_pct");
+fn sparkline_points(row: &MarketWatchlistRowPayload) -> Sparkline {
+    let change_pct = row.change_pct.unwrap_or(0.0);
     let technical = row
-        .get("decision")
-        .and_then(|decision| decision.get("source"))
+        .decision
+        .get("source")
         .and_then(|source| source.get("technical"))
         .cloned()
         .unwrap_or(JsonValue::Null);
@@ -10712,7 +10710,7 @@ fn sparkline_points(row: &JsonValue) -> Sparkline {
     };
     let slope = if positive { -1.0 } else { 1.0 };
     let strength = change_pct.abs().clamp(0.002, 0.08) / 0.08;
-    let seed = symbol_seed(&text(row, "symbol"));
+    let seed = symbol_seed(&row.symbol);
     let mut points = Vec::new();
     for idx in 0..6 {
         let x = 4.0 + idx as f64 * 15.0;
@@ -11047,7 +11045,10 @@ mod tests {
     #[test]
     fn watchlist_quote_statuses_distinguish_fresh_quotes_from_membership() {
         assert_eq!(
-            watchlist_quote_status(&json!({"quote_status": "ok"})),
+            watchlist_quote_status(&MarketWatchlistRowPayload {
+                quote_status: "ok".to_string(),
+                ..MarketWatchlistRowPayload::default()
+            }),
             (
                 "Quote current",
                 "good-status",
@@ -11055,7 +11056,10 @@ mod tests {
             )
         );
         assert_eq!(
-            watchlist_quote_status(&json!({"quote_status": "configured_universe"})),
+            watchlist_quote_status(&MarketWatchlistRowPayload {
+                quote_status: "configured_universe".to_string(),
+                ..MarketWatchlistRowPayload::default()
+            }),
             (
                 "Awaiting quote",
                 "",
@@ -11063,7 +11067,10 @@ mod tests {
             )
         );
         assert_eq!(
-            watchlist_quote_status(&json!({"quote_status": "decision_snapshot"})),
+            watchlist_quote_status(&MarketWatchlistRowPayload {
+                quote_status: "decision_snapshot".to_string(),
+                ..MarketWatchlistRowPayload::default()
+            }),
             (
                 "Decision snapshot",
                 "",

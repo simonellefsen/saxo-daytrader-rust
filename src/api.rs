@@ -3267,7 +3267,21 @@ mod tests {
                 "target_limit": 100,
                 "total_universe": 2,
                 "sort_detail": "must-not-reach-public-api",
-                "items": [{"symbol": "NOVO-B:xcse"}]
+                "items": [{
+                    "symbol": "NOVO-B:xcse",
+                    "instrument_name": "Novo Nordisk B",
+                    "exchange": "XCSE",
+                    "region": "Nordics",
+                    "currency": "DKK",
+                    "current_price_local": 450.25,
+                    "change_pct": 0.0125,
+                    "quote_status": "ok",
+                    "status": "must-not-reach-public-api",
+                    "decision": {"sentiment": "BUY", "source": {"technical": {"trend_bias": "bullish"}}},
+                    "technical_risk": {"status": "ok", "nearest_support": 430.0},
+                    "source": {"provider_error": "must-not-reach-public-api"},
+                    "raw_quote": "must-not-reach-public-api"
+                }]
             }],
         }))
         .expect("watchlists compatibility payload has the public contract");
@@ -3286,6 +3300,29 @@ mod tests {
         assert_eq!(
             serialized["categories"][0]["items"][0]["symbol"],
             "NOVO-B:xcse"
+        );
+        assert_eq!(
+            serialized["categories"][0]["items"][0]["quote_status"],
+            "ok"
+        );
+        assert_eq!(
+            serialized["categories"][0]["items"][0]["decision"]["source"]["technical"]["trend_bias"],
+            "bullish"
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]
+                .get("source")
+                .is_none()
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]
+                .get("raw_quote")
+                .is_none()
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]
+                .get("status")
+                .is_none()
         );
     }
 

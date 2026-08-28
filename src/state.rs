@@ -3168,8 +3168,8 @@ fn dashboard_trading_manager_from_json(
     serde_json::from_value(trading_manager)
 }
 
-/// Decodes the stable Watchlists envelope used by the Watchlists tab. The
-/// quote- and decision-derived category rows intentionally remain staged JSON.
+/// Decodes the stable Watchlists envelope used by the Watchlists tab. The row
+/// shell is allowlisted while nested decision/support evidence stays staged.
 fn dashboard_watchlists_from_json(
     watchlists: JsonValue,
 ) -> serde_json::Result<MarketWatchlistsPayload> {

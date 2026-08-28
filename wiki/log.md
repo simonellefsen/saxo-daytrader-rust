@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type public Watchlist row shell
+
+- Changed public Watchlist rows and their dashboard renderer from generic JSON to an allowlisted identity, market, quote/value/change, and lifecycle projection.
+- Unallowlisted source/raw-quote fields remain internal. Nested Decision Report and support-risk evidence intentionally remain staged while their schemas evolve; quote collection, candidate membership, reports, queues, and Saxo order behavior are unchanged.
+
 ## [2026-08-28] architecture | Type public Market Status exchange rows
 
 - Changed public Market Status exchange rows and the dashboard market table from generic JSON to typed operator-facing session/window fields, preserving explicit absent holiday names.
