@@ -72,14 +72,15 @@ use crate::{
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
-        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload, QuiverConflictPayload,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3219,7 +3220,7 @@ fn dashboard_protective_stop_coverage_from_json(
 fn dashboard_protective_stop_coverage_not_loaded() -> ProtectiveStopCoveragePayload {
     ProtectiveStopCoveragePayload {
         status: "not_loaded".to_string(),
-        summary: json!({}),
+        summary: ProtectiveStopCoverageSummaryPayload::default(),
         positions: Vec::new(),
         exceptions: Vec::new(),
         recent_prechecks: Vec::new(),
@@ -18860,7 +18861,11 @@ mod tests {
     fn dashboard_protective_stop_coverage_requires_the_stable_outer_contract() {
         let coverage = dashboard_protective_stop_coverage_from_json(json!({
             "status": "attention_required",
-            "summary": {"protected_count": 4, "unprotected_count": 1},
+            "summary": {
+                "protected_count": 4,
+                "unprotected_count": 1,
+                "raw_broker_document": {"account": "must not reach dashboard"}
+            },
             "positions": [{"symbol": "NOVO-B:xcse"}],
             "exceptions": [{"symbol": "NOVO-B:xcse", "reason": "missing_stop"}],
             "recent_prechecks": [],
@@ -18871,8 +18876,14 @@ mod tests {
         .expect("protective-stop fixture has the dashboard contract");
 
         assert_eq!(coverage.status, "attention_required");
+        assert_eq!(coverage.summary.protected_count, 4);
+        assert_eq!(coverage.summary.unprotected_count, 1);
         assert_eq!(coverage.positions[0]["symbol"], json!("NOVO-B:xcse"));
         assert_eq!(coverage.exceptions.len(), 1);
+        let serialized = serde_json::to_value(&coverage)
+            .expect("typed protective-stop coverage serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_broker_document"));
         assert_eq!(
             dashboard_protective_stop_coverage_not_loaded().status,
             "not_loaded"

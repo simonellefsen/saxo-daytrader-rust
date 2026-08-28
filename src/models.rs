@@ -2177,15 +2177,40 @@ pub struct TradingManagerDrawdownGuardrailPayload {
     pub override_record: TradingManagerDrawdownGuardrailOverridePayload,
 }
 
+/// Allowlisted aggregate protective-stop coverage evidence.
+///
+/// Per-position, exception, and recorded SIM-test details remain staged because
+/// their fields depend on broker state and lifecycle evidence. This summary is
+/// observational only and cannot invoke Saxo or change any order state.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopCoverageSummaryPayload {
+    #[serde(default)]
+    pub position_count: i64,
+    #[serde(default)]
+    pub protected_count: i64,
+    #[serde(default)]
+    pub partial_count: i64,
+    #[serde(default)]
+    pub planned_count: i64,
+    #[serde(default)]
+    pub unprotected_count: i64,
+    #[serde(default)]
+    pub total_quantity: f64,
+    #[serde(default)]
+    pub confirmed_covered_quantity: f64,
+    #[serde(default)]
+    pub exception_count: i64,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
-/// Per-position, exception, and recorded SIM-test details remain compatibility
-/// JSON because their fields depend on broker state and lifecycle evidence.
-/// This read model neither invokes Saxo nor changes any order state.
+/// Per-position, exception, and recorded SIM-test details remain staged JSON
+/// because their fields depend on broker state and lifecycle evidence. This
+/// read model neither invokes Saxo nor changes any order state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProtectiveStopCoveragePayload {
     pub status: String,
-    pub summary: JsonValue,
+    pub summary: ProtectiveStopCoverageSummaryPayload,
     pub positions: Vec<JsonValue>,
     pub exceptions: Vec<JsonValue>,
     pub recent_prechecks: Vec<JsonValue>,

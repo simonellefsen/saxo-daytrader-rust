@@ -6805,11 +6805,11 @@ fn ProtectiveStopCoveragePanel(
         "unavailable" => "bad",
         _ => "",
     };
-    let protected_count = value_i64(&summary, "protected_count");
-    let partial_count = value_i64(&summary, "partial_count");
-    let planned_count = value_i64(&summary, "planned_count");
-    let unprotected_count = value_i64(&summary, "unprotected_count");
-    let exception_count = value_i64(&summary, "exception_count");
+    let protected_count = summary.protected_count;
+    let partial_count = summary.partial_count;
+    let planned_count = summary.planned_count;
+    let unprotected_count = summary.unprotected_count;
+    let exception_count = summary.exception_count;
     let interpretation = if coverage.interpretation.is_empty() {
         "Protective-stop coverage is unavailable right now.".to_string()
     } else {

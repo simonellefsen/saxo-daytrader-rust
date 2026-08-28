@@ -2754,6 +2754,12 @@ broker mutation was added.
 - Broker, ledger, and configuration detail remains internal; the panel retains only what is required to surface an issue and preserve the existing acknowledgement action.
 - This remains read-only operational evidence and cannot change integrity checks, acknowledgements, scheduler work, reconciliation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
 
+## [2026-08-28] architecture | Type Protective Stop Coverage summary
+
+- Changed the Execution Protective Stop Coverage panel to consume typed, allowlisted aggregate position, coverage, quantity, and exception counts.
+- Per-position, exception, and SIM-test lifecycle evidence remains staged because it depends on broker and lifecycle state; broker documents cannot cross the typed summary boundary.
+- This remains read-only coverage observation and cannot change stop computation, SIM precheck, placement, cancellation, reconciliation, Hermes, manager gates, queues, or Saxo execution.
+
 ## [2026-08-28] architecture | Type Cash Deployment drawdown-guardrail evidence
 
 - Changed Cash Deployment's portfolio-drawdown guardrail display to consume a typed, allowlisted restriction, peak, threshold, soft-reduction, and local override projection.
