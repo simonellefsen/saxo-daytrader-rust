@@ -3326,7 +3326,19 @@ mod tests {
             "summary": {
                 "analysis_window_active": true,
                 "active_markets": ["US"],
-                "active_windows": [{"key": "us_open_followup"}],
+                "active_windows": [{
+                    "key": "us_open_followup:2026-08-28",
+                    "kind": "us_open_followup",
+                    "label": "US Open +1h15 Trading Manager",
+                    "target_at": "2026-08-28T10:45:00-04:00",
+                    "target_at_utc": "2026-08-28T14:45:00Z",
+                    "window_end_at_utc": "2026-08-28T15:05:00Z",
+                    "due": true,
+                    "source_markets": ["Nasdaq US", "NYSE"],
+                    "exchange_codes": ["XNAS", "XNYS"],
+                    "decision_pulse_key": "must-not-reach-public-api",
+                    "manager_detail": {"must-not-reach-public-api": true}
+                }],
                 "open_active_markets": ["US"],
                 "close_active_markets": [],
                 "pre_sync_markets": [],
@@ -3382,7 +3394,21 @@ mod tests {
         );
         assert_eq!(
             serialized["summary"]["active_windows"][0]["key"],
-            "us_open_followup"
+            "us_open_followup:2026-08-28"
+        );
+        assert_eq!(
+            serialized["summary"]["active_windows"][0]["exchange_codes"],
+            json!(["XNAS", "XNYS"])
+        );
+        assert!(
+            serialized["summary"]["active_windows"][0]
+                .get("decision_pulse_key")
+                .is_none()
+        );
+        assert!(
+            serialized["summary"]["active_windows"][0]
+                .get("manager_detail")
+                .is_none()
         );
         assert!(
             serialized["summary"]["calendar_refresh"]

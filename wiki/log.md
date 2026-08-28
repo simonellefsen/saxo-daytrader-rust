@@ -2609,6 +2609,12 @@ broker mutation was added.
 - Added a typed Tuning projection of the existing one-month local account-value comparison against stored native-currency ETF proxy price returns, retaining per-reference status, alignment, freshness, proxy return, and portfolio excess.
 - The view keeps cash inclusion and every comparison limit explicit: it is not time-weighted or total return and does not normalize FX, dividends, fees, tax, or external cash flows. It reads local history and stored closes only, without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
 
+## [2026-08-28] architecture | Type and narrow Market Status active pulses
+
+- Changed Market Status active-pulse rows to a typed, allowlisted scheduling projection: identity, label, timing window, due state, market scope, and exchange scope.
+- Manager-only decision-pulse linkage and retained detail remain internal. Missing or evolving fields degrade to safe empty/default display values rather than exposing the raw manager document.
+- This changes no scheduler cadence, report generation, Hermes, manager gate, queue, precheck, or Saxo execution behavior.
+
 ## [2026-08-28] architecture | Reuse typed scheduler status in Market Status
 
 - Changed Market Status to reuse the existing typed scheduler timing and lifecycle contract rather than forwarding the retained scheduler row.

@@ -1647,10 +1647,8 @@ pub struct MarketWatchlistsPayload {
 /// Bounded market-status envelope.
 ///
 /// Exchange rows and stable summary fields are typed and allowlisted.
-/// Active-pulse documents remain staged JSON while their operational read
-/// models are converted incrementally. This keeps the public observability
-/// boundary explicit without changing market-calendar refreshes or any
-/// decision and execution behavior.
+/// This keeps the public observability boundary explicit without changing
+/// market-calendar refreshes or any decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusPayload {
     pub items: Vec<MarketExchangeStatusPayload>,
@@ -1661,14 +1659,13 @@ pub struct MarketStatusPayload {
 
 /// Stable current-cycle summary for Market Status.
 ///
-/// Active pulses retain staged JSON because their manager-owned shape evolves.
 /// The calendar-refresh state is narrowed to lifecycle metadata so a free-form
 /// Saxo transport error cannot reach the public dashboard/API boundary.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusSummaryPayload {
     pub analysis_window_active: bool,
     pub active_markets: Vec<String>,
-    pub active_windows: JsonValue,
+    pub active_windows: Vec<MarketActivePulsePayload>,
     pub open_active_markets: Vec<String>,
     pub close_active_markets: Vec<String>,
     pub pre_sync_markets: Vec<String>,
@@ -1679,6 +1676,32 @@ pub struct MarketStatusSummaryPayload {
     pub price_monitor_status: Option<String>,
     pub price_monitor_updated_at: Option<String>,
     pub calendar_refresh: MarketCalendarRefreshPayload,
+}
+
+/// One currently due Trading Manager pulse, limited to scheduling metadata.
+///
+/// Manager diagnostics and the decision-pulse linkage remain internal; this
+/// does not cause a decision report, queue, precheck, or Saxo order action.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketActivePulsePayload {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub target_at: String,
+    #[serde(default)]
+    pub target_at_utc: String,
+    #[serde(default)]
+    pub window_end_at_utc: String,
+    #[serde(default)]
+    pub due: bool,
+    #[serde(default)]
+    pub source_markets: Vec<String>,
+    #[serde(default)]
+    pub exchange_codes: Vec<String>,
 }
 
 /// Allowlisted lifecycle metadata for the read-only Saxo exchange-calendar

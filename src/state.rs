@@ -7646,7 +7646,7 @@ impl AppState {
                     summary: MarketStatusSummaryPayload {
                         analysis_window_active: false,
                         active_markets: Vec::new(),
-                        active_windows: json!([]),
+                        active_windows: Vec::new(),
                         open_active_markets: Vec::new(),
                         close_active_markets: Vec::new(),
                         pre_sync_markets: Vec::new(),
