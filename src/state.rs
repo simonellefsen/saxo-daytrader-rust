@@ -67,19 +67,19 @@ use crate::{
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
         MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
-        PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
-        PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
-        PerformanceSummaryPayload, PortfolioTradePayload, ProtectiveStopCoveragePayload,
-        QuiverConflictPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
+        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -7679,11 +7679,12 @@ impl AppState {
             warn!("dashboard typed integrity degraded: {err:#}");
             OverviewIntegrityPayload {
                 healthy: false,
-                warnings: vec![json!({
-                    "code": "integrity_dashboard_payload_unavailable",
-                    "severity": "warning",
-                    "message": "Integrity status could not be loaded for the dashboard."
-                })],
+                warnings: vec![OverviewIntegrityIssuePayload {
+                    code: "integrity_dashboard_payload_unavailable".to_string(),
+                    severity: "warning".to_string(),
+                    message: "Integrity status could not be loaded for the dashboard.".to_string(),
+                    ..Default::default()
+                }],
                 mismatches: Vec::new(),
                 expiry_pending_orders: Vec::new(),
                 acknowledged_issue_count: 0,
@@ -18738,9 +18739,16 @@ mod tests {
     fn dashboard_integrity_requires_the_stable_outer_contract() {
         let integrity = dashboard_integrity_from_json(json!({
             "healthy": false,
-            "warnings": [{"code": "broker_cash_drift"}],
+            "warnings": [{
+                "code": "broker_cash_drift",
+                "raw_broker_document": {"account": "must not reach dashboard"}
+            }],
             "mismatches": [],
-            "expiry_pending_orders": [{"id": 204, "symbol": "BAC:xnys"}],
+            "expiry_pending_orders": [{
+                "id": 204,
+                "symbol": "BAC:xnys",
+                "raw_execution_document": {"broker_order_id": "must not reach dashboard"}
+            }],
             "acknowledged_issue_count": 1,
             "checked_at": "2026-08-23T12:00:00Z"
         }))
@@ -18748,8 +18756,13 @@ mod tests {
 
         assert!(!integrity.healthy);
         assert_eq!(integrity.warnings.len(), 1);
-        assert_eq!(integrity.expiry_pending_orders[0]["id"], json!(204));
+        assert_eq!(integrity.expiry_pending_orders[0].id, 204);
         assert_eq!(integrity.acknowledged_issue_count, 1);
+        let serialized = serde_json::to_value(&integrity)
+            .expect("typed integrity payload serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_broker_document"));
+        assert!(!serialized.contains("raw_execution_document"));
         assert!(dashboard_integrity_from_json(json!({"healthy": true})).is_err());
     }
 

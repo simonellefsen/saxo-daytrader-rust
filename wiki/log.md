@@ -2748,6 +2748,12 @@ broker mutation was added.
 - Active rows retain their separately resilient typed projection, so malformed rows cannot hide valid blocks; rule-trace documents remain staged in the manager diagnostic record.
 - This remains read-only completed-run evidence and cannot change quarantine policy, an operator override, report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
 
+## [2026-08-28] architecture | Type Overview Integrity finding rows
+
+- Changed the Overview Integrity panel to consume typed, allowlisted visible finding, acknowledgement, and expiry-pending DayOrder lifecycle fields.
+- Broker, ledger, and configuration detail remains internal; the panel retains only what is required to surface an issue and preserve the existing acknowledgement action.
+- This remains read-only operational evidence and cannot change integrity checks, acknowledgements, scheduler work, reconciliation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
+
 ## [2026-08-28] architecture | Type Cash Deployment drawdown-guardrail evidence
 
 - Changed Cash Deployment's portfolio-drawdown guardrail display to consume a typed, allowlisted restriction, peak, threshold, soft-reduction, and local override projection.

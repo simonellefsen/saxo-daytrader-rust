@@ -30,9 +30,10 @@ use crate::{
         MarketExchangeStatusPayload, MarketPriceMonitorPayload,
         MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
         MarketWatchlistCategoryPayload, MarketWatchlistDecisionPayload, MarketWatchlistRowPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
@@ -2395,10 +2396,10 @@ fn IntegrityPanel(integrity: OverviewIntegrityPayload, prefs: LocalizationPrefs)
                             tbody {
                                 for row in expiry_pending_orders.iter() {
                                     {
-                                        let order_id = text(row, "id");
-                                        let symbol = text(row, "symbol");
-                                        let status = text(row, "status");
-                                        let expiry = format_timestamp(&text(row, "expected_expiry_at_utc"), &prefs);
+                                        let order_id = row.id;
+                                        let symbol = row.symbol.clone();
+                                        let status = row.status.clone();
+                                        let expiry = format_timestamp(&row.expected_expiry_at_utc, &prefs);
                                         rsx! {
                                     tr {
                                         td { "#{order_id}" }
@@ -2419,21 +2420,22 @@ fn IntegrityPanel(integrity: OverviewIntegrityPayload, prefs: LocalizationPrefs)
 }
 
 #[component]
-fn IntegrityIssueRow(row: JsonValue) -> Element {
-    let code = text(&row, "code");
-    let severity = text(&row, "severity");
-    let message = text(&row, "message");
-    let issue_key = text(&row, "issue_key");
-    let acknowledged = row
-        .get("acknowledged")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let acknowledgement = row
-        .get("acknowledgement")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let acknowledgement_notes = text(&acknowledgement, "notes");
-    let acknowledgement_updated_at = text(&acknowledgement, "updated_at");
+fn IntegrityIssueRow(row: OverviewIntegrityIssuePayload) -> Element {
+    let code = row.code;
+    let severity = row.severity;
+    let message = row.message;
+    let issue_key = row.issue_key;
+    let acknowledged = row.acknowledged;
+    let acknowledgement_notes = row
+        .acknowledgement
+        .as_ref()
+        .map(|acknowledgement| acknowledgement.notes.clone())
+        .unwrap_or_default();
+    let acknowledgement_updated_at = row
+        .acknowledgement
+        .as_ref()
+        .map(|acknowledgement| acknowledgement.updated_at.clone())
+        .unwrap_or_default();
     let tone = match severity.as_str() {
         "error" => "bad-status",
         "warning" => "warn-status",

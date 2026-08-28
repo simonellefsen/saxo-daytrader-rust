@@ -1903,18 +1903,61 @@ pub struct MarketExchangeStatusPayload {
     pub saxo_session_state: String,
 }
 
+/// Allowlisted operator acknowledgement shown with an integrity finding.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverviewIntegrityAcknowledgementPayload {
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// Allowlisted integrity finding rendered in Overview.
+///
+/// Check-specific broker, ledger, and configuration detail remains internal;
+/// this row contains only the context needed to acknowledge a visible finding.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverviewIntegrityIssuePayload {
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub issue_key: String,
+    #[serde(default)]
+    pub acknowledged: bool,
+    #[serde(default)]
+    pub acknowledgement: Option<OverviewIntegrityAcknowledgementPayload>,
+}
+
+/// Allowlisted DayOrder expiry-sync evidence rendered in Overview.
+///
+/// It is observational lifecycle context only and cannot reconcile, cancel,
+/// replace, precheck, or submit an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverviewIntegrityExpiryPendingOrderPayload {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub expected_expiry_at_utc: String,
+}
+
 /// Bounded dashboard integrity envelope.
 ///
-/// Individual findings retain compatibility JSON because each check carries
-/// check-specific diagnostic detail and acknowledgement metadata. The stable
-/// status, timing, and list boundaries are typed so dashboard health cannot
-/// accidentally traverse an arbitrary overview document.
+/// Stable findings and expiry rows are allowlisted. Check-specific broker,
+/// ledger, and configuration documents remain internal.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OverviewIntegrityPayload {
     pub healthy: bool,
-    pub warnings: Vec<JsonValue>,
-    pub mismatches: Vec<JsonValue>,
-    pub expiry_pending_orders: Vec<JsonValue>,
+    pub warnings: Vec<OverviewIntegrityIssuePayload>,
+    pub mismatches: Vec<OverviewIntegrityIssuePayload>,
+    pub expiry_pending_orders: Vec<OverviewIntegrityExpiryPendingOrderPayload>,
     pub acknowledged_issue_count: i64,
     pub checked_at: String,
 }
