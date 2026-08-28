@@ -36,7 +36,8 @@ use crate::{
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
+        ProtectiveStopCoveragePayload, ProtectiveStopCoveragePositionPayload,
+        QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
         TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
         TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
@@ -7084,19 +7085,24 @@ fn ProtectiveStopLifecycleTestRow(
 }
 
 #[component]
-fn ProtectiveStopCoverageRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let symbol = text_or(&row, "symbol", "n/a");
-    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
-    let covered_quantity = format_quantity(value_f64(&row, "confirmed_covered_quantity"), &prefs);
-    let currency = text(&row, "currency");
+fn ProtectiveStopCoverageRow(
+    row: ProtectiveStopCoveragePositionPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let symbol = if row.symbol.is_empty() {
+        "n/a".to_string()
+    } else {
+        row.symbol
+    };
+    let quantity = format_quantity(row.quantity, &prefs);
+    let covered_quantity = format_quantity(row.confirmed_covered_quantity, &prefs);
+    let currency = row.currency;
     let active_stop = row
-        .get("active_stop_price_local")
-        .and_then(JsonValue::as_f64)
+        .active_stop_price_local
         .map(|price| format_position_price(price, &currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let planned_stop = row
-        .get("planned_stop_price_local")
-        .and_then(JsonValue::as_f64)
+        .planned_stop_price_local
         .map(|price| format_position_price(price, &currency, &prefs));
     let stop = if active_stop != "n/a" {
         active_stop
@@ -7105,13 +7111,17 @@ fn ProtectiveStopCoverageRow(row: JsonValue, prefs: LocalizationPrefs) -> Elemen
     } else {
         "n/a".to_string()
     };
-    let state = text_or(&row, "protection_status", "unprotected").replace('_', " ");
+    let state = if row.protection_status.is_empty() {
+        "unprotected".to_string()
+    } else {
+        row.protection_status.replace('_', " ")
+    };
     let state_class = match state.as_str() {
         "protected" => "status good",
         "partial protection" | "planned" | "unprotected" => "status warn",
         _ => "status",
     };
-    let snapshot = format_timestamp(&text(&row, "snapshot_updated_at"), &prefs);
+    let snapshot = format_timestamp(&row.snapshot_updated_at, &prefs);
     rsx! {
         tr {
             td { strong { class: "mono", "{symbol}" } }

@@ -18866,7 +18866,14 @@ mod tests {
                 "unprotected_count": 1,
                 "raw_broker_document": {"account": "must not reach dashboard"}
             },
-            "positions": [{"symbol": "NOVO-B:xcse"}],
+            "positions": [{
+                "symbol": "NOVO-B:xcse",
+                "quantity": 12,
+                "currency": "DKK",
+                "confirmed_covered_quantity": 12,
+                "active_stop_price_local": 780.0,
+                "raw_broker_document": {"account": "must not reach dashboard"}
+            }],
             "exceptions": [{"symbol": "NOVO-B:xcse", "reason": "missing_stop"}],
             "recent_prechecks": [],
             "recent_lifecycle_tests": [],
@@ -18878,7 +18885,8 @@ mod tests {
         assert_eq!(coverage.status, "attention_required");
         assert_eq!(coverage.summary.protected_count, 4);
         assert_eq!(coverage.summary.unprotected_count, 1);
-        assert_eq!(coverage.positions[0]["symbol"], json!("NOVO-B:xcse"));
+        assert_eq!(coverage.positions[0].symbol, "NOVO-B:xcse");
+        assert_eq!(coverage.positions[0].active_stop_price_local, Some(780.0));
         assert_eq!(coverage.exceptions.len(), 1);
         let serialized = serde_json::to_value(&coverage)
             .expect("typed protective-stop coverage serializes")

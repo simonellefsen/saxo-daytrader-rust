@@ -2202,6 +2202,31 @@ pub struct ProtectiveStopCoverageSummaryPayload {
     pub exception_count: i64,
 }
 
+/// Allowlisted per-position protective-stop coverage evidence.
+///
+/// The row is a stored broker-position and local-order observation. Detailed
+/// stop-evidence counts and proposed-order documents remain staged because
+/// they are used by the separate manual SIM exception workflow.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopCoveragePositionPayload {
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub quantity: f64,
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub snapshot_updated_at: String,
+    #[serde(default)]
+    pub protection_status: String,
+    #[serde(default)]
+    pub confirmed_covered_quantity: f64,
+    #[serde(default)]
+    pub active_stop_price_local: Option<f64>,
+    #[serde(default)]
+    pub planned_stop_price_local: Option<f64>,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position, exception, and recorded SIM-test details remain staged JSON
@@ -2211,7 +2236,7 @@ pub struct ProtectiveStopCoverageSummaryPayload {
 pub struct ProtectiveStopCoveragePayload {
     pub status: String,
     pub summary: ProtectiveStopCoverageSummaryPayload,
-    pub positions: Vec<JsonValue>,
+    pub positions: Vec<ProtectiveStopCoveragePositionPayload>,
     pub exceptions: Vec<JsonValue>,
     pub recent_prechecks: Vec<JsonValue>,
     pub recent_lifecycle_tests: Vec<JsonValue>,

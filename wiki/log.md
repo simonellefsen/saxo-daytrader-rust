@@ -2760,6 +2760,12 @@ broker mutation was added.
 - Per-position, exception, and SIM-test lifecycle evidence remains staged because it depends on broker and lifecycle state; broker documents cannot cross the typed summary boundary.
 - This remains read-only coverage observation and cannot change stop computation, SIM precheck, placement, cancellation, reconciliation, Hermes, manager gates, queues, or Saxo execution.
 
+## [2026-08-28] architecture | Type Protective Stop Coverage position rows
+
+- Changed the Execution Protective Stop Coverage table to consume typed, allowlisted stored position, coverage, stop-price, status, currency, and timestamp evidence.
+- Detailed broker/order evidence and proposed-stop documents remain staged for the separate manual SIM exception workflow; those documents cannot cross the typed table row boundary.
+- This remains read-only coverage observation and cannot change stop computation, SIM precheck, placement, cancellation, reconciliation, Hermes, manager gates, queues, or Saxo execution.
+
 ## [2026-08-28] architecture | Type Cash Deployment drawdown-guardrail evidence
 
 - Changed Cash Deployment's portfolio-drawdown guardrail display to consume a typed, allowlisted restriction, peak, threshold, soft-reduction, and local override projection.
