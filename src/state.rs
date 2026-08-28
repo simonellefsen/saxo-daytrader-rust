@@ -3164,8 +3164,8 @@ fn dashboard_integrity_from_json(
     serde_json::from_value(integrity)
 }
 
-/// Decodes the stable Trading Manager boundary used by overview panels. The
-/// persisted run diagnostics intentionally remain staged JSON.
+/// Decodes the stable Trading Manager boundary used by overview panels. Its
+/// lifecycle metadata is allowlisted while gate diagnostics remain staged.
 fn dashboard_trading_manager_from_json(
     trading_manager: JsonValue,
 ) -> serde_json::Result<TradingManagerPayload> {
@@ -7699,7 +7699,7 @@ impl AppState {
                 warn!("dashboard typed Trading Manager degraded: {err:#}");
                 TradingManagerPayload {
                     status: "unavailable".to_string(),
-                    latest_run: JsonValue::Null,
+                    latest_run: None,
                 }
             });
         let watchlists = if dashboard_loads_tab_exclusive_data(&active_view, "watchlists") {
@@ -18757,13 +18757,35 @@ mod tests {
     fn dashboard_trading_manager_requires_the_stable_outer_contract() {
         let trading_manager = dashboard_trading_manager_from_json(json!({
             "status": "available",
-            "latest_run": {"id": 52, "status": "completed"}
+            "latest_run": {
+                "id": 52,
+                "status": "completed",
+                "created_at": "2026-08-28T08:00:00Z",
+                "manager_json": {"status": "completed"},
+                "error_text": "must-not-reach-dashboard",
+                "technical_json": {"provider_error": "must-not-reach-dashboard"},
+                "queue_result_json": {"raw": "must-not-reach-dashboard"}
+            }
         }))
         .expect("Trading Manager fixture has the dashboard contract");
 
         assert_eq!(trading_manager.status, "available");
-        assert_eq!(trading_manager.latest_run["id"], json!(52));
-        assert!(dashboard_trading_manager_from_json(json!({"status": "available"})).is_err());
+        assert_eq!(
+            trading_manager.latest_run.as_ref().map(|run| run.id),
+            Some(52)
+        );
+        let serialized = serde_json::to_value(trading_manager)
+            .expect("typed Trading Manager payload serializes");
+        assert!(serialized["latest_run"].get("error_text").is_none());
+        assert!(serialized["latest_run"].get("technical_json").is_none());
+        assert!(serialized["latest_run"].get("queue_result_json").is_none());
+        assert!(
+            dashboard_trading_manager_from_json(json!({"status": "available"}))
+                .expect("a missing optional run degrades to no run")
+                .latest_run
+                .is_none()
+        );
+        assert!(dashboard_trading_manager_from_json(json!({"latest_run": null})).is_err());
     }
 
     #[test]

@@ -1921,14 +1921,41 @@ pub struct OverviewIntegrityPayload {
 
 /// Bounded dashboard Trading Manager envelope.
 ///
-/// The latest persisted run remains compatibility JSON because its diagnostics
-/// evolve with Trading Manager gates. The stable availability and latest-run
-/// boundary are typed so dashboard panels do not traverse an arbitrary
-/// overview document.
+/// The latest persisted run exposes typed lifecycle metadata. Its evolving
+/// manager gate diagnostics remain staged because the overview panels derive
+/// several independent read-only summaries from them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TradingManagerPayload {
     pub status: String,
-    pub latest_run: JsonValue,
+    pub latest_run: Option<TradingManagerRunPayload>,
+}
+
+/// Allowlisted lifecycle metadata for the latest Trading Manager run.
+///
+/// The staged `manager_json` contains read-only gate diagnostics used by Cash
+/// Deployment and Instrument Quarantine. Raw error, technical, queue-result,
+/// and exchange documents remain within internal diagnostics and cannot cross
+/// the dashboard boundary.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerRunPayload {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub manager_key: String,
+    #[serde(default)]
+    pub manager_kind: String,
+    #[serde(default)]
+    pub manager_label: String,
+    #[serde(default)]
+    pub target_at_utc: String,
+    #[serde(default)]
+    pub report_id: Option<i64>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub manager_json: JsonValue,
 }
 
 /// Bounded protective-stop coverage envelope for the Execution dashboard.

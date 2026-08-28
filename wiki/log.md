@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type latest Trading Manager run envelope
+
+- Changed the Overview's latest Trading Manager run from a generic persisted row to allowlisted run identity, timing, report-linkage, lifecycle, and manager-identity metadata.
+- Root-level raw error, technical, queue-result, and exchange documents remain internal. The established Cash Deployment and Instrument Quarantine gate diagnostics remain staged and read-only; manager selection, queues, and Saxo behavior are unchanged.
+
 ## [2026-08-28] architecture | Type public Watchlist decision summary
 
 - Changed the public Watchlist Decision Report evidence and its dashboard badge/sparkline renderer from generic JSON to a display-only summary: sentiment, action, timestamp, rationale, and report-local trend bias.

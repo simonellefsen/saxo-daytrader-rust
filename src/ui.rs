@@ -36,7 +36,7 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningExecutionPulseOutcome, TuningPulseComparison,
+        TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2113,7 +2113,7 @@ fn CashDeploymentPanel(
     rsx! {
         section { class: "section",
             h2 { "Cash Deployment" }
-            if latest.is_null() {
+            if latest.is_none() {
                 div { class: "event",
                     strong { "No Trading Manager run yet." }
                     span { class: "muted", "Cash deployment diagnostics will appear after the next decision report is processed." }
@@ -2233,13 +2233,12 @@ fn CashDeploymentPanel(
 }
 
 fn cash_deployment_summary(
-    latest_run: &JsonValue,
+    latest_run: &Option<TradingManagerRunPayload>,
     prefs: &LocalizationPrefs,
 ) -> CashDeploymentSummary {
-    let manager = latest_run
-        .get("manager_json")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let default_run = TradingManagerRunPayload::default();
+    let latest_run = latest_run.as_ref().unwrap_or(&default_run);
+    let manager = latest_run.manager_json.clone();
     let diagnostics = manager
         .get("reinvestment_diagnostics")
         .cloned()
@@ -2262,15 +2261,21 @@ fn cash_deployment_summary(
     let status = fallback_text(
         &diagnostics,
         "status",
-        &fallback_text(latest_run, "status", "unknown"),
+        if latest_run.status.is_empty() {
+            "unknown"
+        } else {
+            &latest_run.status
+        },
     );
     let tone = cash_deployment_tone(&status);
-    let created_at = format_timestamp(&text(latest_run, "created_at"), prefs);
-    let report_id = text(latest_run, "report_id");
-    let run_label = if report_id.is_empty() {
+    let created_at = format_timestamp(&latest_run.created_at, prefs);
+    let run_label = if latest_run.report_id.is_none() {
         created_at
     } else {
-        format!("Report #{report_id} · {created_at}")
+        format!(
+            "Report #{} · {created_at}",
+            latest_run.report_id.unwrap_or_default()
+        )
     };
     CashDeploymentSummary {
         status,
@@ -2539,7 +2544,7 @@ fn InstrumentQuarantinePanel(
     rsx! {
         section { class: "section",
             h2 { "Instrument Quarantine" }
-            if latest.is_null() {
+            if latest.is_none() {
                 div { class: "event",
                     strong { "No Trading Manager run yet." }
                     span { class: "muted", "Quarantine diagnostics will appear after the next decision report is processed." }
@@ -2625,9 +2630,12 @@ fn InstrumentQuarantineRow(row: JsonValue, prefs: LocalizationPrefs) -> Element 
     }
 }
 
-fn instrument_quarantine_summary(latest_run: &JsonValue) -> InstrumentQuarantineSummary {
+fn instrument_quarantine_summary(
+    latest_run: &Option<TradingManagerRunPayload>,
+) -> InstrumentQuarantineSummary {
     let quarantine = latest_run
-        .get("manager_json")
+        .as_ref()
+        .map(|latest_run| &latest_run.manager_json)
         .and_then(|value| value.get("instrument_quarantine"))
         .cloned()
         .unwrap_or(JsonValue::Null);
@@ -12382,6 +12390,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = cash_deployment_summary(&latest_run, &default_prefs());
         assert_eq!(summary.status, "excess_cash_with_blocked_buy_candidates");
@@ -12424,6 +12435,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = cash_deployment_summary(&latest_run, &default_prefs());
         assert!(summary.breaker_threshold_breached);
@@ -12457,6 +12471,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = cash_deployment_summary(&latest_run, &default_prefs());
         assert_eq!(summary.drawdown_status, "halt");
@@ -12478,6 +12495,9 @@ mod tests {
             "status": "completed_no_orders",
             "manager_json": {}
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = cash_deployment_summary(&latest_run, &default_prefs());
         assert!(!summary.drawdown_active);
@@ -12504,6 +12524,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = cash_deployment_summary(&latest_run, &default_prefs());
         assert!(!summary.breaker_active);
@@ -12540,6 +12563,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = instrument_quarantine_summary(&latest_run);
         assert!(summary.enabled);
@@ -12568,6 +12594,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = instrument_quarantine_summary(&latest_run);
         assert_eq!(summary.status, "active");
@@ -12600,6 +12629,9 @@ mod tests {
                 }
             }
         });
+        let latest_run = Some(
+            serde_json::from_value(latest_run).expect("manager run fixture has typed envelope"),
+        );
 
         let summary = instrument_quarantine_summary(&latest_run);
         assert_eq!(summary.status, "overridden");
