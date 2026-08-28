@@ -1675,11 +1675,10 @@ pub struct MarketWatchlistCategoryPayload {
 
 /// Stable display shell for one watchlist symbol.
 ///
-/// Decision evidence and technical-support evidence remain nested staged JSON
-/// while the provider-derived decision schema continues to evolve. The outer
-/// quote, identity, market, lifecycle, and local support-risk fields are
-/// allowlisted so arbitrary source documents do not cross the public
-/// Watchlists boundary.
+/// The provider-derived Decision Report source document remains internal. The
+/// outer quote, identity, market, lifecycle, local decision summary, and
+/// local support-risk fields are allowlisted so arbitrary source documents do
+/// not cross the public Watchlists boundary.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistRowPayload {
     #[serde(default)]
@@ -1699,9 +1698,28 @@ pub struct MarketWatchlistRowPayload {
     #[serde(default)]
     pub quote_status: String,
     #[serde(default)]
-    pub decision: JsonValue,
+    pub decision: Option<MarketWatchlistDecisionPayload>,
     #[serde(default)]
     pub technical_risk: Option<MarketWatchlistSupportRiskPayload>,
+}
+
+/// Allowlisted Decision Report summary rendered beside a watchlist symbol.
+///
+/// This is display-only advisory context from the matching report. It excludes
+/// report identifiers, queue eligibility, strategy metadata, and the full
+/// provider/source document; it cannot authorize or create an order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistDecisionPayload {
+    #[serde(default)]
+    pub sentiment: String,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub rationale: String,
+    #[serde(default)]
+    pub trend_bias: String,
 }
 
 /// Allowlisted local support-risk evidence for a watchlist symbol.

@@ -397,6 +397,10 @@ fn merge_report_symbol_decisions(report: &JsonValue, decisions: &mut HashMap<Str
             .and_then(|metadata| metadata.get("technical"))
             .cloned()
         {
+            object.insert(
+                "trend_bias".to_string(),
+                JsonValue::from(text_value(&technical, "trend_bias")),
+            );
             object.insert("source".to_string(), json!({ "technical": technical }));
         }
     }
@@ -26033,6 +26037,10 @@ analysis_windows:
         assert_eq!(
             adbe["source"]["technical"]["trend_bias"], "bullish",
             "sparkline reads source.technical.trend_bias"
+        );
+        assert_eq!(
+            adbe["trend_bias"], "bullish",
+            "the typed Watchlists projection reads the same report-local trend bias"
         );
 
         // A suggested trade may name a symbol the sentiment list omits; it

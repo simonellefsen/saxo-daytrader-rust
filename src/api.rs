@@ -3277,7 +3277,16 @@ mod tests {
                     "change_pct": 0.0125,
                     "quote_status": "ok",
                     "status": "must-not-reach-public-api",
-                    "decision": {"sentiment": "BUY", "source": {"technical": {"trend_bias": "bullish"}}},
+                    "decision": {
+                        "sentiment": "BUY",
+                        "action": "BUY",
+                        "created_at": "2026-08-28T08:00:00Z",
+                        "rationale": "Momentum is improving.",
+                        "trend_bias": "bullish",
+                        "report_id": 901,
+                        "queue_eligible": true,
+                        "source": {"technical": {"trend_bias": "must-not-reach-public-api"}}
+                    },
                     "technical_risk": {
                         "run_date": "2026-08-28",
                         "status": "ok",
@@ -3319,8 +3328,23 @@ mod tests {
             "ok"
         );
         assert_eq!(
-            serialized["categories"][0]["items"][0]["decision"]["source"]["technical"]["trend_bias"],
+            serialized["categories"][0]["items"][0]["decision"]["trend_bias"],
             "bullish"
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]["decision"]
+                .get("report_id")
+                .is_none()
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]["decision"]
+                .get("queue_eligible")
+                .is_none()
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]["decision"]
+                .get("source")
+                .is_none()
         );
         assert_eq!(
             serialized["categories"][0]["items"][0]["technical_risk"]["break_risk_label"],

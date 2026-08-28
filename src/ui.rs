@@ -29,8 +29,8 @@ use crate::{
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
         MarketExchangeStatusPayload, MarketPriceMonitorPayload,
         MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
-        MarketWatchlistCategoryPayload, MarketWatchlistRowPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        MarketWatchlistCategoryPayload, MarketWatchlistDecisionPayload, MarketWatchlistRowPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -3852,7 +3852,7 @@ fn WatchlistCategory(
                                 td { SymbolLink { symbol: row.symbol.clone(), instrument_name: row.instrument_name.clone() } }
                                 td { "{row.instrument_name}" }
                                 td {
-                                    DecisionBadge {
+                                    WatchlistDecisionBadge {
                                         decision: row.decision.clone(),
                                         prefs: prefs.clone(),
                                         stale_after_days: decision_stale_after_days,
@@ -7386,20 +7386,58 @@ fn SymbolLink(symbol: String, instrument_name: String) -> Element {
 
 #[component]
 fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs, stale_after_days: i64) -> Element {
-    if decision.is_null() {
+    let decision = (!decision.is_null()).then(|| DecisionBadgeData {
+        sentiment: text(&decision, "sentiment"),
+        action: text(&decision, "action"),
+        created_at: text(&decision, "created_at"),
+        rationale: text(&decision, "rationale"),
+        target_rationale: text(&decision, "target_rationale"),
+    });
+    decision_badge(decision, prefs, stale_after_days)
+}
+
+#[derive(Clone, Debug)]
+struct DecisionBadgeData {
+    sentiment: String,
+    action: String,
+    created_at: String,
+    rationale: String,
+    target_rationale: String,
+}
+
+#[component]
+fn WatchlistDecisionBadge(
+    decision: Option<MarketWatchlistDecisionPayload>,
+    prefs: LocalizationPrefs,
+    stale_after_days: i64,
+) -> Element {
+    let decision = decision.map(|decision| DecisionBadgeData {
+        sentiment: decision.sentiment,
+        action: decision.action,
+        created_at: decision.created_at,
+        rationale: decision.rationale,
+        target_rationale: String::new(),
+    });
+    decision_badge(decision, prefs, stale_after_days)
+}
+
+fn decision_badge(
+    decision: Option<DecisionBadgeData>,
+    prefs: LocalizationPrefs,
+    stale_after_days: i64,
+) -> Element {
+    let Some(decision) = decision else {
         return rsx! { span { class: "muted", "n/a" } };
-    }
-    let sentiment = text(&decision, "sentiment").to_uppercase();
-    let action = text(&decision, "action");
-    let created_at = text(&decision, "created_at");
+    };
+    let sentiment = decision.sentiment.to_uppercase();
+    let action = decision.action;
+    let created_at = decision.created_at;
     let decision_time = format_timestamp(&created_at, &prefs);
     let (age, stale) = position_decision_age_status(&created_at, Utc::now(), stale_after_days);
-    let rationale = text(&decision, "target_rationale");
-    let fallback_rationale = text(&decision, "rationale");
-    let rationale_tooltip = if rationale.is_empty() {
-        fallback_rationale
+    let rationale_tooltip = if decision.target_rationale.is_empty() {
+        decision.rationale
     } else {
-        rationale
+        decision.target_rationale
     };
     let sentiment_label = if sentiment.is_empty() {
         "HOLD".to_string()
@@ -10682,13 +10720,11 @@ struct Sparkline {
 
 fn sparkline_points(row: &MarketWatchlistRowPayload) -> Sparkline {
     let change_pct = row.change_pct.unwrap_or(0.0);
-    let technical = row
+    let trend_bias = row
         .decision
-        .get("source")
-        .and_then(|source| source.get("technical"))
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let trend_bias = text(&technical, "trend_bias");
+        .as_ref()
+        .map(|decision| decision.trend_bias.as_str())
+        .unwrap_or_default();
     let positive = if trend_bias == "bearish" {
         false
     } else if trend_bias == "bullish" {

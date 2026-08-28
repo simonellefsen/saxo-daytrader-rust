@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type public Watchlist decision summary
+
+- Changed the public Watchlist Decision Report evidence and its dashboard badge/sparkline renderer from generic JSON to a display-only summary: sentiment, action, timestamp, rationale, and report-local trend bias.
+- Report identifiers, queue eligibility, strategy metadata, and provider/source documents remain internal. This cannot generate a report, alter candidate membership, add a queue entry, or mutate a Saxo order.
+
 ## [2026-08-28] architecture | Type public Watchlist support-risk evidence
 
 - Changed the public Watchlist support-risk document and renderer from generic JSON to a fixed local daily-indicator projection: run/status, levels, downside, risk label/value, confidence, history coverage, and touch count.
