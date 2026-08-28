@@ -29,9 +29,10 @@ use crate::{
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
         MarketExchangeStatusPayload, MarketPriceMonitorPayload,
         MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        MarketWatchlistCategoryPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -3783,13 +3784,13 @@ fn WatchlistsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     p { class: "muted section-intro", "Quote-ranked stocks of interest for Nordic, UK, US, and EU/Euronext universes. Refreshed {format_timestamp(&generated_at, &prefs)}." }
                 }
                 div { class: "pill-row right",
-                    for category in categories.iter().filter(|category| text(category, "key") != "all") {
-                        span { class: "pill", "{text(category, \"label\")}: {category.get(\"items\").and_then(JsonValue::as_array).map(Vec::len).unwrap_or(0)} / {text(category, \"target_limit\")}" }
+                    for category in categories.iter().filter(|category| category.key != "all") {
+                        span { class: "pill", "{category.label}: {category.items.len()} / {category.target_limit}" }
                     }
                 }
             }
             div { class: "stack loose",
-                for category in categories.iter().filter(|category| text(category, "key") != "all") {
+                for category in categories.iter().filter(|category| category.key != "all") {
                     WatchlistCategory {
                         category: category.clone(),
                         prefs: prefs.clone(),
@@ -3803,15 +3804,11 @@ fn WatchlistsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 
 #[component]
 fn WatchlistCategory(
-    category: JsonValue,
+    category: MarketWatchlistCategoryPayload,
     prefs: LocalizationPrefs,
     decision_stale_after_days: i64,
 ) -> Element {
-    let items = category
-        .get("items")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let items = category.items.clone();
     let leader = leader_row(&items, true);
     let laggard = leader_row(&items, false);
     let quoted_names = items
@@ -3824,8 +3821,8 @@ fn WatchlistCategory(
         div { class: "event",
             div { class: "section-title-row compact",
                 div {
-                    strong { "{text(&category, \"label\")}" }
-                    div { class: "muted", "Showing {items.len()} of target {text(&category, \"target_limit\")} · universe {text(&category, \"total_universe\")}" }
+                    strong { "{category.label}" }
+                    div { class: "muted", "Showing {items.len()} of target {category.target_limit} · universe {category.total_universe}" }
                 }
                 span { class: "pill", "{coverage_label(&category)} target coverage" }
             }
@@ -9066,13 +9063,9 @@ fn leader_row(items: &[JsonValue], high: bool) -> JsonValue {
     }
 }
 
-fn coverage_label(category: &JsonValue) -> String {
-    let items = category
-        .get("items")
-        .and_then(JsonValue::as_array)
-        .map(Vec::len)
-        .unwrap_or(0) as f64;
-    let target = value_f64(category, "target_limit").max(1.0);
+fn coverage_label(category: &MarketWatchlistCategoryPayload) -> String {
+    let items = category.items.len() as f64;
+    let target = category.target_limit.max(1) as f64;
     format!("{:.0}%", (items / target * 100.0).min(100.0))
 }
 

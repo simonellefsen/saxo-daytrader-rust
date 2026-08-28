@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-28: Typed and narrowed public Watchlist universe metadata and category envelopes. The dashboard now uses compiler-checked provenance, membership counts, category identity, caps, and totals, while the evolving quote/decision-derived rows remain staged JSON. This changes no quote collection, candidate membership, Decision Report context, queues, or Saxo execution behavior.
 - 2026-08-28: Typed and narrowed Market Status active-pulse rows. The public dashboard/API now retains only pulse identity, timing, due state, and market/exchange scope; manager linkage and retained detail remain internal. This completes the typed Market Status envelope without changing scheduling, decisions, queues, or Saxo order behavior.
 - 2026-08-28: Reused the typed scheduler-status contract inside public Market Status. The dashboard continues to render timing and lifecycle data while retained cycle/provider documents and the local scheduler PID remain internal; scheduler timing, decisions, queues, and Saxo order behavior are unchanged.
 - 2026-08-28: Typed and narrowed the public Market Status price-monitor status. The dashboard now uses compiler-checked lifecycle counters and known-closed symbol rows while free-form quote, FX, and calendar refresh errors remain internal; a bounded error count preserves the operational warning without exposing provider detail. Quote collection, decisions, queues, and Saxo order behavior are unchanged.

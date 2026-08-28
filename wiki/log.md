@@ -2609,6 +2609,12 @@ broker mutation was added.
 - Added a typed Tuning projection of the existing one-month local account-value comparison against stored native-currency ETF proxy price returns, retaining per-reference status, alignment, freshness, proxy return, and portfolio excess.
 - The view keeps cash inclusion and every comparison limit explicit: it is not time-weighted or total return and does not normalize FX, dividends, fees, tax, or external cash flows. It reads local history and stored closes only, without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
 
+## [2026-08-28] architecture | Type Watchlist universe and category envelopes
+
+- Changed the Watchlists API and dashboard boundary to use typed universe provenance/counts and typed category identity, labels, caps, and totals.
+- Individual quote, decision, support-risk, and trend rows remain staged compatibility JSON while their display model evolves; unrecognized category and universe fields cannot cross the typed outer boundary.
+- This changes no quote collection, candidate membership, Decision Report context, Hermes, manager gate, queue, precheck, or Saxo execution behavior.
+
 ## [2026-08-28] architecture | Type and narrow Market Status active pulses
 
 - Changed Market Status active-pulse rows to a typed, allowlisted scheduling projection: identity, label, timing window, due state, market scope, and exchange scope.

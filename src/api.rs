@@ -1806,7 +1806,7 @@ fn market_watchlists_degraded_payload(generated_at: String) -> MarketWatchlistsP
     MarketWatchlistsPayload {
         generated_at,
         cache_ttl_seconds: 300,
-        universe: json!({}),
+        universe: crate::models::MarketWatchlistUniversePayload::default(),
         categories: Vec::new(),
     }
 }
@@ -3254,10 +3254,19 @@ mod tests {
         let payload = market_watchlists_payload(json!({
             "generated_at": "2026-08-01T18:00:00Z",
             "cache_ttl_seconds": 300,
-            "universe": {"source": "configured_analysis_universe"},
+            "universe": {
+                "source": "configured_analysis_universe",
+                "configured_symbol_count": 80,
+                "configured_symbols_added": 3,
+                "extra_symbols_added": 1,
+                "raw_config": "must-not-reach-public-api"
+            },
             "categories": [{
                 "key": "nordic",
                 "label": "Nordics",
+                "target_limit": 100,
+                "total_universe": 2,
+                "sort_detail": "must-not-reach-public-api",
                 "items": [{"symbol": "NOVO-B:xcse"}]
             }],
         }))
@@ -3270,6 +3279,10 @@ mod tests {
             serialized["universe"]["source"],
             "configured_analysis_universe"
         );
+        assert_eq!(serialized["universe"]["configured_symbol_count"], 80);
+        assert!(serialized["universe"].get("raw_config").is_none());
+        assert_eq!(serialized["categories"][0]["target_limit"], 100);
+        assert!(serialized["categories"][0].get("sort_detail").is_none());
         assert_eq!(
             serialized["categories"][0]["items"][0]["symbol"],
             "NOVO-B:xcse"

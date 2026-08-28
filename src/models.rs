@@ -1632,16 +1632,45 @@ pub struct HermesExperimentsPayload {
 
 /// Bounded market-watchlists envelope.
 ///
-/// Universe metadata and category rows remain compatibility JSON while the
-/// read model is converted incrementally. This makes cache timing and the
-/// stable top-level watchlist contract explicit without changing quote
-/// collection, candidate membership, or Decision Report context.
+/// Universe metadata and category envelopes are typed, while individual
+/// quote- and decision-derived rows remain staged JSON during the incremental
+/// read-model conversion. This makes cache timing and membership context
+/// explicit without changing quote collection, candidate membership, or
+/// Decision Report context.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistsPayload {
     pub generated_at: String,
     pub cache_ttl_seconds: i64,
-    pub universe: JsonValue,
-    pub categories: Vec<JsonValue>,
+    pub universe: MarketWatchlistUniversePayload,
+    pub categories: Vec<MarketWatchlistCategoryPayload>,
+}
+
+/// Allowlisted provenance and membership counts for the active watch universe.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistUniversePayload {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub configured_symbol_count: i64,
+    #[serde(default)]
+    pub configured_symbols_added: i64,
+    #[serde(default)]
+    pub extra_symbols_added: i64,
+}
+
+/// Stable category metadata with staged quote/decision-derived rows.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistCategoryPayload {
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub target_limit: i64,
+    #[serde(default)]
+    pub total_universe: i64,
+    #[serde(default)]
+    pub items: Vec<JsonValue>,
 }
 
 /// Bounded market-status envelope.

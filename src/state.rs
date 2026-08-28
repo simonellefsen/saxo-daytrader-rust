@@ -66,8 +66,8 @@ use crate::{
         HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
-        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -3180,7 +3180,7 @@ fn dashboard_watchlists_not_loaded() -> MarketWatchlistsPayload {
     MarketWatchlistsPayload {
         generated_at: String::new(),
         cache_ttl_seconds: 300,
-        universe: json!({}),
+        universe: MarketWatchlistUniversePayload::default(),
         categories: Vec::new(),
     }
 }
@@ -18773,7 +18773,7 @@ mod tests {
         .expect("watchlists fixture has the dashboard contract");
 
         assert_eq!(watchlists.cache_ttl_seconds, 300);
-        assert_eq!(watchlists.categories[0]["key"], json!("nordic"));
+        assert_eq!(watchlists.categories[0].key, "nordic");
         assert_eq!(dashboard_watchlists_not_loaded().categories.len(), 0);
         assert!(dashboard_watchlists_from_json(json!({"categories": []})).is_err());
     }
