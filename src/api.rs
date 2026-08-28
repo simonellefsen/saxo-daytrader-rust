@@ -3292,7 +3292,37 @@ mod tests {
     #[test]
     fn market_status_response_keeps_the_typed_outer_contract() {
         let payload = market_status_payload(json!({
-            "items": [{"market": "US", "open_analysis_window_active": true}],
+            "items": [{
+                "code": "XNAS",
+                "market": "US",
+                "timezone": "America/New_York",
+                "local_time": "2026-08-28 10:15",
+                "status_reason": "Open",
+                "holiday_name": null,
+                "session_open_local": "2026-08-28 09:30",
+                "session_close_local": "2026-08-28 16:00",
+                "tradable_close_local": "2026-08-28 15:45",
+                "session_open_at_utc": "2026-08-28T13:30:00Z",
+                "session_close_at_utc": "2026-08-28T20:00:00Z",
+                "tradable_close_at_utc": "2026-08-28T19:45:00Z",
+                "is_open": true,
+                "is_tradable": true,
+                "pre_analysis_sync_active": false,
+                "open_analysis_window_active": true,
+                "close_analysis_window_active": false,
+                "analysis_window_active": true,
+                "pre_analysis_sync_start_at_utc": "2026-08-28T14:10:00Z",
+                "open_analysis_window_start_at_utc": "2026-08-28T14:15:00Z",
+                "open_analysis_window_end_at_utc": "2026-08-28T19:30:00Z",
+                "next_open_at_utc": "2026-08-31T13:30:00Z",
+                "next_open": "2026-08-31 09:30",
+                "calendar_source": "saxo_ref_v1_exchanges",
+                "calendar_last_checked": "2026-08-28T10:00:00Z",
+                "saxo_session_state": "AutomatedTrading",
+                "saxo_exchange_id": "must-not-reach-public-api",
+                "saxo_exchange_name": "must-not-reach-public-api",
+                "saxo_timezone_id": "must-not-reach-public-api"
+            }],
             "summary": {"analysis_window_active": true, "active_markets": ["US"]},
             "scheduler": {"last_cycle_status": "ok"},
             "price_monitor": {"status": "fresh"},
@@ -3304,6 +3334,9 @@ mod tests {
         assert_eq!(serialized["summary"]["active_markets"], json!(["US"]));
         assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
         assert_eq!(serialized["price_monitor"]["status"], "fresh");
+        assert!(serialized["items"][0].get("saxo_exchange_id").is_none());
+        assert!(serialized["items"][0].get("saxo_exchange_name").is_none());
+        assert!(serialized["items"][0].get("saxo_timezone_id").is_none());
     }
 
     #[test]

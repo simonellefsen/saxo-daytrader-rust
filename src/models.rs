@@ -1646,16 +1646,54 @@ pub struct MarketWatchlistsPayload {
 
 /// Bounded market-status envelope.
 ///
-/// Exchange rows plus scheduler and price-monitor details remain compatibility
-/// JSON while the read model is converted incrementally. This keeps the public
-/// observability boundary explicit without changing market-calendar refreshes
-/// or any decision and execution behavior.
+/// Exchange rows are typed and allowlisted. Scheduler, price-monitor, and
+/// summary details remain staged JSON while their operational read models are
+/// converted incrementally. This keeps the public observability boundary
+/// explicit without changing market-calendar refreshes or any decision and
+/// execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusPayload {
-    pub items: Vec<JsonValue>,
+    pub items: Vec<MarketExchangeStatusPayload>,
     pub summary: JsonValue,
     pub scheduler: JsonValue,
     pub price_monitor: JsonValue,
+}
+
+/// One allowlisted exchange status row derived from the configured market
+/// calendar and, when available, a read-only Saxo exchange-calendar cache.
+///
+/// Saxo provider exchange identifiers and names remain internal; this exposes
+/// only operator-facing session timing and analysis-window state. It cannot
+/// refresh quotes, change a Decision Report or manager gate, queue, precheck,
+/// or mutate a Saxo order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketExchangeStatusPayload {
+    pub code: String,
+    pub market: String,
+    pub timezone: String,
+    pub local_time: String,
+    pub status_reason: String,
+    pub holiday_name: Option<String>,
+    pub session_open_local: String,
+    pub session_close_local: String,
+    pub tradable_close_local: String,
+    pub session_open_at_utc: Option<String>,
+    pub session_close_at_utc: Option<String>,
+    pub tradable_close_at_utc: Option<String>,
+    pub is_open: bool,
+    pub is_tradable: bool,
+    pub pre_analysis_sync_active: bool,
+    pub open_analysis_window_active: bool,
+    pub close_analysis_window_active: bool,
+    pub analysis_window_active: bool,
+    pub pre_analysis_sync_start_at_utc: Option<String>,
+    pub open_analysis_window_start_at_utc: Option<String>,
+    pub open_analysis_window_end_at_utc: Option<String>,
+    pub next_open_at_utc: String,
+    pub next_open: String,
+    pub calendar_source: String,
+    pub calendar_last_checked: String,
+    pub saxo_session_state: String,
 }
 
 /// Bounded dashboard integrity envelope.

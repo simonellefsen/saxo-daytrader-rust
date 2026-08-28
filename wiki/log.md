@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type public Market Status exchange rows
+
+- Changed public Market Status exchange rows and the dashboard market table from generic JSON to typed operator-facing session/window fields, preserving explicit absent holiday names.
+- Saxo provider exchange identifiers and names remain internal. The read-only calendar refresh/cache, scheduler and price-monitor documents, Decision Reports, queues, and Saxo order behavior are unchanged.
+
 ## [2026-08-28] architecture | Type Decision Gate Replay scenarios
 
 - Changed public Decision Gate Replay scenarios and their changed-outcome rows from generic JSON to typed, allowlisted historical evidence; the Decisions dashboard now renders the same typed fields.

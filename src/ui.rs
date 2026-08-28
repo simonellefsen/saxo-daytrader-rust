@@ -27,9 +27,10 @@ use crate::{
         DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        MarketExchangeStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
+        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
+        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
+        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -7535,23 +7536,30 @@ fn PositionTrendSparkline(row: DashboardPositionPayload) -> Element {
 }
 
 #[component]
-fn MarketRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let tradable = row
-        .get("is_tradable")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
+fn MarketRow(row: MarketExchangeStatusPayload, prefs: LocalizationPrefs) -> Element {
+    let tradable = row.is_tradable;
     let tradable_label = if tradable { "Yes" } else { "No" };
+    let market = row.market;
+    let code = row.code;
+    let timezone = row.timezone;
+    let status_reason = row.status_reason;
+    let session_open_at_utc = row.session_open_at_utc.unwrap_or_default();
+    let session_close_at_utc = row.session_close_at_utc.unwrap_or_default();
+    let tradable_close_at_utc = row.tradable_close_at_utc.unwrap_or_default();
+    let pre_analysis_sync_active = row.pre_analysis_sync_active;
+    let open_analysis_window_active = row.open_analysis_window_active;
+    let next_open_at_utc = row.next_open_at_utc;
     rsx! {
         tr {
-            td { strong { "{text(&row, \"market\")}" } div { class: "muted", "{text(&row, \"code\")} / {text(&row, \"timezone\")}" } }
-            td { "{text(&row, \"status_reason\")}" }
+            td { strong { "{market}" } div { class: "muted", "{code} / {timezone}" } }
+            td { "{status_reason}" }
             td { span { class: if tradable { "status good-status" } else { "status" }, "{tradable_label}" } }
-            td { "{format_timestamp(&text(&row, \"session_open_at_utc\"), &prefs)}" }
-            td { "{format_timestamp(&text(&row, \"session_close_at_utc\"), &prefs)}" }
-            td { "{format_timestamp(&text(&row, \"tradable_close_at_utc\"), &prefs)}" }
-            td { "{bool_label(&row, \"pre_analysis_sync_active\")}" }
-            td { "{bool_label(&row, \"open_analysis_window_active\")}" }
-            td { "{format_timestamp(&text(&row, \"next_open_at_utc\"), &prefs)}" }
+            td { "{format_timestamp(&session_open_at_utc, &prefs)}" }
+            td { "{format_timestamp(&session_close_at_utc, &prefs)}" }
+            td { "{format_timestamp(&tradable_close_at_utc, &prefs)}" }
+            td { if pre_analysis_sync_active { "Yes" } else { "No" } }
+            td { if open_analysis_window_active { "Yes" } else { "No" } }
+            td { "{format_timestamp(&next_open_at_utc, &prefs)}" }
         }
     }
 }
@@ -9111,14 +9119,6 @@ fn watchlist_quote_status(row: &JsonValue) -> (&'static str, &'static str, &'sta
             "warn-status",
             "No recognized current quote provenance is available for this instrument.",
         ),
-    }
-}
-
-fn bool_label(value: &JsonValue, key: &str) -> &'static str {
-    if value.get(key).and_then(JsonValue::as_bool).unwrap_or(false) {
-        "Yes"
-    } else {
-        "No"
     }
 }
 
