@@ -37,7 +37,8 @@ use crate::{
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
         TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
-        TradingManagerInstrumentQuarantinePayload, TradingManagerMonthlyLossBreakerPayload,
+        TradingManagerInstrumentQuarantinePayload,
+        TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
         TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
@@ -2627,17 +2628,17 @@ fn InstrumentQuarantineRow(
 fn instrument_quarantine_summary(
     latest_run: &Option<TradingManagerRunPayload>,
 ) -> InstrumentQuarantineSummary {
-    let quarantine = latest_run
+    let quarantine_value = latest_run
         .as_ref()
         .map(|latest_run| &latest_run.manager_json)
         .and_then(|value| value.get("instrument_quarantine"))
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let enabled = quarantine
-        .get("enabled")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let active = quarantine
+    let quarantine = serde_json::from_value::<TradingManagerInstrumentQuarantineSummaryPayload>(
+        quarantine_value.clone(),
+    )
+    .unwrap_or_default();
+    let active = quarantine_value
         .get("active")
         .and_then(JsonValue::as_array)
         .into_iter()
@@ -2646,19 +2647,14 @@ fn instrument_quarantine_summary(
             serde_json::from_value::<TradingManagerInstrumentQuarantinePayload>(row.clone()).ok()
         })
         .collect::<Vec<_>>();
-    let active_count = quarantine
-        .get("active_count")
-        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
-        .unwrap_or(active.len() as i64);
+    let active_count = quarantine.active_count.unwrap_or(active.len() as i64);
     let blocked_count = quarantine
-        .get("blocked_count")
-        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+        .blocked_count
         .unwrap_or_else(|| active.iter().filter(|row| !row.override_active).count() as i64);
     let override_count = quarantine
-        .get("override_count")
-        .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+        .override_count
         .unwrap_or_else(|| active_count.saturating_sub(blocked_count));
-    let (status, tone, description) = if !enabled {
+    let (status, tone, description) = if !quarantine.enabled {
         (
             "disabled".to_string(),
             "",
@@ -2684,15 +2680,15 @@ fn instrument_quarantine_summary(
         )
     };
     InstrumentQuarantineSummary {
-        enabled,
+        enabled: quarantine.enabled,
         status,
         tone,
         active_count,
         blocked_count,
         override_count,
-        lookback_days: value_i64(&quarantine, "lookback_days"),
-        min_failures: value_i64(&quarantine, "min_failures"),
-        active_days: value_i64(&quarantine, "active_days"),
+        lookback_days: quarantine.lookback_days,
+        min_failures: quarantine.min_failures,
+        active_days: quarantine.active_days,
         active,
         description,
     }
@@ -12674,7 +12670,8 @@ mod tests {
                     "min_failures": 3,
                     "active_days": 14,
                     "active_count": 0,
-                    "active": []
+                    "active": [],
+                    "raw_manager_detail": {"rule_trace": "must not render"}
                 }
             }
         });
@@ -12688,6 +12685,29 @@ mod tests {
         assert_eq!(summary.tone, "good-status");
         assert_eq!(summary.active_count, 0);
         assert!(summary.active.is_empty());
+    }
+
+    #[test]
+    fn instrument_quarantine_summary_projection_omits_unallowlisted_fields() {
+        let quarantine =
+            serde_json::from_value::<TradingManagerInstrumentQuarantineSummaryPayload>(json!({
+                "enabled": true,
+                "active_count": 2,
+                "blocked_count": 1,
+                "override_count": 1,
+                "lookback_days": 14,
+                "min_failures": 3,
+                "active_days": 14,
+                "raw_manager_detail": {"rule_trace": "must not serialize"}
+            }))
+            .expect("typed quarantine summary accepts allowlisted evidence");
+
+        let serialized = serde_json::to_value(&quarantine)
+            .expect("typed quarantine summary serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_manager_detail"));
+        assert!(quarantine.enabled);
+        assert_eq!(quarantine.blocked_count, Some(1));
     }
 
     #[test]

@@ -1982,6 +1982,29 @@ pub struct TradingManagerInstrumentQuarantinePayload {
     pub sample_error: String,
 }
 
+/// Allowlisted aggregate Instrument Quarantine evidence rendered in Overview.
+///
+/// Active rows retain their own typed projection because malformed individual
+/// rows must not hide valid blocks. This summary cannot alter quarantine
+/// policy, an operator override, queue work, prechecks, or Saxo execution.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerInstrumentQuarantineSummaryPayload {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub active_count: Option<i64>,
+    #[serde(default)]
+    pub blocked_count: Option<i64>,
+    #[serde(default)]
+    pub override_count: Option<i64>,
+    #[serde(default)]
+    pub lookback_days: i64,
+    #[serde(default)]
+    pub min_failures: i64,
+    #[serde(default)]
+    pub active_days: i64,
+}
+
 /// Allowlisted aggregate reason that blocked a candidate BUY in a manager run.
 ///
 /// This is read-only diagnostic context for Cash Deployment. It deliberately
