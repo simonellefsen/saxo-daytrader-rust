@@ -1676,9 +1676,10 @@ pub struct MarketWatchlistCategoryPayload {
 /// Stable display shell for one watchlist symbol.
 ///
 /// Decision evidence and technical-support evidence remain nested staged JSON
-/// while those provider-derived schemas continue to evolve. The outer quote,
-/// identity, market, and lifecycle fields are allowlisted so arbitrary source
-/// documents do not cross the public Watchlists boundary.
+/// while the provider-derived decision schema continues to evolve. The outer
+/// quote, identity, market, lifecycle, and local support-risk fields are
+/// allowlisted so arbitrary source documents do not cross the public
+/// Watchlists boundary.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistRowPayload {
     #[serde(default)]
@@ -1700,7 +1701,38 @@ pub struct MarketWatchlistRowPayload {
     #[serde(default)]
     pub decision: JsonValue,
     #[serde(default)]
-    pub technical_risk: JsonValue,
+    pub technical_risk: Option<MarketWatchlistSupportRiskPayload>,
+}
+
+/// Allowlisted local support-risk evidence for a watchlist symbol.
+///
+/// This is a read-only summary of the most recent local daily-indicator run.
+/// It intentionally excludes raw indicator/provider diagnostics and does not
+/// serve as an execution gate.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketWatchlistSupportRiskPayload {
+    #[serde(default)]
+    pub run_date: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub nearest_support: Option<f64>,
+    #[serde(default)]
+    pub next_support: Option<f64>,
+    #[serde(default)]
+    pub downside_to_support_pct: Option<f64>,
+    #[serde(default)]
+    pub downside_after_break_pct: Option<f64>,
+    #[serde(default)]
+    pub break_risk: Option<f64>,
+    #[serde(default)]
+    pub break_risk_label: String,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub history_coverage: Option<f64>,
+    #[serde(default)]
+    pub touch_count: Option<i64>,
 }
 
 /// Bounded market-status envelope.

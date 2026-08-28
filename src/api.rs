@@ -3278,7 +3278,20 @@ mod tests {
                     "quote_status": "ok",
                     "status": "must-not-reach-public-api",
                     "decision": {"sentiment": "BUY", "source": {"technical": {"trend_bias": "bullish"}}},
-                    "technical_risk": {"status": "ok", "nearest_support": 430.0},
+                    "technical_risk": {
+                        "run_date": "2026-08-28",
+                        "status": "ok",
+                        "nearest_support": 430.0,
+                        "next_support": 415.0,
+                        "downside_to_support_pct": -0.045,
+                        "downside_after_break_pct": -0.08,
+                        "break_risk": 0.25,
+                        "break_risk_label": "low",
+                        "confidence": 0.9,
+                        "history_coverage": 1.0,
+                        "touch_count": 3,
+                        "raw_indicator_error": "must-not-reach-public-api"
+                    },
                     "source": {"provider_error": "must-not-reach-public-api"},
                     "raw_quote": "must-not-reach-public-api"
                 }]
@@ -3308,6 +3321,15 @@ mod tests {
         assert_eq!(
             serialized["categories"][0]["items"][0]["decision"]["source"]["technical"]["trend_bias"],
             "bullish"
+        );
+        assert_eq!(
+            serialized["categories"][0]["items"][0]["technical_risk"]["break_risk_label"],
+            "low"
+        );
+        assert!(
+            serialized["categories"][0]["items"][0]["technical_risk"]
+                .get("raw_indicator_error")
+                .is_none()
         );
         assert!(
             serialized["categories"][0]["items"][0]

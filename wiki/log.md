@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type public Watchlist support-risk evidence
+
+- Changed the public Watchlist support-risk document and renderer from generic JSON to a fixed local daily-indicator projection: run/status, levels, downside, risk label/value, confidence, history coverage, and touch count.
+- Raw indicator diagnostics remain internal. This read-only support display remains separate from every decision/manager gate, quote collection, queue, and Saxo order path.
+
 ## [2026-08-28] architecture | Type public Watchlist row shell
 
 - Changed public Watchlist rows and their dashboard renderer from generic JSON to an allowlisted identity, market, quote/value/change, and lifecycle projection.

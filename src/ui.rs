@@ -3897,51 +3897,39 @@ fn WatchlistQuoteStatus(row: MarketWatchlistRowPayload) -> Element {
 
 #[component]
 fn WatchlistSupportRisk(row: MarketWatchlistRowPayload, prefs: LocalizationPrefs) -> Element {
-    let support = row.technical_risk;
-    if text(&support, "status") != "ok"
-        || support
-            .get("nearest_support")
-            .and_then(JsonValue::as_f64)
-            .filter(|value| *value > 0.0)
-            .is_none()
-    {
+    let Some(support) = row.technical_risk else {
+        return rsx! { span { class: "muted", "No support data" } };
+    };
+    let Some(nearest_support) = support.nearest_support.filter(|value| *value > 0.0) else {
+        return rsx! { span { class: "muted", "No support data" } };
+    };
+    if support.status != "ok" {
         return rsx! { span { class: "muted", "No support data" } };
     }
-    let nearest = format_local_money(
-        value_f64(&support, "nearest_support"),
-        &row.currency,
-        &prefs,
-    );
-    let break_risk = fallback_text(&support, "break_risk_label", "n/a");
+    let nearest = format_local_money(nearest_support, &row.currency, &prefs);
+    let break_risk = if support.break_risk_label.is_empty() {
+        "n/a".to_string()
+    } else {
+        support.break_risk_label.clone()
+    };
     let risk_class = match break_risk.as_str() {
         "high" => "bad-text",
         "moderate" => "warn-text",
         _ => "good-text",
     };
     let next = support
-        .get("next_support")
-        .and_then(JsonValue::as_f64)
+        .next_support
         .filter(|value| *value > 0.0)
         .map(|value| format_local_money(value, &row.currency, &prefs))
         .unwrap_or_else(|| "n/a".to_string());
     let detail = format!(
         "Nearest support {nearest}; downside to support {}; next support {next}; downside after a break {}; break risk {}; confidence {}; returned history {} across {} clustered pivot touches. Read-only context, not an automatic trading gate.",
-        format_optional_percentage_points(
-            support
-                .get("downside_to_support_pct")
-                .and_then(JsonValue::as_f64),
-            &prefs
-        ),
-        format_optional_percentage_points(
-            support
-                .get("downside_after_break_pct")
-                .and_then(JsonValue::as_f64),
-            &prefs
-        ),
+        format_optional_percentage_points(support.downside_to_support_pct, &prefs),
+        format_optional_percentage_points(support.downside_after_break_pct, &prefs),
         break_risk,
-        format_pct(value_f64(&support, "confidence"), &prefs),
-        format_pct(value_f64(&support, "history_coverage"), &prefs),
-        value_i64(&support, "touch_count"),
+        format_pct(support.confidence.unwrap_or(0.0), &prefs),
+        format_pct(support.history_coverage.unwrap_or(0.0), &prefs),
+        support.touch_count.unwrap_or(0),
     );
     rsx! {
         span { class: "{risk_class}", title: "{detail}", "{break_risk} · {nearest}" }
