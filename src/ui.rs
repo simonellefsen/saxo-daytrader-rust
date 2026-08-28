@@ -3760,10 +3760,9 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 section { class: "section" ,
                     h2 { "Scheduler" }
                     div { class: "stack",
-                        div { class: "event", strong { "Started" } span { "{format_timestamp(&text(&scheduler, \"started_at\"), &prefs)}" } }
-                        div { class: "event", strong { "Last Cycle Started" } span { "{format_timestamp(&text(&scheduler, \"last_cycle_started_at\"), &prefs)}" } }
-                        div { class: "event", strong { "Last Cycle Completed" } span { "{format_timestamp(&text(&scheduler, \"last_cycle_completed_at\"), &prefs)}" } }
-                        div { class: "event", strong { "PID" } span { "{text(&scheduler, \"scheduler_pid\")}" } }
+                        div { class: "event", strong { "Started" } span { "{format_timestamp(scheduler.as_ref().map(|value| value.started_at.as_str()).unwrap_or_default(), &prefs)}" } }
+                        div { class: "event", strong { "Last Cycle Started" } span { "{format_timestamp(scheduler.as_ref().and_then(|value| value.last_cycle_started_at.as_deref()).unwrap_or_default(), &prefs)}" } }
+                        div { class: "event", strong { "Last Cycle Completed" } span { "{format_timestamp(scheduler.as_ref().and_then(|value| value.last_cycle_completed_at.as_deref()).unwrap_or_default(), &prefs)}" } }
                     }
                 }
             }

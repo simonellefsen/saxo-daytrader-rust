@@ -7663,7 +7663,7 @@ impl AppState {
                             exchange_count: None,
                         },
                     },
-                    scheduler: JsonValue::Null,
+                    scheduler: None,
                     price_monitor: None,
                 }
             });

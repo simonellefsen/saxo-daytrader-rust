@@ -1589,7 +1589,7 @@ pub struct ExecutionPayload {
 /// and local process metadata. This contract exposes only the scheduler timing
 /// and lifecycle fields needed for operational observation; it cannot schedule
 /// work, change a queue, or mutate a broker order.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SchedulerStatusSummaryPayload {
     pub started_at: String,
     pub last_heartbeat_at: String,
@@ -1647,15 +1647,15 @@ pub struct MarketWatchlistsPayload {
 /// Bounded market-status envelope.
 ///
 /// Exchange rows and stable summary fields are typed and allowlisted.
-/// Scheduler and active-pulse documents remain staged JSON while their
-/// operational read models are converted incrementally. This keeps the public
-/// observability boundary explicit without changing market-calendar refreshes
-/// or any decision and execution behavior.
+/// Active-pulse documents remain staged JSON while their operational read
+/// models are converted incrementally. This keeps the public observability
+/// boundary explicit without changing market-calendar refreshes or any
+/// decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusPayload {
     pub items: Vec<MarketExchangeStatusPayload>,
     pub summary: MarketStatusSummaryPayload,
-    pub scheduler: JsonValue,
+    pub scheduler: Option<SchedulerStatusSummaryPayload>,
     pub price_monitor: Option<MarketPriceMonitorPayload>,
 }
 

@@ -3344,7 +3344,15 @@ mod tests {
                     "error": "must-not-reach-public-api"
                 }
             },
-            "scheduler": {"last_cycle_status": "ok"},
+            "scheduler": {
+                "started_at": "2026-08-28T06:00:00Z",
+                "last_heartbeat_at": "2026-08-28T14:15:00Z",
+                "last_cycle_started_at": "2026-08-28T14:10:00Z",
+                "last_cycle_completed_at": "2026-08-28T14:15:00Z",
+                "last_cycle_status": "ok",
+                "last_cycle_json": {"must_not_reach_public_api": true},
+                "scheduler_pid": 42
+            },
             "price_monitor": {
                 "singleton_key": "must-not-reach-public-api",
                 "updated_at": "2026-08-28T14:15:00Z",
@@ -3382,6 +3390,8 @@ mod tests {
                 .is_none()
         );
         assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
+        assert!(serialized["scheduler"].get("last_cycle_json").is_none());
+        assert!(serialized["scheduler"].get("scheduler_pid").is_none());
         assert_eq!(serialized["price_monitor"]["status"], "partial");
         assert_eq!(
             serialized["price_monitor"]["summary_json"]["error_count"],
