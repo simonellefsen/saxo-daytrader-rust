@@ -3323,7 +3323,27 @@ mod tests {
                 "saxo_exchange_name": "must-not-reach-public-api",
                 "saxo_timezone_id": "must-not-reach-public-api"
             }],
-            "summary": {"analysis_window_active": true, "active_markets": ["US"]},
+            "summary": {
+                "analysis_window_active": true,
+                "active_markets": ["US"],
+                "active_windows": [{"key": "us_open_followup"}],
+                "open_active_markets": ["US"],
+                "close_active_markets": [],
+                "pre_sync_markets": [],
+                "last_cycle_status": "ok",
+                "last_heartbeat_at": "2026-08-28T14:15:00Z",
+                "next_pulse_at": "2026-08-28T20:15:00Z",
+                "next_pulse_label": "US midday shadow",
+                "price_monitor_status": "fresh",
+                "price_monitor_updated_at": "2026-08-28T14:15:00Z",
+                "calendar_refresh": {
+                    "status": "refreshed",
+                    "source": "saxo_ref_v1_exchanges",
+                    "checked_at": "2026-08-28T14:00:00Z",
+                    "exchange_count": 5,
+                    "error": "must-not-reach-public-api"
+                }
+            },
             "scheduler": {"last_cycle_status": "ok"},
             "price_monitor": {"status": "fresh"},
         }))
@@ -3332,6 +3352,19 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("market status payload serializes");
         assert_eq!(serialized["items"][0]["market"], "US");
         assert_eq!(serialized["summary"]["active_markets"], json!(["US"]));
+        assert_eq!(
+            serialized["summary"]["calendar_refresh"]["status"],
+            "refreshed"
+        );
+        assert_eq!(
+            serialized["summary"]["active_windows"][0]["key"],
+            "us_open_followup"
+        );
+        assert!(
+            serialized["summary"]["calendar_refresh"]
+                .get("error")
+                .is_none()
+        );
         assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
         assert_eq!(serialized["price_monitor"]["status"], "fresh");
         assert!(serialized["items"][0].get("saxo_exchange_id").is_none());

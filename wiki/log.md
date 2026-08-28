@@ -2609,6 +2609,12 @@ broker mutation was added.
 - Added a typed Tuning projection of the existing one-month local account-value comparison against stored native-currency ETF proxy price returns, retaining per-reference status, alignment, freshness, proxy return, and portfolio excess.
 - The view keeps cash inclusion and every comparison limit explicit: it is not time-weighted or total return and does not normalize FX, dividends, fees, tax, or external cash flows. It reads local history and stored closes only, without refreshing a benchmark, calling Saxo, or affecting Hermes, a manager gate, queue, broker precheck, execution simulation, or Saxo action.
 
+## [2026-08-28] architecture | Type and narrow the public Market Status summary
+
+- Changed the Market Status API and dashboard boundary to use a typed, allowlisted summary for analysis windows, active market sets, scheduler pulse labels, and quote-monitor lifecycle metadata.
+- The read-only Saxo exchange-calendar refresh now exposes only lifecycle status, source, checked time, and exchange count; free-form refresh errors remain internal. Active-pulse, scheduler, and price-monitor documents remain staged compatibility JSON.
+- This changes no calendar refresh/session mechanics, Decision Report, Hermes, manager gate, queue, precheck, or Saxo execution behavior.
+
 ## [2026-08-21] observability | Expose one-month account-value outcome in Tuning
 
 - Added a typed local account-value outcome projection for the same one-month history used by the benchmark comparison: snapshot confidence/freshness, latest DKK value including cash, simple change/return, maximum drawdown, and cost-basis warning count remain explicit.

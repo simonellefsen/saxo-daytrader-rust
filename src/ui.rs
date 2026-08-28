@@ -27,10 +27,10 @@ use crate::{
         DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketExchangeStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        MarketExchangeStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -3686,27 +3686,44 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let summary = data.market_status.summary.clone();
     let scheduler = data.market_status.scheduler.clone();
     let price_monitor = data.market_status.price_monitor.clone();
+    let analysis_window_label = if summary.analysis_window_active {
+        "Active"
+    } else {
+        "Inactive"
+    };
+    let active_markets = market_names_label(&summary.active_markets);
+    let pre_sync_markets = market_names_label(&summary.pre_sync_markets);
+    let last_cycle_status = summary
+        .last_cycle_status
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let next_pulse_label = summary
+        .next_pulse_label
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let next_pulse_at = summary.next_pulse_at.clone().unwrap_or_default();
+    let last_heartbeat_at = summary.last_heartbeat_at.clone().unwrap_or_default();
     rsx! {
         section { class: "layout",
             div {
                 section { class: "section",
                     h2 { "Market Status" }
                     div { class: "mini-grid",
-                        MetricCard { label: "Analysis Window", value: if summary.get("analysis_window_active").and_then(JsonValue::as_bool).unwrap_or(false) { "Active".to_string() } else { "Inactive".to_string() }, tone: "" }
-                        MetricCard { label: "Active Markets", value: json_list_label(summary.get("active_markets")), tone: "" }
-                        MetricCard { label: "Pre-sync Markets", value: json_list_label(summary.get("pre_sync_markets")), tone: "" }
-                        MetricCard { label: "Last Cycle", value: text(&summary, "last_cycle_status"), tone: "" }
+                        MetricCard { label: "Analysis Window", value: "{analysis_window_label}", tone: "" }
+                        MetricCard { label: "Active Markets", value: "{active_markets}", tone: "" }
+                        MetricCard { label: "Pre-sync Markets", value: "{pre_sync_markets}", tone: "" }
+                        MetricCard { label: "Last Cycle", value: "{last_cycle_status}", tone: "" }
                         MetricCard { label: "Quote Monitor", value: price_monitor_status_label(&price_monitor), tone: "" }
                     }
                     div { class: "stack loose",
                         div { class: "event",
                             strong { "Next Trading Manager Pulse" }
-                            span { "{text(&summary, \"next_pulse_label\")}" }
-                            span { class: "muted", "{format_timestamp(&text(&summary, \"next_pulse_at\"), &prefs)}" }
+                            span { "{next_pulse_label}" }
+                            span { class: "muted", "{format_timestamp(&next_pulse_at, &prefs)}" }
                         }
                         div { class: "event",
                             strong { "Scheduler Heartbeat" }
-                            span { "{format_timestamp(&text(&summary, \"last_heartbeat_at\"), &prefs)}" }
+                            span { "{format_timestamp(&last_heartbeat_at, &prefs)}" }
                         }
                         div { class: "event",
                             strong { "Quote Monitor" }
@@ -8552,19 +8569,17 @@ fn hermes_experiment_age_status(
     }
 }
 
-fn json_list_label(value: Option<&JsonValue>) -> String {
-    let Some(items) = value.and_then(JsonValue::as_array) else {
-        return "None".to_string();
-    };
-    if items.is_empty() {
-        return "None".to_string();
+fn market_names_label(markets: &[String]) -> String {
+    if markets.is_empty() {
+        "None".to_string()
+    } else {
+        markets
+            .iter()
+            .take(4)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
     }
-    items
-        .iter()
-        .filter_map(JsonValue::as_str)
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[component]
@@ -9242,9 +9257,12 @@ fn saxo_operation_health(auth: &DashboardSaxoAuthPayload) -> OperationHealthItem
     }
 }
 
-fn scheduler_operation_health(summary: &JsonValue, now: DateTime<Utc>) -> OperationHealthItem {
-    let heartbeat = text(summary, "last_heartbeat_at");
-    let last_cycle_status = text_or(summary, "last_cycle_status", "unknown");
+fn scheduler_operation_health(
+    summary: &MarketStatusSummaryPayload,
+    now: DateTime<Utc>,
+) -> OperationHealthItem {
+    let heartbeat = summary.last_heartbeat_at.as_deref().unwrap_or_default();
+    let last_cycle_status = summary.last_cycle_status.as_deref().unwrap_or("unknown");
     let Some(age_minutes) = age_minutes(&heartbeat, now) else {
         return OperationHealthItem {
             label: "Scheduler".to_string(),
@@ -12018,10 +12036,26 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let item = scheduler_operation_health(
-            &json!({
-                "last_heartbeat_at": "2026-06-24T10:45:00Z",
-                "last_cycle_status": "ok"
-            }),
+            &MarketStatusSummaryPayload {
+                analysis_window_active: false,
+                active_markets: Vec::new(),
+                active_windows: json!([]),
+                open_active_markets: Vec::new(),
+                close_active_markets: Vec::new(),
+                pre_sync_markets: Vec::new(),
+                last_cycle_status: Some("ok".to_string()),
+                last_heartbeat_at: Some("2026-06-24T10:45:00Z".to_string()),
+                next_pulse_at: None,
+                next_pulse_label: None,
+                price_monitor_status: None,
+                price_monitor_updated_at: None,
+                calendar_refresh: crate::models::MarketCalendarRefreshPayload {
+                    status: "cached".to_string(),
+                    source: None,
+                    checked_at: None,
+                    exchange_count: None,
+                },
+            },
             now,
         );
 

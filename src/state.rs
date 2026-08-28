@@ -65,8 +65,9 @@ use crate::{
         HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
         HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
-        HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketStatusPayload,
-        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarksPayload,
+        HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
+        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
+        OverviewIntegrityPayload, PerformanceBenchmarksPayload,
         PerformanceExposureAttributionPayload, PerformanceGoalTrackingPayload,
         PerformanceHistoryRowPayload, PerformancePnlReconciliationPayload,
         PerformanceRealisedSellOutcomesPayload, PerformanceSnapshotEvidencePayload,
@@ -7616,17 +7617,56 @@ impl AppState {
             });
         let market_status = self.market_status_payload().await.unwrap_or_else(|err| {
             warn!("dashboard market status degraded: {err:#}");
-            json!({"items": [], "summary": {"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}})
+            json!({
+                "items": [],
+                "summary": {
+                    "analysis_window_active": false,
+                    "active_markets": [],
+                    "active_windows": [],
+                    "open_active_markets": [],
+                    "close_active_markets": [],
+                    "pre_sync_markets": [],
+                    "last_cycle_status": null,
+                    "last_heartbeat_at": null,
+                    "next_pulse_at": null,
+                    "next_pulse_label": null,
+                    "price_monitor_status": null,
+                    "price_monitor_updated_at": null,
+                    "calendar_refresh": {"status": "unavailable"}
+                },
+                "scheduler": null,
+                "price_monitor": null
+            })
         });
-        let market_status = dashboard_market_status_from_json(market_status).unwrap_or_else(|err| {
-            warn!("dashboard typed market status degraded: {err:#}");
-            MarketStatusPayload {
-                items: Vec::new(),
-                summary: json!({"analysis_window_active": false, "active_markets": [], "active_windows": [], "pre_sync_markets": []}),
-                scheduler: JsonValue::Null,
-                price_monitor: JsonValue::Null,
-            }
-        });
+        let market_status =
+            dashboard_market_status_from_json(market_status).unwrap_or_else(|err| {
+                warn!("dashboard typed market status degraded: {err:#}");
+                MarketStatusPayload {
+                    items: Vec::new(),
+                    summary: MarketStatusSummaryPayload {
+                        analysis_window_active: false,
+                        active_markets: Vec::new(),
+                        active_windows: json!([]),
+                        open_active_markets: Vec::new(),
+                        close_active_markets: Vec::new(),
+                        pre_sync_markets: Vec::new(),
+                        last_cycle_status: None,
+                        last_heartbeat_at: None,
+                        next_pulse_at: None,
+                        next_pulse_label: None,
+                        price_monitor_status: None,
+                        price_monitor_updated_at: None,
+                        calendar_refresh: MarketCalendarRefreshPayload {
+                            status: "unavailable".to_string(),
+                            source: None,
+                            checked_at: None,
+                            exchange_count: None,
+                        },
+                    },
+                    scheduler: JsonValue::Null,
+                    price_monitor: JsonValue::Null,
+                }
+            });
         let integrity = overview
             .get("integrity")
             .cloned()

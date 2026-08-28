@@ -1646,17 +1646,49 @@ pub struct MarketWatchlistsPayload {
 
 /// Bounded market-status envelope.
 ///
-/// Exchange rows are typed and allowlisted. Scheduler, price-monitor, and
-/// summary details remain staged JSON while their operational read models are
-/// converted incrementally. This keeps the public observability boundary
-/// explicit without changing market-calendar refreshes or any decision and
-/// execution behavior.
+/// Exchange rows and stable summary fields are typed and allowlisted.
+/// Scheduler, price-monitor, and active-pulse documents remain staged JSON
+/// while their operational read models are converted incrementally. This keeps
+/// the public observability boundary explicit without changing market-calendar
+/// refreshes or any decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusPayload {
     pub items: Vec<MarketExchangeStatusPayload>,
-    pub summary: JsonValue,
+    pub summary: MarketStatusSummaryPayload,
     pub scheduler: JsonValue,
     pub price_monitor: JsonValue,
+}
+
+/// Stable current-cycle summary for Market Status.
+///
+/// Active pulses retain staged JSON because their manager-owned shape evolves.
+/// The calendar-refresh state is narrowed to lifecycle metadata so a free-form
+/// Saxo transport error cannot reach the public dashboard/API boundary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketStatusSummaryPayload {
+    pub analysis_window_active: bool,
+    pub active_markets: Vec<String>,
+    pub active_windows: JsonValue,
+    pub open_active_markets: Vec<String>,
+    pub close_active_markets: Vec<String>,
+    pub pre_sync_markets: Vec<String>,
+    pub last_cycle_status: Option<String>,
+    pub last_heartbeat_at: Option<String>,
+    pub next_pulse_at: Option<String>,
+    pub next_pulse_label: Option<String>,
+    pub price_monitor_status: Option<String>,
+    pub price_monitor_updated_at: Option<String>,
+    pub calendar_refresh: MarketCalendarRefreshPayload,
+}
+
+/// Allowlisted lifecycle metadata for the read-only Saxo exchange-calendar
+/// cache refresh used by Market Status.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketCalendarRefreshPayload {
+    pub status: String,
+    pub source: Option<String>,
+    pub checked_at: Option<String>,
+    pub exchange_count: Option<i64>,
 }
 
 /// One allowlisted exchange status row derived from the configured market
