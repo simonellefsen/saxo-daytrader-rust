@@ -2736,6 +2736,12 @@ broker mutation was added.
 - Rule-trace and broker documents remain staged in the Trading Manager diagnostics; the projection has no ability to alter circuit-breaker policy or an operator override.
 - This remains read-only completed-run evidence and cannot change report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
 
+## [2026-08-28] architecture | Type Cash Deployment reinvestment and budget evidence
+
+- Changed Cash Deployment's reinvestment diagnostic and capital-budget display to consume typed, allowlisted status, explanation, aggregate candidate counts, and available-budget values.
+- Candidate and policy documents remain staged in the Trading Manager diagnostic record; ranked blocked-BUY reasons keep their separately resilient typed projection.
+- This remains read-only completed-run evidence and cannot change capital policy, report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
+
 ## [2026-08-28] architecture | Type Cash Deployment drawdown-guardrail evidence
 
 - Changed Cash Deployment's portfolio-drawdown guardrail display to consume a typed, allowlisted restriction, peak, threshold, soft-reduction, and local override projection.

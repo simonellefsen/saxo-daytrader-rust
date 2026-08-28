@@ -36,9 +36,10 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
-        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
-        TradingManagerMonthlyLossBreakerPayload, TradingManagerPayload, TradingManagerRunPayload,
-        TuningExecutionPulseOutcome, TuningPulseComparison,
+        TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
+        TradingManagerInstrumentQuarantinePayload, TradingManagerMonthlyLossBreakerPayload,
+        TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
+        TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2241,15 +2242,20 @@ fn cash_deployment_summary(
     let default_run = TradingManagerRunPayload::default();
     let latest_run = latest_run.as_ref().unwrap_or(&default_run);
     let manager = latest_run.manager_json.clone();
-    let diagnostics = manager
+    let diagnostics_value = manager
         .get("reinvestment_diagnostics")
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let budget = diagnostics
+    let diagnostics = serde_json::from_value::<TradingManagerReinvestmentDiagnosticsPayload>(
+        diagnostics_value.clone(),
+    )
+    .unwrap_or_default();
+    let budget = diagnostics_value
         .get("capital_budget")
         .or_else(|| manager.get("capital_budget"))
         .cloned()
-        .unwrap_or(JsonValue::Null);
+        .and_then(|value| serde_json::from_value::<TradingManagerCashBudgetPayload>(value).ok())
+        .unwrap_or_default();
     let breaker = manager
         .get("monthly_loss_circuit_breaker")
         .cloned()
@@ -2264,15 +2270,16 @@ fn cash_deployment_summary(
             serde_json::from_value::<TradingManagerDrawdownGuardrailPayload>(value).ok()
         })
         .unwrap_or_default();
-    let status = fallback_text(
-        &diagnostics,
-        "status",
+    let status = if diagnostics.status.is_empty() {
         if latest_run.status.is_empty() {
             "unknown"
         } else {
             &latest_run.status
-        },
-    );
+        }
+        .to_string()
+    } else {
+        diagnostics.status
+    };
     let tone = cash_deployment_tone(&status);
     let created_at = format_timestamp(&latest_run.created_at, prefs);
     let run_label = if latest_run.report_id.is_none() {
@@ -2287,12 +2294,12 @@ fn cash_deployment_summary(
         status,
         tone,
         run_label,
-        available_buy_budget_dkk: value_f64(&budget, "available_buy_budget_dkk"),
-        excess_cash_pct: value_f64(&budget, "excess_cash_pct"),
-        approved_buy_count: value_i64(&diagnostics, "approved_buy_count"),
-        skipped_buy_count: value_i64(&diagnostics, "skipped_buy_count"),
-        candidate_buy_count: value_i64(&diagnostics, "buy_candidate_count"),
-        blocked_buy_gates: diagnostics
+        available_buy_budget_dkk: budget.available_buy_budget_dkk,
+        excess_cash_pct: budget.excess_cash_pct,
+        approved_buy_count: diagnostics.approved_buy_count,
+        skipped_buy_count: diagnostics.skipped_buy_count,
+        candidate_buy_count: diagnostics.buy_candidate_count,
+        blocked_buy_gates: diagnostics_value
             .get("blocked_buy_gates")
             .and_then(JsonValue::as_array)
             .into_iter()
@@ -2327,11 +2334,11 @@ fn cash_deployment_summary(
         drawdown_lookback_days: drawdown.lookback_days,
         drawdown_override_updated_at: format_timestamp(&drawdown.override_record.updated_at, prefs),
         drawdown_override_notes: drawdown.override_record.notes,
-        description: fallback_text(
-            &diagnostics,
-            "description",
-            "No reinvestment diagnostic was recorded for this Trading Manager run.",
-        ),
+        description: if diagnostics.description.is_empty() {
+            "No reinvestment diagnostic was recorded for this Trading Manager run.".to_string()
+        } else {
+            diagnostics.description
+        },
     }
 }
 
@@ -12365,6 +12372,7 @@ mod tests {
                     "buy_candidate_count": 4,
                     "approved_buy_count": 0,
                     "skipped_buy_count": 4,
+                    "raw_candidate_document": {"symbol": "must not render"},
                     "blocked_buy_gates": [
                         {"gate_code": "cash_budget", "count": 3, "raw_broker_detail": "must not render"}
                     ],
@@ -12398,6 +12406,34 @@ mod tests {
                 .contains("raw_broker_detail")
         );
         assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn reinvestment_diagnostics_projection_omits_unallowlisted_fields() {
+        let diagnostics =
+            serde_json::from_value::<TradingManagerReinvestmentDiagnosticsPayload>(json!({
+                "status": "reinvestment_candidates_approved",
+                "description": "Two candidates remain after deterministic checks.",
+                "approved_buy_count": 2,
+                "skipped_buy_count": 1,
+                "buy_candidate_count": 3,
+                "raw_candidate_document": {"symbol": "must not serialize"}
+            }))
+            .expect("typed reinvestment diagnostics accept allowlisted evidence");
+        let budget = serde_json::from_value::<TradingManagerCashBudgetPayload>(json!({
+            "available_buy_budget_dkk": 12_500.0,
+            "excess_cash_pct": 0.08,
+            "raw_policy_document": {"reserve": "must not serialize"}
+        }))
+        .expect("typed cash budget accepts allowlisted evidence");
+
+        let serialized = serde_json::to_value((&diagnostics, &budget))
+            .expect("typed cash deployment projections serialize")
+            .to_string();
+        assert!(!serialized.contains("raw_candidate_document"));
+        assert!(!serialized.contains("raw_policy_document"));
+        assert_eq!(diagnostics.approved_buy_count, 2);
+        assert_eq!(budget.available_buy_budget_dkk, 12_500.0);
     }
 
     #[test]

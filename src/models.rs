@@ -1995,6 +1995,36 @@ pub struct TradingManagerBlockedBuyGatePayload {
     pub count: i64,
 }
 
+/// Allowlisted available-cash evidence for a completed manager run.
+///
+/// This is a read-only calculation result displayed in Cash Deployment; it
+/// cannot change reserve policy, sizing, or execution authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerCashBudgetPayload {
+    #[serde(default)]
+    pub available_buy_budget_dkk: f64,
+    #[serde(default)]
+    pub excess_cash_pct: f64,
+}
+
+/// Allowlisted reinvestment diagnostic summary rendered in Cash Deployment.
+///
+/// Candidate documents and the separately parsed ranked blocked-BUY reasons
+/// remain staged in the manager diagnostic record.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerReinvestmentDiagnosticsPayload {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub approved_buy_count: i64,
+    #[serde(default)]
+    pub skipped_buy_count: i64,
+    #[serde(default)]
+    pub buy_candidate_count: i64,
+}
+
 /// Allowlisted operator record associated with a monthly-loss breaker run.
 ///
 /// Notes are local operator context only. This read model contains no setting
