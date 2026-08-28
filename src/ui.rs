@@ -27,8 +27,9 @@ use crate::{
         DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
-        MarketExchangeStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
-        OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        MarketExchangeStatusPayload, MarketPriceMonitorPayload,
+        MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
         PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
@@ -3713,7 +3714,7 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         MetricCard { label: "Active Markets", value: "{active_markets}", tone: "" }
                         MetricCard { label: "Pre-sync Markets", value: "{pre_sync_markets}", tone: "" }
                         MetricCard { label: "Last Cycle", value: "{last_cycle_status}", tone: "" }
-                        MetricCard { label: "Quote Monitor", value: price_monitor_status_label(&price_monitor), tone: "" }
+                        MetricCard { label: "Quote Monitor", value: price_monitor_status_label(price_monitor.as_ref()), tone: "" }
                     }
                     div { class: "stack loose",
                         div { class: "event",
@@ -3727,8 +3728,8 @@ fn MarketView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                         div { class: "event",
                             strong { "Quote Monitor" }
-                            span { "{price_monitor_status_label(&price_monitor)}" }
-                            span { class: "muted", "{price_monitor_detail(&price_monitor, &prefs)}" }
+                            span { "{price_monitor_status_label(price_monitor.as_ref())}" }
+                            span { class: "muted", "{price_monitor_detail(price_monitor.as_ref(), &prefs)}" }
                         }
                     }
                     div { class: "table-wrap market-table",
@@ -9210,7 +9211,11 @@ fn operations_health_at(data: &DashboardView, now: DateTime<Utc>) -> Vec<Operati
             &data.run_schedules.indicators,
             now,
         ),
-        quote_operation_health(&data.positions, &data.market_status.price_monitor, now),
+        quote_operation_health(
+            &data.positions,
+            data.market_status.price_monitor.as_ref(),
+            now,
+        ),
         execution_operation_health(&data.orders),
     ]
 }
@@ -9718,65 +9723,61 @@ fn scheduled_run_missing_detail(label: &str, state: ScheduledRunState) -> String
     }
 }
 
-fn price_monitor_summary(monitor: &JsonValue) -> JsonValue {
-    monitor
-        .get("summary_json")
-        .cloned()
-        .unwrap_or(JsonValue::Null)
-}
-
-fn price_monitor_status_label(monitor: &JsonValue) -> String {
-    let status = text(monitor, "status");
+fn price_monitor_status_label(monitor: Option<&MarketPriceMonitorPayload>) -> String {
+    let Some(monitor) = monitor else {
+        return "unknown".to_string();
+    };
+    let status = &monitor.status;
     if status.is_empty() {
         return "unknown".to_string();
     }
-    let summary = price_monitor_summary(monitor);
     match status.as_str() {
         "ok" => {
-            let updated = value_f64(&summary, "updated") as i64;
-            format!("ok · {updated} updated")
+            format!("ok · {} updated", monitor.summary.updated)
         }
         "market_closed" => {
-            let skipped = value_f64(&summary, "skipped_closed") as i64;
-            format!("closed · {skipped} skipped")
+            format!("closed · {} skipped", monitor.summary.skipped_closed)
         }
         "partial" => {
-            let updated = value_f64(&summary, "updated") as i64;
-            format!("partial · {updated} updated")
+            format!("partial · {} updated", monitor.summary.updated)
         }
         "no_session" => "no session".to_string(),
         other => other.to_string(),
     }
 }
 
-fn price_monitor_detail(monitor: &JsonValue, prefs: &LocalizationPrefs) -> String {
-    if monitor.is_null() {
+fn price_monitor_detail(
+    monitor: Option<&MarketPriceMonitorPayload>,
+    prefs: &LocalizationPrefs,
+) -> String {
+    let Some(monitor) = monitor else {
         return "No price monitor status has been recorded yet.".to_string();
-    }
-    let updated_at = format_timestamp(&text(monitor, "updated_at"), prefs);
-    let summary = price_monitor_summary(monitor);
-    let status = text(monitor, "status");
-    let skipped = value_f64(&summary, "skipped_closed") as usize;
+    };
+    let updated_at = format_timestamp(&monitor.updated_at, prefs);
+    let status = &monitor.status;
+    let skipped = monitor.summary.skipped_closed.max(0) as usize;
     let mut detail = format!("Last status {status} at {updated_at}.");
     if skipped > 0 {
         detail.push_str(&format!(
             " Skipped known-closed symbols: {}.",
-            price_monitor_skipped_symbols(&summary, 8)
+            price_monitor_skipped_symbols(&monitor.summary.skipped_closed_symbols, 8)
         ));
     }
-    let reason = text(&summary, "reason");
-    if !reason.is_empty() {
+    if let Some(reason) = monitor
+        .summary
+        .reason
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         detail.push_str(&format!(" Reason: {reason}."));
     }
     detail
 }
 
-fn price_monitor_skipped_symbols(summary: &JsonValue, limit: usize) -> String {
-    let items = summary
-        .get("skipped_closed_symbols")
-        .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+fn price_monitor_skipped_symbols(
+    items: &[MarketPriceMonitorSkippedSymbolPayload],
+    limit: usize,
+) -> String {
     if items.is_empty() {
         return "none".to_string();
     }
@@ -9784,12 +9785,14 @@ fn price_monitor_skipped_symbols(summary: &JsonValue, limit: usize) -> String {
         .iter()
         .take(limit)
         .map(|row| {
-            let symbol = text(row, "symbol");
-            let exchange = text(row, "exchange");
-            if exchange.is_empty() {
-                symbol
+            if row.exchange.as_deref().unwrap_or_default().is_empty() {
+                row.symbol.clone()
             } else {
-                format!("{symbol} ({exchange})")
+                format!(
+                    "{} ({})",
+                    row.symbol,
+                    row.exchange.as_deref().unwrap_or_default()
+                )
             }
         })
         .collect::<Vec<_>>()
@@ -9803,13 +9806,19 @@ fn price_monitor_skipped_symbols(summary: &JsonValue, limit: usize) -> String {
 
 fn quote_operation_health(
     positions: &[DashboardPositionPayload],
-    monitor: &JsonValue,
+    monitor: Option<&MarketPriceMonitorPayload>,
     now: DateTime<Utc>,
 ) -> OperationHealthItem {
-    let monitor_status = text(monitor, "status");
-    let monitor_summary = price_monitor_summary(monitor);
+    let monitor_status = monitor
+        .map(|value| value.status.as_str())
+        .unwrap_or_default();
     if monitor_status == "market_closed" {
-        let skipped = value_f64(&monitor_summary, "skipped_closed") as usize;
+        let skipped = monitor
+            .map(|value| value.summary.skipped_closed.max(0) as usize)
+            .unwrap_or_default();
+        let skipped_symbols = monitor
+            .map(|value| value.summary.skipped_closed_symbols.as_slice())
+            .unwrap_or_default();
         return OperationHealthItem {
             label: "Quotes".to_string(),
             status: "closed".to_string(),
@@ -9817,7 +9826,7 @@ fn quote_operation_health(
             detail: if skipped > 0 {
                 format!(
                     "Price monitor paused because known exchanges are closed; skipped {skipped} symbol(s): {}.",
-                    price_monitor_skipped_symbols(&monitor_summary, 6)
+                    price_monitor_skipped_symbols(skipped_symbols, 6)
                 )
             } else {
                 "Price monitor paused because known exchanges are closed.".to_string()
@@ -9834,11 +9843,9 @@ fn quote_operation_health(
         };
     }
     if monitor_status == "partial" {
-        let errors = monitor_summary
-            .get("errors")
-            .and_then(JsonValue::as_array)
-            .map(Vec::len)
-            .unwrap_or(0);
+        let errors = monitor
+            .map(|value| value.summary.error_count.max(0))
+            .unwrap_or_default();
         return OperationHealthItem {
             label: "Quotes".to_string(),
             status: "partial".to_string(),
@@ -11639,19 +11646,17 @@ mod tests {
 
     #[test]
     fn quote_operation_health_surfaces_closed_market_pause() {
-        let item = quote_operation_health(
-            &[],
-            &json!({
-                "status": "market_closed",
-                "summary_json": {
-                    "skipped_closed": 1,
-                    "skipped_closed_symbols": [
-                        {"symbol": "NOVOb:xcse", "exchange": "XCSE"}
-                    ]
-                }
-            }),
-            Utc::now(),
-        );
+        let monitor = serde_json::from_value::<MarketPriceMonitorPayload>(json!({
+            "status": "market_closed",
+            "summary_json": {
+                "skipped_closed": 1,
+                "skipped_closed_symbols": [
+                    {"symbol": "NOVOb:xcse", "exchange": "XCSE"}
+                ]
+            }
+        }))
+        .expect("price-monitor fixture has the typed public contract");
+        let item = quote_operation_health(&[], Some(&monitor), Utc::now());
 
         assert_eq!(item.label, "Quotes");
         assert_eq!(item.status, "closed");
@@ -11660,8 +11665,27 @@ mod tests {
     }
 
     #[test]
+    fn quote_operation_health_uses_the_redacted_partial_error_count() {
+        let monitor = serde_json::from_value::<MarketPriceMonitorPayload>(json!({
+            "status": "partial",
+            "summary_json": {
+                "updated": 3,
+                "error_count": 2,
+                "errors": ["must-not-be-read", "must-not-be-read"]
+            }
+        }))
+        .expect("price-monitor fixture has the typed public contract");
+        let item = quote_operation_health(&[], Some(&monitor), Utc::now());
+
+        assert_eq!(item.label, "Quotes");
+        assert_eq!(item.status, "partial");
+        assert_eq!(item.tone, "warn");
+        assert!(item.detail.contains("2 error(s)"));
+    }
+
+    #[test]
     fn price_monitor_label_counts_skipped_symbols() {
-        let monitor = json!({
+        let monitor = serde_json::from_value::<MarketPriceMonitorPayload>(json!({
             "status": "market_closed",
             "summary_json": {
                 "skipped_closed": 2,
@@ -11670,11 +11694,15 @@ mod tests {
                     {"symbol": "B:xnas", "exchange": "XNAS"}
                 ]
             }
-        });
+        }))
+        .expect("price-monitor fixture has the typed public contract");
 
-        assert_eq!(price_monitor_status_label(&monitor), "closed · 2 skipped");
         assert_eq!(
-            price_monitor_skipped_symbols(&price_monitor_summary(&monitor), 1),
+            price_monitor_status_label(Some(&monitor)),
+            "closed · 2 skipped"
+        );
+        assert_eq!(
+            price_monitor_skipped_symbols(&monitor.summary.skipped_closed_symbols, 1),
             "A:xnys (XNYS), +1 more"
         );
     }
@@ -12236,7 +12264,7 @@ mod tests {
             },
         ];
 
-        let item = quote_operation_health(&positions, &json!({}), now);
+        let item = quote_operation_health(&positions, None, now);
         assert_eq!(item.status, "fresh");
         assert_eq!(item.tone, "good");
         assert!(item.detail.contains("5 min"));

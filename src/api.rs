@@ -3345,7 +3345,23 @@ mod tests {
                 }
             },
             "scheduler": {"last_cycle_status": "ok"},
-            "price_monitor": {"status": "fresh"},
+            "price_monitor": {
+                "singleton_key": "must-not-reach-public-api",
+                "updated_at": "2026-08-28T14:15:00Z",
+                "status": "partial",
+                "summary_json": {
+                    "updated": 4,
+                    "instruments": 6,
+                    "tradable_instruments": 5,
+                    "skipped_closed": 1,
+                    "skipped_closed_symbols": [{"symbol": "NOVOb:xcse", "exchange": "XCSE"}],
+                    "session_date": "2026-08-28",
+                    "error_count": 1,
+                    "errors": ["must-not-reach-public-api"],
+                    "calendar_refresh": {"error": "must-not-reach-public-api"},
+                    "fx_refresh": {"error": "must-not-reach-public-api"}
+                }
+            },
         }))
         .expect("market status compatibility payload has the public contract");
 
@@ -3366,7 +3382,31 @@ mod tests {
                 .is_none()
         );
         assert_eq!(serialized["scheduler"]["last_cycle_status"], "ok");
-        assert_eq!(serialized["price_monitor"]["status"], "fresh");
+        assert_eq!(serialized["price_monitor"]["status"], "partial");
+        assert_eq!(
+            serialized["price_monitor"]["summary_json"]["error_count"],
+            1
+        );
+        assert_eq!(
+            serialized["price_monitor"]["summary_json"]["skipped_closed_symbols"][0]["symbol"],
+            "NOVOb:xcse"
+        );
+        assert!(serialized["price_monitor"].get("singleton_key").is_none());
+        assert!(
+            serialized["price_monitor"]["summary_json"]
+                .get("errors")
+                .is_none()
+        );
+        assert!(
+            serialized["price_monitor"]["summary_json"]
+                .get("calendar_refresh")
+                .is_none()
+        );
+        assert!(
+            serialized["price_monitor"]["summary_json"]
+                .get("fx_refresh")
+                .is_none()
+        );
         assert!(serialized["items"][0].get("saxo_exchange_id").is_none());
         assert!(serialized["items"][0].get("saxo_exchange_name").is_none());
         assert!(serialized["items"][0].get("saxo_timezone_id").is_none());

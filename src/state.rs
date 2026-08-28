@@ -7664,7 +7664,7 @@ impl AppState {
                         },
                     },
                     scheduler: JsonValue::Null,
-                    price_monitor: JsonValue::Null,
+                    price_monitor: None,
                 }
             });
         let integrity = overview

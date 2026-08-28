@@ -1647,16 +1647,16 @@ pub struct MarketWatchlistsPayload {
 /// Bounded market-status envelope.
 ///
 /// Exchange rows and stable summary fields are typed and allowlisted.
-/// Scheduler, price-monitor, and active-pulse documents remain staged JSON
-/// while their operational read models are converted incrementally. This keeps
-/// the public observability boundary explicit without changing market-calendar
-/// refreshes or any decision and execution behavior.
+/// Scheduler and active-pulse documents remain staged JSON while their
+/// operational read models are converted incrementally. This keeps the public
+/// observability boundary explicit without changing market-calendar refreshes
+/// or any decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MarketStatusPayload {
     pub items: Vec<MarketExchangeStatusPayload>,
     pub summary: MarketStatusSummaryPayload,
     pub scheduler: JsonValue,
-    pub price_monitor: JsonValue,
+    pub price_monitor: Option<MarketPriceMonitorPayload>,
 }
 
 /// Stable current-cycle summary for Market Status.
@@ -1689,6 +1689,49 @@ pub struct MarketCalendarRefreshPayload {
     pub source: Option<String>,
     pub checked_at: Option<String>,
     pub exchange_count: Option<i64>,
+}
+
+/// Allowlisted read-only quote-monitor status retained by the scheduler.
+///
+/// Provider refresh documents and free-form per-symbol errors remain internal;
+/// this status has no authority to refresh quotes, alter decisions, or mutate
+/// Saxo orders.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketPriceMonitorPayload {
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, rename = "summary_json")]
+    pub summary: MarketPriceMonitorSummaryPayload,
+}
+
+/// Bounded lifecycle counters from the latest price-monitor pass.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketPriceMonitorSummaryPayload {
+    #[serde(default)]
+    pub updated: i64,
+    #[serde(default)]
+    pub instruments: i64,
+    #[serde(default)]
+    pub tradable_instruments: i64,
+    #[serde(default)]
+    pub skipped_closed: i64,
+    #[serde(default)]
+    pub skipped_closed_symbols: Vec<MarketPriceMonitorSkippedSymbolPayload>,
+    #[serde(default)]
+    pub session_date: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub error_count: i64,
+}
+
+/// One operator-facing symbol excluded because its exchange is known closed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketPriceMonitorSkippedSymbolPayload {
+    pub symbol: String,
+    pub exchange: Option<String>,
 }
 
 /// One allowlisted exchange status row derived from the configured market

@@ -187,6 +187,7 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
                 "skipped_closed": skipped_closed.len(),
                 "skipped_closed_symbols": skipped_closed,
                 "calendar_refresh": calendar_refresh,
+                "error_count": 0,
                 "reason": "all_known_exchanges_closed"
             }),
         )
@@ -311,6 +312,7 @@ pub async fn refresh_portfolio_prices(state: &AppState) -> Result<JsonValue> {
             "session_date": session_date.to_string(),
             "calendar_refresh": calendar_refresh,
             "fx_refresh": fx_refresh,
+            "error_count": errors.len(),
             "errors": errors,
         }),
     )
