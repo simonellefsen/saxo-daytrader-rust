@@ -25,11 +25,11 @@ use crate::{
         DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
         DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
         DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
-        LatestDecisionStatusPayload, MarketWatchlistsPayload, OverviewIntegrityPayload,
-        PerformanceBenchmarkReferencePayload, PerformanceBenchmarksPayload,
-        PerformanceExposureAttributionPayload, PerformanceGoalPeriodPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+        DataFreshnessSourcePayload, DecisionGateReplayChangePayload, DecisionGateReplayPayload,
+        DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
+        MarketWatchlistsPayload, OverviewIntegrityPayload, PerformanceBenchmarkReferencePayload,
+        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+        PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
@@ -4672,18 +4672,17 @@ fn GateReplayPanel(replay: DecisionGateReplayPayload, prefs: LocalizationPrefs) 
 }
 
 #[component]
-fn GateReplayScenario(scenario: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let summary = scenario.get("summary").cloned().unwrap_or(JsonValue::Null);
-    let changes = json_array(&scenario, "changes");
-    let variable_path = text(&scenario, "variable_path");
-    let proposed_value = scenario
-        .get("proposed_value")
-        .map(|value| compact_json(Some(value)))
-        .unwrap_or_else(|| "n/a".to_string());
-    let block_count = value_i64(&summary, "would_block_target_gate_count");
-    let clear_count = value_i64(&summary, "would_clear_target_gate_only_count");
-    let evaluated_count = value_i64(&summary, "evaluated_count");
-    let comparison = text(&scenario, "comparison");
+fn GateReplayScenario(
+    scenario: DecisionGateReplayScenarioPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let variable_path = scenario.variable_path;
+    let proposed_value = compact_json(Some(&scenario.proposed_value));
+    let block_count = scenario.summary.would_block_target_gate_count;
+    let clear_count = scenario.summary.would_clear_target_gate_only_count;
+    let evaluated_count = scenario.summary.evaluated_count;
+    let comparison = scenario.comparison;
+    let changes = scenario.changes;
     rsx! {
         div { class: "event",
             strong { "{variable_path} -> {proposed_value}" }
@@ -4712,19 +4711,23 @@ fn GateReplayScenario(scenario: JsonValue, prefs: LocalizationPrefs) -> Element 
 }
 
 #[component]
-fn GateReplayChangeRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let effect = text(&row, "effect").replace('_', " ");
-    let symbol = fallback_text(&row, "symbol", "candidate");
-    let action = text(&row, "action");
-    let recorded_gate = text(&row, "recorded_gate").replace('_', " ");
-    let recorded_value = compact_json(row.get("recorded_value"));
-    let proposed_value = compact_json(row.get("proposed_value"));
-    let effect_class = if text(&row, "effect") == "would_block_target_gate" {
+fn GateReplayChangeRow(row: DecisionGateReplayChangePayload, prefs: LocalizationPrefs) -> Element {
+    let effect_class = if row.effect == "would_block_target_gate" {
         "status warn"
     } else {
         "status good"
     };
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
+    let effect = row.effect.replace('_', " ");
+    let symbol = if row.symbol.trim().is_empty() {
+        "candidate".to_string()
+    } else {
+        row.symbol
+    };
+    let action = row.action;
+    let recorded_gate = row.recorded_gate.replace('_', " ");
+    let recorded_value = compact_json(Some(&row.recorded_value));
+    let proposed_value = compact_json(Some(&row.proposed_value));
+    let created_at = format_timestamp(&row.created_at, &prefs);
     rsx! {
         tr {
             td { strong { "{symbol}" } span { class: "muted block", "{action}" } }

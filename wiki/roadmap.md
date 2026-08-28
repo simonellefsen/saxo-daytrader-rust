@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-28: Typed the deterministic public Decision Gate Replay scenario and changed-outcome rows, and moved the dashboard renderer to those same compiler-checked fields. Manager/provider documents remain outside the boundary; threshold value documents and the independently evolving support-risk evidence remain staged JSON. This stays an offline historical comparison only and cannot rerun a report, alter a gate/configuration, queue, precheck, or reach Saxo.
 - 2026-08-27: Typed and narrowed the public Markov signal list. It now returns only allowlisted collector lifecycle metadata and bounded rendered regime/probability rows; collector config/summary documents, transition counts/matrices, forecasts, raw payloads, and provider diagnostics remain in internal read models. Malformed rows fail closed at the API boundary, and this read-only endpoint cannot refresh a regime run, change a Decision Report or manager gate, queue, precheck, or reach Saxo.
 - 2026-08-27: Typed and narrowed the public Quiver signal list. It now returns only allowlisted collector lifecycle metadata and bounded rendered signal rows; collector config/summary documents, source-status/top-event documents, and provider diagnostics remain in internal read models. Malformed rows fail closed at the API boundary, and this read-only endpoint cannot refresh collection, change a Decision Report or manager gate, queue, precheck, or reach Saxo.
 - 2026-08-27: Narrowed the Saxo session-refresh success response to the same typed, sanitized session-health contract as the session-status endpoint, after durable persistence completes. The scheduler consumes typed lifecycle fields and records the same sanitized status; session paths and free-form auth errors remain internal, while refresh leases, token renewal, invalid-session audit persistence, and all broker/execution behavior are unchanged.

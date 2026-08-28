@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-28] architecture | Type Decision Gate Replay scenarios
+
+- Changed public Decision Gate Replay scenarios and their changed-outcome rows from generic JSON to typed, allowlisted historical evidence; the Decisions dashboard now renders the same typed fields.
+- Raw Trading Manager/provider documents stay outside this boundary. Threshold value documents and the independently evolving support-risk evidence remain staged JSON; this is still an offline historical comparison with no report, gate, configuration, queue, or Saxo mutation authority.
 
 ## [2026-08-27] architecture | Type public Markov signal list
 

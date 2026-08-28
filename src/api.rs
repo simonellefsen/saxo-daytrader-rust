@@ -3584,7 +3584,33 @@ mod tests {
         let payload = decision_gate_replay_payload(json!({
             "status": "available",
             "run_count": 3,
-            "scenarios": [{"variable_path": "strategy.swing.markov_gate.min_signed_signal"}],
+            "scenarios": [{
+                "variable_path": "strategy.swing.markov_gate.min_signed_signal",
+                "proposed_value": 0.2,
+                "comparison": "Historical comparison only.",
+                "summary": {
+                    "candidate_count": 3,
+                    "evaluated_count": 2,
+                    "would_block_target_gate_count": 1,
+                    "would_clear_target_gate_only_count": 0,
+                    "unchanged_target_gate_count": 1,
+                    "not_reached_count": 0,
+                    "insufficient_evidence_count": 1
+                },
+                "changes": [{
+                    "manager_run_id": 17,
+                    "report_id": 42,
+                    "created_at": "2026-08-27T08:30:00Z",
+                    "symbol": "TSLA:xnas",
+                    "action": "BUY",
+                    "recorded_outcome": "blocked",
+                    "recorded_gate": "markov",
+                    "effect": "would_block_target_gate",
+                    "recorded_value": {"min_signed_signal": 0.1},
+                    "proposed_value": {"min_signed_signal": 0.2},
+                    "manager_json": {"must_not_reach_public_api": true}
+                }]
+            }],
             "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
             "interpretation": "A target-gate clear is not an approval.",
             "support_risk_evidence": {"status": "collecting"},
@@ -3598,6 +3624,16 @@ mod tests {
         assert_eq!(
             serialized["scenarios"][0]["variable_path"],
             "strategy.swing.markov_gate.min_signed_signal"
+        );
+        assert_eq!(serialized["scenarios"][0]["summary"]["evaluated_count"], 2);
+        assert_eq!(
+            serialized["scenarios"][0]["changes"][0]["symbol"],
+            "TSLA:xnas"
+        );
+        assert!(
+            serialized["scenarios"][0]["changes"][0]
+                .get("manager_json")
+                .is_none()
         );
         assert_eq!(serialized["support_risk_evidence"]["status"], "collecting");
     }

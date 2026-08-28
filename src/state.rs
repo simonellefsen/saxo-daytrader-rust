@@ -18743,7 +18743,21 @@ mod tests {
         let replay = dashboard_decision_gate_replay_from_json(json!({
             "status": "available",
             "run_count": 3,
-            "scenarios": [{"variable_path": "strategy.swing.markov_gate.min_signed_signal"}],
+            "scenarios": [{
+                "variable_path": "strategy.swing.markov_gate.min_signed_signal",
+                "proposed_value": 0.2,
+                "comparison": "Historical comparison only.",
+                "summary": {
+                    "candidate_count": 3,
+                    "evaluated_count": 2,
+                    "would_block_target_gate_count": 1,
+                    "would_clear_target_gate_only_count": 0,
+                    "unchanged_target_gate_count": 1,
+                    "not_reached_count": 0,
+                    "insufficient_evidence_count": 1
+                },
+                "changes": []
+            }],
             "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
             "interpretation": "A target-gate clear is not an approval.",
             "support_risk_evidence": {"status": "collecting"}
@@ -18752,9 +18766,10 @@ mod tests {
 
         assert_eq!(replay.run_count, 3);
         assert_eq!(
-            replay.scenarios[0]["variable_path"],
-            json!("strategy.swing.markov_gate.min_signed_signal")
+            replay.scenarios[0].variable_path,
+            "strategy.swing.markov_gate.min_signed_signal"
         );
+        assert_eq!(replay.scenarios[0].summary.evaluated_count, 2);
         assert_eq!(
             dashboard_decision_gate_replay_not_loaded().status,
             "not_loaded"

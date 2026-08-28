@@ -2380,18 +2380,58 @@ pub struct PerformancePayload {
 
 /// Bounded Decision Gate Replay envelope.
 ///
-/// Scenario and support-risk evidence details remain compatibility JSON while
-/// the historical-analysis read model is converted incrementally. This makes
-/// the stable public replay boundary explicit without changing report
+/// Deterministic replay scenarios and changes are typed, while support-risk
+/// evidence remains staged JSON as the historical-analysis read model evolves.
+/// This preserves the public replay boundary without changing report
 /// generation, configuration, or any decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DecisionGateReplayPayload {
     pub status: String,
     pub run_count: usize,
-    pub scenarios: Vec<JsonValue>,
+    pub scenarios: Vec<DecisionGateReplayScenarioPayload>,
     pub safety: String,
     pub interpretation: String,
     pub support_risk_evidence: JsonValue,
+}
+
+/// One isolated historical threshold comparison in the Decision Gate Replay.
+///
+/// Its value documents remain narrowly scoped to the threshold being compared;
+/// raw Trading Manager and provider documents never cross this boundary.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DecisionGateReplayScenarioPayload {
+    pub variable_path: String,
+    pub proposed_value: JsonValue,
+    pub comparison: String,
+    pub summary: DecisionGateReplayScenarioSummaryPayload,
+    pub changes: Vec<DecisionGateReplayChangePayload>,
+}
+
+/// Aggregate outcome counts for one historical Decision Gate Replay scenario.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DecisionGateReplayScenarioSummaryPayload {
+    pub candidate_count: usize,
+    pub evaluated_count: usize,
+    pub would_block_target_gate_count: usize,
+    pub would_clear_target_gate_only_count: usize,
+    pub unchanged_target_gate_count: usize,
+    pub not_reached_count: usize,
+    pub insufficient_evidence_count: usize,
+}
+
+/// One bounded changed outcome in a Decision Gate Replay scenario.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DecisionGateReplayChangePayload {
+    pub manager_run_id: i64,
+    pub report_id: i64,
+    pub created_at: String,
+    pub symbol: String,
+    pub action: String,
+    pub recorded_outcome: String,
+    pub recorded_gate: String,
+    pub effect: String,
+    pub recorded_value: JsonValue,
+    pub proposed_value: JsonValue,
 }
 
 /// Bounded Markov signal-list envelope.
