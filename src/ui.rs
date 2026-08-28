@@ -35,8 +35,9 @@ use crate::{
         PerformanceGoalPeriodPayload, PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
-        ProtectiveStopCoveragePayload, QuiverConflictPayload, TradingManagerPayload,
-        TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
+        ProtectiveStopCoveragePayload, QuiverConflictPayload,
+        TradingManagerInstrumentQuarantinePayload, TradingManagerPayload, TradingManagerRunPayload,
+        TuningExecutionPulseOutcome, TuningPulseComparison,
     },
 };
 
@@ -2530,7 +2531,7 @@ struct InstrumentQuarantineSummary {
     lookback_days: i64,
     min_failures: i64,
     active_days: i64,
-    active: Vec<JsonValue>,
+    active: Vec<TradingManagerInstrumentQuarantinePayload>,
     description: String,
 }
 
@@ -2582,23 +2583,27 @@ fn InstrumentQuarantinePanel(
 }
 
 #[component]
-fn InstrumentQuarantineRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let sample = fallback_text(&row, "sample_error", "No sample error recorded.");
-    let symbol = text(&row, "symbol");
-    let action = text(&row, "action");
-    let signature = text(&row, "signature");
-    let override_active = row
-        .get("override_active")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let override_notes = text(&row, "override_notes");
+fn InstrumentQuarantineRow(
+    row: TradingManagerInstrumentQuarantinePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let sample = if row.sample_error.is_empty() {
+        "No sample error recorded.".to_string()
+    } else {
+        row.sample_error.clone()
+    };
+    let symbol = row.symbol;
+    let action = row.action;
+    let signature = row.signature;
+    let override_active = row.override_active;
+    let override_notes = row.override_notes;
     rsx! {
         tr { title: "{sample}",
             td { class: "mono", "{symbol}" }
             td { "{action}" }
             td { "{signature}" }
-            td { "{value_i64(&row, \"failure_count\")}" }
-            td { "{format_timestamp(&text(&row, \"expires_at\"), &prefs)}" }
+            td { "{row.failure_count}" }
+            td { "{format_timestamp(&row.expires_at, &prefs)}" }
             td {
                 if override_active {
                     span { class: "status warn-status", "overridden" }
@@ -2646,8 +2651,12 @@ fn instrument_quarantine_summary(
     let active = quarantine
         .get("active")
         .and_then(JsonValue::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            serde_json::from_value::<TradingManagerInstrumentQuarantinePayload>(row.clone()).ok()
+        })
+        .collect::<Vec<_>>();
     let active_count = quarantine
         .get("active_count")
         .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
@@ -2655,16 +2664,7 @@ fn instrument_quarantine_summary(
     let blocked_count = quarantine
         .get("blocked_count")
         .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
-        .unwrap_or_else(|| {
-            active
-                .iter()
-                .filter(|row| {
-                    !row.get("override_active")
-                        .and_then(JsonValue::as_bool)
-                        .unwrap_or(false)
-                })
-                .count() as i64
-        });
+        .unwrap_or_else(|| active.iter().filter(|row| !row.override_active).count() as i64);
     let override_count = quarantine
         .get("override_count")
         .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
@@ -12589,7 +12589,8 @@ mod tests {
                         "action": "BUY",
                         "signature": "commission_not_configured",
                         "failure_count": 3,
-                        "expires_at": "2026-07-22T10:00:00Z"
+                        "expires_at": "2026-07-22T10:00:00Z",
+                        "raw_broker_detail": "must-not-reach-overview-row"
                     }]
                 }
             }
@@ -12602,8 +12603,44 @@ mod tests {
         assert_eq!(summary.status, "active");
         assert_eq!(summary.tone, "warn-status");
         assert_eq!(summary.active_count, 1);
-        assert_eq!(text(&summary.active[0], "symbol"), "ARKK:xmil");
+        assert_eq!(summary.active[0].symbol, "ARKK:xmil");
+        let serialized =
+            serde_json::to_value(&summary.active[0]).expect("typed quarantine row serializes");
+        assert!(serialized.get("raw_broker_detail").is_none());
         assert!(summary.description.contains("blocked"));
+    }
+
+    #[test]
+    fn instrument_quarantine_drops_malformed_rows_without_hiding_valid_blocks() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "manager_json": {
+                    "instrument_quarantine": {
+                        "enabled": true,
+                        "active": [
+                            {
+                                "symbol": "GOOD:xnas",
+                                "action": "BUY",
+                                "signature": "instrument_not_tradable",
+                                "failure_count": 3,
+                                "expires_at": "2026-08-29T10:00:00Z"
+                            },
+                            {
+                                "symbol": "BROKEN:xnas",
+                                "failure_count": "not-a-number"
+                            }
+                        ]
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = instrument_quarantine_summary(&latest_run);
+        assert_eq!(summary.active_count, 1);
+        assert_eq!(summary.blocked_count, 1);
+        assert_eq!(summary.active.len(), 1);
+        assert_eq!(summary.active[0].symbol, "GOOD:xnas");
     }
 
     #[test]

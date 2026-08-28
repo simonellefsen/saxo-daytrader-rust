@@ -1958,6 +1958,30 @@ pub struct TradingManagerRunPayload {
     pub manager_json: JsonValue,
 }
 
+/// Allowlisted active instrument-quarantine row rendered in Overview.
+///
+/// It is a local read-only explanation for a prior manager decision. The row
+/// carries no broker identifier, payload, or mutation authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerInstrumentQuarantinePayload {
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub failure_count: i64,
+    #[serde(default)]
+    pub expires_at: String,
+    #[serde(default)]
+    pub override_active: bool,
+    #[serde(default)]
+    pub override_notes: String,
+    #[serde(default)]
+    pub sample_error: String,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position, exception, and recorded SIM-test details remain compatibility

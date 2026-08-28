@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type Overview Instrument Quarantine rows
+
+- Changed the Overview's active instrument-quarantine rows from generic JSON to allowlisted symbol, action, failure category/count, expiry, override, and bounded sample-error evidence.
+- Unallowlisted row fields remain internal; malformed rows degrade independently while valid blocks remain visible. The panel remains read-only and does not alter quarantine policy, manager selection, queues, or Saxo behavior.
+
 ## [2026-08-28] architecture | Type latest Trading Manager run envelope
 
 - Changed the Overview's latest Trading Manager run from a generic persisted row to allowlisted run identity, timing, report-linkage, lifecycle, and manager-identity metadata.
