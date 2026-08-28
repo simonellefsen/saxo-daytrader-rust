@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type Support Risk Evidence panel
+
+- Changed the Decisions support-risk outcome evidence and renderer from generic JSON to an allowlisted local count, label, one/five-run observation, and confidence projection.
+- Raw daily-indicator documents and unused analytical detail remain internal. The panel remains descriptive, non-causal, and non-gating; it cannot change reports, Hermes, configuration, queues, or Saxo behavior.
+
 ## [2026-08-28] architecture | Type Protective Stop Coverage lifecycle tests
 
 - Changed the Execution SIM lifecycle-test rows from generic persisted JSON to an allowlisted local ID, requested stop, lifecycle status, and visible broker-order reference projection.

@@ -74,9 +74,9 @@ use crate::{
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
         ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
         ProtectiveStopLifecycleTestPayload, ProtectiveStopPrecheckPayload, QuiverConflictPayload,
-        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, SupportRiskEvidencePayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3206,7 +3206,7 @@ fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayPayload {
         scenarios: Vec::new(),
         safety: "not_loaded_outside_decisions_tab".to_string(),
         interpretation: String::new(),
-        support_risk_evidence: JsonValue::Null,
+        support_risk_evidence: SupportRiskEvidencePayload::default(),
     }
 }
 
@@ -18906,7 +18906,19 @@ mod tests {
             }],
             "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
             "interpretation": "A target-gate clear is not an approval.",
-            "support_risk_evidence": {"status": "collecting"}
+            "support_risk_evidence": {
+                "status": "collecting",
+                "eligible_signal_count": 12,
+                "labels": [{
+                    "label": "high",
+                    "signal_count": 12,
+                    "next_run": {"sample_count": 10, "average_return_pct": -1.2},
+                    "five_run": {"sample_count": 8, "negative_return_rate": 0.625},
+                    "average_confidence": 0.7,
+                    "raw_indicator_document": {"must": "stay internal"}
+                }],
+                "raw_support_risk_document": {"must": "stay internal"}
+            }
         }))
         .expect("gate replay fixture has the dashboard contract");
 
@@ -18916,6 +18928,18 @@ mod tests {
             "strategy.swing.markov_gate.min_signed_signal"
         );
         assert_eq!(replay.scenarios[0].summary.evaluated_count, 2);
+        assert_eq!(replay.support_risk_evidence.labels.len(), 1);
+        assert_eq!(
+            replay.support_risk_evidence.labels[0]
+                .next_run
+                .average_return_pct,
+            Some(-1.2)
+        );
+        let serialized = serde_json::to_value(&replay)
+            .expect("typed gate replay serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_indicator_document"));
+        assert!(!serialized.contains("raw_support_risk_document"));
         assert_eq!(
             dashboard_decision_gate_replay_not_loaded().status,
             "not_loaded"

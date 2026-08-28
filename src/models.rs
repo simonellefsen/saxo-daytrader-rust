@@ -3015,11 +3015,63 @@ pub struct PerformancePayload {
     pub snapshot_evidence: PerformanceSnapshotEvidencePayload,
 }
 
+/// One observed forward-return horizon grouped by a support-risk label.
+///
+/// These are local next-available-run observations, not a causal backtest or
+/// an execution input.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupportRiskEvidenceOutcomePayload {
+    #[serde(default)]
+    pub sample_count: i64,
+    #[serde(default)]
+    pub average_return_pct: Option<f64>,
+    #[serde(default)]
+    pub negative_return_rate: Option<f64>,
+}
+
+/// Allowlisted observed outcomes for one stored support-break-risk label.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupportRiskEvidenceLabelPayload {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub signal_count: i64,
+    #[serde(default)]
+    pub next_run: SupportRiskEvidenceOutcomePayload,
+    #[serde(default)]
+    pub five_run: SupportRiskEvidenceOutcomePayload,
+    #[serde(default)]
+    pub average_confidence: Option<f64>,
+}
+
+/// Read-only local outcome evidence for stored daily support-risk labels.
+///
+/// It excludes raw indicator rows and explicitly cannot create a gate, change
+/// Hermes, alter configuration, queue work, or reach Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupportRiskEvidencePayload {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub minimum_complete_observations: i64,
+    #[serde(default)]
+    pub eligible_signal_count: i64,
+    #[serde(default)]
+    pub next_run_complete_count: i64,
+    #[serde(default)]
+    pub five_run_complete_count: i64,
+    #[serde(default)]
+    pub labels: Vec<SupportRiskEvidenceLabelPayload>,
+    #[serde(default)]
+    pub safety: String,
+    #[serde(default)]
+    pub interpretation: String,
+}
+
 /// Bounded Decision Gate Replay envelope.
 ///
-/// Deterministic replay scenarios and changes are typed, while support-risk
-/// evidence remains staged JSON as the historical-analysis read model evolves.
-/// This preserves the public replay boundary without changing report
+/// Deterministic replay scenarios and local support-risk observations are
+/// typed. This preserves the public replay boundary without changing report
 /// generation, configuration, or any decision and execution behavior.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DecisionGateReplayPayload {
@@ -3028,7 +3080,7 @@ pub struct DecisionGateReplayPayload {
     pub scenarios: Vec<DecisionGateReplayScenarioPayload>,
     pub safety: String,
     pub interpretation: String,
-    pub support_risk_evidence: JsonValue,
+    pub support_risk_evidence: SupportRiskEvidencePayload,
 }
 
 /// One isolated historical threshold comparison in the Decision Gate Replay.
