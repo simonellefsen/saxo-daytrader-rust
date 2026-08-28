@@ -72,15 +72,15 @@ use crate::{
         PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
-        ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload, QuiverConflictPayload,
-        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
+        ProtectiveStopPrecheckPayload, QuiverConflictPayload, SchedulerStatusSummaryPayload,
+        StrategyJournalEntryPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
@@ -3215,6 +3215,47 @@ fn dashboard_protective_stop_coverage_from_json(
     coverage: JsonValue,
 ) -> serde_json::Result<ProtectiveStopCoveragePayload> {
     serde_json::from_value(coverage)
+}
+
+/// Projects persisted SIM prechecks into the small dashboard/form contract.
+///
+/// This never grants placement authority: the only form identifier is the
+/// local precheck id, and the existing handler reloads it, validates SIM and
+/// accepted status, and requires a separate confirmation before reaching Saxo.
+fn protective_stop_precheck_payloads(rows: Vec<JsonValue>) -> Vec<ProtectiveStopPrecheckPayload> {
+    rows.into_iter()
+        .map(|row| {
+            let status = json_text(&row, "status");
+            let result = dashboard_embedded_json(&row, "result_json").unwrap_or(JsonValue::Null);
+            let result_label = result
+                .get("error")
+                .and_then(|error| error.get("label"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or_else(|| {
+                    if status == "precheck_ok" {
+                        "Accepted"
+                    } else {
+                        "Review required"
+                    }
+                })
+                .to_string();
+            let safety = result
+                .get("safety")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("no Saxo order placement")
+                .to_string();
+            ProtectiveStopPrecheckPayload {
+                id: value_i64(&row, "id"),
+                created_at: json_text(&row, "created_at"),
+                symbol: json_text(&row, "symbol"),
+                quantity: value_f64(&row, "quantity"),
+                stop_price_local: value_f64(&row, "stop_price_local"),
+                status,
+                result_label,
+                safety,
+            }
+        })
+        .collect()
 }
 
 fn dashboard_protective_stop_coverage_not_loaded() -> ProtectiveStopCoveragePayload {
@@ -9853,7 +9894,10 @@ impl AppState {
             atr_multiple,
         );
         if let Some(object) = coverage.as_object_mut() {
-            object.insert("recent_prechecks".to_string(), JsonValue::Array(prechecks));
+            object.insert(
+                "recent_prechecks".to_string(),
+                serde_json::to_value(protective_stop_precheck_payloads(prechecks))?,
+            );
             object.insert(
                 "recent_lifecycle_tests".to_string(),
                 JsonValue::Array(lifecycle_tests),
@@ -18921,6 +18965,32 @@ mod tests {
         assert!(
             dashboard_protective_stop_coverage_from_json(json!({"status": "covered"})).is_err()
         );
+    }
+
+    #[test]
+    fn protective_stop_precheck_payloads_allowlist_result_and_safety_display() {
+        let payloads = protective_stop_precheck_payloads(vec![json!({
+            "id": 42,
+            "created_at": "2026-08-28T12:00:00Z",
+            "environment": "sim",
+            "symbol": "NOVO-B:xcse",
+            "quantity": 12,
+            "stop_price_local": 780.0,
+            "status": "precheck_ok",
+            "result_json": "{\"error\":{\"label\":\"Accepted by simulated broker\"},\"safety\":\"precheck_only_no_order_placement\",\"raw_saxo_response\":{\"account\":\"must stay internal\"}}",
+            "raw_broker_document": {"account": "must stay internal"}
+        })]);
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].id, 42);
+        assert_eq!(payloads[0].result_label, "Accepted by simulated broker");
+        assert_eq!(payloads[0].safety, "precheck_only_no_order_placement");
+        let serialized = serde_json::to_value(&payloads)
+            .expect("typed precheck payload serializes")
+            .to_string();
+        assert!(!serialized.contains("raw_saxo_response"));
+        assert!(!serialized.contains("raw_broker_document"));
+        assert!(!serialized.contains("result_json"));
     }
 
     #[test]

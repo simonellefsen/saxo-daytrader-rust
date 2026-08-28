@@ -2273,6 +2273,32 @@ pub struct ProtectiveStopCoverageExceptionPayload {
     pub operator_action: String,
 }
 
+/// Allowlisted result of a manual SIM protective-stop precheck.
+///
+/// The display contains only the local form linkage, requested stop values,
+/// result label, and safety marker. The persisted Saxo precheck document stays
+/// outside the dashboard contract; it is reloaded by the existing placement
+/// handler before any order can be requested.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProtectiveStopPrecheckPayload {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub symbol: String,
+    #[serde(default)]
+    pub quantity: f64,
+    #[serde(default)]
+    pub stop_price_local: f64,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub result_label: String,
+    #[serde(default)]
+    pub safety: String,
+}
+
 /// Bounded protective-stop coverage envelope for the Execution dashboard.
 ///
 /// Per-position and exception display/form fields are allowlisted. Detailed
@@ -2284,7 +2310,7 @@ pub struct ProtectiveStopCoveragePayload {
     pub summary: ProtectiveStopCoverageSummaryPayload,
     pub positions: Vec<ProtectiveStopCoveragePositionPayload>,
     pub exceptions: Vec<ProtectiveStopCoverageExceptionPayload>,
-    pub recent_prechecks: Vec<JsonValue>,
+    pub recent_prechecks: Vec<ProtectiveStopPrecheckPayload>,
     pub recent_lifecycle_tests: Vec<JsonValue>,
     pub safety: String,
     pub interpretation: String,

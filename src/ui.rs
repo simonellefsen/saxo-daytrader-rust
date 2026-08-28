@@ -37,9 +37,10 @@ use crate::{
         PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
         ProtectiveStopCoverageExceptionPayload, ProtectiveStopCoveragePayload,
-        ProtectiveStopCoveragePositionPayload, QuiverConflictPayload,
-        TradingManagerBlockedBuyGatePayload, TradingManagerCashBudgetPayload,
-        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
+        ProtectiveStopCoveragePositionPayload, ProtectiveStopPrecheckPayload,
+        QuiverConflictPayload, TradingManagerBlockedBuyGatePayload,
+        TradingManagerCashBudgetPayload, TradingManagerDrawdownGuardrailPayload,
+        TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
         TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
@@ -6956,39 +6957,45 @@ fn ProtectiveStopCoveragePanel(
 
 #[component]
 fn ProtectiveStopPrecheckRow(
-    row: JsonValue,
+    row: ProtectiveStopPrecheckPayload,
     prefs: LocalizationPrefs,
     sim_enabled: bool,
 ) -> Element {
-    let result = row
-        .get("result_json")
-        .and_then(JsonValue::as_str)
-        .and_then(|value| serde_json::from_str::<JsonValue>(value).ok())
-        .unwrap_or(JsonValue::Null);
-    let status = text_or(&row, "status", "unknown").replace('_', " ");
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
-    let symbol = text_or(&row, "symbol", "n/a");
-    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
-    let stop_price = format_number(value_f64(&row, "stop_price_local"), 4, &prefs);
-    let status_class = if text(&row, "status") == "precheck_ok" {
+    let raw_status = row.status;
+    let status = if raw_status.is_empty() {
+        "unknown".to_string()
+    } else {
+        raw_status.replace('_', " ")
+    };
+    let created_at = format_timestamp(&row.created_at, &prefs);
+    let symbol = if row.symbol.is_empty() {
+        "n/a".to_string()
+    } else {
+        row.symbol
+    };
+    let quantity = format_quantity(row.quantity, &prefs);
+    let stop_price = format_number(row.stop_price_local, 4, &prefs);
+    let status_class = if raw_status == "precheck_ok" {
         "status good"
     } else {
         "status warn"
     };
-    let result_label = result
-        .get("error")
-        .and_then(|error| error.get("label"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or_else(|| {
-            if text(&row, "status") == "precheck_ok" {
-                "Accepted"
-            } else {
-                "Review required"
-            }
-        });
-    let safety = fallback_text(&result, "safety", "no Saxo order placement").replace('_', " ");
-    let id = value_i64(&row, "id");
-    let eligible_for_test = sim_enabled && text(&row, "status") == "precheck_ok" && id > 0;
+    let result_label = if row.result_label.is_empty() {
+        if raw_status == "precheck_ok" {
+            "Accepted".to_string()
+        } else {
+            "Review required".to_string()
+        }
+    } else {
+        row.result_label
+    };
+    let safety = if row.safety.is_empty() {
+        "no Saxo order placement".to_string()
+    } else {
+        row.safety.replace('_', " ")
+    };
+    let id = row.id;
+    let eligible_for_test = sim_enabled && raw_status == "precheck_ok" && id > 0;
     rsx! {
         tr {
             td { "{created_at}" }

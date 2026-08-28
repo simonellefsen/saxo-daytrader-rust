@@ -10,6 +10,11 @@ updated: 2026-08-28
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-28] architecture | Type Protective Stop Coverage SIM prechecks
+
+- Changed the Execution recent-SIM-precheck rows from generic persisted JSON to an allowlisted local ID, requested stop, status, compact result-label, and safety projection.
+- The stored Saxo precheck response remains internal. Its placement form still sends only the local precheck ID to the established explicit SIM confirmation and reload/validation path; no precheck, placement, cancellation, reconciliation, queue, or Saxo behavior changed.
+
 ## [2026-08-28] architecture | Type Protective Stop Coverage exception rows
 
 - Changed the Execution protection-exception rows and their computed proposal display from generic JSON to an allowlisted symbol, uncovered quantity, reason, operator guidance, and stored-indicator price/ATR projection.
