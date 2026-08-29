@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Watchlists dashboard projection
+
+- Added `market_state` for the typed Watchlists dashboard envelope and its explicit unloaded fallback, with a provider-document exclusion test.
+- `AppState` retains persisted reads, tab gating, degradation handling, quote refresh, universe configuration, report generation, manager gates, queues, and Saxo behavior.
+
 ## [2026-08-29] architecture | Extract Decision Report gate and summary projections
 
 - Extended `decision_state` with typed Decision Gate Replay and bounded Decision Report summary decoding, with focused tests excluding raw historical indicator and provider/report documents.

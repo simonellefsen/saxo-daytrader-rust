@@ -15,6 +15,7 @@ mod execution_state;
 mod fx;
 mod hermes_state;
 mod localization;
+mod market_state;
 mod markov_method;
 mod markov_state;
 mod mcp;

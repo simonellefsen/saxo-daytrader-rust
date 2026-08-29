@@ -44,6 +44,7 @@ use crate::{
         normalize_hermes_experiment_variable_path,
     },
     localization::LocalizationPrefs,
+    market_state::{dashboard_watchlists_from_json, dashboard_watchlists_not_loaded},
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
         CandidateScoringWaterfallCandidatePayload, CandidateScoringWaterfallConcentrationPayload,
@@ -79,16 +80,15 @@ use crate::{
         HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
-        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
-        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
-        PortfolioTradePayload, QuiverConflictPayload, TradingManagerPayload,
-        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
-        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
+        OverviewIntegrityIssuePayload, OverviewIntegrityPayload, PortfolioTradePayload,
+        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     overview_state::{
         dashboard_integrity_from_json, dashboard_market_status_from_json,
@@ -3113,23 +3113,6 @@ fn performance_range_limit(range_key: &str) -> i64 {
 
 fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Option<i64> {
     (active_view == "performance").then(|| performance_range_limit(range_key))
-}
-
-/// Decodes the stable Watchlists envelope used by the Watchlists tab. The row
-/// shell is allowlisted while nested decision/support evidence stays staged.
-fn dashboard_watchlists_from_json(
-    watchlists: JsonValue,
-) -> serde_json::Result<MarketWatchlistsPayload> {
-    serde_json::from_value(watchlists)
-}
-
-fn dashboard_watchlists_not_loaded() -> MarketWatchlistsPayload {
-    MarketWatchlistsPayload {
-        generated_at: String::new(),
-        cache_ttl_seconds: 300,
-        universe: MarketWatchlistUniversePayload::default(),
-        categories: Vec::new(),
-    }
 }
 
 fn dashboard_embedded_json(row: &JsonValue, key: &str) -> Option<JsonValue> {
