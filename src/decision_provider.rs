@@ -5,11 +5,13 @@
 //! xAI's deferred-completion path. It deliberately knows nothing about
 //! scheduling, report persistence, Trading Manager gates, queues, or Saxo.
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
+
+use crate::decision_schema;
 
 /// Provider-neutral request inputs. The provider owns only the transport
 /// shape; report prompting, schema selection, and persistence remain outside
@@ -157,11 +159,217 @@ impl DecisionProvider {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SchemaValidationIssue {
+    pub path: String,
+    pub message: String,
+}
+
+pub(crate) fn decision_report_response_format(provider: &str) -> JsonValue {
+    if provider != "openrouter" {
+        return json!({"type": "json_object"});
+    }
+    let schema = openrouter_strict_schema(decision_schema::decision_report_json_schema());
+    json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "daytrader_decision_report",
+            "strict": true,
+            "schema": schema
+        }
+    })
+}
+
+pub(crate) fn openrouter_strict_schema(mut schema: JsonValue) -> JsonValue {
+    enforce_openrouter_strict_schema(&mut schema);
+    schema
+}
+
+fn enforce_openrouter_strict_schema(schema: &mut JsonValue) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+
+    let is_object_schema = object.get("type").is_some_and(schema_type_includes_object);
+    if is_object_schema {
+        object.insert("additionalProperties".to_string(), JsonValue::from(false));
+
+        if let Some(properties) = object.get("properties").and_then(JsonValue::as_object) {
+            let mut required = object
+                .get("required")
+                .and_then(JsonValue::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for property in properties.keys() {
+                if !required
+                    .iter()
+                    .any(|value| value.as_str() == Some(property.as_str()))
+                {
+                    required.push(JsonValue::from(property.clone()));
+                }
+            }
+            object.insert("required".to_string(), JsonValue::from(required));
+        }
+    }
+
+    if let Some(properties) = object
+        .get_mut("properties")
+        .and_then(JsonValue::as_object_mut)
+    {
+        for child in properties.values_mut() {
+            enforce_openrouter_strict_schema(child);
+        }
+    }
+
+    if let Some(items) = object.get_mut("items") {
+        enforce_openrouter_strict_schema(items);
+    }
+
+    for branch_key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(branches) = object.get_mut(branch_key).and_then(JsonValue::as_array_mut) {
+            for child in branches {
+                enforce_openrouter_strict_schema(child);
+            }
+        }
+    }
+
+    for definitions_key in ["$defs", "definitions"] {
+        if let Some(definitions) = object
+            .get_mut(definitions_key)
+            .and_then(JsonValue::as_object_mut)
+        {
+            for child in definitions.values_mut() {
+                enforce_openrouter_strict_schema(child);
+            }
+        }
+    }
+}
+
+fn schema_type_includes_object(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::String(text) => text == "object",
+        JsonValue::Array(values) => values.iter().any(|item| item.as_str() == Some("object")),
+        _ => false,
+    }
+}
+
+pub(crate) fn validate_openrouter_strict_schema(schema: &JsonValue) -> Vec<SchemaValidationIssue> {
+    let mut issues = Vec::new();
+    validate_openrouter_strict_schema_at(schema, "schema", &mut issues);
+    issues
+}
+
+fn validate_openrouter_strict_schema_at(
+    schema: &JsonValue,
+    path: &str,
+    issues: &mut Vec<SchemaValidationIssue>,
+) {
+    if schema.get("type").is_some_and(schema_type_includes_object) {
+        if schema.get("additionalProperties") != Some(&JsonValue::from(false)) {
+            issues.push(SchemaValidationIssue {
+                path: path.to_string(),
+                message: "object schemas must set additionalProperties=false".to_string(),
+            });
+        }
+
+        let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) else {
+            issues.push(SchemaValidationIssue {
+                path: path.to_string(),
+                message: "object schemas must define properties".to_string(),
+            });
+            return;
+        };
+
+        let Some(required) = schema.get("required").and_then(JsonValue::as_array) else {
+            issues.push(SchemaValidationIssue {
+                path: path.to_string(),
+                message: "object schemas must list required properties".to_string(),
+            });
+            return;
+        };
+
+        let mut seen_required = HashSet::new();
+        for value in required {
+            let Some(required_name) = value.as_str() else {
+                issues.push(SchemaValidationIssue {
+                    path: path.to_string(),
+                    message: "required entries must be strings".to_string(),
+                });
+                continue;
+            };
+            if !seen_required.insert(required_name.to_string()) {
+                issues.push(SchemaValidationIssue {
+                    path: path.to_string(),
+                    message: format!("required property {required_name:?} is duplicated"),
+                });
+            }
+            if !properties.contains_key(required_name) {
+                issues.push(SchemaValidationIssue {
+                    path: path.to_string(),
+                    message: format!(
+                        "required property {required_name:?} is not declared in properties"
+                    ),
+                });
+            }
+        }
+
+        for property in properties.keys() {
+            if !required
+                .iter()
+                .any(|value| value.as_str() == Some(property.as_str()))
+            {
+                issues.push(SchemaValidationIssue {
+                    path: format!("{path}.{property}"),
+                    message: "property must be listed in required for strict structured outputs"
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
+        for (name, child) in properties {
+            validate_openrouter_strict_schema_at(child, &format!("{path}.{name}"), issues);
+        }
+    }
+
+    if let Some(items) = schema.get("items") {
+        validate_openrouter_strict_schema_at(items, &format!("{path}[]"), issues);
+    }
+
+    for branch_key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(branches) = schema.get(branch_key).and_then(JsonValue::as_array) {
+            for (index, child) in branches.iter().enumerate() {
+                validate_openrouter_strict_schema_at(
+                    child,
+                    &format!("{path}.{branch_key}[{index}]"),
+                    issues,
+                );
+            }
+        }
+    }
+
+    for definitions_key in ["$defs", "definitions"] {
+        if let Some(definitions) = schema.get(definitions_key).and_then(JsonValue::as_object) {
+            for (name, child) in definitions {
+                validate_openrouter_strict_schema_at(
+                    child,
+                    &format!("{path}.{definitions_key}.{name}"),
+                    issues,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{ChatCompletionRequest, DecisionProvider};
+    use super::{
+        ChatCompletionRequest, DecisionProvider, decision_report_response_format,
+        validate_openrouter_strict_schema,
+    };
 
     #[test]
     fn provider_preserves_sync_and_deferred_contracts() {
@@ -216,5 +424,15 @@ mod tests {
         assert_eq!(request["max_tokens"], 4096);
         assert!(request.get("plugins").is_none());
         assert!(request.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn openrouter_response_format_uses_a_valid_strict_schema() {
+        let response_format = decision_report_response_format("openrouter");
+        let schema = &response_format["json_schema"]["schema"];
+
+        assert_eq!(response_format["type"], "json_schema");
+        assert_eq!(response_format["json_schema"]["strict"], true);
+        assert!(validate_openrouter_strict_schema(schema).is_empty());
     }
 }

@@ -2812,5 +2812,11 @@ broker mutation was added.
 ## [2026-08-29] architecture | Extract Decision Report provider request assembly
 
 - Moved provider-specific Decision Report chat request assembly into `decision_provider`, including OpenRouter plugin selection and response-format and reasoning-effort placement.
-- Report prompting, schema construction and validation, strict completion normalization, scheduling, persistence, and the public schema-health API remain at their existing boundaries in `xai_decision`.
+- At this stage, report prompting, schema construction and validation, strict completion normalization, scheduling, persistence, and the public schema-health API remained at their existing boundaries in `xai_decision`; the subsequent provider-boundary entry records the strict-schema move.
+- This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.
+
+## [2026-08-29] architecture | Extract OpenRouter strict schema provider boundary
+
+- Moved OpenRouter strict-schema shaping, recursive validation, response-format construction, and schema-validation issue data into `decision_provider` alongside the existing provider transport and request assembly.
+- The public schema-health API remains a thin mapping in `xai_decision`; report prompting, canonical schema construction, completion normalization, scheduling, persistence, and all execution boundaries remain unchanged.
 - This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.
