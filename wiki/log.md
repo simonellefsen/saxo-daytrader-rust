@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Render typed execution orders directly
+
+- Removed the Execution and Overview order renderers' generic-JSON re-serialization of their compiler-checked execution-order payloads. Stable display fields now remain typed through SSR.
+- Persisted lifecycle-result and Hermes-attribution documents remain explicit diagnostics-only inputs, with a direct regression test covering protective-stop, broker-visibility, and attribution display semantics. This changes no queue claim, precheck, placement, cancellation, replacement, reconciliation, or Saxo execution behavior.
+
 ## [2026-08-29] architecture | Render selected Decision Report directly
 
 - Removed the Decisions view's internal generic-JSON re-serialization of the selected typed Decision Report. Its stable lifecycle, cadence, authority, model, and error fields now flow straight from the compiler-checked dashboard payload.

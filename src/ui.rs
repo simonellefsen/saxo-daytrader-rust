@@ -7639,13 +7639,12 @@ fn MarketRow(row: MarketExchangeStatusPayload, prefs: LocalizationPrefs) -> Elem
 
 #[component]
 fn OrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPrefs) -> Element {
-    let row = execution_order_as_json(&row);
-    let id = text(&row, "id");
-    let created_at = format_timestamp(&text(&row, "created_at"), &prefs);
-    let symbol = text(&row, "symbol");
-    let action = text(&row, "action");
-    let status = text(&row, "status");
-    let quantity = format_quantity(value_f64(&row, "quantity"), &prefs);
+    let id = row.id;
+    let created_at = format_timestamp(&row.created_at, &prefs);
+    let symbol = row.symbol.clone();
+    let action = row.action.clone();
+    let status = row.status.clone();
+    let quantity = format_quantity(row.quantity, &prefs);
     let currency = execution_order_price_currency(&row);
     let (trigger_price, trigger_kind) = execution_order_trigger_price(&row, &currency, &prefs);
     let expiry = execution_order_lifecycle_label(&row, &prefs);
@@ -7681,8 +7680,7 @@ fn OrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPrefs) -> El
 
 #[component]
 fn ExecutionOrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPrefs) -> Element {
-    let row = execution_order_as_json(&row);
-    let status = text(&row, "status");
+    let status = row.status.clone();
     let detail = execution_status_detail(&row);
     let reason = execution_status_reason(&row);
     let failure_stage = execution_failure_stage(&row);
@@ -7700,18 +7698,34 @@ fn ExecutionOrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPre
     let attribution_detail = execution_attribution_detail(&row, &prefs);
     let expiry = execution_order_lifecycle_label(&row, &prefs);
     let lifecycle_detail = execution_order_lifecycle_detail(&row, &prefs);
+    let strategy_type = if row.strategy_type.is_empty() {
+        "unknown".to_string()
+    } else {
+        row.strategy_type.clone()
+    };
+    let strategy_role = if row.strategy_role.is_empty() {
+        "primary".to_string()
+    } else {
+        row.strategy_role.clone()
+    };
+    let order_type = if row.order_type.is_empty() {
+        "Market".to_string()
+    } else {
+        row.order_type.clone()
+    };
+    let currency = execution_order_price_currency(&row);
     rsx! {
         tr {
-            td { "{text(&row, \"id\")}" }
-            td { "{format_timestamp(&text(&row, \"created_at\"), &prefs)}" }
-            td { "{text(&row, \"symbol\")}" }
-            td { "{text(&row, \"action\")}" }
+            td { "{row.id}" }
+            td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.symbol}" }
+            td { "{row.action}" }
             // Never fall back to a concrete provenance. An unset type used to
             // render as "manual", which showed every automated order as
             // operator-initiated instead of revealing that the value was absent.
-            td { "{fallback_text(&row, \"strategy_type\", \"unknown\")}" }
-            td { "{fallback_text(&row, \"strategy_role\", \"primary\")}" }
-            td { "{fallback_text(&row, \"order_type\", \"Market\")}" }
+            td { "{strategy_type}" }
+            td { "{strategy_role}" }
+            td { "{order_type}" }
             td { class: "execution-status-cell",
                 span { class: "{status_class}", title: "{tooltip}", "{status}" }
                 if !reason.is_empty() {
@@ -7721,16 +7735,16 @@ fn ExecutionOrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPre
                     span { class: "status detail-status", title: "{tooltip}", "{failure_stage_label}" }
                 }
             }
-            td { "{format_quantity(value_f64(&row, \"quantity\"), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"price_local\"), &execution_order_price_currency(&row), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"limit_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
-            td { "{format_local_money(value_f64(&row, \"stop_price_local\"), &execution_order_price_currency(&row), &prefs)}" }
+            td { "{format_quantity(row.quantity, &prefs)}" }
+            td { "{format_local_money(row.price_local, &currency, &prefs)}" }
+            td { "{format_local_money(row.limit_price_local, &currency, &prefs)}" }
+            td { "{format_local_money(row.stop_price_local, &currency, &prefs)}" }
             td { class: "muted", title: "{lifecycle_detail}", "{expiry}" }
             td { class: "muted",
                 details {
                     class: "error-details order-events-details",
                     "data-order-events": "true",
-                    "data-order-id": "{text(&row, \"id\")}",
+                        "data-order-id": "{row.id}",
                     summary { "Broker events" }
                     div {
                         class: "order-events-output",
@@ -7759,34 +7773,74 @@ fn ExecutionOrderRow(row: DashboardExecutionOrderPayload, prefs: LocalizationPre
     }
 }
 
-fn execution_order_as_json(row: &DashboardExecutionOrderPayload) -> JsonValue {
-    json!({
-        "id": row.id,
-        "created_at": row.created_at,
-        "symbol": row.symbol,
-        "action": row.action,
-        "order_type": row.order_type,
-        "status": row.status,
-        "quantity": row.quantity,
-        "price_local": row.price_local,
-        "limit_price_local": row.limit_price_local,
-        "stop_price_local": row.stop_price_local,
-        "currency": row.currency,
-        "strategy_type": row.strategy_type,
-        "strategy_role": row.strategy_role,
-        "error_text": row.error_text,
-        "order_duration_type": row.order_duration_type,
-        "expected_expiry_at_utc": row.expected_expiry_at_utc,
-        "lifecycle_state": row.lifecycle_state,
-        "execution_result_json": row.execution_result_json,
-        "attribution": row.attribution,
-    })
+/// Stable execution rows render directly from their typed dashboard payload.
+/// Tests retain a JSON implementation so the diagnostic parsing behavior stays
+/// pinned against persisted legacy documents.
+trait ExecutionOrderDisplayRow {
+    fn execution_text(&self, key: &str) -> String;
+    fn execution_number(&self, key: &str) -> f64;
+    fn execution_document(&self, key: &str) -> Option<JsonValue>;
 }
 
-fn execution_attribution_label(row: &JsonValue) -> (String, &'static str) {
-    let null = JsonValue::Null;
-    let attribution = row.get("attribution").unwrap_or(&null);
-    match text(attribution, "delta").as_str() {
+impl ExecutionOrderDisplayRow for DashboardExecutionOrderPayload {
+    fn execution_text(&self, key: &str) -> String {
+        match key {
+            "id" => self.id.to_string(),
+            "created_at" => self.created_at.clone(),
+            "symbol" => self.symbol.clone(),
+            "action" => self.action.clone(),
+            "order_type" => self.order_type.clone(),
+            "status" => self.status.clone(),
+            "currency" => self.currency.clone(),
+            "strategy_type" => self.strategy_type.clone(),
+            "strategy_role" => self.strategy_role.clone(),
+            "error_text" => self.error_text.clone(),
+            "order_duration_type" => self.order_duration_type.clone(),
+            "expected_expiry_at_utc" => self.expected_expiry_at_utc.clone(),
+            "lifecycle_state" => self.lifecycle_state.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn execution_number(&self, key: &str) -> f64 {
+        match key {
+            "quantity" => self.quantity,
+            "price_local" => self.price_local,
+            "limit_price_local" => self.limit_price_local,
+            "stop_price_local" => self.stop_price_local,
+            _ => 0.0,
+        }
+    }
+
+    fn execution_document(&self, key: &str) -> Option<JsonValue> {
+        let value = match key {
+            "execution_result_json" => &self.execution_result_json,
+            "attribution" => &self.attribution,
+            _ => return None,
+        };
+        (!value.is_null()).then(|| value.clone())
+    }
+}
+
+impl ExecutionOrderDisplayRow for JsonValue {
+    fn execution_text(&self, key: &str) -> String {
+        text(self, key)
+    }
+
+    fn execution_number(&self, key: &str) -> f64 {
+        value_f64(self, key)
+    }
+
+    fn execution_document(&self, key: &str) -> Option<JsonValue> {
+        diagnostic_payload(self, key)
+    }
+}
+
+fn execution_attribution_label(row: &impl ExecutionOrderDisplayRow) -> (String, &'static str) {
+    let attribution = row
+        .execution_document("attribution")
+        .unwrap_or(JsonValue::Null);
+    match text(&attribution, "delta").as_str() {
         "allowed_executed" => ("Hermes allow".to_string(), "good-text"),
         "allowed_queued" => ("Hermes allow".to_string(), ""),
         "reduced_or_capped" => ("Hermes reduce".to_string(), "warn-text"),
@@ -7799,9 +7853,19 @@ fn execution_attribution_label(row: &JsonValue) -> (String, &'static str) {
     }
 }
 
-fn execution_attribution_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
+fn execution_attribution_detail(
+    row: &impl ExecutionOrderDisplayRow,
+    prefs: &LocalizationPrefs,
+) -> String {
     let null = JsonValue::Null;
-    let attribution = row.get("attribution").unwrap_or(&null);
+    let attribution = row
+        .execution_document("attribution")
+        .unwrap_or(JsonValue::Null);
+    let attribution = if attribution.is_null() {
+        &null
+    } else {
+        &attribution
+    };
     let report = attribution.get("report").unwrap_or(&null);
     let manager = attribution.get("trading_manager").unwrap_or(&null);
     let manager_decision = manager.get("decision").unwrap_or(&null);
@@ -9928,8 +9992,8 @@ fn execution_status_is_healthy(status: &str) -> bool {
     )
 }
 
-fn execution_status_detail(row: &JsonValue) -> String {
-    let error = text(row, "error_text");
+fn execution_status_detail(row: &impl ExecutionOrderDisplayRow) -> String {
+    let error = row.execution_text("error_text");
     if !error.is_empty() {
         return error;
     }
@@ -9937,16 +10001,16 @@ fn execution_status_detail(row: &JsonValue) -> String {
     // generic key walk below matched Saxo's `DisplayAndFormat.Description` --
     // the instrument name -- and every resting protective stop rendered
     // "error: ConocoPhillips" with `error_text` actually NULL in the database.
-    if execution_status_is_healthy(&text(row, "status")) {
+    if execution_status_is_healthy(&row.execution_text("status")) {
         return String::new();
     }
-    diagnostic_payload(row, "execution_result_json")
+    row.execution_document("execution_result_json")
         .and_then(|payload| diagnostic_detail_from_json(&payload))
         .unwrap_or_default()
 }
 
-fn execution_status_reason(row: &JsonValue) -> String {
-    if text(row, "lifecycle_state") == "expiry_pending_broker_sync" {
+fn execution_status_reason(row: &impl ExecutionOrderDisplayRow) -> String {
+    if row.execution_text("lifecycle_state") == "expiry_pending_broker_sync" {
         return "Expiry sync pending".to_string();
     }
     if let Some(taxonomy) = execution_error_taxonomy(row) {
@@ -9955,18 +10019,22 @@ fn execution_status_reason(row: &JsonValue) -> String {
             return label;
         }
     }
-    let status = text(row, "status");
+    let status = row.execution_text("status");
     let detail = execution_status_detail(row);
     classify_execution_detail(&status, &detail)
 }
 
-fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> String {
+fn execution_status_tooltip(
+    row: &impl ExecutionOrderDisplayRow,
+    reason: &str,
+    detail: &str,
+) -> String {
     let mut lines = Vec::new();
-    let status = text(row, "status");
+    let status = row.execution_text("status");
     if !status.is_empty() {
         lines.push(format!("status: {status}"));
     }
-    let broker_order_id = text(row, "broker_order_id");
+    let broker_order_id = row.execution_text("broker_order_id");
     if !broker_order_id.is_empty() {
         lines.push(format!("broker order: {broker_order_id}"));
     }
@@ -9992,7 +10060,7 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
             lines.push(format!("retry: {retry_policy}"));
         }
     }
-    let lifecycle_state = text(row, "lifecycle_state");
+    let lifecycle_state = row.execution_text("lifecycle_state");
     if !lifecycle_state.is_empty() {
         lines.push(format!("lifecycle state: {lifecycle_state}"));
     }
@@ -10018,8 +10086,8 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
             "detail: order accepted by Saxo; waiting for broker status/fill sync".to_string(),
         );
     }
-    let duration = text(row, "order_duration_type");
-    let expiry = text(row, "expected_expiry_at_utc");
+    let duration = row.execution_text("order_duration_type");
+    let expiry = row.execution_text("expected_expiry_at_utc");
     if !duration.is_empty() || !expiry.is_empty() {
         lines.push(format!(
             "lifecycle: duration {}; expected expiry {}",
@@ -10034,13 +10102,13 @@ fn execution_status_tooltip(row: &JsonValue, reason: &str, detail: &str) -> Stri
     lines.join("\n")
 }
 
-fn execution_error_taxonomy(row: &JsonValue) -> Option<JsonValue> {
-    diagnostic_payload(row, "execution_result_json")
+fn execution_error_taxonomy(row: &impl ExecutionOrderDisplayRow) -> Option<JsonValue> {
+    row.execution_document("execution_result_json")
         .and_then(|payload| payload.get("error_taxonomy").cloned())
 }
 
-fn execution_failure_stage(row: &JsonValue) -> String {
-    diagnostic_payload(row, "execution_result_json")
+fn execution_failure_stage(row: &impl ExecutionOrderDisplayRow) -> String {
+    row.execution_document("execution_result_json")
         .and_then(|payload| payload.get("failure_stage").cloned())
         .and_then(|value| value.as_str().map(str::trim).map(ToString::to_string))
         .filter(|value| !value.is_empty())
@@ -10059,8 +10127,9 @@ fn execution_failure_stage_label(stage: &str) -> &'static str {
     }
 }
 
-fn execution_broker_sync_text(row: &JsonValue, key: &str) -> String {
-    row.get("execution_result_json")
+fn execution_broker_sync_text(row: &impl ExecutionOrderDisplayRow, key: &str) -> String {
+    row.execution_document("execution_result_json")
+        .as_ref()
         .and_then(|value| value.get("broker_sync"))
         .and_then(|value| value.get(key))
         .and_then(JsonValue::as_str)
@@ -10070,9 +10139,12 @@ fn execution_broker_sync_text(row: &JsonValue, key: &str) -> String {
         .to_string()
 }
 
-fn execution_order_lifecycle_label(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
-    let duration = text(row, "order_duration_type");
-    let expiry_at = text(row, "expected_expiry_at_utc");
+fn execution_order_lifecycle_label(
+    row: &impl ExecutionOrderDisplayRow,
+    prefs: &LocalizationPrefs,
+) -> String {
+    let duration = row.execution_text("order_duration_type");
+    let expiry_at = row.execution_text("expected_expiry_at_utc");
     if duration.eq_ignore_ascii_case("DayOrder") && !expiry_at.is_empty() {
         return format_timestamp(&expiry_at, prefs);
     }
@@ -10082,24 +10154,27 @@ fn execution_order_lifecycle_label(row: &JsonValue, prefs: &LocalizationPrefs) -
     String::new()
 }
 
-fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) -> String {
+fn execution_order_lifecycle_detail(
+    row: &impl ExecutionOrderDisplayRow,
+    prefs: &LocalizationPrefs,
+) -> String {
     let mut lines = Vec::new();
-    let duration = text(row, "order_duration_type");
+    let duration = row.execution_text("order_duration_type");
     if !duration.is_empty() {
         lines.push(format!("duration {duration}"));
     }
-    let expiry_at = text(row, "expected_expiry_at_utc");
+    let expiry_at = row.execution_text("expected_expiry_at_utc");
     if !expiry_at.is_empty() {
         lines.push(format!(
             "expected expiry {}",
             format_timestamp(&expiry_at, prefs)
         ));
     }
-    let market = text(row, "expected_expiry_market");
+    let market = row.execution_text("expected_expiry_market");
     if !market.is_empty() {
         lines.push(format!("market {market}"));
     }
-    let lifecycle_state = text(row, "lifecycle_state");
+    let lifecycle_state = row.execution_text("lifecycle_state");
     if !lifecycle_state.is_empty() {
         lines.push(format!("state {lifecycle_state}"));
     }
@@ -10111,7 +10186,7 @@ fn execution_order_lifecycle_detail(row: &JsonValue, prefs: &LocalizationPrefs) 
     if !broker_visibility_note.is_empty() {
         lines.push(broker_visibility_note);
     }
-    let note = text(row, "lifecycle_note");
+    let note = row.execution_text("lifecycle_note");
     if !note.is_empty() {
         lines.push(note);
     }
@@ -10228,12 +10303,12 @@ fn saxo_precheck_reason(detail: &str) -> Option<String> {
     }
 }
 
-fn execution_detail_block(row: &JsonValue, detail: &str) -> String {
+fn execution_detail_block(row: &impl ExecutionOrderDisplayRow, detail: &str) -> String {
     let mut lines = Vec::new();
     if !detail.is_empty() {
         lines.push(format!("error: {detail}"));
     }
-    if let Some(payload) = diagnostic_payload(row, "execution_result_json") {
+    if let Some(payload) = row.execution_document("execution_result_json") {
         let sanitized = sanitize_diagnostic_json(&payload);
         if !sanitized.is_null() && sanitized != json_empty_object() {
             let pretty =
@@ -10405,13 +10480,13 @@ fn age_label(minutes: f64) -> String {
 /// (a Market order), so the caller can render the bare value without inventing
 /// a label.
 fn execution_order_trigger_price(
-    row: &JsonValue,
+    row: &impl ExecutionOrderDisplayRow,
     currency: &str,
     prefs: &LocalizationPrefs,
 ) -> (String, String) {
-    let stop = value_f64(row, "stop_price_local");
-    let limit = value_f64(row, "limit_price_local");
-    let order_type = text(row, "order_type").to_ascii_lowercase();
+    let stop = row.execution_number("stop_price_local");
+    let limit = row.execution_number("limit_price_local");
+    let order_type = row.execution_text("order_type").to_ascii_lowercase();
     // Trust the order type first; fall back to whichever price is present so a
     // row with an unexpected or missing type still shows what it has.
     let prefers_stop = order_type.contains("stop");
@@ -10440,17 +10515,18 @@ fn execution_order_trigger_price(
 ///
 /// `strategy_type` is set by the runtime at insert (never by the model), so it
 /// is reliable provenance rather than a heuristic on price or action.
-fn is_protective_stop_order(row: &JsonValue) -> bool {
-    text(row, "strategy_type") == "protective_stop"
+fn is_protective_stop_order(row: &impl ExecutionOrderDisplayRow) -> bool {
+    row.execution_text("strategy_type") == "protective_stop"
 }
 
-fn execution_order_price_currency(row: &JsonValue) -> String {
-    let currency = text(row, "currency");
+fn execution_order_price_currency(row: &impl ExecutionOrderDisplayRow) -> String {
+    let currency = row.execution_text("currency");
     if !currency.trim().is_empty() {
         return currency;
     }
     if let Some(currency) = row
-        .get("execution_result_json")
+        .execution_document("execution_result_json")
+        .as_ref()
         .and_then(|value| value.get("broker_sync"))
         .and_then(|value| value.get("broker_payload"))
         .and_then(|value| value.get("DisplayAndFormat"))
@@ -10460,7 +10536,7 @@ fn execution_order_price_currency(row: &JsonValue) -> String {
     {
         return currency.to_string();
     }
-    currency_for_symbol(&text(row, "symbol")).to_string()
+    currency_for_symbol(&row.execution_text("symbol")).to_string()
 }
 
 fn currency_for_symbol(symbol: &str) -> &'static str {
@@ -11272,6 +11348,37 @@ mod tests {
             is_protective_stop_order(&row),
             "runtime-set strategy_type is the provenance signal"
         );
+    }
+
+    #[test]
+    fn typed_execution_order_rows_preserve_diagnostic_documents_without_json_round_trip() {
+        let row = DashboardExecutionOrderPayload {
+            symbol: "ADBE:xnas".to_string(),
+            status: "broker_working".to_string(),
+            currency: "USD".to_string(),
+            order_type: "Stop".to_string(),
+            strategy_type: "protective_stop".to_string(),
+            stop_price_local: 226.17,
+            execution_result_json: json!({
+                "broker_sync": {
+                    "broker_visibility": "activity_only",
+                    "broker_visibility_note": "Latest audit activity is the broker-status fallback."
+                }
+            }),
+            attribution: json!({"delta": "allowed_queued"}),
+            ..DashboardExecutionOrderPayload::default()
+        };
+
+        let (trigger, kind) = execution_order_trigger_price(&row, "USD", &default_prefs());
+        assert_eq!(kind, "Stop");
+        assert!(trigger.contains("226"));
+        assert!(is_protective_stop_order(&row));
+        assert_eq!(execution_status_detail(&row), "");
+        assert!(
+            execution_status_tooltip(&row, "Broker working", "")
+                .contains("broker visibility: activity_only")
+        );
+        assert_eq!(execution_attribution_label(&row).0, "Hermes allow");
     }
 
     #[test]
