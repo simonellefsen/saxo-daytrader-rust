@@ -2796,3 +2796,9 @@ broker mutation was added.
 - Changed the selected Decision Report's deterministic Candidate Scoring Waterfall to consume typed run identity, lifecycle, aggregate outcome-count, and per-candidate display evidence.
 - Raw manager documents and unallowlisted candidate detail are dropped at the typed boundary; the existing market, technical, Markov, Hermes, cost, holding, concentration, and position-weight explanations remain available from compiler-checked fields.
 - This remains read-only historical evidence and cannot generate a report, alter manager gates or configuration, invoke Hermes, queue work, precheck, or mutate a Saxo order.
+
+## [2026-08-29] architecture | Extract Decision Report schema construction
+
+- Moved the canonical Decision Report JSON Schema builders into the pure `decision_schema` module and added a direct contract test for the required suggested-trade metadata.
+- OpenRouter strict-output enforcement and the public schema-health check remain at the existing provider boundary; the report request continues to use the unchanged canonical schema.
+- This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.

@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # Daytrader Roadmap
@@ -23,6 +23,7 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Recently Landed
 
+- 2026-08-29: Moved the canonical Decision Report JSON Schema construction into `src/decision_schema.rs`, with a direct contract test for the required suggested-trade metadata. OpenRouter strict-output enforcement and the public schema-health check remain at the provider boundary in `xai_decision.rs`. This pure refactor changes no report schedule, model request shape, Trading Manager gate, configuration, queue, precheck, or Saxo execution behavior.
 - 2026-08-29: Typed and narrowed the selected Decision Report's deterministic Candidate Scoring Waterfall. The Decisions view now consumes compiler-checked manager-run identity, aggregate outcome counts, and per-candidate market, technical, Markov, Hermes, cost, holding, concentration, and position-weight display evidence; embedded raw manager documents and unallowlisted candidate detail are dropped at the boundary. This remains an offline historical snapshot and changes no report generation, manager gate, configuration, queue, precheck, or Saxo execution behavior.
 - 2026-08-28: Typed and narrowed the Decisions Support Risk Evidence panel beside Decision Gate Replay. The dashboard now consumes compiler-checked observation counts, labelled one/five-run outcome summaries, and confidence; raw indicator documents and unused analytical detail remain internal. This remains descriptive local outcome collection, not a gate or backtest, and changes no report generation, Hermes proposal, configuration, queue, precheck, or Saxo execution behavior.
 - 2026-08-28: Typed and narrowed the Execution Protective Stop Coverage's SIM lifecycle-test rows. The dashboard now consumes compiler-checked local test linkage, requested stop values, lifecycle status, and visible broker-order reference; placement, cancellation, reconciliation, request, and broker-response documents remain internal. The existing reconcile/cancel handlers still reload the local test and enforce their separate SIM and acknowledgement safeguards; queue and Saxo execution behavior are unchanged.
