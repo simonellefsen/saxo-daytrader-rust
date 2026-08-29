@@ -6112,7 +6112,7 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let benchmark_readthrough = latest
         .as_ref()
         .map(|journal| end_of_day_benchmark_readthrough(&journal.diary_json))
-        .unwrap_or(JsonValue::Null);
+        .unwrap_or_default();
     rsx! {
         section { class: "layout",
             div {
@@ -6174,25 +6174,18 @@ fn EndOfDayView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
 }
 
 #[component]
-fn EndOfDayBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&benchmarks, "status").replace('_', " ");
+fn EndOfDayBenchmarkPanel(
+    benchmarks: EndOfDayBenchmarkReadthrough,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = benchmarks.status.replace('_', " ");
     let status_label = if status.is_empty() {
         "not available".to_string()
     } else {
         status
     };
-    let references = benchmarks
-        .get("references")
-        .and_then(JsonValue::as_array)
-        .map(|references| {
-            references
-                .iter()
-                .cloned()
-                .filter_map(|reference| serde_json::from_value(reference).ok())
-                .collect::<Vec<PerformanceBenchmarkReferencePayload>>()
-        })
-        .unwrap_or_default();
-    let caveat = text(&benchmarks, "caveat");
+    let references = benchmarks.references;
+    let caveat = benchmarks.caveat;
     rsx! {
         div { class: "event benchmark-panel",
             div { class: "section-title-row compact",
@@ -6231,16 +6224,38 @@ fn EndOfDayBenchmarkPanel(benchmarks: JsonValue, prefs: LocalizationPrefs) -> El
     }
 }
 
-fn end_of_day_benchmark_readthrough(diary_json: &JsonValue) -> JsonValue {
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EndOfDayBenchmarkReadthrough {
+    status: String,
+    references: Vec<PerformanceBenchmarkReferencePayload>,
+    caveat: String,
+}
+
+fn end_of_day_benchmark_readthrough(diary_json: &JsonValue) -> EndOfDayBenchmarkReadthrough {
     let diary = match diary_json {
         JsonValue::String(raw) => serde_json::from_str::<JsonValue>(raw).ok(),
         value => Some(value.clone()),
     }
     .unwrap_or(JsonValue::Null);
-    diary
+    let readthrough = diary
         .pointer("/diary/benchmark_readthrough")
         .cloned()
-        .unwrap_or(JsonValue::Null)
+        .unwrap_or(JsonValue::Null);
+    EndOfDayBenchmarkReadthrough {
+        status: text(&readthrough, "status"),
+        references: readthrough
+            .get("references")
+            .and_then(JsonValue::as_array)
+            .map(|references| {
+                references
+                    .iter()
+                    .cloned()
+                    .filter_map(|reference| serde_json::from_value(reference).ok())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        caveat: text(&readthrough, "caveat"),
+    }
 }
 
 #[component]
@@ -11081,14 +11096,37 @@ mod tests {
         );
 
         let readthrough = end_of_day_benchmark_readthrough(&diary_json);
-        assert_eq!(
-            readthrough.get("status").and_then(JsonValue::as_str),
-            Some("ready")
-        );
-        assert_eq!(
-            readthrough.get("scope").and_then(JsonValue::as_str),
-            Some("read_only_end_of_day_context_only")
-        );
+        assert_eq!(readthrough.status, "ready");
+        assert!(readthrough.references.is_empty());
+        assert!(readthrough.caveat.is_empty());
+    }
+
+    #[test]
+    fn end_of_day_benchmark_readthrough_keeps_only_rendered_reference_fields() {
+        let readthrough = end_of_day_benchmark_readthrough(&json!({
+            "diary": {
+                "benchmark_readthrough": {
+                    "status": "ready",
+                    "caveat": "Observed proxy prices only.",
+                    "references": [
+                        {
+                            "key": "sp500",
+                            "label": "S&P 500 proxy",
+                            "symbol": "SPY:xnas",
+                            "status": "aligned_close",
+                            "benchmark_return_pct": 1.2
+                        },
+                        {"unexpected": "malformed"}
+                    ]
+                }
+            }
+        }));
+
+        assert_eq!(readthrough.status, "ready");
+        assert_eq!(readthrough.caveat, "Observed proxy prices only.");
+        assert_eq!(readthrough.references.len(), 1);
+        assert_eq!(readthrough.references[0].symbol, "SPY:xnas");
+        assert_eq!(readthrough.references[0].benchmark_return_pct, Some(1.2));
     }
 
     #[test]

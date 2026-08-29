@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Type End-of-Day benchmark readthrough
+
+- Changed the EOD benchmark-readthrough card from a generic diary document to a small local projection of status, valid rendered benchmark references, and caveat. Unrelated diary fields and malformed reference rows do not reach the renderer.
+- The complete retained diary document remains in the established read-only journal detail view. This changes no benchmark collection, EOD scheduling, Hermes context, Decision Report, manager gate, queue, precheck, or Saxo behavior.
+
 ## [2026-08-29] architecture | Render typed portfolio decision badge directly
 
 - Removed the portfolio-position Decision Badge's generic-JSON re-serialization of its typed advisory projection. Sentiment, action, timestamp, rationale, and original-thesis fields now remain compiler-checked through SSR.
