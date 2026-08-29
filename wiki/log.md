@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Overview dashboard projections
+
+- Added `overview_state` for typed Market Status, integrity-finding, and latest Trading Manager lifecycle decoding, with tests proving provider, broker, execution, and manager diagnostic documents stay outside the dashboard model.
+- `AppState` retains data collection, fallback states, tab gating, and dashboard orchestration. Calendar/quote refreshes, manager gates, reports, queues, prechecks, placement, cancellation, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Extract Decision Report status projections
 
 - Added `decision_state` for compact latest Decision Report and scheduled-pulse status decoding, together with provider-payload exclusion tests. `AppState` retains persisted reads, tab gating, degradation handling, and dashboard orchestration.

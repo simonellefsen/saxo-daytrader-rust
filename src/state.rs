@@ -88,6 +88,10 @@ use crate::{
         TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
         TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
+    overview_state::{
+        dashboard_integrity_from_json, dashboard_market_status_from_json,
+        dashboard_trading_manager_from_json,
+    },
     performance_state::{
         dashboard_performance_benchmarks_from_json,
         dashboard_performance_exposure_attribution_from_json,
@@ -3107,28 +3111,6 @@ fn performance_range_limit(range_key: &str) -> i64 {
 
 fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Option<i64> {
     (active_view == "performance").then(|| performance_range_limit(range_key))
-}
-
-fn dashboard_market_status_from_json(
-    market_status: JsonValue,
-) -> serde_json::Result<MarketStatusPayload> {
-    serde_json::from_value(market_status)
-}
-
-/// Decodes the stable Integrity status used by the dashboard. Individual
-/// issue rows remain staged JSON because their fields are check-specific.
-fn dashboard_integrity_from_json(
-    integrity: JsonValue,
-) -> serde_json::Result<OverviewIntegrityPayload> {
-    serde_json::from_value(integrity)
-}
-
-/// Decodes the stable Trading Manager boundary used by overview panels. Its
-/// lifecycle metadata is allowlisted while gate diagnostics remain staged.
-fn dashboard_trading_manager_from_json(
-    trading_manager: JsonValue,
-) -> serde_json::Result<TradingManagerPayload> {
-    serde_json::from_value(trading_manager)
 }
 
 /// Decodes the stable Watchlists envelope used by the Watchlists tab. The row
@@ -18699,72 +18681,6 @@ fn normalize_hermes_context_self_check(value: JsonValue) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dashboard_integrity_requires_the_stable_outer_contract() {
-        let integrity = dashboard_integrity_from_json(json!({
-            "healthy": false,
-            "warnings": [{
-                "code": "broker_cash_drift",
-                "raw_broker_document": {"account": "must not reach dashboard"}
-            }],
-            "mismatches": [],
-            "expiry_pending_orders": [{
-                "id": 204,
-                "symbol": "BAC:xnys",
-                "raw_execution_document": {"broker_order_id": "must not reach dashboard"}
-            }],
-            "acknowledged_issue_count": 1,
-            "checked_at": "2026-08-23T12:00:00Z"
-        }))
-        .expect("integrity fixture has the dashboard contract");
-
-        assert!(!integrity.healthy);
-        assert_eq!(integrity.warnings.len(), 1);
-        assert_eq!(integrity.expiry_pending_orders[0].id, 204);
-        assert_eq!(integrity.acknowledged_issue_count, 1);
-        let serialized = serde_json::to_value(&integrity)
-            .expect("typed integrity payload serializes")
-            .to_string();
-        assert!(!serialized.contains("raw_broker_document"));
-        assert!(!serialized.contains("raw_execution_document"));
-        assert!(dashboard_integrity_from_json(json!({"healthy": true})).is_err());
-    }
-
-    #[test]
-    fn dashboard_trading_manager_requires_the_stable_outer_contract() {
-        let trading_manager = dashboard_trading_manager_from_json(json!({
-            "status": "available",
-            "latest_run": {
-                "id": 52,
-                "status": "completed",
-                "created_at": "2026-08-28T08:00:00Z",
-                "manager_json": {"status": "completed"},
-                "error_text": "must-not-reach-dashboard",
-                "technical_json": {"provider_error": "must-not-reach-dashboard"},
-                "queue_result_json": {"raw": "must-not-reach-dashboard"}
-            }
-        }))
-        .expect("Trading Manager fixture has the dashboard contract");
-
-        assert_eq!(trading_manager.status, "available");
-        assert_eq!(
-            trading_manager.latest_run.as_ref().map(|run| run.id),
-            Some(52)
-        );
-        let serialized = serde_json::to_value(trading_manager)
-            .expect("typed Trading Manager payload serializes");
-        assert!(serialized["latest_run"].get("error_text").is_none());
-        assert!(serialized["latest_run"].get("technical_json").is_none());
-        assert!(serialized["latest_run"].get("queue_result_json").is_none());
-        assert!(
-            dashboard_trading_manager_from_json(json!({"status": "available"}))
-                .expect("a missing optional run degrades to no run")
-                .latest_run
-                .is_none()
-        );
-        assert!(dashboard_trading_manager_from_json(json!({"latest_run": null})).is_err());
-    }
 
     #[test]
     fn dashboard_watchlists_requires_the_stable_outer_contract() {
