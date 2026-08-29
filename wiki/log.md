@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract protective-stop dashboard projections
+
+- Moved typed protective-stop coverage, SIM precheck-result, and SIM lifecycle-test dashboard projections into `execution_state`, retaining focused exclusions for broker, indicator, and Saxo-response documents.
+- `AppState` still collects persisted evidence and owns the existing handler-side reload, SIM checks, acknowledgements, prechecks, placement, cancellation, reconciliation, and Saxo behavior.
+
 ## [2026-08-29] architecture | Extract Overview dashboard projections
 
 - Added `overview_state` for typed Market Status, integrity-finding, and latest Trading Manager lifecycle decoding, with tests proving provider, broker, execution, and manager diagnostic documents stay outside the dashboard model.

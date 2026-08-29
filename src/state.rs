@@ -28,7 +28,9 @@ use crate::{
     },
     execution_state::{
         dashboard_execution_events_from_json, dashboard_execution_fills_from_json,
-        execution_order_window,
+        dashboard_protective_stop_coverage_from_json,
+        dashboard_protective_stop_coverage_not_loaded, execution_order_window,
+        protective_stop_lifecycle_test_payloads, protective_stop_precheck_payloads,
     },
     hermes_state::{
         HERMES_ADVISORY_EXPERIMENT_STATUSES, HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES,
@@ -78,15 +80,14 @@ use crate::{
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
         MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
         MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
-        PortfolioTradePayload, ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
-        ProtectiveStopLifecycleTestPayload, ProtectiveStopPrecheckPayload, QuiverConflictPayload,
-        SupportRiskEvidencePayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        PortfolioTradePayload, QuiverConflictPayload, SupportRiskEvidencePayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     overview_state::{
         dashboard_integrity_from_json, dashboard_market_status_from_json,
@@ -3146,89 +3147,6 @@ fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayPayload {
         safety: "not_loaded_outside_decisions_tab".to_string(),
         interpretation: String::new(),
         support_risk_evidence: SupportRiskEvidencePayload::default(),
-    }
-}
-
-/// Decodes the stable protective-stop coverage boundary used by the Execution
-/// tab. Its detailed broker and lifecycle evidence remains staged JSON.
-fn dashboard_protective_stop_coverage_from_json(
-    coverage: JsonValue,
-) -> serde_json::Result<ProtectiveStopCoveragePayload> {
-    serde_json::from_value(coverage)
-}
-
-/// Projects persisted SIM prechecks into the small dashboard/form contract.
-///
-/// This never grants placement authority: the only form identifier is the
-/// local precheck id, and the existing handler reloads it, validates SIM and
-/// accepted status, and requires a separate confirmation before reaching Saxo.
-fn protective_stop_precheck_payloads(rows: Vec<JsonValue>) -> Vec<ProtectiveStopPrecheckPayload> {
-    rows.into_iter()
-        .map(|row| {
-            let status = json_text(&row, "status");
-            let result = dashboard_embedded_json(&row, "result_json").unwrap_or(JsonValue::Null);
-            let result_label = result
-                .get("error")
-                .and_then(|error| error.get("label"))
-                .and_then(JsonValue::as_str)
-                .unwrap_or_else(|| {
-                    if status == "precheck_ok" {
-                        "Accepted"
-                    } else {
-                        "Review required"
-                    }
-                })
-                .to_string();
-            let safety = result
-                .get("safety")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("no Saxo order placement")
-                .to_string();
-            ProtectiveStopPrecheckPayload {
-                id: value_i64(&row, "id"),
-                created_at: json_text(&row, "created_at"),
-                symbol: json_text(&row, "symbol"),
-                quantity: value_f64(&row, "quantity"),
-                stop_price_local: value_f64(&row, "stop_price_local"),
-                status,
-                result_label,
-                safety,
-            }
-        })
-        .collect()
-}
-
-/// Projects lifecycle records into their dashboard/action-link contract.
-///
-/// The output carries no broker response document. Its local id remains only a
-/// pointer for existing handlers, which reload the record before reconciling
-/// or cancelling anything at Saxo.
-fn protective_stop_lifecycle_test_payloads(
-    rows: Vec<JsonValue>,
-) -> Vec<ProtectiveStopLifecycleTestPayload> {
-    rows.into_iter()
-        .map(|row| ProtectiveStopLifecycleTestPayload {
-            id: value_i64(&row, "id"),
-            created_at: json_text(&row, "created_at"),
-            symbol: json_text(&row, "symbol"),
-            quantity: value_f64(&row, "quantity"),
-            stop_price_local: value_f64(&row, "stop_price_local"),
-            status: json_text(&row, "status"),
-            broker_order_id: json_text(&row, "broker_order_id"),
-        })
-        .collect()
-}
-
-fn dashboard_protective_stop_coverage_not_loaded() -> ProtectiveStopCoveragePayload {
-    ProtectiveStopCoveragePayload {
-        status: "not_loaded".to_string(),
-        summary: ProtectiveStopCoverageSummaryPayload::default(),
-        positions: Vec::new(),
-        exceptions: Vec::new(),
-        recent_prechecks: Vec::new(),
-        recent_lifecycle_tests: Vec::new(),
-        safety: "not_loaded_outside_execution_tab".to_string(),
-        interpretation: String::new(),
     }
 }
 
@@ -7011,12 +6929,11 @@ impl AppState {
             });
             dashboard_protective_stop_coverage_from_json(coverage).unwrap_or_else(|err| {
                 warn!("dashboard typed protective-stop coverage degraded: {err:#}");
-                ProtectiveStopCoveragePayload {
-                    status: "unavailable".to_string(),
-                    safety: "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation".to_string(),
-                    interpretation: "Protective-stop coverage could not be loaded. No Saxo order was placed, replaced, or cancelled.".to_string(),
-                    ..dashboard_protective_stop_coverage_not_loaded()
-                }
+                let mut unavailable = dashboard_protective_stop_coverage_not_loaded();
+                unavailable.status = "unavailable".to_string();
+                unavailable.safety = "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation".to_string();
+                unavailable.interpretation = "Protective-stop coverage could not be loaded. No Saxo order was placed, replaced, or cancelled.".to_string();
+                unavailable
             })
         } else {
             dashboard_protective_stop_coverage_not_loaded()
@@ -18759,131 +18676,6 @@ mod tests {
             "not_loaded"
         );
         assert!(dashboard_decision_gate_replay_from_json(json!({"status": "available"})).is_err());
-    }
-
-    #[test]
-    fn dashboard_protective_stop_coverage_requires_the_stable_outer_contract() {
-        let coverage = dashboard_protective_stop_coverage_from_json(json!({
-            "status": "attention_required",
-            "summary": {
-                "protected_count": 4,
-                "unprotected_count": 1,
-                "raw_broker_document": {"account": "must not reach dashboard"}
-            },
-            "positions": [{
-                "symbol": "NOVO-B:xcse",
-                "quantity": 12,
-                "currency": "DKK",
-                "confirmed_covered_quantity": 12,
-                "active_stop_price_local": 780.0,
-                "raw_broker_document": {"account": "must not reach dashboard"}
-            }],
-            "exceptions": [{
-                "symbol": "NOVO-B:xcse",
-                "unprotected_quantity": 12,
-                "reason": "missing_stop",
-                "proposed_stop": {
-                    "stop_price_local": 780.0,
-                    "reference_close": 800.0,
-                    "atr14": 10.0,
-                    "atr_multiple": 2.0,
-                    "distance_pct": 2.5,
-                    "raw_indicator_document": {"must": "stay staged"}
-                },
-                "raw_broker_document": {"account": "must not reach dashboard"}
-            }],
-            "recent_prechecks": [],
-            "recent_lifecycle_tests": [],
-            "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit_no_saxo_call_or_order_mutation",
-            "interpretation": "Coverage is a local audit."
-        }))
-        .expect("protective-stop fixture has the dashboard contract");
-
-        assert_eq!(coverage.status, "attention_required");
-        assert_eq!(coverage.summary.protected_count, 4);
-        assert_eq!(coverage.summary.unprotected_count, 1);
-        assert_eq!(coverage.positions[0].symbol, "NOVO-B:xcse");
-        assert_eq!(coverage.positions[0].active_stop_price_local, Some(780.0));
-        assert_eq!(coverage.exceptions.len(), 1);
-        assert_eq!(coverage.exceptions[0].unprotected_quantity, 12.0);
-        assert_eq!(
-            coverage.exceptions[0]
-                .proposed_stop
-                .as_ref()
-                .map(|proposal| proposal.stop_price_local),
-            Some(780.0)
-        );
-        let serialized = serde_json::to_value(&coverage)
-            .expect("typed protective-stop coverage serializes")
-            .to_string();
-        assert!(!serialized.contains("raw_broker_document"));
-        assert!(!serialized.contains("raw_indicator_document"));
-        assert_eq!(
-            dashboard_protective_stop_coverage_not_loaded().status,
-            "not_loaded"
-        );
-        assert!(
-            dashboard_protective_stop_coverage_from_json(json!({"status": "covered"})).is_err()
-        );
-    }
-
-    #[test]
-    fn protective_stop_precheck_payloads_allowlist_result_and_safety_display() {
-        let payloads = protective_stop_precheck_payloads(vec![json!({
-            "id": 42,
-            "created_at": "2026-08-28T12:00:00Z",
-            "environment": "sim",
-            "symbol": "NOVO-B:xcse",
-            "quantity": 12,
-            "stop_price_local": 780.0,
-            "status": "precheck_ok",
-            "result_json": "{\"error\":{\"label\":\"Accepted by simulated broker\"},\"safety\":\"precheck_only_no_order_placement\",\"raw_saxo_response\":{\"account\":\"must stay internal\"}}",
-            "raw_broker_document": {"account": "must stay internal"}
-        })]);
-
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].id, 42);
-        assert_eq!(payloads[0].result_label, "Accepted by simulated broker");
-        assert_eq!(payloads[0].safety, "precheck_only_no_order_placement");
-        let serialized = serde_json::to_value(&payloads)
-            .expect("typed precheck payload serializes")
-            .to_string();
-        assert!(!serialized.contains("raw_saxo_response"));
-        assert!(!serialized.contains("raw_broker_document"));
-        assert!(!serialized.contains("result_json"));
-    }
-
-    #[test]
-    fn protective_stop_lifecycle_payloads_allowlist_action_link_fields() {
-        let payloads = protective_stop_lifecycle_test_payloads(vec![json!({
-            "id": 43,
-            "created_at": "2026-08-28T12:10:00Z",
-            "updated_at": "2026-08-28T12:12:00Z",
-            "source_precheck_id": 42,
-            "environment": "sim",
-            "symbol": "NOVO-B:xcse",
-            "quantity": 12,
-            "stop_price_local": 780.0,
-            "status": "broker_working",
-            "broker_order_id": "SIM-123",
-            "external_reference": "must stay internal",
-            "request_id": "must stay internal",
-            "placement_result_json": {"raw_saxo_response": {"account": "must stay internal"}},
-            "cancellation_result_json": {"raw_saxo_response": {"account": "must stay internal"}},
-            "reconciliation_json": {"raw_saxo_response": {"account": "must stay internal"}}
-        })]);
-
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].id, 43);
-        assert_eq!(payloads[0].status, "broker_working");
-        assert_eq!(payloads[0].broker_order_id, "SIM-123");
-        let serialized = serde_json::to_value(&payloads)
-            .expect("typed lifecycle payload serializes")
-            .to_string();
-        assert!(!serialized.contains("source_precheck_id"));
-        assert!(!serialized.contains("external_reference"));
-        assert!(!serialized.contains("request_id"));
-        assert!(!serialized.contains("raw_saxo_response"));
     }
 
     #[test]
