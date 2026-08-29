@@ -179,17 +179,16 @@ pub struct DashboardSelectedDecisionPayload {
 
 /// Aggregate, read-only manager-gate evidence for one Decision Report.
 ///
-/// The summary and run identity are stable and compiler-checked. Candidate
-/// rows remain sanitized compatibility JSON because their detailed historical
-/// gate diagnostics evolve independently. This is an offline snapshot and
-/// cannot rerun a report, alter a gate, queue work, precheck, or reach Saxo.
+/// The summary, run identity, and candidate display evidence are stable and
+/// compiler-checked. This is an offline snapshot and cannot rerun a report,
+/// alter a gate, queue work, precheck, or reach Saxo.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CandidateScoringWaterfallPayload {
     pub status: String,
     pub run_id: i64,
     pub created_at: String,
     pub manager_status: String,
-    pub candidates: Vec<JsonValue>,
+    pub candidates: Vec<CandidateScoringWaterfallCandidatePayload>,
     pub summary: CandidateScoringWaterfallSummaryPayload,
     pub safety: String,
 }
@@ -215,6 +214,112 @@ pub struct CandidateScoringWaterfallSummaryPayload {
     pub approved_count: i64,
     pub skipped_count: i64,
     pub not_reached_count: i64,
+}
+
+/// Display-safe deterministic manager evidence for one candidate order.
+///
+/// Raw manager reasons, provider context, broker documents, and unmodelled
+/// rule traces are deliberately absent. This record describes a completed
+/// manager run and cannot change a gate, queue, or broker order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallCandidatePayload {
+    pub strategy_key: String,
+    pub symbol: String,
+    pub action: String,
+    pub order_type: String,
+    pub quantity: f64,
+    pub market: CandidateScoringWaterfallMarketPayload,
+    pub technical: CandidateScoringWaterfallTechnicalPayload,
+    pub final_technical: Option<CandidateScoringWaterfallTechnicalPayload>,
+    pub cost_guard: Option<CandidateScoringWaterfallCostGuardPayload>,
+    pub holding_limit: Option<CandidateScoringWaterfallHoldingLimitPayload>,
+    pub concentration: Option<CandidateScoringWaterfallConcentrationPayload>,
+    pub position_weight: Option<CandidateScoringWaterfallPositionWeightPayload>,
+    pub markov: CandidateScoringWaterfallMarkovPayload,
+    pub hermes: CandidateScoringWaterfallHermesPayload,
+    pub outcome: String,
+    pub gate_code: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallMarketPayload {
+    pub exchange: String,
+    pub exchange_open: bool,
+    pub risk_excluded: bool,
+    pub quarantine_active: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallTechnicalPayload {
+    pub status: String,
+    pub source: String,
+    pub run_date: String,
+    pub sentiment: String,
+    pub trend_bias: String,
+    pub confluence_count: i64,
+    pub min_confluences: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallCostGuardPayload {
+    pub verified_from_db: bool,
+    pub estimated_slippage_bps: f64,
+    pub cost_guard_multiple: f64,
+    pub expected_reward_dkk: f64,
+    pub round_trip_commission_dkk: f64,
+    pub one_way_slippage_dkk: f64,
+    pub required_reward_dkk: f64,
+    pub passes: bool,
+    pub basis: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallHoldingLimitPayload {
+    pub verified_from_state: bool,
+    pub max_holdings: i64,
+    pub holding_count_before: i64,
+    pub already_held: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallConcentrationPayload {
+    pub status: String,
+    pub verified_from_state: bool,
+    pub max_assets_per_exchange: i64,
+    pub max_assets_per_currency: i64,
+    pub exchange: String,
+    pub currency: String,
+    pub exchange_count_before: i64,
+    pub currency_count_before: i64,
+    pub already_held: bool,
+    pub unmapped_exchange_symbol_count: i64,
+    pub unmapped_currency_symbol_count: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallPositionWeightPayload {
+    pub verified_from_state: bool,
+    pub max_position_weight: f64,
+    pub current_position_value_dkk: f64,
+    pub approved_value_dkk: f64,
+    pub resulting_position_value_dkk: f64,
+    pub max_position_value_dkk: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallMarkovPayload {
+    pub status: String,
+    pub fresh: bool,
+    pub direction: String,
+    pub signed_signal: f64,
+    pub age_days: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallHermesPayload {
+    pub effect: String,
+    pub requested_quantity: f64,
+    pub resulting_quantity: f64,
 }
 
 /// One read-only portfolio position rendered in the dashboard overview.

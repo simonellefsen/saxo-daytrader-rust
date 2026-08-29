@@ -11,7 +11,8 @@ use crate::{
         format_timestamp,
     },
     models::{
-        CandidateScoringWaterfallPayload, DashboardAiSettingsPayload,
+        CandidateScoringWaterfallCandidatePayload, CandidateScoringWaterfallPayload,
+        CandidateScoringWaterfallTechnicalPayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionReportSummaryPayload,
         DashboardExecutionEventPayload, DashboardExecutionFillPayload,
@@ -4793,101 +4794,59 @@ fn CandidateScoringWaterfallPanel(
 }
 
 #[component]
-fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let symbol = fallback_text(&row, "symbol", "Legacy candidate");
-    let action = text(&row, "action");
-    let market = row.get("market").cloned().unwrap_or(JsonValue::Null);
-    let technical = row.get("technical").cloned().unwrap_or(JsonValue::Null);
-    let final_technical = row
-        .get("final_technical")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let cost_guard = row.get("cost_guard").cloned().unwrap_or(JsonValue::Null);
-    let holding_limit = row
-        .get("final_holding_limit")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let concentration = row.get("concentration").cloned().unwrap_or(JsonValue::Null);
-    let position_weight = row
-        .get("final_position_weight")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let markov = row.get("markov").cloned().unwrap_or(JsonValue::Null);
-    let hermes = row.get("hermes").cloned().unwrap_or(JsonValue::Null);
-    let outcome = text(&row, "outcome");
+fn CandidateScoringWaterfallRow(
+    row: CandidateScoringWaterfallCandidatePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let symbol = if row.symbol.trim().is_empty() {
+        "Legacy candidate".to_string()
+    } else {
+        row.symbol.clone()
+    };
+    let action = row.action.clone();
+    let outcome = row.outcome.clone();
     let outcome_class = match outcome.as_str() {
         "approved" => "status good",
         "skipped" => "status bad",
         _ => "status",
     };
-    let market_label = if market
-        .get("risk_excluded")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
+    let market_label = if row.market.risk_excluded {
         "risk excluded".to_string()
-    } else if market
-        .get("quarantine_active")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
+    } else if row.market.quarantine_active {
         "instrument quarantined".to_string()
-    } else if market
-        .get("exchange_open")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
-        format!("{} open", fallback_text(&market, "exchange", "market"))
+    } else if row.market.exchange_open {
+        format!("{} open", candidate_text(&row.market.exchange, "market"))
     } else {
-        format!("{} closed", fallback_text(&market, "exchange", "market"))
+        format!("{} closed", candidate_text(&row.market.exchange, "market"))
     };
-    let preflight_technical_label = candidate_technical_label(&technical);
-    let final_technical_recorded = text(&final_technical, "status") == "ok";
+    let preflight_technical_label = candidate_technical_label(&row.technical);
+    let final_technical_recorded = row
+        .final_technical
+        .as_ref()
+        .is_some_and(|technical| technical.status == "ok");
     let technical_label = if final_technical_recorded {
-        candidate_technical_label(&final_technical)
+        row.final_technical
+            .as_ref()
+            .map(candidate_technical_label)
+            .unwrap_or_else(|| preflight_technical_label.clone())
     } else {
         preflight_technical_label.clone()
     };
-    let support_label = candidate_support_label(
-        if final_technical_recorded {
-            &final_technical
-        } else {
-            &technical
-        },
-        &prefs,
-    );
-    let markov_label = if text(&markov, "status") == "unavailable" {
+    let markov_label = if row.markov.status == "unavailable" {
         "unavailable".to_string()
     } else {
         format!(
             "{} / {}{}",
-            fallback_text(&markov, "direction", "n/a"),
-            format_signed_pct(value_f64(&markov, "signed_signal"), &prefs),
-            if markov
-                .get("fresh")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false)
-            {
-                " fresh"
-            } else {
-                " stale"
-            },
+            candidate_text(&row.markov.direction, "n/a"),
+            format_signed_pct(row.markov.signed_signal, &prefs),
+            if row.markov.fresh { " fresh" } else { " stale" },
         )
     };
-    let hermes_effect = fallback_text(&hermes, "effect", "not recorded").replace('_', " ");
-    let gate_code = text(&row, "gate_code").replace('_', " ");
-    let gate_detail = candidate_gate_detail(
-        &row,
-        &final_technical,
-        final_technical_recorded,
-        &cost_guard,
-        &holding_limit,
-        &concentration,
-        &position_weight,
-        &prefs,
-    );
-    let requested_quantity = value_f64(&hermes, "requested_quantity");
-    let resulting_quantity = value_f64(&hermes, "resulting_quantity");
+    let hermes_effect = candidate_text(&row.hermes.effect, "not recorded").replace('_', " ");
+    let gate_code = row.gate_code.replace('_', " ");
+    let gate_detail = candidate_gate_detail(&row, final_technical_recorded, &prefs);
+    let requested_quantity = row.hermes.requested_quantity;
+    let resulting_quantity = row.hermes.resulting_quantity;
     let hermes_label = if requested_quantity > 0.0 {
         format!(
             "{}: {} -> {}",
@@ -4909,9 +4868,6 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
                 } else {
                     span { class: "muted block", "preflight only" }
                 }
-                if !support_label.is_empty() {
-                    span { class: "muted block", "{support_label}" }
-                }
             }
             td { "{markov_label}" }
             td { "{hermes_label}" }
@@ -4926,78 +4882,76 @@ fn CandidateScoringWaterfallRow(row: JsonValue, prefs: LocalizationPrefs) -> Ele
     }
 }
 
-fn candidate_technical_label(technical: &JsonValue) -> String {
-    if text(technical, "status") != "ok" {
+fn candidate_text(value: &str, fallback: &str) -> String {
+    if value.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn candidate_technical_label(technical: &CandidateScoringWaterfallTechnicalPayload) -> String {
+    if technical.status != "ok" {
         return "unavailable".to_string();
     }
-    let confluences = value_i64(technical, "confluence_count");
-    let minimum = value_i64(technical, "min_confluences");
+    let confluences = technical.confluence_count;
+    let minimum = technical.min_confluences;
     if minimum <= 0 {
         return format!(
             "{} / {}",
-            fallback_text(technical, "sentiment", "n/a"),
-            fallback_text(technical, "trend_bias", "n/a"),
+            candidate_text(&technical.sentiment, "n/a"),
+            candidate_text(&technical.trend_bias, "n/a"),
         );
     }
     format!(
         "{} / {} / {}/{}",
-        fallback_text(technical, "sentiment", "n/a"),
-        fallback_text(technical, "trend_bias", "n/a"),
+        candidate_text(&technical.sentiment, "n/a"),
+        candidate_text(&technical.trend_bias, "n/a"),
         confluences,
         minimum,
     )
 }
 
-fn candidate_support_label(technical: &JsonValue, prefs: &LocalizationPrefs) -> String {
-    let support = technical.get("support").unwrap_or(&JsonValue::Null);
-    let nearest = support
-        .get("nearest_support")
-        .and_then(JsonValue::as_f64)
-        .filter(|value| *value > 0.0);
-    let Some(nearest) = nearest else {
-        return String::new();
-    };
-    format!(
-        "support {:.2}; break {} · confidence {} · history {}",
-        nearest,
-        fallback_text(support, "break_risk_label", "n/a"),
-        format_pct(value_f64(support, "confidence"), prefs),
-        format_pct(value_f64(support, "history_coverage"), prefs),
-    )
-}
-
 fn candidate_gate_detail(
-    row: &JsonValue,
-    final_technical: &JsonValue,
+    row: &CandidateScoringWaterfallCandidatePayload,
     final_technical_recorded: bool,
-    cost_guard: &JsonValue,
-    holding_limit: &JsonValue,
-    concentration: &JsonValue,
-    position_weight: &JsonValue,
     prefs: &LocalizationPrefs,
 ) -> String {
-    let gate_code = text(row, "gate_code");
+    let gate_code = row.gate_code.as_str();
     if gate_code == "candidate_limit" {
         return "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached.".to_string();
     }
     if matches!(
-        gate_code.as_str(),
+        gate_code,
         "concentration_exchange" | "concentration_currency"
     ) {
+        let concentration = row.concentration.as_ref();
         let bucket = if gate_code == "concentration_exchange" {
-            fallback_text(concentration, "exchange", "exchange")
+            concentration
+                .map(|value| candidate_text(&value.exchange, "exchange"))
+                .unwrap_or_else(|| "exchange".to_string())
         } else {
-            fallback_text(concentration, "currency", "currency")
+            concentration
+                .map(|value| candidate_text(&value.currency, "currency"))
+                .unwrap_or_else(|| "currency".to_string())
         };
         let count = if gate_code == "concentration_exchange" {
-            value_f64(concentration, "exchange_count_before") as i64
+            concentration
+                .map(|value| value.exchange_count_before)
+                .unwrap_or_default()
         } else {
-            value_f64(concentration, "currency_count_before") as i64
+            concentration
+                .map(|value| value.currency_count_before)
+                .unwrap_or_default()
         };
         let maximum = if gate_code == "concentration_exchange" {
-            value_f64(concentration, "max_assets_per_exchange") as i64
+            concentration
+                .map(|value| value.max_assets_per_exchange)
+                .unwrap_or_default()
         } else {
-            value_f64(concentration, "max_assets_per_currency") as i64
+            concentration
+                .map(|value| value.max_assets_per_currency)
+                .unwrap_or_default()
         };
         if maximum > 0 {
             return format!(
@@ -5010,81 +4964,62 @@ fn candidate_gate_detail(
         return "The enabled concentration policy could not be evaluated because configuration, the position snapshot, or canonical symbol-bucket mapping was unavailable.".to_string();
     }
     if gate_code == "cost_guard" {
-        if !cost_guard
-            .get("verified_from_db")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false)
-        {
+        let Some(cost_guard) = row
+            .cost_guard
+            .as_ref()
+            .filter(|value| value.verified_from_db)
+        else {
             return "No database-verified cost calculation was recorded.".to_string();
-        }
+        };
         return format!(
             "Expected reward {} vs lower-bound hurdle {} (commission {}, slippage {}; {:.1}x, {:.1} bps).",
-            format_dkk(value_f64(cost_guard, "expected_reward_dkk"), prefs),
-            format_dkk(value_f64(cost_guard, "required_reward_dkk"), prefs),
-            format_dkk(value_f64(cost_guard, "round_trip_commission_dkk"), prefs),
-            format_dkk(value_f64(cost_guard, "one_way_slippage_dkk"), prefs),
-            value_f64(cost_guard, "cost_guard_multiple"),
-            value_f64(cost_guard, "estimated_slippage_bps"),
+            format_dkk(cost_guard.expected_reward_dkk, prefs),
+            format_dkk(cost_guard.required_reward_dkk, prefs),
+            format_dkk(cost_guard.round_trip_commission_dkk, prefs),
+            format_dkk(cost_guard.one_way_slippage_dkk, prefs),
+            cost_guard.cost_guard_multiple,
+            cost_guard.estimated_slippage_bps,
+        );
+    }
+    if let Some(holding_limit) = row
+        .holding_limit
+        .as_ref()
+        .filter(|value| value.verified_from_state)
+    {
+        return if holding_limit.already_held {
+            format!(
+                "Existing holding: {} of {} symbol slots were occupied before this BUY, so no new slot was required.",
+                holding_limit.holding_count_before, holding_limit.max_holdings
+            )
+        } else {
+            format!(
+                "New holding: {} of {} symbol slots were occupied before this BUY.",
+                holding_limit.holding_count_before, holding_limit.max_holdings
+            )
+        };
+    }
+    if let Some(position_weight) = row
+        .position_weight
+        .as_ref()
+        .filter(|value| value.verified_from_state)
+    {
+        return format!(
+            "Position exposure {} plus BUY {} = {} against a {} ceiling ({:.1}% of portfolio).",
+            format_dkk(position_weight.current_position_value_dkk, prefs),
+            format_dkk(position_weight.approved_value_dkk, prefs),
+            format_dkk(position_weight.resulting_position_value_dkk, prefs),
+            format_dkk(position_weight.max_position_value_dkk, prefs),
+            position_weight.max_position_weight * 100.0,
         );
     }
     if gate_code == "max_holdings" {
-        let count = value_f64(holding_limit, "holding_count_before") as i64;
-        let maximum = value_f64(holding_limit, "max_holdings") as i64;
-        if maximum > 0 {
-            return format!(
-                "New symbol blocked: all {count} of {maximum} configured holding slots were already occupied."
-            );
-        }
         return "The configured maximum holding count was already reached, or the persisted position snapshot was unavailable.".to_string();
     }
     if gate_code == "max_selected_assets" {
         return "This report had already approved its configured number of distinct BUY symbols. SELLs and repeated actions for a previously selected symbol remain eligible.".to_string();
     }
-    if position_weight
-        .get("verified_from_state")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
-        return format!(
-            "Position exposure {} plus BUY {} = {} against a {} ceiling ({:.1}% of portfolio).",
-            format_dkk(
-                value_f64(position_weight, "current_position_value_dkk"),
-                prefs
-            ),
-            format_dkk(value_f64(position_weight, "approved_value_dkk"), prefs),
-            format_dkk(
-                value_f64(position_weight, "resulting_position_value_dkk"),
-                prefs
-            ),
-            format_dkk(value_f64(position_weight, "max_position_value_dkk"), prefs),
-            value_f64(position_weight, "max_position_weight") * 100.0,
-        );
-    }
     if gate_code == "position_weight" {
         return "The configured per-symbol allocation ceiling left less than one share of headroom, or position-value evidence was unavailable.".to_string();
-    }
-    if holding_limit
-        .get("verified_from_state")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
-        let already_held = holding_limit
-            .get("already_held")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false);
-        let count = value_f64(holding_limit, "holding_count_before") as i64;
-        let maximum = value_f64(holding_limit, "max_holdings") as i64;
-        return if already_held {
-            format!(
-                "Existing holding: {} of {} symbol slots were occupied before this BUY, so no new slot was required.",
-                count, maximum
-            )
-        } else {
-            format!(
-                "New holding: {} of {} symbol slots were occupied before this BUY.",
-                count, maximum
-            )
-        };
     }
     if gate_code != "technical" {
         return String::new();
@@ -5092,9 +5027,17 @@ fn candidate_gate_detail(
     if !final_technical_recorded {
         return "Final technical snapshot was not recorded for this legacy run.".to_string();
     }
-    let sentiment = fallback_text(final_technical, "sentiment", "HOLD");
-    let trend = fallback_text(final_technical, "trend_bias", "neutral");
-    match text(row, "action").as_str() {
+    let sentiment = row
+        .final_technical
+        .as_ref()
+        .map(|value| candidate_text(&value.sentiment, "HOLD"))
+        .unwrap_or_else(|| "HOLD".to_string());
+    let trend = row
+        .final_technical
+        .as_ref()
+        .map(|value| candidate_text(&value.trend_bias, "neutral"))
+        .unwrap_or_else(|| "neutral".to_string());
+    match row.action.as_str() {
         "BUY" => format!(
             "Final {sentiment}/{trend}; BUY needs BUY or OVERWEIGHT, bullish trend, and enough confluences."
         ),
@@ -8567,18 +8510,6 @@ fn optional_f64(value: &JsonValue, key: &str) -> Option<f64> {
         .filter(|value| value.is_finite())
 }
 
-fn value_i64(value: &JsonValue, key: &str) -> i64 {
-    value
-        .get(key)
-        .and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_f64().map(|v| v as i64))
-                .or_else(|| value.as_str()?.parse().ok())
-        })
-        .unwrap_or(0)
-}
-
 fn text(value: &JsonValue, key: &str) -> String {
     match value.get(key) {
         Some(JsonValue::String(text)) => text.clone(),
@@ -11186,48 +11117,36 @@ mod tests {
 
     #[test]
     fn waterfall_technical_gate_explains_final_verified_sell_signal() {
-        let row = json!({"action": "SELL", "gate_code": "technical"});
-        let final_technical = json!({
-            "status": "ok",
-            "sentiment": "HOLD",
-            "trend_bias": "neutral",
-            "confluence_count": 1,
-            "min_confluences": 3,
-        });
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(&json!({
+            "action": "SELL",
+            "gate_code": "technical",
+            "final_technical": {
+                "status": "ok",
+                "sentiment": "HOLD",
+                "trend_bias": "neutral",
+                "confluence_count": 1,
+                "min_confluences": 3
+            }
+        }));
+        let final_technical = row.final_technical.as_ref().expect("final technical");
 
         assert_eq!(
             candidate_technical_label(&final_technical),
             "HOLD / neutral / 1/3"
         );
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &final_technical,
-                true,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &default_prefs()
-            ),
+            candidate_gate_detail(&row, true, &default_prefs()),
             "Final HOLD/neutral; SELL needs SELL or UNDERWEIGHT, or a bearish trend."
         );
     }
 
     #[test]
     fn waterfall_technical_gate_labels_legacy_runs_without_final_snapshot() {
-        let row = json!({"action": "BUY", "gate_code": "technical"});
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(
+            &json!({"action": "BUY", "gate_code": "technical"}),
+        );
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &default_prefs()
-            ),
+            candidate_gate_detail(&row, false, &default_prefs()),
             "Final technical snapshot was not recorded for this legacy run."
         );
     }
@@ -11235,28 +11154,22 @@ mod tests {
     #[test]
     fn waterfall_cost_guard_explains_recorded_hurdle() {
         let prefs = default_prefs();
-        let row = json!({"action": "BUY", "gate_code": "cost_guard"});
-        let cost_guard = json!({
-            "verified_from_db": true,
-            "expected_reward_dkk": 120.0,
-            "required_reward_dkk": 150.0,
-            "round_trip_commission_dkk": 40.0,
-            "one_way_slippage_dkk": 90.0,
-            "cost_guard_multiple": 1.5,
-            "estimated_slippage_bps": 8.0,
-        });
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(&json!({
+            "action": "BUY",
+            "gate_code": "cost_guard",
+            "cost_guard": {
+                "verified_from_db": true,
+                "expected_reward_dkk": 120.0,
+                "required_reward_dkk": 150.0,
+                "round_trip_commission_dkk": 40.0,
+                "one_way_slippage_dkk": 90.0,
+                "cost_guard_multiple": 1.5,
+                "estimated_slippage_bps": 8.0
+            }
+        }));
 
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &cost_guard,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &prefs,
-            ),
+            candidate_gate_detail(&row, false, &prefs),
             "Expected reward 120 DKK vs lower-bound hurdle 150 DKK (commission 40 DKK, slippage 90 DKK; 1.5x, 8.0 bps)."
         );
     }
@@ -11264,111 +11177,79 @@ mod tests {
     #[test]
     fn waterfall_position_weight_explains_total_symbol_exposure() {
         let prefs = default_prefs();
-        let row = json!({"action": "BUY", "gate_code": "approved"});
-        let position_weight = json!({
-            "verified_from_state": true,
-            "max_position_weight": 0.04,
-            "current_position_value_dkk": 2000.0,
-            "approved_value_dkk": 2000.0,
-            "resulting_position_value_dkk": 4000.0,
-            "max_position_value_dkk": 4000.0,
-        });
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(&json!({
+            "action": "BUY",
+            "gate_code": "approved",
+            "final_position_weight": {
+                "verified_from_state": true,
+                "max_position_weight": 0.04,
+                "current_position_value_dkk": 2000.0,
+                "approved_value_dkk": 2000.0,
+                "resulting_position_value_dkk": 4000.0,
+                "max_position_value_dkk": 4000.0
+            }
+        }));
 
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &position_weight,
-                &prefs,
-            ),
+            candidate_gate_detail(&row, false, &prefs),
             "Position exposure 2,000 DKK plus BUY 2,000 DKK = 4,000 DKK against a 4,000 DKK ceiling (4.0% of portfolio)."
         );
     }
 
     #[test]
     fn waterfall_holding_limit_explains_new_symbol_slot() {
-        let row = json!({"action": "BUY", "gate_code": "approved"});
-        let holding_limit = json!({
-            "verified_from_state": true,
-            "max_holdings": 25,
-            "holding_count_before": 12,
-            "already_held": false,
-        });
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(&json!({
+            "action": "BUY",
+            "gate_code": "approved",
+            "final_holding_limit": {
+                "verified_from_state": true,
+                "max_holdings": 25,
+                "holding_count_before": 12,
+                "already_held": false
+            }
+        }));
 
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &holding_limit,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &default_prefs(),
-            ),
+            candidate_gate_detail(&row, false, &default_prefs()),
             "New holding: 12 of 25 symbol slots were occupied before this BUY."
         );
     }
 
     #[test]
     fn waterfall_candidate_limit_explains_that_overflow_was_not_evaluated() {
-        let row = json!({"action": "BUY", "gate_code": "candidate_limit"});
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(
+            &json!({"action": "BUY", "gate_code": "candidate_limit"}),
+        );
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &default_prefs()
-            ),
+            candidate_gate_detail(&row, false, &default_prefs()),
             "Skipped before Hermes and trading gates because this report's distinct-symbol ceiling was reached."
         );
     }
 
     #[test]
     fn waterfall_selection_limit_explains_buy_only_cap() {
-        let row = json!({"action": "BUY", "gate_code": "max_selected_assets"});
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(
+            &json!({"action": "BUY", "gate_code": "max_selected_assets"}),
+        );
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &default_prefs()
-            ),
+            candidate_gate_detail(&row, false, &default_prefs()),
             "This report had already approved its configured number of distinct BUY symbols. SELLs and repeated actions for a previously selected symbol remain eligible."
         );
     }
 
     #[test]
     fn waterfall_concentration_gate_explains_the_recorded_bucket_cap() {
-        let row = json!({"action": "BUY", "gate_code": "concentration_currency"});
-        let concentration = json!({
-            "currency": "USD",
-            "currency_count_before": 3,
-            "max_assets_per_currency": 3,
-        });
+        let row = crate::state::dashboard_candidate_scoring_candidate_from_json(&json!({
+            "action": "BUY",
+            "gate_code": "concentration_currency",
+            "concentration": {
+                "currency": "USD",
+                "currency_count_before": 3,
+                "max_assets_per_currency": 3
+            }
+        }));
         assert_eq!(
-            candidate_gate_detail(
-                &row,
-                &JsonValue::Null,
-                false,
-                &JsonValue::Null,
-                &JsonValue::Null,
-                &concentration,
-                &JsonValue::Null,
-                &default_prefs(),
-            ),
+            candidate_gate_detail(&row, false, &default_prefs()),
             "New symbol blocked: 3 of 3 configured USD bucket slots were already occupied."
         );
     }

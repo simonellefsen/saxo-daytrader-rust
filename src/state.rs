@@ -36,8 +36,13 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CandidateScoringWaterfallPayload, CandidateScoringWaterfallSummaryPayload,
-        CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
+        CandidateScoringWaterfallCandidatePayload, CandidateScoringWaterfallConcentrationPayload,
+        CandidateScoringWaterfallCostGuardPayload, CandidateScoringWaterfallHermesPayload,
+        CandidateScoringWaterfallHoldingLimitPayload, CandidateScoringWaterfallMarketPayload,
+        CandidateScoringWaterfallMarkovPayload, CandidateScoringWaterfallPayload,
+        CandidateScoringWaterfallPositionWeightPayload, CandidateScoringWaterfallSummaryPayload,
+        CandidateScoringWaterfallTechnicalPayload, CashBufferSettings,
+        DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
@@ -696,6 +701,19 @@ fn compact_candidate_cost_guard(value: &JsonValue) -> JsonValue {
     })
 }
 
+fn compact_candidate_holding_limit(value: &JsonValue) -> JsonValue {
+    let holding_limit = value.get("final_holding_limit").unwrap_or(&JsonValue::Null);
+    if !holding_limit.is_object() {
+        return JsonValue::Null;
+    }
+    json!({
+        "verified_from_state": holding_limit.get("verified_from_state").and_then(JsonValue::as_bool).unwrap_or(false),
+        "max_holdings": value_i64(holding_limit, "max_holdings"),
+        "holding_count_before": value_i64(holding_limit, "holding_count_before"),
+        "already_held": holding_limit.get("already_held").and_then(JsonValue::as_bool).unwrap_or(false),
+    })
+}
+
 fn compact_candidate_concentration(value: &JsonValue) -> JsonValue {
     let concentration = value.get("final_concentration").unwrap_or(&JsonValue::Null);
     if !concentration.is_object() {
@@ -713,6 +731,23 @@ fn compact_candidate_concentration(value: &JsonValue) -> JsonValue {
         "already_held": concentration.get("already_held").and_then(JsonValue::as_bool).unwrap_or(false),
         "unmapped_exchange_symbol_count": value_i64(concentration, "unmapped_exchange_symbol_count"),
         "unmapped_currency_symbol_count": value_i64(concentration, "unmapped_currency_symbol_count"),
+    })
+}
+
+fn compact_candidate_position_weight(value: &JsonValue) -> JsonValue {
+    let position_weight = value
+        .get("final_position_weight")
+        .unwrap_or(&JsonValue::Null);
+    if !position_weight.is_object() {
+        return JsonValue::Null;
+    }
+    json!({
+        "verified_from_state": position_weight.get("verified_from_state").and_then(JsonValue::as_bool).unwrap_or(false),
+        "max_position_weight": value_f64(position_weight, "max_position_weight"),
+        "current_position_value_dkk": value_f64(position_weight, "current_position_value_dkk"),
+        "approved_value_dkk": value_f64(position_weight, "approved_value_dkk"),
+        "resulting_position_value_dkk": value_f64(position_weight, "resulting_position_value_dkk"),
+        "max_position_value_dkk": value_f64(position_weight, "max_position_value_dkk"),
     })
 }
 
@@ -1959,7 +1994,9 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
                     "gate_code": candidate_gate_code(row),
                     "final_technical": compact_candidate_final_technical(row),
                     "cost_guard": compact_candidate_cost_guard(row),
+                    "final_holding_limit": compact_candidate_holding_limit(row),
                     "concentration": compact_candidate_concentration(row),
+                    "final_position_weight": compact_candidate_position_weight(row),
                 }),
             );
         }
@@ -1984,7 +2021,9 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "technical": compact_candidate_technical(&row),
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
+            "final_holding_limit": outcome.get("final_holding_limit").cloned().unwrap_or(JsonValue::Null),
             "concentration": outcome.get("concentration").cloned().unwrap_or(JsonValue::Null),
+            "final_position_weight": outcome.get("final_position_weight").cloned().unwrap_or(JsonValue::Null),
             "markov": compact_candidate_markov(&row),
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -2013,7 +2052,9 @@ fn candidate_scoring_waterfall_from_manager_run(run: &JsonValue) -> JsonValue {
             "technical": {"status": "unavailable", "sentiment": "", "trend_bias": "", "confluence_count": 0, "min_confluences": 0},
             "final_technical": outcome.get("final_technical").cloned().unwrap_or(JsonValue::Null),
             "cost_guard": outcome.get("cost_guard").cloned().unwrap_or(JsonValue::Null),
+            "final_holding_limit": outcome.get("final_holding_limit").cloned().unwrap_or(JsonValue::Null),
             "concentration": outcome.get("concentration").cloned().unwrap_or(JsonValue::Null),
+            "final_position_weight": outcome.get("final_position_weight").cloned().unwrap_or(JsonValue::Null),
             "markov": {"status": "unavailable", "fresh": false, "direction": "", "signed_signal": 0.0, "age_days": 0},
             "hermes": compact_candidate_advice(advice_by_key.get(&key)),
             "outcome": json_text(&outcome, "outcome"),
@@ -3837,10 +3878,151 @@ pub(crate) fn decision_report_summaries_from_json(
         .collect()
 }
 
+fn dashboard_candidate_scoring_technical_from_json(
+    value: Option<&JsonValue>,
+) -> CandidateScoringWaterfallTechnicalPayload {
+    let value = value.unwrap_or(&JsonValue::Null);
+    CandidateScoringWaterfallTechnicalPayload {
+        status: json_text(value, "status"),
+        source: json_text(value, "source"),
+        run_date: json_text(value, "run_date"),
+        sentiment: json_text(value, "sentiment"),
+        trend_bias: json_text(value, "trend_bias"),
+        confluence_count: value_i64(value, "confluence_count"),
+        min_confluences: value_i64(value, "min_confluences"),
+    }
+}
+
+pub(crate) fn dashboard_candidate_scoring_candidate_from_json(
+    value: &JsonValue,
+) -> CandidateScoringWaterfallCandidatePayload {
+    let market = value.get("market").unwrap_or(&JsonValue::Null);
+    let markov = value.get("markov").unwrap_or(&JsonValue::Null);
+    let hermes = value.get("hermes").unwrap_or(&JsonValue::Null);
+    let cost_guard = value
+        .get("cost_guard")
+        .filter(|value| value.is_object())
+        .map(|value| CandidateScoringWaterfallCostGuardPayload {
+            verified_from_db: value
+                .get("verified_from_db")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            estimated_slippage_bps: value_f64(value, "estimated_slippage_bps"),
+            cost_guard_multiple: value_f64(value, "cost_guard_multiple"),
+            expected_reward_dkk: value_f64(value, "expected_reward_dkk"),
+            round_trip_commission_dkk: value_f64(value, "round_trip_commission_dkk"),
+            one_way_slippage_dkk: value_f64(value, "one_way_slippage_dkk"),
+            required_reward_dkk: value_f64(value, "required_reward_dkk"),
+            passes: value
+                .get("passes")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            basis: json_text(value, "basis"),
+        });
+    let concentration = value
+        .get("concentration")
+        .filter(|value| value.is_object())
+        .map(|value| CandidateScoringWaterfallConcentrationPayload {
+            status: json_text(value, "status"),
+            verified_from_state: value
+                .get("verified_from_state")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            max_assets_per_exchange: value_i64(value, "max_assets_per_exchange"),
+            max_assets_per_currency: value_i64(value, "max_assets_per_currency"),
+            exchange: json_text(value, "exchange"),
+            currency: json_text(value, "currency"),
+            exchange_count_before: value_i64(value, "exchange_count_before"),
+            currency_count_before: value_i64(value, "currency_count_before"),
+            already_held: value
+                .get("already_held")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            unmapped_exchange_symbol_count: value_i64(value, "unmapped_exchange_symbol_count"),
+            unmapped_currency_symbol_count: value_i64(value, "unmapped_currency_symbol_count"),
+        });
+    let holding_limit = value
+        .get("final_holding_limit")
+        .filter(|value| value.is_object())
+        .map(|value| CandidateScoringWaterfallHoldingLimitPayload {
+            verified_from_state: value
+                .get("verified_from_state")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            max_holdings: value_i64(value, "max_holdings"),
+            holding_count_before: value_i64(value, "holding_count_before"),
+            already_held: value
+                .get("already_held")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+        });
+    let position_weight = value
+        .get("final_position_weight")
+        .filter(|value| value.is_object())
+        .map(|value| CandidateScoringWaterfallPositionWeightPayload {
+            verified_from_state: value
+                .get("verified_from_state")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            max_position_weight: value_f64(value, "max_position_weight"),
+            current_position_value_dkk: value_f64(value, "current_position_value_dkk"),
+            approved_value_dkk: value_f64(value, "approved_value_dkk"),
+            resulting_position_value_dkk: value_f64(value, "resulting_position_value_dkk"),
+            max_position_value_dkk: value_f64(value, "max_position_value_dkk"),
+        });
+    CandidateScoringWaterfallCandidatePayload {
+        strategy_key: json_text(value, "strategy_key"),
+        symbol: json_text(value, "symbol"),
+        action: json_text(value, "action"),
+        order_type: json_text(value, "order_type"),
+        quantity: value_f64(value, "quantity"),
+        market: CandidateScoringWaterfallMarketPayload {
+            exchange: json_text(market, "exchange"),
+            exchange_open: market
+                .get("exchange_open")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            risk_excluded: market
+                .get("risk_excluded")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            quarantine_active: market
+                .get("quarantine_active")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+        },
+        technical: dashboard_candidate_scoring_technical_from_json(value.get("technical")),
+        final_technical: value
+            .get("final_technical")
+            .filter(|value| value.is_object())
+            .map(|value| dashboard_candidate_scoring_technical_from_json(Some(value))),
+        cost_guard,
+        holding_limit,
+        concentration,
+        position_weight,
+        markov: CandidateScoringWaterfallMarkovPayload {
+            status: json_text(markov, "status"),
+            fresh: markov
+                .get("fresh")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            direction: json_text(markov, "direction"),
+            signed_signal: value_f64(markov, "signed_signal"),
+            age_days: value_i64(markov, "age_days"),
+        },
+        hermes: CandidateScoringWaterfallHermesPayload {
+            effect: json_text(hermes, "effect"),
+            requested_quantity: value_f64(hermes, "requested_quantity"),
+            resulting_quantity: value_f64(hermes, "resulting_quantity"),
+        },
+        outcome: json_text(value, "outcome"),
+        gate_code: json_text(value, "gate_code"),
+    }
+}
+
 /// Decodes the selected Decision Report's stable outer fields. Its detailed
 /// report and provider diagnostics remain compatibility JSON, while the
-/// deterministic manager-gate waterfall has a typed outer boundary. Candidate
-/// diagnostics remain staged JSON because their historical schema evolves.
+/// deterministic manager-gate waterfall has a fully typed dashboard boundary.
 fn dashboard_candidate_scoring_waterfall_from_json(
     value: Option<&JsonValue>,
 ) -> CandidateScoringWaterfallPayload {
@@ -3856,8 +4038,10 @@ fn dashboard_candidate_scoring_waterfall_from_json(
         candidates: value
             .get("candidates")
             .and_then(JsonValue::as_array)
-            .cloned()
-            .unwrap_or_default(),
+            .into_iter()
+            .flatten()
+            .map(dashboard_candidate_scoring_candidate_from_json)
+            .collect(),
         summary: CandidateScoringWaterfallSummaryPayload {
             candidate_count: value_i64(summary, "candidate_count"),
             approved_count: value_i64(summary, "approved_count"),
@@ -19182,7 +19366,12 @@ mod tests {
                     "skipped_count": 1,
                     "not_reached_count": 0
                 },
-                "candidates": [{"symbol": "ACME:xnas"}],
+                "candidates": [{
+                    "symbol": "ACME:xnas",
+                    "action": "BUY",
+                    "markov": {"status": "ok", "fresh": true, "signed_signal": 0.42},
+                    "raw_reason": "candidate-raw-detail-must-not-reach-the-dashboard"
+                }],
                 "manager_json": {"raw_reason": "must-not-reach-the-dashboard"}
             }
         }))
@@ -19203,13 +19392,23 @@ mod tests {
             1
         );
         assert_eq!(
-            decision.candidate_scoring_waterfall.candidates[0]["symbol"],
-            json!("ACME:xnas")
+            decision.candidate_scoring_waterfall.candidates[0].symbol,
+            "ACME:xnas"
+        );
+        assert!(
+            decision.candidate_scoring_waterfall.candidates[0]
+                .markov
+                .fresh
         );
         assert!(
             !serde_json::to_string(&decision)
                 .expect("typed selected Decision Report serializes")
                 .contains("raw_reason")
+        );
+        assert!(
+            !serde_json::to_string(&decision)
+                .expect("typed selected Decision Report serializes")
+                .contains("candidate-raw-detail-must-not-reach-the-dashboard")
         );
         assert!(
             dashboard_selected_decision_from_json(JsonValue::Null)

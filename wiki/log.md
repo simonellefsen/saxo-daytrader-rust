@@ -2791,8 +2791,8 @@ broker mutation was added.
 - Changed Cash Deployment's portfolio-drawdown guardrail display to consume a typed, allowlisted restriction, peak, threshold, soft-reduction, and local override projection.
 - Rule-trace and broker documents remain staged in the Trading Manager diagnostics; the projection has no ability to alter the guardrail or an operator override.
 - This remains read-only completed-run evidence and cannot change report generation, Hermes, manager gates, queues, broker prechecks, or Saxo execution.
-## [2026-08-29] architecture | Type Candidate Scoring Waterfall outer contract
+## [2026-08-29] architecture | Type Candidate Scoring Waterfall
 
-- Changed the selected Decision Report's deterministic Candidate Scoring Waterfall to consume typed run identity, lifecycle, and aggregate outcome-count evidence.
-- Per-candidate diagnostic rows remain staged sanitized JSON while their historical gate schema evolves; embedded raw manager documents are dropped at the typed boundary.
+- Changed the selected Decision Report's deterministic Candidate Scoring Waterfall to consume typed run identity, lifecycle, aggregate outcome-count, and per-candidate display evidence.
+- Raw manager documents and unallowlisted candidate detail are dropped at the typed boundary; the existing market, technical, Markov, Hermes, cost, holding, concentration, and position-weight explanations remain available from compiler-checked fields.
 - This remains read-only historical evidence and cannot generate a report, alter manager gates or configuration, invoke Hermes, queue work, precheck, or mutate a Saxo order.
