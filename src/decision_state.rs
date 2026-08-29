@@ -323,7 +323,7 @@ fn optional_boolish(row: &JsonValue, key: &str) -> serde_json::Result<Option<boo
         Some(JsonValue::String(value)) if value == "1" || value.eq_ignore_ascii_case("true") => {
             Ok(Some(true))
         }
-        _ => serde_json::from_value(JsonValue::Null),
+        _ => serde_json::from_value::<bool>(JsonValue::Null).map(Some),
     }
 }
 fn json_text(value: &JsonValue, key: &str) -> String {
@@ -426,5 +426,62 @@ mod tests {
                 .contains("must-not-reach-the-dashboard")
         );
         assert!(decision_report_summaries_from_json(vec![json!({"id": 312})]).is_err());
+    }
+
+    #[test]
+    fn selected_decision_keeps_manager_detail_outside_the_dashboard_contract() {
+        let decision = dashboard_selected_decision_from_json(json!({
+            "id": 312,
+            "created_at": "2026-08-26T12:00:00Z",
+            "report_date": "2026-08-26",
+            "model": "openai/gpt-5",
+            "status": "completed",
+            "analysis_window_active": 1,
+            "response_id": "gen-312",
+            "prompt_text": "Review the retained report.",
+            "request_json": "{\"response_format\": {\"type\": \"json_schema\"}}",
+            "response_json": {"id": "gen-312"},
+            "report_json": {"suggested_trades": []},
+            "error_text": null,
+            "analysis_pulse_key": "us_open_followup:2026-08-26",
+            "analysis_pulse_label": "US Open +1h15",
+            "pulse_mode": "execution_eligible",
+            "queue_eligible": "1",
+            "candidate_scoring_waterfall": {
+                "status": "available",
+                "run_id": 91,
+                "summary": {"candidate_count": 2, "approved_count": 1, "skipped_count": 1, "not_reached_count": 0},
+                "candidates": [{"symbol": "ACME:xnas", "action": "BUY", "markov": {"status": "ok", "fresh": true, "signed_signal": 0.42}, "raw_reason": "candidate-raw-detail-must-not-reach-the-dashboard"}],
+                "manager_json": {"raw_reason": "must-not-reach-the-dashboard"}
+            }
+        }))
+        .expect("selected Decision Report fixture has the dashboard contract")
+        .expect("fixture is present");
+
+        assert_eq!(decision.id, 312);
+        assert!(decision.analysis_window_active);
+        assert!(decision.queue_eligible);
+        assert_eq!(
+            decision.request_json["response_format"]["type"],
+            json!("json_schema")
+        );
+        assert_eq!(decision.candidate_scoring_waterfall.run_id, 91);
+        assert!(
+            decision.candidate_scoring_waterfall.candidates[0]
+                .markov
+                .fresh
+        );
+        let serialized =
+            serde_json::to_string(&decision).expect("typed selected Decision Report serializes");
+        assert!(!serialized.contains("raw_reason"));
+        assert!(!serialized.contains("candidate-raw-detail-must-not-reach-the-dashboard"));
+        assert!(
+            dashboard_selected_decision_from_json(JsonValue::Null)
+                .expect("absent selected Decision Report is explicit")
+                .is_none()
+        );
+        assert!(dashboard_selected_decision_from_json(json!({
+            "id": 312, "created_at": "2026-08-26T12:00:00Z", "status": "completed", "queue_eligible": "unknown"
+        })).is_err());
     }
 }

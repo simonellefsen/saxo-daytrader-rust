@@ -15,6 +15,10 @@ Append-only timeline for project wiki maintenance. Use headings with the format 
 - Moved the production selected-Decision-Report and Candidate Scoring Waterfall renderer onto `decision_state`; the former local projection is compiled only for regression parity coverage.
 - Report/provider diagnostics remain staged. Report generation, manager gates, queues, prechecks, and Saxo behavior are unchanged.
 
+## [2026-08-29] test | Cover selected Decision Report projection directly
+
+- Added direct `decision_state` coverage for typed waterfall fields, raw manager-detail exclusion, absent reports, and fail-closed malformed queue flags.
+
 ## [2026-08-29] architecture | Extract Watchlists dashboard projection
 
 - Added `market_state` for the typed Watchlists dashboard envelope and its explicit unloaded fallback, with a provider-document exclusion test.
