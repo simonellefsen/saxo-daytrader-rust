@@ -8,6 +8,12 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value as JsonValue, json};
 
 use crate::db::{value_f64, value_i64};
+use crate::models::{
+    PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
+    PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
+    PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
+    PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
+};
 
 pub(crate) fn performance_summary_from_history(
     history: &[JsonValue],
@@ -147,6 +153,101 @@ pub(crate) fn performance_confidence(history: &[JsonValue], now: DateTime<Utc>) 
         "age_minutes": age_minutes,
         "scope": "account_value_only",
     })
+}
+
+/// Validates the local aggregate rows before the dashboard renders them.
+///
+/// The performance API and persisted query already share this fixed projection.
+/// Keeping the dashboard conversion all-or-nothing avoids silently drawing a
+/// partial selected range if a legacy row is malformed.
+pub(crate) fn dashboard_performance_history_from_json(
+    history: Vec<JsonValue>,
+) -> serde_json::Result<Vec<PerformanceHistoryRowPayload>> {
+    history.into_iter().map(serde_json::from_value).collect()
+}
+
+/// Decodes the selected-range summary for SSR while preserving the non-Performance
+/// tabs' explicit unavailable state.
+pub(crate) fn dashboard_performance_summary_from_json(
+    summary: JsonValue,
+) -> serde_json::Result<Option<PerformanceSummaryPayload>> {
+    if summary.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(summary).map(Some)
+    }
+}
+
+/// Decodes the read-only proxy comparison for SSR while preserving an explicit
+/// unavailable state outside the Performance tab.
+pub(crate) fn dashboard_performance_benchmarks_from_json(
+    benchmarks: JsonValue,
+) -> serde_json::Result<Option<PerformanceBenchmarksPayload>> {
+    if benchmarks.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(benchmarks).map(Some)
+    }
+}
+
+/// Decodes local goal progress for SSR while retaining the unavailable state on
+/// views that do not load the Performance projection.
+pub(crate) fn dashboard_performance_goal_tracking_from_json(
+    goal_tracking: JsonValue,
+) -> serde_json::Result<Option<PerformanceGoalTrackingPayload>> {
+    if goal_tracking.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(goal_tracking).map(Some)
+    }
+}
+
+/// Decodes retained position-snapshot evidence for SSR while preserving an
+/// explicit unavailable state outside the Performance view.
+pub(crate) fn dashboard_performance_snapshot_evidence_from_json(
+    evidence: JsonValue,
+) -> serde_json::Result<Option<PerformanceSnapshotEvidencePayload>> {
+    if evidence.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(evidence).map(Some)
+    }
+}
+
+/// Decodes read-only unrealised-P/L reconciliation for the dashboard while
+/// retaining an explicit unavailable state outside the Performance view.
+pub(crate) fn dashboard_performance_pnl_reconciliation_from_json(
+    reconciliation: JsonValue,
+) -> serde_json::Result<Option<PerformancePnlReconciliationPayload>> {
+    if reconciliation.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(reconciliation).map(Some)
+    }
+}
+
+/// Decodes stored exposure P/L attribution for the dashboard while retaining
+/// an explicit unavailable state outside the Performance view.
+pub(crate) fn dashboard_performance_exposure_attribution_from_json(
+    attribution: JsonValue,
+) -> serde_json::Result<Option<PerformanceExposureAttributionPayload>> {
+    if attribution.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(attribution).map(Some)
+    }
+}
+
+/// Decodes local realised SELL-outcome evidence for the dashboard while
+/// retaining an explicit unavailable state outside the Performance view.
+pub(crate) fn dashboard_performance_realised_sell_outcomes_from_json(
+    outcomes: JsonValue,
+) -> serde_json::Result<Option<PerformanceRealisedSellOutcomesPayload>> {
+    if outcomes.is_null() {
+        Ok(None)
+    } else {
+        serde_json::from_value(outcomes).map(Some)
+    }
 }
 
 #[cfg(test)]

@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Performance dashboard decoders
+
+- Moved the typed Performance-tab history, summary, benchmark, goal-progress, snapshot-evidence, P/L-reconciliation, exposure-attribution, and realised-SELL-outcome decoders from `state.rs` into the existing `performance_state` read-model module.
+- `AppState` keeps persisted reads, tab gating, degradation handling, and dashboard orchestration. Account-value collection, FX calculation, benchmark collection, reports, queues, prechecks, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Extract strategy-journal read model
 
 - Moved the typed EOD dashboard-detail and public strategy-journal summary decoders, plus their boundary tests, from `state.rs` to `strategy_journal_state`. The public API imports its summary decoder directly from that focused module.

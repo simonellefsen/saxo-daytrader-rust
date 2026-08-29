@@ -73,11 +73,7 @@ use crate::{
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
         MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
         MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
-        PerformanceBenchmarksPayload, PerformanceExposureAttributionPayload,
-        PerformanceGoalTrackingPayload, PerformanceHistoryRowPayload,
-        PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
-        PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
-        ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
+        PortfolioTradePayload, ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
         ProtectiveStopLifecycleTestPayload, ProtectiveStopPrecheckPayload, QuiverConflictPayload,
         SchedulerStatusSummaryPayload, SupportRiskEvidencePayload, TradingManagerPayload,
         TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
@@ -88,7 +84,15 @@ use crate::{
         TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
         TuningTradeThesisEvidence,
     },
-    performance_state::performance_summary_from_history,
+    performance_state::{
+        dashboard_performance_benchmarks_from_json,
+        dashboard_performance_exposure_attribution_from_json,
+        dashboard_performance_goal_tracking_from_json, dashboard_performance_history_from_json,
+        dashboard_performance_pnl_reconciliation_from_json,
+        dashboard_performance_realised_sell_outcomes_from_json,
+        dashboard_performance_snapshot_evidence_from_json, dashboard_performance_summary_from_json,
+        performance_summary_from_history,
+    },
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
     scheduler_state::{SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page},
     strategy_journal_state::dashboard_strategy_journal_entries_from_json,
@@ -3097,101 +3101,6 @@ fn performance_range_limit(range_key: &str) -> i64 {
 
 fn dashboard_performance_history_limit(active_view: &str, range_key: &str) -> Option<i64> {
     (active_view == "performance").then(|| performance_range_limit(range_key))
-}
-
-/// Validates the local aggregate rows before the dashboard renders them.
-///
-/// The performance API and persisted query already share this fixed projection.
-/// Keeping the dashboard conversion all-or-nothing avoids silently drawing a
-/// partial selected range if a legacy row is malformed.
-fn dashboard_performance_history_from_json(
-    history: Vec<JsonValue>,
-) -> serde_json::Result<Vec<PerformanceHistoryRowPayload>> {
-    history.into_iter().map(serde_json::from_value).collect()
-}
-
-/// Decodes the selected-range summary for SSR while preserving the non-Performance
-/// tabs' explicit unavailable state.
-fn dashboard_performance_summary_from_json(
-    summary: JsonValue,
-) -> serde_json::Result<Option<PerformanceSummaryPayload>> {
-    if summary.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(summary).map(Some)
-    }
-}
-
-/// Decodes the read-only proxy comparison for SSR while preserving an explicit
-/// unavailable state outside the Performance tab.
-fn dashboard_performance_benchmarks_from_json(
-    benchmarks: JsonValue,
-) -> serde_json::Result<Option<PerformanceBenchmarksPayload>> {
-    if benchmarks.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(benchmarks).map(Some)
-    }
-}
-
-/// Decodes local goal progress for SSR while retaining the unavailable state on
-/// views that do not load the Performance projection.
-fn dashboard_performance_goal_tracking_from_json(
-    goal_tracking: JsonValue,
-) -> serde_json::Result<Option<PerformanceGoalTrackingPayload>> {
-    if goal_tracking.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(goal_tracking).map(Some)
-    }
-}
-
-/// Decodes retained position-snapshot evidence for SSR while preserving an
-/// explicit unavailable state outside the Performance view.
-fn dashboard_performance_snapshot_evidence_from_json(
-    evidence: JsonValue,
-) -> serde_json::Result<Option<PerformanceSnapshotEvidencePayload>> {
-    if evidence.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(evidence).map(Some)
-    }
-}
-
-/// Decodes read-only unrealised-P/L reconciliation for the dashboard while
-/// retaining an explicit unavailable state outside the Performance view.
-fn dashboard_performance_pnl_reconciliation_from_json(
-    reconciliation: JsonValue,
-) -> serde_json::Result<Option<PerformancePnlReconciliationPayload>> {
-    if reconciliation.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(reconciliation).map(Some)
-    }
-}
-
-/// Decodes stored exposure P/L attribution for the dashboard while retaining
-/// an explicit unavailable state outside the Performance view.
-fn dashboard_performance_exposure_attribution_from_json(
-    attribution: JsonValue,
-) -> serde_json::Result<Option<PerformanceExposureAttributionPayload>> {
-    if attribution.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(attribution).map(Some)
-    }
-}
-
-/// Decodes local realised SELL-outcome evidence for the dashboard while
-/// retaining an explicit unavailable state outside the Performance view.
-fn dashboard_performance_realised_sell_outcomes_from_json(
-    outcomes: JsonValue,
-) -> serde_json::Result<Option<PerformanceRealisedSellOutcomesPayload>> {
-    if outcomes.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(outcomes).map(Some)
-    }
 }
 
 fn dashboard_market_status_from_json(
