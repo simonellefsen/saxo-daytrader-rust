@@ -35,6 +35,7 @@ mod scheduler;
 mod scheduler_state;
 mod state;
 mod strategy_journal;
+mod strategy_journal_state;
 mod trading_manager;
 mod ui;
 mod xai_decision;

@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract strategy-journal read model
+
+- Moved the typed EOD dashboard-detail and public strategy-journal summary decoders, plus their boundary tests, from `state.rs` to `strategy_journal_state`. The public API imports its summary decoder directly from that focused module.
+- `AppState` retains the existing SQL reads and dashboard orchestration. Detailed metrics, learnings, and diary documents remain staged only for the dashboard detail path and excluded from public summaries; EOD scheduling, provider calls, Hermes, reports, queues, prechecks, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Type End-of-Day benchmark readthrough
 
 - Changed the EOD benchmark-readthrough card from a generic diary document to a small local projection of status, valid rendered benchmark references, and caveat. Unrelated diary fields and malformed reference rows do not reach the renderer.

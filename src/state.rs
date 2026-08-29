@@ -59,15 +59,14 @@ use crate::{
         DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
         DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardSchedulerCyclePayload, DashboardSelectedDecisionPayload,
-        DashboardStrategyJournalEntryPayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionPulseStatusPayload, DecisionReportDebugPayload,
-        DecisionReportDebugPayloads, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
-        ExecutionOrderEventTimelineEntryPayload, ExecutionOrderSummaryPayload,
-        HermesCapabilitiesPayload, HermesContextDecisionsPayload, HermesContextEndOfDayPayload,
-        HermesContextExecutionPayload, HermesContextHermesPayload, HermesContextItemsPayload,
-        HermesContextLearningMemoryPayload, HermesContextPayload, HermesContextPerformancePayload,
-        HermesContextSafetyPayload, HermesContextSchedulerPayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
+        DecisionReportDebugPayload, DecisionReportDebugPayloads, ExecutionEventSummaryPayload,
+        ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
+        ExecutionOrderSummaryPayload, HermesCapabilitiesPayload, HermesContextDecisionsPayload,
+        HermesContextEndOfDayPayload, HermesContextExecutionPayload, HermesContextHermesPayload,
+        HermesContextItemsPayload, HermesContextLearningMemoryPayload, HermesContextPayload,
+        HermesContextPerformancePayload, HermesContextSafetyPayload, HermesContextSchedulerPayload,
         HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
         HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
         HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
@@ -80,9 +79,9 @@ use crate::{
         PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload, PortfolioTradePayload,
         ProtectiveStopCoveragePayload, ProtectiveStopCoverageSummaryPayload,
         ProtectiveStopLifecycleTestPayload, ProtectiveStopPrecheckPayload, QuiverConflictPayload,
-        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, SupportRiskEvidencePayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        SchedulerStatusSummaryPayload, SupportRiskEvidencePayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -92,6 +91,7 @@ use crate::{
     performance_state::performance_summary_from_history,
     quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
     scheduler_state::{SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page},
+    strategy_journal_state::dashboard_strategy_journal_entries_from_json,
 };
 
 #[cfg(test)]
@@ -4894,98 +4894,6 @@ fn dashboard_decision_pulse_evidence_unavailable() -> DashboardDecisionPulseEvid
         status: "unavailable".to_string(),
         interpretation: "Decision-pulse outcome evidence is unavailable right now.".to_string(),
         ..DashboardDecisionPulseEvidencePayload::default()
-    }
-}
-
-/// Decodes the stable outer fields of retained local EOD journals. Detailed
-/// metrics, learnings, and diary documents remain staged JSON for the EOD
-/// detail view and its read-only benchmark context.
-fn dashboard_strategy_journal_entries_from_json(
-    entries: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardStrategyJournalEntryPayload>> {
-    entries
-        .into_iter()
-        .map(|entry| {
-            Ok(DashboardStrategyJournalEntryPayload {
-                id: dashboard_required_i64(&entry, "id")?,
-                created_at: dashboard_required_string(&entry, "created_at")?,
-                journal_date: dashboard_required_string(&entry, "journal_date")?,
-                cadence: dashboard_required_string(&entry, "cadence")?,
-                status: dashboard_required_string(&entry, "status")?,
-                summary: dashboard_required_string(&entry, "summary")?,
-                source_report_id: serde_json::from_value(
-                    entry
-                        .get("source_report_id")
-                        .cloned()
-                        .unwrap_or(JsonValue::Null),
-                )?,
-                metrics_json: entry
-                    .get("metrics_json")
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
-                learnings_json: entry
-                    .get("learnings_json")
-                    .cloned()
-                    .unwrap_or(JsonValue::Null),
-                diary_json: entry.get("diary_json").cloned().unwrap_or(JsonValue::Null),
-            })
-        })
-        .collect()
-}
-
-pub(crate) fn strategy_journal_summaries_from_json(
-    entries: Vec<JsonValue>,
-) -> serde_json::Result<Vec<StrategyJournalEntryPayload>> {
-    entries
-        .into_iter()
-        .map(|entry| {
-            Ok(StrategyJournalEntryPayload {
-                id: dashboard_required_i64(&entry, "id")?,
-                created_at: dashboard_required_string(&entry, "created_at")?,
-                journal_date: dashboard_required_string(&entry, "journal_date")?,
-                cadence: dashboard_required_string(&entry, "cadence")?,
-                status: dashboard_required_string(&entry, "status")?,
-                summary: dashboard_required_string(&entry, "summary")?,
-                source_report_id: serde_json::from_value(
-                    entry
-                        .get("source_report_id")
-                        .cloned()
-                        .unwrap_or(JsonValue::Null),
-                )?,
-            })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod strategy_journal_summary_tests {
-    use serde_json::json;
-
-    use super::strategy_journal_summaries_from_json;
-
-    #[test]
-    fn summaries_exclude_retained_detail_documents() {
-        let entries = strategy_journal_summaries_from_json(vec![json!({
-            "id": 17,
-            "created_at": "2026-08-26T15:30:00Z",
-            "journal_date": "2026-08-26",
-            "cadence": "daily",
-            "status": "completed",
-            "summary": "Bounded EOD summary.",
-            "source_report_id": 42,
-            "metrics_json": {"total_value_dkk": 250000.0},
-            "learnings_json": {"theme": "observation"},
-            "diary_json": {"api_key": "must-not-reach-the-public-api"}
-        })])
-        .expect("stable strategy-journal summary rows decode");
-
-        assert_eq!(entries[0].source_report_id, Some(42));
-        assert!(
-            !serde_json::to_string(&entries)
-                .expect("typed strategy-journal summary rows serialize")
-                .contains("must-not-reach-the-public-api")
-        );
-        assert!(strategy_journal_summaries_from_json(vec![json!({"id": 17})]).is_err());
     }
 }
 
@@ -20497,38 +20405,6 @@ mod tests {
             dashboard_decision_pulse_evidence_from_json(json!({
                 "status": "collecting"
             }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn dashboard_strategy_journal_entries_keep_only_staged_detail_documents() {
-        let entries = dashboard_strategy_journal_entries_from_json(vec![json!({
-            "id": 17,
-            "created_at": "2026-08-26T15:30:00Z",
-            "journal_date": "2026-08-26",
-            "cadence": "daily",
-            "status": "completed",
-            "summary": "Bounded EOD summary.",
-            "source_report_id": 42,
-            "metrics_json": {"total_value_dkk": 250000.0},
-            "learnings_json": {"theme": "observation"},
-            "diary_json": {"diary": {"benchmark_readthrough": {"status": "ready"}}},
-            "runtime_session": {"api_key": "must-not-reach-the-dashboard"}
-        })])
-        .expect("stable strategy-journal rows decode");
-
-        assert_eq!(entries[0].source_report_id, Some(42));
-        assert_eq!(entries[0].journal_date, "2026-08-26");
-        assert!(
-            !serde_json::to_string(&entries)
-                .expect("typed strategy-journal rows serialize")
-                .contains("must-not-reach-the-dashboard")
-        );
-        assert!(
-            dashboard_strategy_journal_entries_from_json(vec![json!({
-                "id": 17
-            })])
             .is_err()
         );
     }
