@@ -1,17 +1,15 @@
-use std::collections::HashSet;
-use std::time::Duration as StdDuration;
-
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use reqwest::StatusCode;
 use serde_json::{Value as JsonValue, json};
 use sqlx::{AnyPool, Row};
+use std::collections::HashSet;
 use tracing::{info, warn};
 
 use crate::{
     config::{yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
+    decision_provider::DecisionProvider,
     decision_schema,
     models::{DecisionReportSchemaHealth, DecisionReportSchemaIssue},
     state::AppState,
@@ -328,28 +326,19 @@ async fn submit_deferred_report(
     };
 
     let base_url = ai_base_url(state);
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(xai_http_timeout_seconds(state)))
-        .build()
-        .context("building AI provider HTTP client")?;
+    let provider_client =
+        DecisionProvider::new(&provider, &base_url, xai_http_timeout_seconds(state));
     let mut outbound_request = request_json.clone();
-    if provider == "xai" {
+    if provider_client.is_xai() {
         if let Some(obj) = outbound_request.as_object_mut() {
             obj.insert("deferred".to_string(), JsonValue::from(true));
         }
     }
-    let response = client
-        .post(format!("{base_url}/chat/completions"))
-        .bearer_auth(api_key)
-        .json(&outbound_request)
-        .send()
-        .await
-        .context("submitting AI decision report")?;
-    let status = response.status();
-    let response_body = response
-        .text()
-        .await
-        .unwrap_or_else(|err| format!("failed to read AI provider response body: {err}"));
+    let response = provider_client
+        .submit_chat_completion(&api_key, &outbound_request)
+        .await?;
+    let status = response.status;
+    let response_body = response.body;
     if !status.is_success() {
         let response_excerpt = truncate_error_text(&response_body, 2_000);
         let report = insert_xai_error_report(
@@ -398,7 +387,7 @@ async fn submit_deferred_report(
             return Ok(report);
         }
     };
-    if provider != "xai" {
+    if !provider_client.is_xai() {
         let response_id = response_json
             .get("id")
             .and_then(JsonValue::as_str)
@@ -579,32 +568,20 @@ async fn poll_one_deferred_report(
             "reason": format!("{key_name} is missing")
         }));
     };
-    let base_url = xai_base_url(state);
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(xai_http_timeout_seconds(state)))
-        .build()
-        .context("building xAI HTTP client")?;
-    let response = client
-        .get(format!(
-            "{base_url}/chat/deferred-completion/{}",
-            pending.request_id
-        ))
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .context("polling xAI deferred decision report")?;
-    if response.status() == StatusCode::ACCEPTED {
+    let provider_client =
+        DecisionProvider::new("xai", &xai_base_url(state), xai_http_timeout_seconds(state));
+    let response = provider_client
+        .poll_deferred_completion(&api_key, &pending.request_id)
+        .await?;
+    if response.is_accepted() {
         return Ok(json!({
             "status": "pending",
             "report_id": pending.id,
             "request_id": pending.request_id
         }));
     }
-    let status = response.status();
-    let response_body = response
-        .text()
-        .await
-        .unwrap_or_else(|err| format!("failed to read xAI deferred response body: {err}"));
+    let status = response.status;
+    let response_body = response.body;
     if !status.is_success() {
         mark_deferred_report_error(
             state,
@@ -2977,11 +2954,7 @@ async fn ai_api_key(state: &AppState) -> Option<String> {
 }
 
 fn ai_api_key_env_name(state: &AppState) -> &'static str {
-    if ai_provider(state) == "openrouter" {
-        "OPENROUTER_API_KEY"
-    } else {
-        "XAI_API_KEY"
-    }
+    DecisionProvider::new(&ai_provider(state), "", 5).api_key_env_name()
 }
 
 fn xai_http_timeout_seconds(state: &AppState) -> u64 {

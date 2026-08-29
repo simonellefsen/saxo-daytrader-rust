@@ -2802,3 +2802,9 @@ broker mutation was added.
 - Moved the canonical Decision Report JSON Schema builders into the pure `decision_schema` module and added a direct contract test for the required suggested-trade metadata.
 - OpenRouter strict-output enforcement and the public schema-health check remain at the existing provider boundary; the report request continues to use the unchanged canonical schema.
 - This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.
+
+## [2026-08-29] architecture | Extract Decision Report provider HTTP boundary
+
+- Moved Decision Report endpoint construction, timeout-bound chat and deferred-completion HTTP calls, provider key naming, and the shared HTTP response envelope into `decision_provider`.
+- Scheduling, request construction, strict response normalization, persistence, and the public schema-health API remain at their existing boundaries in `xai_decision`.
+- This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.

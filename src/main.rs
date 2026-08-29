@@ -6,6 +6,7 @@ mod config_contract;
 mod daily_indicators;
 mod db;
 mod debug_redaction;
+mod decision_provider;
 mod decision_schema;
 mod drawdown_guard;
 mod editorial_research;
