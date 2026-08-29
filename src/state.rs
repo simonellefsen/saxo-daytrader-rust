@@ -23,7 +23,10 @@ use crate::{
     config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
-    execution_state::execution_order_window,
+    execution_state::{
+        dashboard_execution_events_from_json, dashboard_execution_fills_from_json,
+        execution_order_window,
+    },
     hermes_state::{
         HERMES_ADVISORY_EXPERIMENT_STATUSES, HERMES_EXPERIMENT_DUPLICATE_BLOCKING_STATUSES,
         LEARNING_MEMORY_LIMIT, LEARNING_MEMORY_REFLECTION_LIMIT, LESSONS_PENDING_REVIEW_LIMIT,
@@ -45,8 +48,7 @@ use crate::{
         DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
-        DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardExecutionOrderPayload,
+        DashboardDecisionReportSummaryPayload, DashboardExecutionOrderPayload,
         DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
         DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
         DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
@@ -3263,47 +3265,6 @@ fn dashboard_decision_pulse_statuses_from_json(
     statuses: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DecisionPulseStatusPayload>> {
     statuses.into_iter().map(serde_json::from_value).collect()
-}
-
-/// Decodes the compact fill facts rendered on the Execution tab. Raw Saxo
-/// fill payloads stay outside the dashboard SSR model and cannot become an
-/// accidental browser-facing transport path.
-fn dashboard_execution_fills_from_json(
-    fills: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardExecutionFillPayload>> {
-    fills.into_iter().map(serde_json::from_value).collect()
-}
-
-/// Decodes only the stable lifecycle facts needed by the flat Execution-tab
-/// event list. The persisted raw Saxo response never enters this SSR model.
-/// Failure-stage labels originate in local order processing, so the decoder
-/// retains only the fixed vocabulary shown in the dashboard.
-fn dashboard_execution_events_from_json(
-    events: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardExecutionEventPayload>> {
-    events
-        .into_iter()
-        .map(|event| {
-            let failure_stage = dashboard_execution_event_failure_stage(&event);
-            let mut event: DashboardExecutionEventPayload = serde_json::from_value(event)?;
-            event.failure_stage = failure_stage;
-            Ok(event)
-        })
-        .collect()
-}
-
-fn dashboard_execution_event_failure_stage(event: &JsonValue) -> Option<String> {
-    let payload = match event.get("raw_payload_json")? {
-        JsonValue::String(value) => serde_json::from_str(value).ok()?,
-        value => value.clone(),
-    };
-    match payload.get("failure_stage").and_then(JsonValue::as_str) {
-        Some(
-            stage @ ("local_validation" | "precheck_guard" | "request_build" | "precheck"
-            | "placement" | "execution"),
-        ) => Some(stage.to_string()),
-        _ => None,
-    }
 }
 
 /// Flattens only stable scheduler-cycle fields for the dashboard and public
@@ -19389,70 +19350,6 @@ mod tests {
         assert!(
             dashboard_decision_pulse_statuses_from_json(vec![json!({
                 "key": "manual"
-            })])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn dashboard_execution_fills_keep_raw_broker_payloads_outside_ssr() {
-        let fills = dashboard_execution_fills_from_json(vec![json!({
-            "id": 91,
-            "created_at": "2026-08-23T18:15:59Z",
-            "execution_order_id": 345,
-            "broker_order_id": "SAXO-123",
-            "symbol": "AMD:xnas",
-            "side": "BUY",
-            "fill_status": "FinalFill",
-            "order_status": "broker_final_fill",
-            "cumulative_quantity": 4.0,
-            "delta_quantity": 4.0,
-            "average_price_local": 193.12,
-            "currency": "USD",
-            "ledger_id": 811,
-            "raw_payload_json": {"AccountKey": "must-not-reach-the-dashboard"}
-        })])
-        .expect("stable fill evidence decodes");
-
-        assert_eq!(fills[0].execution_order_id, 345);
-        assert_eq!(fills[0].ledger_id, Some(811));
-        assert!(
-            !serde_json::to_string(&fills)
-                .expect("typed fill evidence serializes")
-                .contains("must-not-reach-the-dashboard")
-        );
-        assert!(
-            dashboard_execution_fills_from_json(vec![json!({
-                "id": 91,
-                "symbol": "AMD:xnas"
-            })])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn dashboard_execution_events_keep_raw_broker_payloads_outside_ssr() {
-        let events = dashboard_execution_events_from_json(vec![json!({
-            "id": 188,
-            "created_at": "2026-08-24T08:30:00Z",
-            "execution_order_id": 345,
-            "event_type": "execution_failed",
-            "broker_status": "execution_failed",
-            "raw_payload_json": {
-                "failure_stage": "precheck",
-                "AccountKey": "must-not-reach-the-dashboard",
-                "Message": "must-not-reach-the-dashboard"
-            }
-        })])
-        .expect("stable execution-event evidence decodes");
-
-        assert_eq!(events[0].execution_order_id, 345);
-        assert_eq!(events[0].failure_stage.as_deref(), Some("precheck"));
-        let serialized = serde_json::to_string(&events).expect("typed event evidence serializes");
-        assert!(!serialized.contains("must-not-reach-the-dashboard"));
-        assert!(
-            dashboard_execution_events_from_json(vec![json!({
-                "event_type": "execution_failed"
             })])
             .is_err()
         );

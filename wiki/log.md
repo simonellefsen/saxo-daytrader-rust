@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Execution dashboard projections
+
+- Moved the typed Execution-tab fill and event decoders, their local failure-stage allowlist, and their raw-broker-payload exclusion tests from `state.rs` into `execution_state`, which already owns execution pagination bounds.
+- `AppState` retains persisted reads, tab gating, degradation handling, and dashboard orchestration. Queue claim, reconciliation, precheck, placement, cancellation, replacement, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Extract Performance dashboard decoders
 
 - Moved the typed Performance-tab history, summary, benchmark, goal-progress, snapshot-evidence, P/L-reconciliation, exposure-attribution, and realised-SELL-outcome decoders from `state.rs` into the existing `performance_state` read-model module.
