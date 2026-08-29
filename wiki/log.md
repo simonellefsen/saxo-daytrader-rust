@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Render typed portfolio decision badge directly
+
+- Removed the portfolio-position Decision Badge's generic-JSON re-serialization of its typed advisory projection. Sentiment, action, timestamp, rationale, and original-thesis fields now remain compiler-checked through SSR.
+- Trend stays on the existing typed sparkline path, and direct regression coverage preserves the stored advisory fields. This is display-only: quote refresh, Decision Reports, Hermes, manager gates, queues, prechecks, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Render typed execution orders directly
 
 - Removed the Execution and Overview order renderers' generic-JSON re-serialization of their compiler-checked execution-order payloads. Stable display fields now remain typed through SSR.

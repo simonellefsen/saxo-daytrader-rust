@@ -1,7 +1,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use chrono_tz::Tz;
 use dioxus::prelude::*;
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 
 use crate::{
     auth::SsoSession,
@@ -24,8 +24,8 @@ use crate::{
         DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
         DashboardLatestRunPayload, DashboardMarkovSignalPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
-        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
+        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
         DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
@@ -7277,7 +7277,7 @@ fn PositionRow(
             td { PositionSymbolCell { row: row.clone(), prefs: prefs.clone() } }
             td {
                 DecisionBadge {
-                    decision: position_decision_as_json(row.decision.as_ref()),
+                    decision: row.decision.clone(),
                     prefs: prefs.clone(),
                     stale_after_days: decision_stale_after_days,
                 }
@@ -7418,15 +7418,23 @@ fn SymbolLink(symbol: String, instrument_name: String) -> Element {
 }
 
 #[component]
-fn DecisionBadge(decision: JsonValue, prefs: LocalizationPrefs, stale_after_days: i64) -> Element {
-    let decision = (!decision.is_null()).then(|| DecisionBadgeData {
-        sentiment: text(&decision, "sentiment"),
-        action: text(&decision, "action"),
-        created_at: text(&decision, "created_at"),
-        rationale: text(&decision, "rationale"),
-        target_rationale: text(&decision, "target_rationale"),
-    });
+fn DecisionBadge(
+    decision: Option<DashboardPositionDecisionPayload>,
+    prefs: LocalizationPrefs,
+    stale_after_days: i64,
+) -> Element {
+    let decision = decision.map(position_decision_badge_data);
     decision_badge(decision, prefs, stale_after_days)
+}
+
+fn position_decision_badge_data(decision: DashboardPositionDecisionPayload) -> DecisionBadgeData {
+    DecisionBadgeData {
+        sentiment: decision.sentiment,
+        action: decision.action,
+        created_at: decision.created_at,
+        rationale: decision.rationale,
+        target_rationale: decision.target_rationale,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -10842,22 +10850,6 @@ fn position_sparkline_points(row: &DashboardPositionPayload) -> Sparkline {
     }
 }
 
-fn position_decision_as_json(
-    decision: Option<&crate::models::DashboardPositionDecisionPayload>,
-) -> JsonValue {
-    decision
-        .map(|decision| {
-            json!({
-                "sentiment": decision.sentiment,
-                "action": decision.action,
-                "created_at": decision.created_at,
-                "rationale": decision.rationale,
-                "target_rationale": decision.target_rationale,
-            })
-        })
-        .unwrap_or(JsonValue::Null)
-}
-
 fn symbol_seed(symbol: &str) -> u64 {
     symbol.bytes().fold(0_u64, |acc, byte| {
         acc.wrapping_mul(31).wrapping_add(byte as u64)
@@ -11619,6 +11611,24 @@ mod tests {
             position_decision_age_status("2026-07-13T12:00:00Z", now, 7),
             ("1d".to_string(), false)
         );
+    }
+
+    #[test]
+    fn typed_position_decision_badge_keeps_the_stored_advisory_fields() {
+        let badge = position_decision_badge_data(DashboardPositionDecisionPayload {
+            sentiment: "BUY".to_string(),
+            action: "ACCUMULATE".to_string(),
+            created_at: "2026-08-29T08:00:00Z".to_string(),
+            rationale: "Momentum remains constructive.".to_string(),
+            target_rationale: "Keep the original thesis visible.".to_string(),
+            trend_bias: "bullish".to_string(),
+        });
+
+        assert_eq!(badge.sentiment, "BUY");
+        assert_eq!(badge.action, "ACCUMULATE");
+        assert_eq!(badge.created_at, "2026-08-29T08:00:00Z");
+        assert_eq!(badge.rationale, "Momentum remains constructive.");
+        assert_eq!(badge.target_rationale, "Keep the original thesis visible.");
     }
 
     #[test]
