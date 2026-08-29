@@ -25,7 +25,7 @@ use crate::{
         DashboardLatestRunPayload, DashboardMarkovSignalPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
         DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardSelectedDecisionPayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
         DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
         DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
@@ -4320,33 +4320,47 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .as_ref()
         .map(|report| report.candidate_scoring_waterfall.clone())
         .unwrap_or_default();
-    let report = data
-        .selected_decision
-        .as_ref()
-        .map(selected_decision_as_json)
-        .unwrap_or_else(|| latest_decision_status_as_json(&data.latest_decision));
-    let report_json = report
-        .get("report_json")
-        .cloned()
+    let selected_report = data.selected_decision.as_ref();
+    let report_json = selected_report
+        .map(|report| report.report_json.clone())
         .unwrap_or(JsonValue::Null);
     let suggested_trades = json_array(&report_json, "suggested_trades");
     let selected_assets = json_array(&report_json, "selected_assets");
     let candidate_assets = json_array(&report_json, "candidate_assets");
     let symbol_sentiment = json_array(&report_json, "symbol_sentiment");
     let selected_count = selected_assets.len().max(candidate_assets.len());
-    let selected_id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
-    let error_text = text(&report, "error_text");
-    let pulse_authority = if text(&report, "pulse_mode") == "shadow"
-        || optional_json_number(&report, "queue_eligible") == Some(0.0)
-    {
-        "Shadow · no queue".to_string()
-    } else if text(&report, "pulse_mode") == "execution_eligible"
-        && optional_json_number(&report, "queue_eligible") == Some(1.0)
-    {
-        "Execution eligible".to_string()
-    } else {
-        "Authority unavailable · blocked".to_string()
-    };
+    let selected_id = selected_report.map(|report| report.id).unwrap_or(0);
+    let error_text = selected_report
+        .map(|report| report.error_text.clone())
+        .or_else(|| data.latest_decision.error_text.clone())
+        .unwrap_or_default();
+    let pulse_authority = selected_report
+        .map(|report| {
+            if report.pulse_mode == "shadow" || !report.queue_eligible {
+                "Shadow · no queue".to_string()
+            } else if report.pulse_mode == "execution_eligible" && report.queue_eligible {
+                "Execution eligible".to_string()
+            } else {
+                "Authority unavailable · blocked".to_string()
+            }
+        })
+        .unwrap_or_else(|| "Authority unavailable · blocked".to_string());
+    let report_created_at = selected_report
+        .map(|report| report.created_at.clone())
+        .or_else(|| data.latest_decision.created_at.clone())
+        .unwrap_or_default();
+    let report_status = selected_report
+        .map(|report| report.status.clone())
+        .or_else(|| data.latest_decision.status.clone())
+        .unwrap_or_default();
+    let report_cadence = selected_report
+        .map(|report| report.analysis_pulse_label.clone())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "Manual Decision Report".to_string());
+    let report_model = selected_report
+        .map(|report| report.model.clone())
+        .or_else(|| data.latest_decision.model.clone())
+        .unwrap_or_default();
     let strategy_status = fallback_text(
         &report_json,
         "strategy_status",
@@ -4419,8 +4433,21 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             });
     let manual_pulse = decision_pulse_health_from_status(&data.decision_pulse_statuses, "manual")
         .unwrap_or_else(|| decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run"));
-    let diagnostics = decision_report_diagnostics(&report);
-    let quality = decision_report_quality(&report, &report_json, &diagnostics);
+    let null_document = JsonValue::Null;
+    let diagnostics = decision_report_diagnostics(
+        &report_model,
+        selected_report
+            .map(|report| report.response_id.as_str())
+            .unwrap_or_default(),
+        &error_text,
+        selected_report
+            .map(|report| &report.request_json)
+            .unwrap_or(&null_document),
+        selected_report
+            .map(|report| &report.response_json)
+            .unwrap_or(&null_document),
+    );
+    let quality = decision_report_quality(&report_status, &report_json, &diagnostics);
     let gate_replay = data.decision_gate_replay.clone();
     rsx! {
         section { class: "section stack loose",
@@ -4472,7 +4499,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                 DecisionPulseHealthCard { health: us_shadow_pulse, prefs: prefs.clone() }
                 DecisionPulseHealthCard { health: manual_pulse, prefs: prefs.clone() }
             }
-            if report.is_null() {
+            if selected_report.is_none() && data.latest_decision.id.is_none() {
                 div { class: "event",
                     strong { "No decision report exists yet." }
                     span { class: "muted", "Use Generate Report to create a manual Rust fallback report, or wait for the scheduled decision pulse." }
@@ -4485,13 +4512,13 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
                 div { class: "mini-grid decision-summary-grid",
-                    MetricCard { label: "Created", value: format_timestamp(&text(&report, "created_at"), &prefs), tone: "" }
-                    MetricCard { label: "Status", value: text(&report, "status"), tone: "" }
+                    MetricCard { label: "Created", value: format_timestamp(&report_created_at, &prefs), tone: "" }
+                    MetricCard { label: "Status", value: report_status.clone(), tone: "" }
                     MetricCard { label: "Selected Assets", value: selected_count.to_string(), tone: "" }
                     MetricCard { label: "Suggested Trades", value: suggested_trades.len().to_string(), tone: "" }
-                    MetricCard { label: "Report Cadence", value: fallback_text(&report, "analysis_pulse_label", "Manual Decision Report"), tone: "" }
+                    MetricCard { label: "Report Cadence", value: report_cadence, tone: "" }
                     MetricCard { label: "Pulse Authority", value: pulse_authority, tone: "" }
-                    MetricCard { label: "Model", value: text(&report, "model"), tone: "" }
+                    MetricCard { label: "Model", value: report_model.clone(), tone: "" }
                 }
                 CandidateScoringWaterfallPanel { waterfall: candidate_waterfall, prefs: prefs.clone() }
                 GateReplayPanel { replay: gate_replay, prefs: prefs.clone() }
@@ -4550,7 +4577,12 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         }
                         DecisionReportQualityPanel { quality }
                         DecisionReportDiagnosticsPanel { diagnostics: diagnostics.clone() }
-                        DecisionReportDebugPanel { debug: decision_report_debug_payload(&report, &report_json) }
+                        DecisionReportDebugPanel { debug: decision_report_debug_payload(
+                            selected_report.map(|report| report.prompt_text.as_str()).unwrap_or_default(),
+                            selected_report.map(|report| &report.request_json),
+                            selected_report.map(|report| &report.response_json),
+                            &report_json,
+                        ) }
                     }
                 }
                 div { class: "table-wrap",
@@ -5209,9 +5241,13 @@ fn decision_status_text_tone(status: &str) -> &'static str {
     }
 }
 
-fn decision_report_diagnostics(report: &JsonValue) -> DecisionReportDiagnostics {
-    let request = report.get("request_json").unwrap_or(&JsonValue::Null);
-    let response = report.get("response_json").unwrap_or(&JsonValue::Null);
+fn decision_report_diagnostics(
+    model: &str,
+    response_id: &str,
+    error_text: &str,
+    request: &JsonValue,
+    response: &JsonValue,
+) -> DecisionReportDiagnostics {
     let response_format = request.get("response_format").unwrap_or(&JsonValue::Null);
     let schema = response_format
         .get("json_schema")
@@ -5233,11 +5269,13 @@ fn decision_report_diagnostics(report: &JsonValue) -> DecisionReportDiagnostics 
         .to_string();
     let schema_ok =
         root_object == "strict" && capital_plan_object == "strict" && strict_schema == "true";
-    let error_text = text(report, "error_text");
-
     DecisionReportDiagnostics {
         provider: decision_report_provider_label(request),
-        model: fallback_text(report, "model", &text(request, "model")),
+        model: if model.is_empty() {
+            text(request, "model")
+        } else {
+            model.to_string()
+        },
         response_format: fallback_text(response_format, "type", "n/a"),
         strict_schema,
         root_object,
@@ -5251,13 +5289,17 @@ fn decision_report_diagnostics(report: &JsonValue) -> DecisionReportDiagnostics 
         request_bytes: serde_json::to_string(request)
             .map(|rendered| rendered.len())
             .unwrap_or(0),
-        response_id: fallback_text(report, "response_id", &text(response, "id")),
+        response_id: if response_id.is_empty() {
+            text(response, "id")
+        } else {
+            response_id.to_string()
+        },
         response_present: if response.is_null() {
             "no".to_string()
         } else {
             "yes".to_string()
         },
-        error_category: decision_error_category(&error_text).to_string(),
+        error_category: decision_error_category(error_text).to_string(),
         error_excerpt: if error_text.is_empty() {
             "No error recorded.".to_string()
         } else {
@@ -5317,13 +5359,12 @@ fn decision_error_category(error_text: &str) -> &'static str {
 }
 
 fn decision_report_quality(
-    report: &JsonValue,
+    status: &str,
     report_json: &JsonValue,
     diagnostics: &DecisionReportDiagnostics,
 ) -> DecisionReportQuality {
     let mut score = 0_i64;
     let mut warnings = Vec::new();
-    let status = text(report, "status");
     if status == "completed" {
         score += 20;
     } else {
@@ -5511,13 +5552,15 @@ fn DebugPayloadDetails(label: &'static str, body: String) -> Element {
 }
 
 fn decision_report_debug_payload(
-    report: &JsonValue,
+    prompt_text: &str,
+    request: Option<&JsonValue>,
+    response: Option<&JsonValue>,
     normalized_report: &JsonValue,
 ) -> DecisionReportDebugPayload {
     DecisionReportDebugPayload {
-        prompt: compact_debug_text(&text(report, "prompt_text"), DEBUG_PAYLOAD_MAX_CHARS),
-        request: compact_json_redacted(report.get("request_json"), DEBUG_PAYLOAD_MAX_CHARS),
-        response: compact_json_redacted(report.get("response_json"), DEBUG_PAYLOAD_MAX_CHARS),
+        prompt: compact_debug_text(prompt_text, DEBUG_PAYLOAD_MAX_CHARS),
+        request: compact_json_redacted(request, DEBUG_PAYLOAD_MAX_CHARS),
+        response: compact_json_redacted(response, DEBUG_PAYLOAD_MAX_CHARS),
         normalized: compact_json_redacted(Some(normalized_report), DEBUG_PAYLOAD_MAX_CHARS),
     }
 }
@@ -7740,27 +7783,6 @@ fn execution_order_as_json(row: &DashboardExecutionOrderPayload) -> JsonValue {
     })
 }
 
-fn selected_decision_as_json(report: &DashboardSelectedDecisionPayload) -> JsonValue {
-    json!({
-        "id": report.id,
-        "created_at": report.created_at,
-        "report_date": report.report_date,
-        "model": report.model,
-        "status": report.status,
-        "analysis_window_active": report.analysis_window_active,
-        "response_id": report.response_id,
-        "prompt_text": report.prompt_text,
-        "request_json": report.request_json,
-        "response_json": report.response_json,
-        "report_json": report.report_json,
-        "error_text": report.error_text,
-        "analysis_pulse_key": report.analysis_pulse_key,
-        "analysis_pulse_label": report.analysis_pulse_label,
-        "pulse_mode": report.pulse_mode,
-        "queue_eligible": if report.queue_eligible { 1 } else { 0 },
-    })
-}
-
 fn execution_attribution_label(row: &JsonValue) -> (String, &'static str) {
     let null = JsonValue::Null;
     let attribution = row.get("attribution").unwrap_or(&null);
@@ -8800,17 +8822,6 @@ fn MissedTradeShadowRow(
             }
         }
     }
-}
-
-fn optional_json_number(row: &JsonValue, key: &str) -> Option<f64> {
-    row.get(key)
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_i64().map(|value| value as f64))
-                .or_else(|| value.as_str()?.parse::<f64>().ok())
-        })
-        .filter(|value| value.is_finite())
 }
 
 fn counterfactual_status_tone(status: &str) -> &'static str {
@@ -10910,23 +10921,6 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     result
 }
 
-/// Health pill for the decision engine derived from the latest report.
-/// Credit/spending-limit failures get their own label because they need
-/// operator action (top up xAI credits) rather than a code fix.
-fn latest_decision_status_as_json(latest: &LatestDecisionStatusPayload) -> JsonValue {
-    if latest.id.is_none() {
-        JsonValue::Null
-    } else {
-        serde_json::json!({
-            "id": latest.id,
-            "created_at": latest.created_at,
-            "status": latest.status,
-            "model": latest.model,
-            "error_text": latest.error_text,
-        })
-    }
-}
-
 fn decision_health(latest_decision: &LatestDecisionStatusPayload) -> (&'static str, String) {
     let status = latest_decision.status.as_deref().unwrap_or("");
     match status {
@@ -12960,7 +12954,13 @@ mod tests {
             "response_json": {"id": "gen-123"}
         });
 
-        let diagnostics = decision_report_diagnostics(&report);
+        let diagnostics = decision_report_diagnostics(
+            &text(&report, "model"),
+            &text(&report, "response_id"),
+            &text(&report, "error_text"),
+            report.get("request_json").unwrap_or(&JsonValue::Null),
+            report.get("response_json").unwrap_or(&JsonValue::Null),
+        );
         assert_eq!(diagnostics.provider, "openrouter/json_schema");
         assert_eq!(diagnostics.response_format, "json_schema");
         assert_eq!(diagnostics.strict_schema, "true");
@@ -12997,7 +12997,13 @@ mod tests {
             }
         });
 
-        let diagnostics = decision_report_diagnostics(&report);
+        let diagnostics = decision_report_diagnostics(
+            &text(&report, "model"),
+            &text(&report, "response_id"),
+            &text(&report, "error_text"),
+            report.get("request_json").unwrap_or(&JsonValue::Null),
+            report.get("response_json").unwrap_or(&JsonValue::Null),
+        );
         assert_eq!(diagnostics.root_object, "open");
         assert_eq!(diagnostics.capital_plan_object, "open");
         assert_eq!(diagnostics.schema_status, "needs review");
@@ -13041,7 +13047,7 @@ mod tests {
             error_excerpt: "No error recorded.".to_string(),
         };
 
-        let quality = decision_report_quality(&report, &report_json, &diagnostics);
+        let quality = decision_report_quality(&text(&report, "status"), &report_json, &diagnostics);
         assert_eq!(quality.score, 100);
         assert_eq!(quality.tone, "good-text");
         assert_eq!(quality.status_label, "ready");
@@ -13086,7 +13092,7 @@ mod tests {
             error_excerpt: "No error recorded.".to_string(),
         };
 
-        let quality = decision_report_quality(&report, &report_json, &diagnostics);
+        let quality = decision_report_quality(&text(&report, "status"), &report_json, &diagnostics);
         assert_eq!(quality.score, 90);
         assert_eq!(quality.status_label, "ready with notes");
         assert!(
@@ -13139,7 +13145,12 @@ mod tests {
             }
         });
 
-        let debug = decision_report_debug_payload(&report, &report_json);
+        let debug = decision_report_debug_payload(
+            &text(&report, "prompt_text"),
+            report.get("request_json"),
+            report.get("response_json"),
+            &report_json,
+        );
         assert!(debug.prompt.contains("[redacted]"));
         assert!(debug.request.contains("\"Authorization\": \"[redacted]\""));
         assert!(debug.response.contains("\"client_key\": \"[redacted]\""));

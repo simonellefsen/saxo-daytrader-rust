@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-29] architecture | Render selected Decision Report directly
+
+- Removed the Decisions view's internal generic-JSON re-serialization of the selected typed Decision Report. Its stable lifecycle, cadence, authority, model, and error fields now flow straight from the compiler-checked dashboard payload.
+- The prompt, provider request/response, and normalized-report documents remain explicit inputs only to the established detail, diagnostics, and redacted debug views. This is a read-only UI boundary change: report scheduling, provider calls, Hermes, manager gates, queues, prechecks, and Saxo execution are unchanged.
 
 ## [2026-08-28] architecture | Type Support Risk Evidence panel
 
