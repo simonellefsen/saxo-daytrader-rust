@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Decision Report gate and summary projections
+
+- Extended `decision_state` with typed Decision Gate Replay and bounded Decision Report summary decoding, with focused tests excluding raw historical indicator and provider/report documents.
+- `AppState` retains persisted reads, selected-report detail, tab gating, degradation handling, report generation, manager gates, queues, prechecks, and Saxo behavior.
+
 ## [2026-08-29] architecture | Extract protective-stop dashboard projections
 
 - Moved typed protective-stop coverage, SIM precheck-result, and SIM lifecycle-test dashboard projections into `execution_state`, retaining focused exclusions for broker, indicator, and Saxo-response documents.

@@ -24,7 +24,9 @@ use crate::{
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
     decision_state::{
+        dashboard_decision_gate_replay_from_json, dashboard_decision_gate_replay_not_loaded,
         dashboard_decision_pulse_statuses_from_json, dashboard_latest_decision_from_json,
+        decision_report_summaries_from_json,
     },
     execution_state::{
         dashboard_execution_events_from_json, dashboard_execution_fills_from_json,
@@ -53,21 +55,20 @@ use crate::{
         DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
-        DashboardDecisionReportSummaryPayload, DashboardExecutionOrderPayload,
-        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
-        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
-        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
-        DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload,
-        DashboardTradeThesisOutcomePayload, DashboardView, DataFreshnessSourcePayload,
-        DecisionGateReplayPayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
+        DashboardExecutionOrderPayload, DashboardHermesBaselineEvidencePackPayload,
+        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
+        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
+        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
+        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
+        DashboardMissedTradeShadowPayload, DashboardPositionDecisionPayload,
+        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSelectedDecisionPayload,
+        DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
+        DataFreshnessSourcePayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
         ExecutionOrderEventTimelineEntryPayload, ExecutionOrderSummaryPayload,
         HermesCapabilitiesPayload, HermesContextDecisionsPayload, HermesContextEndOfDayPayload,
@@ -80,9 +81,9 @@ use crate::{
         HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
         MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistUniversePayload,
         MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
-        PortfolioTradePayload, QuiverConflictPayload, SupportRiskEvidencePayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        PortfolioTradePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
         TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
         TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
         TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
@@ -3131,25 +3132,6 @@ fn dashboard_watchlists_not_loaded() -> MarketWatchlistsPayload {
     }
 }
 
-/// Decodes the stable Decision Gate Replay envelope used by the Decisions tab.
-/// Scenario and support-risk evidence remain staged historical-analysis JSON.
-fn dashboard_decision_gate_replay_from_json(
-    replay: JsonValue,
-) -> serde_json::Result<DecisionGateReplayPayload> {
-    serde_json::from_value(replay)
-}
-
-fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayPayload {
-    DecisionGateReplayPayload {
-        status: "not_loaded".to_string(),
-        run_count: 0,
-        scenarios: Vec::new(),
-        safety: "not_loaded_outside_decisions_tab".to_string(),
-        interpretation: String::new(),
-        support_risk_evidence: SupportRiskEvidencePayload::default(),
-    }
-}
-
 fn dashboard_embedded_json(row: &JsonValue, key: &str) -> Option<JsonValue> {
     match row.get(key)? {
         JsonValue::String(value) => serde_json::from_str(value).ok(),
@@ -3528,29 +3510,6 @@ pub(crate) fn dashboard_quiver_signals_from_json(
                     .unwrap_or_else(|| "n/a".to_string()),
                 status: dashboard_required_string(&signal, "status")?,
                 error_text,
-            })
-        })
-        .collect()
-}
-
-/// Decodes bounded Decision Report summaries for the dashboard and public API.
-/// Detailed report/provider documents remain on the selected-report and lazy
-/// debug paths.
-pub(crate) fn decision_report_summaries_from_json(
-    reports: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardDecisionReportSummaryPayload>> {
-    reports
-        .into_iter()
-        .map(|report| {
-            Ok(DashboardDecisionReportSummaryPayload {
-                id: dashboard_required_i64(&report, "id")?,
-                created_at: dashboard_required_string(&report, "created_at")?,
-                status: dashboard_required_string(&report, "status")?,
-                model: dashboard_optional_string(&report, "model")?.unwrap_or_default(),
-                analysis_pulse_key: dashboard_optional_string(&report, "analysis_pulse_key")?
-                    .unwrap_or_default(),
-                analysis_pulse_label: dashboard_optional_string(&report, "analysis_pulse_label")?
-                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -7011,15 +6970,17 @@ impl AppState {
                         "interpretation": "Decision Gate Replay evidence could not be loaded.",
                         "support_risk_evidence": null,
                     })
-                });
+            });
             dashboard_decision_gate_replay_from_json(replay).unwrap_or_else(|err| {
                 warn!("dashboard typed gate replay degraded: {err:#}");
-                DecisionGateReplayPayload {
-                    status: "unavailable".to_string(),
-                    safety: "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation".to_string(),
-                    interpretation: "Decision Gate Replay evidence could not be loaded.".to_string(),
-                    ..dashboard_decision_gate_replay_not_loaded()
-                }
+                let mut unavailable = dashboard_decision_gate_replay_not_loaded();
+                unavailable.status = "unavailable".to_string();
+                unavailable.safety =
+                    "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation"
+                        .to_string();
+                unavailable.interpretation =
+                    "Decision Gate Replay evidence could not be loaded.".to_string();
+                unavailable
             })
         } else {
             dashboard_decision_gate_replay_not_loaded()
