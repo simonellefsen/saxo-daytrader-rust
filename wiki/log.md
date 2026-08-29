@@ -2808,3 +2808,9 @@ broker mutation was added.
 - Moved Decision Report endpoint construction, timeout-bound chat and deferred-completion HTTP calls, provider key naming, and the shared HTTP response envelope into `decision_provider`.
 - Scheduling, request construction, strict response normalization, persistence, and the public schema-health API remain at their existing boundaries in `xai_decision`.
 - This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.
+
+## [2026-08-29] architecture | Extract Decision Report provider request assembly
+
+- Moved provider-specific Decision Report chat request assembly into `decision_provider`, including OpenRouter plugin selection and response-format and reasoning-effort placement.
+- Report prompting, schema construction and validation, strict completion normalization, scheduling, persistence, and the public schema-health API remain at their existing boundaries in `xai_decision`.
+- This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.

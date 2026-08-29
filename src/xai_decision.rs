@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use crate::{
     config::{yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
-    decision_provider::DecisionProvider,
+    decision_provider::{ChatCompletionRequest, DecisionProvider},
     decision_schema,
     models::{DecisionReportSchemaHealth, DecisionReportSchemaIssue},
     state::AppState,
@@ -1783,33 +1783,20 @@ fn build_chat_request(state: &AppState, prompt: &JsonValue, model: &str) -> Resu
             .ok_or_else(|| anyhow!("decision prompt missing user payload"))?,
     )?;
     let max_tokens = yaml_i64(&state.config, &["xai", "max_output_tokens"]).unwrap_or(8192);
-    let mut request = json!({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "response_format": decision_report_response_format(&ai_provider(state)),
-        "max_tokens": max_tokens
-    });
-    if ai_provider(state) == "openrouter" {
-        let mut plugins = vec![json!({"id": "response-healing"})];
-        if model == "openrouter/fusion" {
-            plugins.insert(0, json!({"id": "fusion", "preset": "general-high"}));
-        }
-        if let Some(obj) = request.as_object_mut() {
-            obj.insert("plugins".to_string(), JsonValue::from(plugins));
-        }
-    }
-    if let Some(reasoning_effort) = yaml_string(&state.config, &["xai", "reasoning_effort"]) {
-        if let Some(obj) = request.as_object_mut() {
-            obj.insert(
-                "reasoning_effort".to_string(),
-                JsonValue::from(reasoning_effort),
-            );
-        }
-    }
-    Ok(request)
+    let provider = ai_provider(state);
+    let client = DecisionProvider::new(
+        &provider,
+        &ai_base_url(state),
+        xai_http_timeout_seconds(state),
+    );
+    Ok(client.build_chat_completion_request(ChatCompletionRequest {
+        model,
+        system_content: system,
+        user_content: &user,
+        response_format: decision_report_response_format(&provider),
+        max_tokens,
+        reasoning_effort: yaml_string(&state.config, &["xai", "reasoning_effort"]).as_deref(),
+    }))
 }
 
 fn decision_report_response_format(provider: &str) -> JsonValue {
