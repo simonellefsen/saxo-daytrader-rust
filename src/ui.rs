@@ -11,21 +11,22 @@ use crate::{
         format_timestamp,
     },
     models::{
-        DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
-        DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
-        DashboardDecisionReportSummaryPayload, DashboardExecutionEventPayload,
-        DashboardExecutionFillPayload, DashboardExecutionOrderPayload,
-        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
-        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
-        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
-        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
-        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
-        DashboardRunSchedulePayload, DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload,
-        DashboardSelectedDecisionPayload, DashboardTradeThesisEvidencePayload, DashboardView,
-        DataFreshnessSourcePayload, DecisionGateReplayChangePayload, DecisionGateReplayPayload,
+        CandidateScoringWaterfallPayload, DashboardAiSettingsPayload,
+        DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
+        DashboardDecisionPulseOutcomePayload, DashboardDecisionReportSummaryPayload,
+        DashboardExecutionEventPayload, DashboardExecutionFillPayload,
+        DashboardExecutionOrderPayload, DashboardHermesBaselineEvidencePackPayload,
+        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
+        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
+        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
+        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
+        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMarkovSignalPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowPayload,
+        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
+        DashboardSaxoAuthPayload, DashboardSchedulerCyclePayload, DashboardSelectedDecisionPayload,
+        DashboardTradeThesisEvidencePayload, DashboardView, DataFreshnessSourcePayload,
+        DecisionGateReplayChangePayload, DecisionGateReplayPayload,
         DecisionGateReplayScenarioPayload, DecisionPulseStatusPayload, LatestDecisionStatusPayload,
         MarketExchangeStatusPayload, MarketPriceMonitorPayload,
         MarketPriceMonitorSkippedSymbolPayload, MarketStatusSummaryPayload,
@@ -4313,6 +4314,11 @@ fn QuiverSignalRow(row: DashboardQuiverSignalPayload, prefs: LocalizationPrefs) 
 
 #[component]
 fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let candidate_waterfall = data
+        .selected_decision
+        .as_ref()
+        .map(|report| report.candidate_scoring_waterfall.clone())
+        .unwrap_or_default();
     let report = data
         .selected_decision
         .as_ref()
@@ -4414,10 +4420,6 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .unwrap_or_else(|| decision_pulse_health(&data.reports, "manual:", "Manual / Dry Run"));
     let diagnostics = decision_report_diagnostics(&report);
     let quality = decision_report_quality(&report, &report_json, &diagnostics);
-    let candidate_waterfall = report
-        .get("candidate_scoring_waterfall")
-        .cloned()
-        .unwrap_or(JsonValue::Null);
     let gate_replay = data.decision_gate_replay.clone();
     rsx! {
         section { class: "section stack loose",
@@ -4750,13 +4752,15 @@ fn GateReplayChangeRow(row: DecisionGateReplayChangePayload, prefs: Localization
 }
 
 #[component]
-fn CandidateScoringWaterfallPanel(waterfall: JsonValue, prefs: LocalizationPrefs) -> Element {
-    let status = text(&waterfall, "status");
-    let summary = waterfall.get("summary").cloned().unwrap_or(JsonValue::Null);
-    let candidates = json_array(&waterfall, "candidates");
-    let approved_count = value_i64(&summary, "approved_count");
-    let skipped_count = value_i64(&summary, "skipped_count");
-    let not_reached_count = value_i64(&summary, "not_reached_count");
+fn CandidateScoringWaterfallPanel(
+    waterfall: CandidateScoringWaterfallPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let status = waterfall.status;
+    let candidates = waterfall.candidates;
+    let approved_count = waterfall.summary.approved_count;
+    let skipped_count = waterfall.summary.skipped_count;
+    let not_reached_count = waterfall.summary.not_reached_count;
     rsx! {
         div { class: "event candidate-scoring-panel",
             strong { "Candidate Scoring Waterfall" }
@@ -7811,7 +7815,6 @@ fn selected_decision_as_json(report: &DashboardSelectedDecisionPayload) -> JsonV
         "analysis_pulse_label": report.analysis_pulse_label,
         "pulse_mode": report.pulse_mode,
         "queue_eligible": if report.queue_eligible { 1 } else { 0 },
-        "candidate_scoring_waterfall": report.candidate_scoring_waterfall,
     })
 }
 

@@ -36,6 +36,7 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
+        CandidateScoringWaterfallPayload, CandidateScoringWaterfallSummaryPayload,
         CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
@@ -3837,8 +3838,36 @@ pub(crate) fn decision_report_summaries_from_json(
 }
 
 /// Decodes the selected Decision Report's stable outer fields. Its detailed
-/// report, provider diagnostics, and candidate waterfall remain explicit
-/// compatibility JSON for the existing read-only Decisions view.
+/// report and provider diagnostics remain compatibility JSON, while the
+/// deterministic manager-gate waterfall has a typed outer boundary. Candidate
+/// diagnostics remain staged JSON because their historical schema evolves.
+fn dashboard_candidate_scoring_waterfall_from_json(
+    value: Option<&JsonValue>,
+) -> CandidateScoringWaterfallPayload {
+    let Some(value) = value.filter(|value| value.is_object()) else {
+        return CandidateScoringWaterfallPayload::default();
+    };
+    let summary = value.get("summary").unwrap_or(&JsonValue::Null);
+    CandidateScoringWaterfallPayload {
+        status: json_text(value, "status"),
+        run_id: value_i64(value, "run_id"),
+        created_at: json_text(value, "created_at"),
+        manager_status: json_text(value, "manager_status"),
+        candidates: value
+            .get("candidates")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        summary: CandidateScoringWaterfallSummaryPayload {
+            candidate_count: value_i64(summary, "candidate_count"),
+            approved_count: value_i64(summary, "approved_count"),
+            skipped_count: value_i64(summary, "skipped_count"),
+            not_reached_count: value_i64(summary, "not_reached_count"),
+        },
+        safety: json_text(value, "safety"),
+    }
+}
+
 fn dashboard_selected_decision_from_json(
     decision: JsonValue,
 ) -> serde_json::Result<Option<DashboardSelectedDecisionPayload>> {
@@ -3869,10 +3898,9 @@ fn dashboard_selected_decision_from_json(
             .unwrap_or_default(),
         pulse_mode: dashboard_optional_string(&decision, "pulse_mode")?.unwrap_or_default(),
         queue_eligible: dashboard_optional_boolish(&decision, "queue_eligible")?.unwrap_or(false),
-        candidate_scoring_waterfall: decision
-            .get("candidate_scoring_waterfall")
-            .cloned()
-            .unwrap_or(JsonValue::Null),
+        candidate_scoring_waterfall: dashboard_candidate_scoring_waterfall_from_json(
+            decision.get("candidate_scoring_waterfall"),
+        ),
     }))
 }
 
@@ -19145,7 +19173,18 @@ mod tests {
             "analysis_pulse_label": "US Open +1h15",
             "pulse_mode": "execution_eligible",
             "queue_eligible": "1",
-            "candidate_scoring_waterfall": {"status": "available"}
+            "candidate_scoring_waterfall": {
+                "status": "available",
+                "run_id": 91,
+                "summary": {
+                    "candidate_count": 2,
+                    "approved_count": 1,
+                    "skipped_count": 1,
+                    "not_reached_count": 0
+                },
+                "candidates": [{"symbol": "ACME:xnas"}],
+                "manager_json": {"raw_reason": "must-not-reach-the-dashboard"}
+            }
         }))
         .expect("selected Decision Report fixture has the dashboard contract")
         .expect("fixture is present");
@@ -19157,9 +19196,20 @@ mod tests {
             decision.request_json["response_format"]["type"],
             json!("json_schema")
         );
+        assert_eq!(decision.candidate_scoring_waterfall.status, "available");
+        assert_eq!(decision.candidate_scoring_waterfall.run_id, 91);
         assert_eq!(
-            decision.candidate_scoring_waterfall["status"],
-            json!("available")
+            decision.candidate_scoring_waterfall.summary.approved_count,
+            1
+        );
+        assert_eq!(
+            decision.candidate_scoring_waterfall.candidates[0]["symbol"],
+            json!("ACME:xnas")
+        );
+        assert!(
+            !serde_json::to_string(&decision)
+                .expect("typed selected Decision Report serializes")
+                .contains("raw_reason")
         );
         assert!(
             dashboard_selected_decision_from_json(JsonValue::Null)

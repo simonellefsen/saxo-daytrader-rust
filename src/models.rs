@@ -151,10 +151,11 @@ pub struct DashboardDecisionReportSummaryPayload {
 /// One selected Decision Report rendered by the Decisions dashboard.
 ///
 /// Stable lifecycle and authority fields are typed. The existing normalized
-/// report, provider diagnostics, and scoring waterfall remain explicit
-/// compatibility documents for this detailed read-only view. This record
-/// cannot generate a report, change queue eligibility, reach Hermes, or
-/// mutate a Saxo order.
+/// report and provider diagnostics remain explicit compatibility documents for
+/// this detailed read-only view. Its deterministic manager-gate waterfall has
+/// a typed outer contract while the evolving per-candidate diagnostics remain
+/// staged JSON. This record cannot generate a report, change queue
+/// eligibility, reach Hermes, or mutate a Saxo order.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct DashboardSelectedDecisionPayload {
     pub id: i64,
@@ -173,7 +174,47 @@ pub struct DashboardSelectedDecisionPayload {
     pub analysis_pulse_label: String,
     pub pulse_mode: String,
     pub queue_eligible: bool,
-    pub candidate_scoring_waterfall: JsonValue,
+    pub candidate_scoring_waterfall: CandidateScoringWaterfallPayload,
+}
+
+/// Aggregate, read-only manager-gate evidence for one Decision Report.
+///
+/// The summary and run identity are stable and compiler-checked. Candidate
+/// rows remain sanitized compatibility JSON because their detailed historical
+/// gate diagnostics evolve independently. This is an offline snapshot and
+/// cannot rerun a report, alter a gate, queue work, precheck, or reach Saxo.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallPayload {
+    pub status: String,
+    pub run_id: i64,
+    pub created_at: String,
+    pub manager_status: String,
+    pub candidates: Vec<JsonValue>,
+    pub summary: CandidateScoringWaterfallSummaryPayload,
+    pub safety: String,
+}
+
+impl Default for CandidateScoringWaterfallPayload {
+    fn default() -> Self {
+        Self {
+            status: "not_processed".to_string(),
+            run_id: 0,
+            created_at: String::new(),
+            manager_status: String::new(),
+            candidates: Vec::new(),
+            summary: CandidateScoringWaterfallSummaryPayload::default(),
+            safety: "sanitized_local_manager_audit".to_string(),
+        }
+    }
+}
+
+/// Stable aggregate counts for one recorded candidate waterfall.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CandidateScoringWaterfallSummaryPayload {
+    pub candidate_count: i64,
+    pub approved_count: i64,
+    pub skipped_count: i64,
+    pub not_reached_count: i64,
 }
 
 /// One read-only portfolio position rendered in the dashboard overview.
