@@ -26,6 +26,7 @@ use crate::{
     decision_state::{
         dashboard_decision_gate_replay_from_json, dashboard_decision_gate_replay_not_loaded,
         dashboard_decision_pulse_statuses_from_json, dashboard_latest_decision_from_json,
+        dashboard_selected_decision_from_json as dashboard_selected_decision_projection_from_json,
         decision_report_summaries_from_json,
     },
     execution_state::{
@@ -47,13 +48,7 @@ use crate::{
     market_state::{dashboard_watchlists_from_json, dashboard_watchlists_not_loaded},
     markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
     models::{
-        CandidateScoringWaterfallCandidatePayload, CandidateScoringWaterfallConcentrationPayload,
-        CandidateScoringWaterfallCostGuardPayload, CandidateScoringWaterfallHermesPayload,
-        CandidateScoringWaterfallHoldingLimitPayload, CandidateScoringWaterfallMarketPayload,
-        CandidateScoringWaterfallMarkovPayload, CandidateScoringWaterfallPayload,
-        CandidateScoringWaterfallPositionWeightPayload, CandidateScoringWaterfallSummaryPayload,
-        CandidateScoringWaterfallTechnicalPayload, CashBufferSettings,
-        DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
+        CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
         DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
         DashboardExecutionOrderPayload, DashboardHermesBaselineEvidencePackPayload,
@@ -67,7 +62,7 @@ use crate::{
         DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
         DashboardMissedTradeShadowPayload, DashboardPositionDecisionPayload,
         DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload, DashboardSelectedDecisionPayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
@@ -108,6 +103,16 @@ use crate::{
         SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page, scheduler_cycle_summaries_from_json,
     },
     strategy_journal_state::dashboard_strategy_journal_entries_from_json,
+};
+
+#[cfg(test)]
+use crate::models::{
+    CandidateScoringWaterfallCandidatePayload, CandidateScoringWaterfallConcentrationPayload,
+    CandidateScoringWaterfallCostGuardPayload, CandidateScoringWaterfallHermesPayload,
+    CandidateScoringWaterfallHoldingLimitPayload, CandidateScoringWaterfallMarketPayload,
+    CandidateScoringWaterfallMarkovPayload, CandidateScoringWaterfallPayload,
+    CandidateScoringWaterfallPositionWeightPayload, CandidateScoringWaterfallSummaryPayload,
+    CandidateScoringWaterfallTechnicalPayload, DashboardSelectedDecisionPayload,
 };
 
 #[cfg(test)]
@@ -3145,6 +3150,7 @@ fn dashboard_required_boolish(row: &JsonValue, key: &str) -> serde_json::Result<
     }
 }
 
+#[cfg(test)]
 fn dashboard_optional_boolish(row: &JsonValue, key: &str) -> serde_json::Result<Option<bool>> {
     match row.get(key) {
         None | Some(JsonValue::Null) => Ok(None),
@@ -3498,6 +3504,7 @@ pub(crate) fn dashboard_quiver_signals_from_json(
         .collect()
 }
 
+#[cfg(test)]
 fn dashboard_candidate_scoring_technical_from_json(
     value: Option<&JsonValue>,
 ) -> CandidateScoringWaterfallTechnicalPayload {
@@ -3513,6 +3520,7 @@ fn dashboard_candidate_scoring_technical_from_json(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn dashboard_candidate_scoring_candidate_from_json(
     value: &JsonValue,
 ) -> CandidateScoringWaterfallCandidatePayload {
@@ -3643,6 +3651,7 @@ pub(crate) fn dashboard_candidate_scoring_candidate_from_json(
 /// Decodes the selected Decision Report's stable outer fields. Its detailed
 /// report and provider diagnostics remain compatibility JSON, while the
 /// deterministic manager-gate waterfall has a fully typed dashboard boundary.
+#[cfg(test)]
 fn dashboard_candidate_scoring_waterfall_from_json(
     value: Option<&JsonValue>,
 ) -> CandidateScoringWaterfallPayload {
@@ -3672,6 +3681,7 @@ fn dashboard_candidate_scoring_waterfall_from_json(
     }
 }
 
+#[cfg(test)]
 fn dashboard_selected_decision_from_json(
     decision: JsonValue,
 ) -> serde_json::Result<Option<DashboardSelectedDecisionPayload>> {
@@ -7614,7 +7624,7 @@ impl AppState {
                 warn!("dashboard typed latest decision degraded: {err:#}");
                 LatestDecisionStatusPayload::default()
             });
-        let selected_decision = dashboard_selected_decision_from_json(selected_decision)
+        let selected_decision = dashboard_selected_decision_projection_from_json(selected_decision)
             .unwrap_or_else(|err| {
                 warn!("dashboard typed selected Decision Report degraded: {err:#}");
                 None
