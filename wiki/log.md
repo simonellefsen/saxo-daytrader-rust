@@ -10,6 +10,11 @@ updated: 2026-08-29
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-29] architecture | Extract Decision Report status projections
+
+- Added `decision_state` for compact latest Decision Report and scheduled-pulse status decoding, together with provider-payload exclusion tests. `AppState` retains persisted reads, tab gating, degradation handling, and dashboard orchestration.
+- Provider requests, report scheduling, manager gates, queues, prechecks, and Saxo behavior are unchanged.
+
 ## [2026-08-29] architecture | Extract Scheduler dashboard projections
 
 - Moved the typed scheduler-cycle and scheduler-status decoders, their tolerant retained-cycle parsing, and their raw cycle/process-metadata exclusion tests from `state.rs` into `scheduler_state`, which already owns scheduler pagination. The public API imports these summaries directly from the module.

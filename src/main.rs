@@ -8,6 +8,7 @@ mod db;
 mod debug_redaction;
 mod decision_provider;
 mod decision_schema;
+mod decision_state;
 mod drawdown_guard;
 mod editorial_research;
 mod execution_state;
