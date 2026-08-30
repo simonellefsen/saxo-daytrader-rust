@@ -62,8 +62,8 @@ use crate::{
         DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
         DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
         DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
@@ -99,7 +99,9 @@ use crate::{
         dashboard_performance_snapshot_evidence_from_json, dashboard_performance_summary_from_json,
         performance_summary_from_history,
     },
-    quiver_state::{QUIVER_SIGNALS_PAGE_SIZE, quiver_signal_page},
+    quiver_state::{
+        QUIVER_SIGNALS_PAGE_SIZE, dashboard_quiver_signals_from_json, quiver_signal_page,
+    },
     scheduler_state::{
         SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page, scheduler_cycle_summaries_from_json,
     },
@@ -3371,40 +3373,6 @@ fn dashboard_hermes_baseline_evidence_window_from_json(
             .ok()
             .flatten(),
     }
-}
-
-/// Decodes the rendered Quiver signal table fields while keeping source-status,
-/// top-event, and provider diagnostics on their dedicated read-only paths.
-pub(crate) fn dashboard_quiver_signals_from_json(
-    signals: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardQuiverSignalPayload>> {
-    signals
-        .into_iter()
-        .map(|signal| {
-            let error_text = dashboard_optional_string(&signal, "error_text")?
-                .map(|value| compact_debug_text(&value, 220))
-                .unwrap_or_default();
-            Ok(DashboardQuiverSignalPayload {
-                symbol: dashboard_required_string(&signal, "symbol")?,
-                ticker: dashboard_required_string(&signal, "ticker")?,
-                instrument_name: dashboard_required_string(&signal, "instrument_name")?,
-                signal: dashboard_required_f64(&signal, "signal")?,
-                direction: dashboard_required_string(&signal, "direction")?,
-                confidence: dashboard_required_f64(&signal, "confidence")?,
-                event_count: dashboard_required_i64(&signal, "event_count")?,
-                congress_purchase_count: dashboard_required_i64(
-                    &signal,
-                    "congress_purchase_count",
-                )?,
-                congress_sale_count: dashboard_required_i64(&signal, "congress_sale_count")?,
-                net_congress_amount: dashboard_required_f64(&signal, "net_congress_amount")?,
-                latest_event_date: dashboard_optional_string(&signal, "latest_event_date")?
-                    .unwrap_or_else(|| "n/a".to_string()),
-                status: dashboard_required_string(&signal, "status")?,
-                error_text,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -19049,47 +19017,6 @@ mod tests {
             dashboard_active_strategy_baseline_from_json(json!({"id": "baseline-91"})).is_err()
         );
         assert!(dashboard_hermes_baseline_evidence_pack_from_json(json!({})).is_err());
-    }
-
-    #[test]
-    fn dashboard_quiver_signals_keep_source_documents_outside_ssr() {
-        let signals = dashboard_quiver_signals_from_json(vec![json!({
-            "id": "quiver-91",
-            "run_id": "run-91",
-            "created_at": "2026-08-26T08:30:00Z",
-            "run_date": "2026-08-26",
-            "status": "error",
-            "symbol": "EXAMPLE:xnas",
-            "ticker": "EXAMPLE",
-            "instrument_name": "Example Corp",
-            "signal": 0.4,
-            "direction": "bullish",
-            "confidence": 0.8,
-            "event_count": 3,
-            "congress_purchase_count": 2,
-            "congress_sale_count": 1,
-            "net_congress_amount": 120000.0,
-            "latest_event_date": "2026-08-25",
-            "error_text": "Quiver response included sk-must-not-reach-the-dashboard-1234567890",
-            "source_status_json": {"api_key": "must-not-reach-the-dashboard"},
-            "top_events_json": [{"token": "must-not-reach-the-dashboard"}]
-        })])
-        .expect("stable Quiver signal display row decodes");
-
-        assert_eq!(signals[0].symbol, "EXAMPLE:xnas");
-        assert_eq!(signals[0].event_count, 3);
-        assert!(signals[0].error_text.contains("[redacted]"));
-        assert!(
-            !serde_json::to_string(&signals)
-                .expect("typed Quiver signals serialize")
-                .contains("must-not-reach-the-dashboard")
-        );
-        assert!(
-            dashboard_quiver_signals_from_json(vec![json!({
-                "symbol": "EXAMPLE:xnas"
-            })])
-            .is_err()
-        );
     }
 
     #[test]
