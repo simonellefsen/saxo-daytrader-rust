@@ -896,6 +896,18 @@ fn completed_report_json_from_parts(
     let shadow_change_assessment =
         normalize_shadow_change_assessment(&mut parsed, &pulse, request_json);
     if let Some(obj) = parsed.as_object_mut() {
+        // `suggested_trades` is the only provider-facing candidate contract.
+        // Do not allow a loose JSON-object provider to smuggle a different
+        // executable list through `strategy_plan`: Trading Manager used to
+        // prefer that field when it was present. The server rebuilds the
+        // manager-facing plan from the normalized, scope-filtered suggestions
+        // below, so the UI, outcome ledger, and manager all audit the same
+        // candidates.
+        let provider_strategy_plan_present = obj.contains_key("strategy_plan");
+        let suggested_trades = obj
+            .get("suggested_trades")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         obj.insert(
             "status".to_string(),
             JsonValue::from(mode.completed_status()),
@@ -916,33 +928,30 @@ fn completed_report_json_from_parts(
             "execution_safety".to_string(),
             report_execution_safety(mode, pulse_mode),
         );
-        if !obj.contains_key("strategy_plan") {
-            let suggested = obj
-                .get("suggested_trades")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
-            obj.insert(
-                "strategy_plan".to_string(),
-                json!({
-                    "mode": "swing",
-                    "status": "completed",
-                    "swing_orders": suggested,
-                    "suggested_trades": obj.get("suggested_trades").cloned().unwrap_or_else(|| json!([])),
-                    "notes": ["Strategy plan was normalized by the Rust xAI deferred completion poller."]
-                }),
-            );
-        }
         if let Some(capital_plan) = requested_capital_plan {
             obj.entry("capital_plan".to_string())
                 .or_insert_with(|| capital_plan.clone());
-            if let Some(plan) = obj
-                .get_mut("strategy_plan")
-                .and_then(JsonValue::as_object_mut)
-            {
-                plan.entry("capital_plan".to_string())
-                    .or_insert(capital_plan);
-            }
         }
+        let mut strategy_plan = json!({
+            "mode": "swing",
+            "status": mode.completed_status(),
+            "swing_orders": suggested_trades,
+            "suggested_trades": obj.get("suggested_trades").cloned().unwrap_or_else(|| json!([])),
+            "notes": ["Strategy plan was normalized by the Rust Decision Report completion boundary."]
+        });
+        if let Some(capital_plan) = obj.get("capital_plan").cloned() {
+            strategy_plan["capital_plan"] = capital_plan;
+        }
+        obj.insert("strategy_plan".to_string(), strategy_plan);
+        obj.insert(
+            "decision_pipeline".to_string(),
+            json!({
+                "candidate_source": "server_normalized_suggested_trades",
+                "provider_strategy_plan": if provider_strategy_plan_present { "discarded" } else { "not_present" },
+                "manager_candidate_source": "suggested_trades",
+                "safety": "The provider cannot create a second candidate list through strategy_plan; queue and Saxo authority remain separately server-gated."
+            }),
+        );
     }
     Ok(parsed)
 }
@@ -3985,6 +3994,54 @@ mod tests {
         let report = completed_report_json(&pending, &response).unwrap();
         assert_eq!(report["status"], "completed");
         assert_eq!(report["strategy_plan"]["status"], "completed");
+    }
+
+    #[test]
+    fn completion_discards_provider_strategy_plan_and_uses_suggested_trades() {
+        let suggested = json!([{
+            "symbol": "AAA:xcse",
+            "action": "BUY",
+            "quantity": 2.0
+        }]);
+        let response = json!({
+            "choices": [{"message": {"content": serde_json::to_string(&json!({
+                "report_title": "Boundary fixture",
+                "suggested_trades": suggested,
+                "strategy_plan": {
+                    "swing_orders": [{
+                        "symbol": "UNEXPECTED:xnas",
+                        "action": "SELL",
+                        "quantity": 99.0
+                    }]
+                }
+            })).unwrap()}}]
+        });
+        let report = completed_report_json_from_parts(
+            &json!({}),
+            &json!({"analysis_pulse": {
+                "key": "us_open_followup:2026-08-30",
+                "pulse_mode": "execution_eligible",
+                "queue_eligible": true
+            }}),
+            &response,
+            "test",
+            json!({}),
+            DecisionReportSubmissionMode::Live,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report["strategy_plan"]["swing_orders"],
+            report["suggested_trades"]
+        );
+        assert_eq!(
+            report["strategy_plan"]["swing_orders"][0]["symbol"],
+            "AAA:xcse"
+        );
+        assert_eq!(
+            report["decision_pipeline"]["provider_strategy_plan"],
+            "discarded"
+        );
     }
 
     #[test]

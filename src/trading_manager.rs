@@ -3105,13 +3105,18 @@ async fn has_manager_run_for_report(state: &AppState, report_id: i64) -> Result<
 }
 
 fn candidate_orders_from_report(report_json: &JsonValue) -> Vec<CandidateOrder> {
+    // Completed reports are normalized so both fields are identical. Prefer
+    // the provider-facing `suggested_trades` contract nonetheless, which also
+    // makes historic/diagnostic reports use the same candidates visible in the
+    // Decision Report UI. `strategy_plan` remains a compatibility fallback for
+    // older retained reports only.
     let orders = report_json
-        .get("strategy_plan")
-        .and_then(|value| value.get("swing_orders"))
+        .get("suggested_trades")
         .and_then(JsonValue::as_array)
         .or_else(|| {
             report_json
-                .get("suggested_trades")
+                .get("strategy_plan")
+                .and_then(|value| value.get("swing_orders"))
                 .and_then(JsonValue::as_array)
         })
         .cloned()
@@ -6194,6 +6199,31 @@ mod tests {
         let orders = candidate_orders_from_report(&report);
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].strategy_key, "swing:test:NVDA:xnas:BUY");
+    }
+
+    #[test]
+    fn candidate_orders_prefer_visible_suggested_trades_over_strategy_plan() {
+        let report = json!({
+            "suggested_trades": [{
+                "symbol": "VISIBLE:xcse",
+                "action": "BUY",
+                "quantity": 2,
+                "strategy_key": "visible",
+                "estimated_value_dkk": 1200
+            }],
+            "strategy_plan": {"swing_orders": [{
+                "symbol": "HIDDEN:xnas",
+                "action": "SELL",
+                "quantity": 99,
+                "strategy_key": "hidden",
+                "estimated_value_dkk": 99999
+            }]}
+        });
+
+        let orders = candidate_orders_from_report(&report);
+
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].symbol, "VISIBLE:xcse");
     }
 
     /// The decision-report schema has no `strategy_type` field, so reading it

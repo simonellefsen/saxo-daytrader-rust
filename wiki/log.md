@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] safety | Canonicalize Decision Report candidate source
+
+- Completion now rebuilds the manager-facing `strategy_plan` from the scope-normalized top-level `suggested_trades`, discards a provider-supplied alternate plan with retained audit metadata, and Trading Manager reads the visible candidate contract first while preserving a legacy fallback for old reports.
+- This removes a decision-pipeline ambiguity without changing queue eligibility, deterministic manager gates, Hermes authority, or Saxo placement behavior.
+
 ## [2026-08-30] architecture | Extract portfolio projections
 
 - Added `portfolio_state` for typed dashboard-position and public portfolio-ledger decoding, with the existing broker/context-document exclusion regressions moved beside the projection boundary.
