@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] safety | Project reviewed execution taxonomy into event diagnostics
+
+- Execution-event rows now show only reviewed category, canonical next-step, retry posture, and the local queue-expiry stage. The projection resolves a persisted taxonomy code through the server-owned canonical taxonomy instead of rendering stored label/remediation text.
+- Unknown taxonomy versions/codes and all raw broker or free-form payload fields remain excluded from SSR. This is an observability-only change: it does not alter Trading Manager admission, Saxo prechecks, order placement, broker reconciliation, or Hermes authority.
+
 ## [2026-08-30] safety | Connect Decision completion audit to Hermes preflight
 
 - Added a compact server-owned Completion Quality Audit projection to Hermes Trading Manager preflight metadata: status, score, bounded counts, and check labels only. Full provider output and free-form diagnostics remain excluded.

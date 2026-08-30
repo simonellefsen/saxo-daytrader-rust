@@ -454,9 +454,10 @@ pub struct DashboardExecutionFillPayload {
 /// Minimal execution lifecycle evidence rendered in the dashboard event list.
 ///
 /// The broker payload and free-form broker error text are retained only in the
-/// local audit store. The optional failure stage is constrained to known local
-/// pipeline stages before it crosses the SSR boundary. This view cannot alter,
-/// replay, reconcile, precheck, queue, or submit an order.
+/// local audit store. The optional failure stage and error taxonomy are
+/// constrained to known local vocabulary before they cross the SSR boundary.
+/// This view cannot alter, replay, reconcile, precheck, queue, or submit an
+/// order.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DashboardExecutionEventPayload {
     pub created_at: String,
@@ -464,6 +465,9 @@ pub struct DashboardExecutionEventPayload {
     pub event_type: String,
     pub broker_status: Option<String>,
     pub failure_stage: Option<String>,
+    pub failure_category: Option<String>,
+    pub failure_remediation: Option<String>,
+    pub failure_retry_policy: Option<String>,
 }
 
 /// Stable, read-only execution-order metadata exposed by the API.

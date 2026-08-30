@@ -8230,6 +8230,21 @@ fn ExecutionEventRow(row: DashboardExecutionEventPayload, prefs: LocalizationPre
         .as_deref()
         .map(execution_failure_stage_label)
         .unwrap_or_default();
+    let failure_category_label = row
+        .failure_category
+        .as_deref()
+        .map(execution_failure_category_label)
+        .unwrap_or_default();
+    let failure_retry_policy_label = row
+        .failure_retry_policy
+        .as_deref()
+        .map(execution_retry_policy_label)
+        .unwrap_or_default();
+    let failure_message = execution_event_failure_message(
+        &failure_category_label,
+        row.failure_remediation.as_deref().unwrap_or_default(),
+        &failure_retry_policy_label,
+    );
     let status_class = execution_status_class(&status);
     let reason_class = execution_reason_class(&reason);
     let tooltip = execution_event_tooltip(&row, &status, &reason);
@@ -8248,7 +8263,11 @@ fn ExecutionEventRow(row: DashboardExecutionEventPayload, prefs: LocalizationPre
                 }
             }
             td { class: "muted error-cell",
-                span { class: "muted", "n/a" }
+                if failure_message.is_empty() {
+                    span { class: "muted", "n/a" }
+                } else {
+                    span { class: "muted", title: "{tooltip}", "{failure_message}" }
+                }
             }
         }
     }
@@ -10199,6 +10218,32 @@ fn execution_status_tooltip(
     lines.join("\n")
 }
 
+fn execution_event_failure_message(
+    category: &str,
+    remediation: &str,
+    retry_policy: &str,
+) -> String {
+    if category.is_empty() {
+        return String::new();
+    }
+    let mut message = category.to_string();
+    if !retry_policy.is_empty() {
+        message.push_str(&format!(" · {retry_policy}"));
+    }
+    if !remediation.is_empty() {
+        message.push_str(" · review details");
+    }
+    message
+}
+
+fn execution_failure_category_label(category: &str) -> String {
+    category.replace('_', " ")
+}
+
+fn execution_retry_policy_label(policy: &str) -> String {
+    policy.replace('_', " ")
+}
+
 fn execution_error_taxonomy(row: &impl ExecutionOrderDisplayRow) -> Option<JsonValue> {
     row.execution_document("execution_result_json")
         .and_then(|payload| payload.get("error_taxonomy").cloned())
@@ -10220,6 +10265,7 @@ fn execution_failure_stage_label(stage: &str) -> &'static str {
         "precheck" => "Saxo precheck",
         "placement" => "Saxo placement",
         "execution" => "Queue execution",
+        "queue_expiry" => "Queue expiry",
         _ => "",
     }
 }
@@ -10320,6 +10366,26 @@ fn execution_event_tooltip(
             "stage: {failure_stage_label} ({})",
             row.failure_stage.as_deref().unwrap_or_default()
         ));
+    }
+    let failure_category_label = row
+        .failure_category
+        .as_deref()
+        .map(execution_failure_category_label)
+        .unwrap_or_default();
+    if !failure_category_label.is_empty() {
+        lines.push(format!("category: {failure_category_label}"));
+    }
+    let remediation = row.failure_remediation.as_deref().unwrap_or_default();
+    if !remediation.is_empty() {
+        lines.push(format!("next step: {remediation}"));
+    }
+    let retry_policy_label = row
+        .failure_retry_policy
+        .as_deref()
+        .map(execution_retry_policy_label)
+        .unwrap_or_default();
+    if !retry_policy_label.is_empty() {
+        lines.push(format!("retry: {retry_policy_label}"));
     }
     lines.join("\n")
 }
@@ -12148,6 +12214,9 @@ mod tests {
             event_type: "broker_sync".to_string(),
             broker_status: Some("execution_failed".to_string()),
             failure_stage: Some("placement".to_string()),
+            failure_category: Some("tick_size".to_string()),
+            failure_remediation: Some("Invalid tick size: Recalculate the price.".to_string()),
+            failure_retry_policy: Some("review_and_resubmit".to_string()),
         };
 
         assert_eq!(
@@ -12161,6 +12230,18 @@ mod tests {
         assert!(
             execution_event_tooltip(&row, "execution_failed", "Broker rejected")
                 .contains("stage: Saxo placement (placement)")
+        );
+        assert!(
+            execution_event_tooltip(&row, "execution_failed", "Broker rejected")
+                .contains("category: tick size")
+        );
+        assert_eq!(
+            execution_event_failure_message(
+                "tick size",
+                "Invalid tick size: Recalculate the price.",
+                "review and resubmit"
+            ),
+            "tick size · review and resubmit · review details"
         );
     }
 

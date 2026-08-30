@@ -11,6 +11,7 @@ use crate::models::{
     ProtectiveStopCoverageSummaryPayload, ProtectiveStopLifecycleTestPayload,
     ProtectiveStopPrecheckPayload,
 };
+use crate::saxo_error::execution_error_taxonomy_for_code;
 
 pub(crate) const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
 pub(crate) const OVERVIEW_EXECUTION_ORDERS_LIMIT: i64 = 12;
@@ -63,8 +64,8 @@ pub(crate) fn dashboard_execution_fills_from_json(
 
 /// Decodes only the stable lifecycle facts needed by the flat Execution-tab
 /// event list. The persisted raw Saxo response never enters this SSR model.
-/// Failure-stage labels originate in local order processing, so the decoder
-/// retains only the fixed vocabulary shown in the dashboard.
+/// Failure-stage and taxonomy labels originate in local order processing, so
+/// the decoder retains only the fixed vocabulary shown in the dashboard.
 pub(crate) fn dashboard_execution_events_from_json(
     events: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardExecutionEventPayload>> {
@@ -72,24 +73,68 @@ pub(crate) fn dashboard_execution_events_from_json(
         .into_iter()
         .map(|event| {
             let failure_stage = dashboard_execution_event_failure_stage(&event);
+            let (failure_category, failure_remediation, failure_retry_policy) =
+                dashboard_execution_event_error_taxonomy(&event);
             let mut event: DashboardExecutionEventPayload = serde_json::from_value(event)?;
             event.failure_stage = failure_stage;
+            event.failure_category = failure_category;
+            event.failure_remediation = failure_remediation;
+            event.failure_retry_policy = failure_retry_policy;
             Ok(event)
         })
         .collect()
 }
 
 fn dashboard_execution_event_failure_stage(event: &JsonValue) -> Option<String> {
-    let payload = match event.get("raw_payload_json")? {
-        JsonValue::String(value) => serde_json::from_str(value).ok()?,
-        value => value.clone(),
-    };
+    let payload = dashboard_execution_event_payload(event)?;
     match payload.get("failure_stage").and_then(JsonValue::as_str) {
         Some(
             stage @ ("local_validation" | "precheck_guard" | "request_build" | "precheck"
-            | "placement" | "execution"),
+            | "placement" | "execution" | "queue_expiry"),
         ) => Some(stage.to_string()),
         _ => None,
+    }
+}
+
+/// Projects only the locally-created, versioned Saxo error taxonomy attached
+/// to an execution event. Broker messages and arbitrary raw payload fields are
+/// deliberately ignored. Unknown taxonomy versions or codes stay hidden until
+/// their dashboard vocabulary has been reviewed.
+fn dashboard_execution_event_error_taxonomy(
+    event: &JsonValue,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let Some(payload) = dashboard_execution_event_payload(event) else {
+        return (None, None, None);
+    };
+    let Some(taxonomy) = payload.get("error_taxonomy") else {
+        return (None, None, None);
+    };
+    if taxonomy.get("version").and_then(JsonValue::as_i64) != Some(1) {
+        return (None, None, None);
+    }
+    let Some(code) = taxonomy.get("code").and_then(JsonValue::as_str) else {
+        return (None, None, None);
+    };
+    let Some(taxonomy) = execution_error_taxonomy_for_code(code) else {
+        return (None, None, None);
+    };
+    let label = taxonomy.get("label").and_then(JsonValue::as_str);
+    let remediation = taxonomy.get("remediation").and_then(JsonValue::as_str);
+    let retry_policy = taxonomy.get("retry_policy").and_then(JsonValue::as_str);
+    match (label, remediation, retry_policy) {
+        (Some(label), Some(remediation), Some(retry_policy)) => (
+            Some(code.to_string()),
+            Some(label.to_string() + ": " + remediation),
+            Some(retry_policy.to_string()),
+        ),
+        _ => (None, None, None),
+    }
+}
+
+fn dashboard_execution_event_payload(event: &JsonValue) -> Option<JsonValue> {
+    match event.get("raw_payload_json")? {
+        JsonValue::String(value) => serde_json::from_str(value).ok(),
+        value => Some(value.clone()),
     }
 }
 
@@ -307,6 +352,13 @@ mod tests {
             "broker_status": "execution_failed",
             "raw_payload_json": {
                 "failure_stage": "precheck",
+                "error_taxonomy": {
+                    "version": 1,
+                    "code": "tick_size",
+                    "label": "must-not-reach-the-dashboard",
+                    "remediation": "must-not-reach-the-dashboard",
+                    "retry_policy": "must-not-reach-the-dashboard"
+                },
                 "AccountKey": "must-not-reach-the-dashboard",
                 "Message": "must-not-reach-the-dashboard"
             }
@@ -315,14 +367,45 @@ mod tests {
 
         assert_eq!(events[0].execution_order_id, 345);
         assert_eq!(events[0].failure_stage.as_deref(), Some("precheck"));
+        assert_eq!(events[0].failure_category.as_deref(), Some("tick_size"));
+        assert_eq!(
+            events[0].failure_retry_policy.as_deref(),
+            Some("review_and_resubmit")
+        );
         let serialized = serde_json::to_string(&events).expect("typed event evidence serializes");
         assert!(!serialized.contains("must-not-reach-the-dashboard"));
+        assert!(serialized.contains("Invalid tick size"));
         assert!(
             dashboard_execution_events_from_json(vec![json!({
                 "event_type": "execution_failed"
             })])
             .is_err()
         );
+    }
+
+    #[test]
+    fn dashboard_events_hide_unknown_or_incomplete_taxonomy() {
+        let events = dashboard_execution_events_from_json(vec![json!({
+            "created_at": "2026-08-24T08:30:00Z",
+            "execution_order_id": 345,
+            "event_type": "execution_failed",
+            "raw_payload_json": {
+                "failure_stage": "queue_expiry",
+                "error_taxonomy": {
+                    "version": 1,
+                    "code": "unreviewed_code",
+                    "label": "must-not-reach-the-dashboard",
+                    "remediation": "must-not-reach-the-dashboard",
+                    "retry_policy": "must-not-reach-the-dashboard"
+                }
+            }
+        })])
+        .expect("stable event with unknown taxonomy decodes");
+
+        assert_eq!(events[0].failure_stage.as_deref(), Some("queue_expiry"));
+        assert_eq!(events[0].failure_category, None);
+        assert_eq!(events[0].failure_remediation, None);
+        assert_eq!(events[0].failure_retry_policy, None);
     }
 
     #[test]

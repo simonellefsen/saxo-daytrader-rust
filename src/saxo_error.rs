@@ -179,6 +179,40 @@ pub(crate) fn classify_execution_error(status: &str, error_text: &str) -> JsonVa
     })
 }
 
+/// Resolves a reviewed taxonomy code to its canonical, browser-safe details.
+///
+/// Execution-event projections use this instead of copying text from a
+/// persisted payload. That keeps a future raw broker document or a malformed
+/// historical row from turning into dashboard content.
+pub(crate) fn execution_error_taxonomy_for_code(code: &str) -> Option<JsonValue> {
+    let (status, representative_error) = match code {
+        "broker_state_unknown" => ("broker_state_unknown", ""),
+        "queue_expired" => ("expired_local", ""),
+        "order_expired" => ("broker_expired", ""),
+        "done_for_day" => ("broker_done_for_day", ""),
+        "broker_cancelled" => ("broker_cancelled", ""),
+        "broker_rejected" => ("execution_failed", "rejected"),
+        "market_closed" => ("waiting_for_market_open", ""),
+        "quantity" => ("invalid_quantity", ""),
+        "session_expired" => ("execution_failed", "HTTP 401"),
+        "rate_limited" => ("execution_failed", "HTTP 429"),
+        "commission_setup" => ("execution_failed", "CommissionGroup"),
+        "insufficient_cash" => ("execution_failed", "insufficient cash"),
+        "tick_size" => ("execution_failed", "tick size invalid"),
+        "price_invalid" => ("execution_failed", "limit price outside allowed range"),
+        "position_quantity" => ("execution_failed", "active sell reservations"),
+        "sell_order_already_exists" => (
+            "execution_failed",
+            "SellOrdersAlreadyExistForOwnedContracts",
+        ),
+        "order_type_not_supported" => ("execution_failed", "OrderTypeNotSupported"),
+        "instrument_not_tradable" => ("execution_failed", "instrument is not tradable"),
+        "unknown" => ("execution_failed", "unclassified failure"),
+        _ => return None,
+    };
+    Some(classify_execution_error(status, representative_error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +292,36 @@ mod tests {
         );
         assert_eq!(unsupported["code"], "order_type_not_supported");
         assert_eq!(unsupported["retry_policy"], "manual_review");
+    }
+
+    #[test]
+    fn reviewed_taxonomy_codes_resolve_to_their_canonical_details() {
+        for code in [
+            "broker_state_unknown",
+            "queue_expired",
+            "order_expired",
+            "done_for_day",
+            "broker_cancelled",
+            "broker_rejected",
+            "market_closed",
+            "quantity",
+            "session_expired",
+            "rate_limited",
+            "commission_setup",
+            "insufficient_cash",
+            "tick_size",
+            "price_invalid",
+            "position_quantity",
+            "sell_order_already_exists",
+            "order_type_not_supported",
+            "instrument_not_tradable",
+            "unknown",
+        ] {
+            assert_eq!(
+                execution_error_taxonomy_for_code(code).expect("reviewed code resolves")["code"],
+                json!(code)
+            );
+        }
+        assert!(execution_error_taxonomy_for_code("future_unreviewed_code").is_none());
     }
 }
