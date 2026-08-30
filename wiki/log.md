@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] architecture | Extract portfolio projections
+
+- Added `portfolio_state` for typed dashboard-position and public portfolio-ledger decoding, with the existing broker/context-document exclusion regressions moved beside the projection boundary.
+- `AppState` retains persisted reads, quote refresh, broker snapshots, accounting, report generation, manager gates, queues, and Saxo behavior.
+
 ## [2026-08-30] architecture | Extract Quiver signal-table projection
 
 - Moved typed Quiver signal-table decoding and its source/provider-document exclusion regression from `state.rs` into `quiver_state`; the protected API imports the projection directly.

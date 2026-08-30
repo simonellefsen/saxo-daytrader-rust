@@ -25,6 +25,7 @@ mod overview_state;
 mod performance_benchmarks;
 mod performance_state;
 mod portfolio_reset;
+mod portfolio_state;
 mod price_monitor;
 mod protective_stops;
 mod quiver;
