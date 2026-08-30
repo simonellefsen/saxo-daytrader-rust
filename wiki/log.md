@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] architecture | Extract Markov signal-table projection
+
+- Moved typed Markov signal-table decoding and its model/provider-document exclusion regression from `state.rs` into `markov_state`; the protected API imports the projection directly.
+- `AppState` retains persisted reads, tab gating, data freshness, regime collection, scheduling, report generation, manager gates, queues, and Saxo behavior.
+
 ## [2026-08-30] architecture | Extract Hermes public summary projections
 
 - Moved the protected reflection and experiment metadata serializers from `state.rs` to `hermes_state`; the API routes now import those public boundaries directly.

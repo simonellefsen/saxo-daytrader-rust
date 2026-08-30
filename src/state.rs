@@ -46,7 +46,9 @@ use crate::{
     },
     localization::LocalizationPrefs,
     market_state::{dashboard_watchlists_from_json, dashboard_watchlists_not_loaded},
-    markov_state::{MARKOV_SIGNALS_PAGE_SIZE, markov_signal_page},
+    markov_state::{
+        MARKOV_SIGNALS_PAGE_SIZE, dashboard_markov_signals_from_json, markov_signal_page,
+    },
     models::{
         CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
         DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
@@ -58,11 +60,10 @@ use crate::{
         DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
         DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
         DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMarkovSignalPayload, DashboardMissedTradeShadowEvidencePayload,
-        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
-        DashboardMissedTradeShadowPayload, DashboardPositionDecisionPayload,
-        DashboardPositionPayload, DashboardQuiverSignalPayload, DashboardRunSchedulePayload,
-        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
+        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
+        DashboardPositionDecisionPayload, DashboardPositionPayload, DashboardQuiverSignalPayload,
+        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
@@ -3370,57 +3371,6 @@ fn dashboard_hermes_baseline_evidence_window_from_json(
             .ok()
             .flatten(),
     }
-}
-
-/// Decodes the rendered Markov signal table fields while keeping the retained
-/// model artifacts and raw/provider diagnostics on their dedicated paths.
-pub(crate) fn dashboard_markov_signals_from_json(
-    signals: Vec<JsonValue>,
-) -> serde_json::Result<Vec<DashboardMarkovSignalPayload>> {
-    signals
-        .into_iter()
-        .map(|signal| {
-            let stationary =
-                dashboard_embedded_json(&signal, "stationary_json").unwrap_or(JsonValue::Null);
-            let optional_f64_or_zero =
-                |key: &str| dashboard_optional_f64(&signal, key).map(|value| value.unwrap_or(0.0));
-            let stationary_probability = |key: &str| {
-                stationary
-                    .get(key)
-                    .and_then(|value| value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)))
-                    .filter(|value| value.is_finite())
-                    .unwrap_or(0.0)
-            };
-            let error_text = dashboard_optional_string(&signal, "error_text")?
-                .map(|value| compact_debug_text(&value, 220))
-                .unwrap_or_default();
-            Ok(DashboardMarkovSignalPayload {
-                symbol: dashboard_required_string(&signal, "symbol")?,
-                instrument_name: dashboard_optional_string(&signal, "instrument_name")?
-                    .unwrap_or_default(),
-                current_state: dashboard_optional_string(&signal, "current_state")?
-                    .unwrap_or_else(|| "n/a".to_string()),
-                signed_signal: optional_f64_or_zero("signed_signal")?,
-                direction: dashboard_optional_string(&signal, "direction")?
-                    .unwrap_or_else(|| "n/a".to_string()),
-                bull_prob: optional_f64_or_zero("bull_prob")?,
-                sideways_prob: optional_f64_or_zero("sideways_prob")?,
-                bear_prob: optional_f64_or_zero("bear_prob")?,
-                stationary_bull_prob: stationary_probability("Bull"),
-                stationary_sideways_prob: stationary_probability("Sideways"),
-                stationary_bear_prob: stationary_probability("Bear"),
-                rolling_return: optional_f64_or_zero("rolling_return")?,
-                sample_count: serde_json::from_value(
-                    signal
-                        .get("sample_count")
-                        .cloned()
-                        .unwrap_or(JsonValue::Null),
-                )?,
-                status: dashboard_required_string(&signal, "status")?,
-                error_text,
-            })
-        })
-        .collect()
 }
 
 /// Decodes the rendered Quiver signal table fields while keeping source-status,
@@ -19099,48 +19049,6 @@ mod tests {
             dashboard_active_strategy_baseline_from_json(json!({"id": "baseline-91"})).is_err()
         );
         assert!(dashboard_hermes_baseline_evidence_pack_from_json(json!({})).is_err());
-    }
-
-    #[test]
-    fn dashboard_markov_signals_keep_model_documents_outside_ssr() {
-        let signals = dashboard_markov_signals_from_json(vec![json!({
-            "id": "markov-91",
-            "run_id": "run-91",
-            "created_at": "2026-08-26T08:30:00Z",
-            "run_date": "2026-08-26",
-            "status": "error",
-            "symbol": "EXAMPLE:xnas",
-            "instrument_name": "Example Corp",
-            "current_state": "Bull",
-            "sample_count": 240,
-            "rolling_return": 0.04,
-            "stationary_json": {"Bull": 0.6, "Sideways": 0.3, "Bear": 0.1},
-            "bull_prob": 0.7,
-            "sideways_prob": 0.2,
-            "bear_prob": 0.1,
-            "signed_signal": 0.6,
-            "direction": "long",
-            "error_text": "Saxo response included sk-must-not-reach-the-dashboard-1234567890",
-            "transition_matrix_json": {"api_key": "must-not-reach-the-dashboard"},
-            "forecasts_json": {"token": "must-not-reach-the-dashboard"},
-            "raw_payload_json": {"api_key": "must-not-reach-the-dashboard"}
-        })])
-        .expect("stable Markov signal display row decodes");
-
-        assert_eq!(signals[0].symbol, "EXAMPLE:xnas");
-        assert_eq!(signals[0].stationary_bull_prob, 0.6);
-        assert!(signals[0].error_text.contains("[redacted]"));
-        assert!(
-            !serde_json::to_string(&signals)
-                .expect("typed Markov signals serialize")
-                .contains("must-not-reach-the-dashboard")
-        );
-        assert!(
-            dashboard_markov_signals_from_json(vec![json!({
-                "symbol": "EXAMPLE:xnas"
-            })])
-            .is_err()
-        );
     }
 
     #[test]
