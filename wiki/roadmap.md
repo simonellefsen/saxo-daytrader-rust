@@ -460,6 +460,7 @@ The decision-report pipeline should become more deterministic, easier to diagnos
 
 Hermes should become a useful advisory layer that learns from evidence without becoming an unbounded actor.
 
+- Landed 2026-08-30: Hermes Trading Manager preflight now receives a compact projection of the server-owned Decision Report Completion Quality Audit (status, score, counts, and check labels). Raw provider output and free-form diagnostics stay excluded. A `review` item can support only more conservative advice; a `ready` audit never grants approval or bypasses a deterministic manager gate.
 - Add a Hermes advisory dashboard section with rows for each report: input report id, advice status, recommendation, orders allowed/reduced/blocked, timeout status, and final Trading Manager outcome.
 - Add "proposal impact" tracking: when Hermes blocks or reduces an order, follow the hypothetical outcome versus the executed path.
 - Give Hermes access to normalized report outcomes: report completed, manager queued, broker submitted, filled/expired/failed, and next-day/weekly P/L attribution.

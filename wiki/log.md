@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] safety | Connect Decision completion audit to Hermes preflight
+
+- Added a compact server-owned Completion Quality Audit projection to Hermes Trading Manager preflight metadata: status, score, bounded counts, and check labels only. Full provider output and free-form diagnostics remain excluded.
+- Hermes may use a review item only to become more conservative. The audit cannot approve a candidate, change a deterministic manager gate, create queue work, or reach Saxo. The Hermes execution-boundary documentation now records this contract.
+
 ## [2026-08-30] safety | Persist Decision Report completion-quality evidence
 
 - Added a pure server-owned audit after completion normalization. It records report structure, scope provenance, candidate shape and canonical-plan consistency, technical/Markov evidence, cash-context consistency, and server-owned execution metadata for every new report.

@@ -2522,6 +2522,7 @@ async fn hermes_decision_preflight_bundle(
             "pulse_label": &report.pulse_label,
             "pulse_mode": &report.pulse_mode,
             "queue_eligible": report.queue_eligible,
+            "completion_quality": compact_hermes_preflight_completion_quality(&report.report_json),
         },
         "portfolio": overview.get("portfolio_summary").cloned().unwrap_or(JsonValue::Null),
         "execution_capacity": overview.get("execution").and_then(|value| value.get("daily_order_capacity")).cloned().unwrap_or(JsonValue::Null),
@@ -2570,6 +2571,50 @@ async fn hermes_decision_preflight_bundle(
             "raw_broker_payloads_excluded": true,
             "raw_execution_errors_excluded": true,
         }
+    })
+}
+
+/// Carries the server-owned Decision Report completion audit into Hermes'
+/// bounded preflight context. It intentionally keeps only deterministic audit
+/// status and check labels: provider output, full report content, and free-form
+/// raw diagnostics remain outside the Hermes request. Hermes may recommend a
+/// more conservative action when it sees a review item, but the audit can never
+/// grant approval or replace a Trading Manager gate.
+fn compact_hermes_preflight_completion_quality(report_json: &JsonValue) -> JsonValue {
+    let Some(audit) = report_json
+        .get("decision_quality")
+        .filter(|value| value.is_object())
+    else {
+        return json!({
+            "status": "not_recorded",
+            "source": "server_completion_boundary",
+            "admission": "observational_only",
+        });
+    };
+    let checks = audit
+        .get("checks")
+        .and_then(JsonValue::as_array)
+        .map(|checks| {
+            checks
+                .iter()
+                .take(12)
+                .map(|check| {
+                    json!({
+                        "key": check.get("key").cloned().unwrap_or(JsonValue::Null),
+                        "status": check.get("status").cloned().unwrap_or(JsonValue::Null),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "status": audit.get("status").cloned().unwrap_or(JsonValue::Null),
+        "score": audit.get("score").cloned().unwrap_or(JsonValue::Null),
+        "warning_count": audit.get("warning_count").cloned().unwrap_or(JsonValue::Null),
+        "candidate_count": audit.get("candidate_count").cloned().unwrap_or(JsonValue::Null),
+        "checks": checks,
+        "source": "server_completion_boundary",
+        "admission": "observational_only",
     })
 }
 
@@ -2723,7 +2768,7 @@ async fn request_hermes_decision_advice(
         .min(60);
 
     let input = format!(
-        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, portfolio and candidate exposure, Markov freshness, operator-approved experiment state, and classified execution failures. Pending-review proposal values are omitted by the server and must never influence allow, reduce, stand_down, or review advice; the count is audit-only. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, server-owned completion-quality audit, portfolio and candidate exposure, Markov freshness, operator-approved experiment state, and classified execution failures. Completion quality is observational only: a ready audit does not approve an order, while a review item may justify only a more conservative recommendation. Pending-review proposal values are omitted by the server and must never influence allow, reduce, stand_down, or review advice; the count is audit-only. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
         report.id, report.id, source_session_id
     );
     let payload = json!({
@@ -6497,6 +6542,39 @@ mod tests {
         assert_eq!(compact["success_count"], json!(76));
         assert_eq!(compact["error_count"], json!(4));
         assert!(compact.get("config_json").is_none());
+    }
+
+    #[test]
+    fn hermes_preflight_completion_quality_keeps_only_server_audit_fields() {
+        let compact = compact_hermes_preflight_completion_quality(&json!({
+            "decision_quality": {
+                "status": "review",
+                "score": 75,
+                "warning_count": 1,
+                "candidate_count": 2,
+                "checks": [
+                    {"key": "candidate_evidence", "status": "review", "message": "raw details stay local"}
+                ],
+                "provider_raw_payload": "must-not-reach-hermes"
+            }
+        }));
+
+        assert_eq!(compact["status"], json!("review"));
+        assert_eq!(compact["checks"][0]["key"], json!("candidate_evidence"));
+        assert!(
+            !serde_json::to_string(&compact)
+                .expect("preflight quality serializes")
+                .contains("must-not-reach-hermes")
+        );
+        assert_eq!(compact["admission"], json!("observational_only"));
+    }
+
+    #[test]
+    fn hermes_preflight_marks_older_report_quality_as_not_recorded() {
+        let compact = compact_hermes_preflight_completion_quality(&json!({}));
+
+        assert_eq!(compact["status"], json!("not_recorded"));
+        assert_eq!(compact["admission"], json!("observational_only"));
     }
 
     #[test]
