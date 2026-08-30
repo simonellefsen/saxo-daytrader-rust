@@ -7,6 +7,7 @@ mod daily_indicators;
 mod db;
 mod debug_redaction;
 mod decision_provider;
+mod decision_quality;
 mod decision_schema;
 mod decision_state;
 mod drawdown_guard;

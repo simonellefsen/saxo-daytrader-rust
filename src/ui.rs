@@ -4448,6 +4448,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             .unwrap_or(&null_document),
     );
     let quality = decision_report_quality(&report_status, &report_json, &diagnostics);
+    let completion_audit = decision_completion_audit(&report_json);
     let gate_replay = data.decision_gate_replay.clone();
     rsx! {
         section { class: "section stack loose",
@@ -4575,6 +4576,7 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             strong { "Report JSON" }
                             span { "{compact_json(Some(&report_json))}" }
                         }
+                        DecisionCompletionAuditPanel { audit: completion_audit }
                         DecisionReportQualityPanel { quality }
                         DecisionReportDiagnosticsPanel { diagnostics: diagnostics.clone() }
                         DecisionReportDebugPanel { debug: decision_report_debug_payload(
@@ -5122,6 +5124,15 @@ struct DecisionReportQuality {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct DecisionCompletionAudit {
+    status: String,
+    score: i64,
+    candidate_count: usize,
+    warning_count: usize,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct DecisionReportDebugPayload {
     prompt: String,
     request: String,
@@ -5457,6 +5468,38 @@ fn decision_report_quality(
     }
 }
 
+fn decision_completion_audit(report_json: &JsonValue) -> DecisionCompletionAudit {
+    let audit = report_json
+        .get("decision_quality")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let checks = json_array(&audit, "checks");
+    let warnings = checks
+        .iter()
+        .filter(|check| text(check, "status") != "pass")
+        .map(|check| text(check, "message"))
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    DecisionCompletionAudit {
+        status: if audit.is_null() {
+            "not recorded".to_string()
+        } else {
+            fallback_text(&audit, "status", "review")
+        },
+        score: audit.get("score").and_then(JsonValue::as_i64).unwrap_or(0),
+        candidate_count: audit
+            .get("candidate_count")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(0) as usize,
+        warning_count: audit
+            .get("warning_count")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(warnings.len() as u64) as usize,
+        warnings,
+    }
+}
+
 fn decision_trade_shape_ok(trade: &JsonValue) -> bool {
     let order_type = text(trade, "order_type");
     let action = text(trade, "action");
@@ -5492,6 +5535,37 @@ fn DecisionReportQualityPanel(quality: DecisionReportQuality) -> Element {
             } else {
                 ul { class: "quality-warning-list",
                     for warning in quality.warnings.iter() {
+                        li { "{warning}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DecisionCompletionAuditPanel(audit: DecisionCompletionAudit) -> Element {
+    let tone = match audit.status.as_str() {
+        "ready" => "good-text",
+        "review" => "warn-text",
+        _ => "",
+    };
+    rsx! {
+        div { class: "event report-quality-panel",
+            strong { "Completion Quality Audit" }
+            div { class: "quality-score-row",
+                span { class: "quality-score {tone}", "{audit.score}/100" }
+                span { class: "status", "{audit.status}" }
+                span { class: "muted", "{audit.candidate_count} candidate(s) · {audit.warning_count} warning(s)" }
+            }
+            p { class: "muted", "Server-owned completion evidence. It is observational only and cannot approve, queue, or place an order." }
+            if audit.status == "not recorded" {
+                p { class: "muted", "This retained report predates the completion audit." }
+            } else if audit.warnings.is_empty() {
+                p { class: "muted", "All recorded completion checks passed." }
+            } else {
+                ul { class: "quality-warning-list",
+                    for warning in audit.warnings.iter() {
                         li { "{warning}" }
                     }
                 }
@@ -13262,6 +13336,27 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("filtered 1 symbol"))
         );
+    }
+
+    #[test]
+    fn reads_server_owned_completion_audit_without_recomputing_it() {
+        let audit = decision_completion_audit(&json!({
+            "decision_quality": {
+                "status": "review",
+                "score": 75,
+                "candidate_count": 2,
+                "warning_count": 1,
+                "checks": [
+                    {"status": "pass", "message": "Canonical plan matches."},
+                    {"status": "review", "message": "Capital context differs."}
+                ]
+            }
+        }));
+
+        assert_eq!(audit.status, "review");
+        assert_eq!(audit.score, 75);
+        assert_eq!(audit.candidate_count, 2);
+        assert_eq!(audit.warnings, vec!["Capital context differs."]);
     }
 
     #[test]

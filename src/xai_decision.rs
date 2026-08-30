@@ -13,6 +13,7 @@ use crate::{
         ChatCompletionRequest, DecisionProvider, decision_report_response_format,
         validate_openrouter_strict_schema,
     },
+    decision_quality::completion_quality_audit,
     models::{DecisionReportSchemaHealth, DecisionReportSchemaIssue},
     state::AppState,
 };
@@ -928,7 +929,7 @@ fn completed_report_json_from_parts(
             "execution_safety".to_string(),
             report_execution_safety(mode, pulse_mode),
         );
-        if let Some(capital_plan) = requested_capital_plan {
+        if let Some(capital_plan) = requested_capital_plan.as_ref() {
             obj.entry("capital_plan".to_string())
                 .or_insert_with(|| capital_plan.clone());
         }
@@ -952,6 +953,10 @@ fn completed_report_json_from_parts(
                 "safety": "The provider cannot create a second candidate list through strategy_plan; queue and Saxo authority remain separately server-gated."
             }),
         );
+    }
+    let quality_audit = completion_quality_audit(&parsed, requested_capital_plan.as_ref());
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert("decision_quality".to_string(), quality_audit);
     }
     Ok(parsed)
 }

@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] safety | Persist Decision Report completion-quality evidence
+
+- Added a pure server-owned audit after completion normalization. It records report structure, scope provenance, candidate shape and canonical-plan consistency, technical/Markov evidence, cash-context consistency, and server-owned execution metadata for every new report.
+- The Decisions view renders the retained audit. It is explicitly observational and cannot alter Trading Manager admission, queue creation, Hermes authority, or Saxo execution.
+
 ## [2026-08-30] safety | Canonicalize Decision Report candidate source
 
 - Completion now rebuilds the manager-facing `strategy_plan` from the scope-normalized top-level `suggested_trades`, discards a provider-supplied alternate plan with retained audit metadata, and Trading Manager reads the visible candidate contract first while preserving a legacy fallback for old reports.
