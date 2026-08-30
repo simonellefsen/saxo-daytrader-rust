@@ -12,6 +12,7 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::{
     db::{value_f64, value_i64},
+    models::{HermesExperimentSummaryPayload, HermesReflectionSummaryPayload},
     state::json_text,
 };
 
@@ -225,6 +226,62 @@ pub(crate) fn safe_display_text(value: &str, max_chars: usize) -> String {
     let mut truncated: String = normalized.chars().take(max_chars).collect();
     truncated.push_str("...");
     truncated
+}
+
+/// Decodes stable reflection metadata for the protected API list. Detailed
+/// advisory documents remain in the local audit store and do not cross this
+/// boundary.
+pub(crate) fn hermes_reflection_summaries_from_json(
+    reflections: Vec<JsonValue>,
+) -> serde_json::Result<Vec<HermesReflectionSummaryPayload>> {
+    reflections
+        .into_iter()
+        .map(|reflection| {
+            Ok(HermesReflectionSummaryPayload {
+                id: required_string(&reflection, "id")?,
+                created_at: required_string(&reflection, "created_at")?,
+                period_start: required_string(&reflection, "period_start")?,
+                period_end: required_string(&reflection, "period_end")?,
+                goal_version: required_i64(&reflection, "goal_version")?,
+                summary: required_string(&reflection, "summary")?,
+                source_session_id: optional_string(&reflection, "source_session_id")?,
+            })
+        })
+        .collect()
+}
+
+/// Decodes stable experiment metadata for the protected API list. Proposed
+/// values and supporting documents remain in the local audit store and do not
+/// cross this boundary.
+pub(crate) fn hermes_experiment_summaries_from_json(
+    experiments: Vec<JsonValue>,
+) -> serde_json::Result<Vec<HermesExperimentSummaryPayload>> {
+    experiments
+        .into_iter()
+        .map(|experiment| {
+            Ok(HermesExperimentSummaryPayload {
+                id: required_string(&experiment, "id")?,
+                created_at: required_string(&experiment, "created_at")?,
+                status: required_string(&experiment, "status")?,
+                baseline_id: optional_string(&experiment, "baseline_id")?,
+                goal_version: required_i64(&experiment, "goal_version")?,
+                changed_variable_path: required_string(&experiment, "changed_variable_path")?,
+                source_session_id: optional_string(&experiment, "source_session_id")?,
+            })
+        })
+        .collect()
+}
+
+fn required_string(row: &JsonValue, key: &str) -> serde_json::Result<String> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn optional_string(row: &JsonValue, key: &str) -> serde_json::Result<Option<String>> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
+}
+
+fn required_i64(row: &JsonValue, key: &str) -> serde_json::Result<i64> {
+    serde_json::from_value(row.get(key).cloned().unwrap_or(JsonValue::Null))
 }
 
 fn reflection_cadence(reflection: &JsonValue) -> String {

@@ -73,17 +73,17 @@ use crate::{
         HermesContextSafetyPayload, HermesContextSchedulerPayload,
         HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
         HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
-        HermesExperimentRequest, HermesExperimentSummaryPayload, HermesReflectionRequest,
-        HermesReflectionSummaryPayload, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
-        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
-        OverviewIntegrityIssuePayload, OverviewIntegrityPayload, PortfolioTradePayload,
-        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
+        MarketCalendarRefreshPayload, MarketStatusPayload, MarketStatusSummaryPayload,
+        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
+        PortfolioTradePayload, QuiverConflictPayload, TradingManagerPayload,
+        TuningBenchmarkComparison, TuningBenchmarkReference, TuningDirectionalOutcome,
+        TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     overview_state::{
         dashboard_integrity_from_json, dashboard_market_status_from_json,
@@ -3182,28 +3182,6 @@ fn dashboard_hermes_reflections_from_json(
         .collect()
 }
 
-/// Decodes stable reflection metadata for the protected API list. Detailed
-/// advisory documents remain in the local audit store and do not cross this
-/// boundary.
-pub(crate) fn hermes_reflection_summaries_from_json(
-    reflections: Vec<JsonValue>,
-) -> serde_json::Result<Vec<HermesReflectionSummaryPayload>> {
-    reflections
-        .into_iter()
-        .map(|reflection| {
-            Ok(HermesReflectionSummaryPayload {
-                id: dashboard_required_string(&reflection, "id")?,
-                created_at: dashboard_required_string(&reflection, "created_at")?,
-                period_start: dashboard_required_string(&reflection, "period_start")?,
-                period_end: dashboard_required_string(&reflection, "period_end")?,
-                goal_version: dashboard_required_i64(&reflection, "goal_version")?,
-                summary: dashboard_required_string(&reflection, "summary")?,
-                source_session_id: dashboard_optional_string(&reflection, "source_session_id")?,
-            })
-        })
-        .collect()
-}
-
 /// Decodes the already-redacted, derived Hermes lesson queue for the
 /// advisory-only dashboard section. It carries no raw reflection payload or
 /// detailed proposed-action document across the SSR boundary.
@@ -3308,31 +3286,6 @@ fn dashboard_hermes_experiments_from_json(
                 hypothesis: dashboard_required_string(&experiment, "hypothesis")?,
                 expected_effect: dashboard_required_string(&experiment, "expected_effect")?,
                 evidence_display: compact_json_redacted(experiment.get("evidence_json"), 220),
-            })
-        })
-        .collect()
-}
-
-/// Decodes stable experiment metadata for the protected API list. Proposed
-/// values and supporting documents remain in the local audit store and do not
-/// cross this boundary.
-pub(crate) fn hermes_experiment_summaries_from_json(
-    experiments: Vec<JsonValue>,
-) -> serde_json::Result<Vec<HermesExperimentSummaryPayload>> {
-    experiments
-        .into_iter()
-        .map(|experiment| {
-            Ok(HermesExperimentSummaryPayload {
-                id: dashboard_required_string(&experiment, "id")?,
-                created_at: dashboard_required_string(&experiment, "created_at")?,
-                status: dashboard_required_string(&experiment, "status")?,
-                baseline_id: dashboard_optional_string(&experiment, "baseline_id")?,
-                goal_version: dashboard_required_i64(&experiment, "goal_version")?,
-                changed_variable_path: dashboard_required_string(
-                    &experiment,
-                    "changed_variable_path",
-                )?,
-                source_session_id: dashboard_optional_string(&experiment, "source_session_id")?,
             })
         })
         .collect()
@@ -18963,7 +18916,7 @@ mod tests {
 
     #[test]
     fn hermes_reflection_summaries_exclude_detailed_advisory_documents() {
-        let reflections = hermes_reflection_summaries_from_json(vec![json!({
+        let reflections = crate::hermes_state::hermes_reflection_summaries_from_json(vec![json!({
             "id": "hermes-reflection-91",
             "created_at": "2026-08-26T08:30:00Z",
             "period_start": "2026-08-25",
@@ -18984,7 +18937,7 @@ mod tests {
                 .contains("must-not-reach-the-public-api")
         );
         assert!(
-            hermes_reflection_summaries_from_json(vec![json!({
+            crate::hermes_state::hermes_reflection_summaries_from_json(vec![json!({
                 "id": "hermes-reflection-91"
             })])
             .is_err()
@@ -19270,7 +19223,7 @@ mod tests {
 
     #[test]
     fn hermes_experiment_summaries_exclude_proposal_and_provider_documents() {
-        let experiments = hermes_experiment_summaries_from_json(vec![json!({
+        let experiments = crate::hermes_state::hermes_experiment_summaries_from_json(vec![json!({
             "id": "experiment-91",
             "created_at": "2026-08-26T08:30:00Z",
             "status": "pending_review",
@@ -19294,7 +19247,7 @@ mod tests {
                 .contains("must-not-reach-the-public-api")
         );
         assert!(
-            hermes_experiment_summaries_from_json(vec![json!({
+            crate::hermes_state::hermes_experiment_summaries_from_json(vec![json!({
                 "id": "experiment-91"
             })])
             .is_err()

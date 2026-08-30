@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-30] architecture | Extract Hermes public summary projections
+
+- Moved the protected reflection and experiment metadata serializers from `state.rs` to `hermes_state`; the API routes now import those public boundaries directly.
+- Detailed advisory, proposal, and provider documents remain in local audit storage. `AppState` retains persisted reads, dashboard detail, Hermes advisory inputs, experiment lifecycle/configuration controls, reports, queues, and Saxo behavior.
 
 ## [2026-08-29] architecture | Stage selected Decision Report projection extraction
 
