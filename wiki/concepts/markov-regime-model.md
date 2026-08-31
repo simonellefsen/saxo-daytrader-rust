@@ -56,6 +56,13 @@ bars and returns `1` for daily-or-coarser horizons, so the historical daily
 behaviour is reproduced exactly. `an_unscaled_intraday_window_would_collapse_the_regime_signal`
 locks the failure mode down.
 
+**The same trap exists in `src/daily_indicators.rs` and is not yet guarded.**
+Its `horizon_minutes` is config-driven and contracted, but `RSI_PERIOD`,
+`ATR_PERIOD`, the MACD periods, `RESISTANCE_LOOKBACK`, `SUPPORT_SHORT_WINDOW`
+(252) and `SUPPORT_LONG_WINDOW` (1260) are hardcoded bar counts named for their
+daily meaning. Latent rather than live — nothing has changed that value — but
+see [roadmap](../roadmap.md).
+
 ## Bars per session vary by exchange
 
 Measured against live SIM at `Horizon=60`:
