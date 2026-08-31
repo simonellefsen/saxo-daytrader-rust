@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - todo
   - maintained-by-llm
-updated: 2026-08-21
+updated: 2026-08-31
 ---
 
 # Daytrader Todo
@@ -37,6 +37,8 @@ The decision is not which queue to fix. It is what "reviewed" means:
 
 **Do not build a fourth queue until this is settled.** The next evidence surface should either plug into an existing closing mechanism or come with its own.
 
+**Checked against this rule 2026-08-31.** The Hermes data-request loop added that day records refusals and per-source outcomes on the advice record, which is new evidence output — but it is not a fourth queue: every request is served or refused within the same manager cycle and nothing accumulates for a human to work through. It closes itself by construction, which is the shape this item asks for. The `rejected` list is the one thing worth watching: a source Hermes keeps asking for and keeps being refused would be a backlog forming inside an audit field, and should be surfaced rather than left to accumulate quietly.
+
 ## T2 — Establish whether the strategy has an edge
 
 **Status:** open. This is an operator decision about capital, not an engineering task.
@@ -64,6 +66,10 @@ Two things genuinely point the right way and should not be lost in the negative 
 
 - **The loss tail has been truncated.** AMAT (−4,469), ASML (−4,236) and ARM (−3,678) all closed 20–30 July, *before* the automatic protective-stop sweep landed on 07-26. Since stops went live the worst single loss is −1,390.
 - **Only one exit in the whole period was a protective stop.** Four were discretionary `swing` sells and fifteen have no attributable exit order, so stops are standing guard rather than doing the closing.
+
+**Applied 2026-08-31.** This item decided a real question rather than sitting as advice. A proposed multi-horizon Markov extension (4h / 1d / 5d trends) was measured and rejected — partly on its own evidence, and partly on item 3 below: adding a fourth signal dimension before the existing three can be evaluated makes the evaluation harder. See [concepts/markov-regime-model](concepts/markov-regime-model.md).
+
+**One complication for the baseline, from the same day.** Markov moved from daily to hourly bars and `min_signed_signal` was recalibrated 0.15 → 0.20. Trades from 2026-08-31 onward are therefore decided by a different model than the 20 round trips recorded above, so they do not extend that sample — they start a new one. This is the second model change inside an already-underpowered record, and it is worth being honest that each such change resets the clock on answering this question. That is an argument for holding the model still for a while, not for avoiding the change that was already needed.
 
 **What would change the picture, in preference order:**
 

@@ -2964,3 +2964,29 @@ broker mutation was added.
 - Moved OpenRouter strict-schema shaping, recursive validation, response-format construction, and schema-validation issue data into `decision_provider` alongside the existing provider transport and request assembly.
 - The public schema-health API remains a thin mapping in `xai_decision`; report prompting, canonical schema construction, completion normalization, scheduling, persistence, and all execution boundaries remain unchanged.
 - This changes no report schedule, model-provider behavior, Trading Manager gate or configuration, Hermes role, queue, precheck, or Saxo execution behavior.
+
+## [2026-08-31] strategy | Markov moved to hourly bars with pre-report refresh slots
+
+- Made every Markov tuning horizon-aware. `window_days`, `min_labeled_days`, `signal_horizon_days` and `forecast_steps` are index offsets into the bar series, so all four counted bars rather than calendar days — identical only while the horizon stayed daily. Changing `horizon_minutes` alone would have reinterpreted a 20-day window as 20 hours and collapsed every label to `Sideways` with no error raised.
+- Validated against live SIM before flipping: Saxo returns 1200 bars at any horizon, all sampled symbols returned the full 900 requested at hourly, and gate pass rates held.
+- Scheduling moved from one run per date to named slots with per-slot timezones; the europe_open report moved to 10:45 because Markov runs after decision reports within a scheduler tick.
+- Recorded in [concepts/markov-regime-model](concepts/markov-regime-model.md).
+
+## [2026-08-31] strategy | Recalibrated the Markov gate and rejected multi-horizon extensions
+
+- Hourly signals proved *stronger* than daily, not weaker, which loosened `min_signed_signal` as a side effect: 132 of 200 symbols admitted against 111 on the last daily run. Recalibrated 0.15 to 0.20, admitting 113.
+- An initial 16-symbol sample indicated the opposite direction and reached the roadmap before a 45-symbol sample and the live universe corrected it. The roadmap entry was corrected rather than appended to.
+- Measured and rejected two multi-horizon designs, and rejected 14-day and 30-day forecast steps as restatements of `stationary_json`. `forecast_steps` trimmed to `[1, 2, 3, 5]`.
+- Left `signal_horizon_days` unchanged despite evidence that information peaks at 2-3 days, because the new threshold was calibrated at horizon 5; recorded as a one-variable roadmap item instead.
+
+## [2026-08-31] hermes | Candidate visibility fixed and a data-request loop added
+
+- Found the cause of the 2026-08-31 blanket review hold: the MCP report view exposed `candidate_count` and no candidate identities, so Hermes could not produce the per-order advice it was asked for and fell back to a global review, which in conservative mode zeroed three unrelated candidates.
+- The MCP view now names each candidate through a field-by-field projection, and the prompt states that the candidate list is authoritative.
+- Hermes can now name a missing or stale input in `data_requests`; the server serves it from a fixed read-only allowlist and re-asks once. Bounded to one extra round and only when the first round blocked.
+
+## [2026-08-31] reliability | Watchlist null tolerance
+
+- The Watchlists view rendered empty because `#[serde(default)]` covers an absent key but not an explicit `null`, and one symbol carried `"currency": null`. One field failed deserialization of the whole payload, and the symptom pointed at configuration rather than at a decoder.
+- Recorded on the roadmap as a defect class affecting every typed read model built over dynamic JSON, not as a one-off incident.
+
