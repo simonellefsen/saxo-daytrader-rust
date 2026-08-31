@@ -3,12 +3,17 @@ type: wiki-log
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # Wiki Log
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
+
+## [2026-08-31] safety | Normalize Decision Report outcomes for Hermes
+
+- Replaced the former raw report projection in Hermes context and `get_decision_reports` with typed report-to-manager-to-execution evidence: safe report/pulse metadata, completion-quality status/counts, latest manager state, queue/broker/fill terminal counts, and directly linked reconciled SELL realised P/L.
+- Stored report JSON is read only to allow-list server audit values; provider content, prompts, rationales, free-form errors, and broker documents remain excluded. The projection is retrospective and read-only, so it cannot change Hermes authority, manager admission, queueing, or Saxo behavior.
 
 ## [2026-08-30] safety | Audit decision-time currency and instrument evidence
 

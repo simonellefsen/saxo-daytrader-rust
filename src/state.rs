@@ -72,17 +72,18 @@ use crate::{
         HermesContextLearningMemoryPayload, HermesContextPayload, HermesContextPerformancePayload,
         HermesContextSafetyPayload, HermesContextSchedulerPayload,
         HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
-        HermesDecisionAdviceRequest, HermesExperimentOverlayCapabilitiesPayload,
-        HermesExperimentRequest, HermesReflectionRequest, LatestDecisionStatusPayload,
-        MarketCalendarRefreshPayload, MarketStatusPayload, MarketStatusSummaryPayload,
-        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
-        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
-        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
-        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
-        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
-        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
-        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
-        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
+        HermesDecisionAdviceRequest, HermesDecisionReportOutcomePayload,
+        HermesExperimentOverlayCapabilitiesPayload, HermesExperimentRequest,
+        HermesReflectionRequest, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
+        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
+        OverviewIntegrityIssuePayload, OverviewIntegrityPayload, QuiverConflictPayload,
+        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
+        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
+        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
+        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
+        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
+        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
+        TuningTradeThesisEvidence,
     },
     overview_state::{
         dashboard_integrity_from_json, dashboard_market_status_from_json,
@@ -11880,15 +11881,52 @@ impl AppState {
         serde_json::to_value(self.hermes_context(limit).await?).map_err(Into::into)
     }
 
-    pub async fn hermes_decision_report_items(&self, limit: i64) -> Result<Vec<JsonValue>> {
+    pub async fn hermes_decision_report_items(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<HermesDecisionReportOutcomePayload>> {
         let sql = format!(
-            "SELECT id, created_at, report_date, model, status, analysis_window_active, report_json, error_text, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible
-             FROM decision_reports
-             ORDER BY created_at DESC, id DESC
+            "SELECT
+                dr.id AS report_id,
+                dr.created_at,
+                dr.report_date,
+                dr.status AS report_status,
+                dr.analysis_pulse_key,
+                dr.analysis_pulse_label,
+                dr.pulse_mode,
+                dr.queue_eligible,
+                dr.report_json,
+                (
+                    SELECT tm.status
+                    FROM trading_manager_runs tm
+                    WHERE tm.report_id = dr.id
+                    ORDER BY tm.created_at DESC, tm.id DESC
+                    LIMIT 1
+                ) AS manager_status,
+                COUNT(eo.id) AS execution_order_count,
+                SUM(CASE WHEN eo.status = 'pending_execution' THEN 1 ELSE 0 END) AS pending_execution_count,
+                SUM(CASE WHEN eo.status = 'broker_working' THEN 1 ELSE 0 END) AS broker_working_count,
+                SUM(CASE WHEN eo.status = 'broker_partially_filled' THEN 1 ELSE 0 END) AS partial_fill_count,
+                SUM(CASE WHEN eo.status = 'filled' THEN 1 ELSE 0 END) AS filled_count,
+                SUM(CASE WHEN eo.status IN ('expired_local', 'broker_expired', 'broker_done_for_day') THEN 1 ELSE 0 END) AS expired_count,
+                SUM(CASE WHEN eo.status = 'broker_cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+                SUM(CASE WHEN eo.status IN ('execution_failed', 'broker_rejected', 'local_rejected') THEN 1 ELSE 0 END) AS failed_or_rejected_count,
+                SUM(CASE WHEN eo.status = 'filled' AND tl.side = 'SELL' THEN 1 ELSE 0 END) AS realised_sell_count,
+                COALESCE(SUM(CASE WHEN eo.status = 'filled' AND tl.side = 'SELL' THEN tl.realised_gain_dkk ELSE 0 END), 0) AS realised_sell_gain_dkk
+             FROM decision_reports dr
+             LEFT JOIN execution_orders eo ON eo.report_id = dr.id
+             LEFT JOIN trade_ledger tl ON tl.id = eo.ledger_id
+             GROUP BY dr.id, dr.created_at, dr.report_date, dr.status, dr.analysis_pulse_key,
+                      dr.analysis_pulse_label, dr.pulse_mode, dr.queue_eligible, dr.report_json
+             ORDER BY dr.created_at DESC, dr.id DESC
              LIMIT {}",
             clamp_limit(limit, 1, 100)
         );
-        Ok(self.select_json(&sql).await.unwrap_or_default())
+        Ok(
+            crate::hermes_state::hermes_decision_report_outcomes_from_rows(
+                self.select_json(&sql).await.unwrap_or_default(),
+            ),
+        )
     }
 
     pub async fn hermes_decision_advice_audit(&self, limit: i64) -> Result<Vec<JsonValue>> {
@@ -21275,7 +21313,10 @@ market_data:
             decisions: HermesContextDecisionsPayload {
                 cadence: "two_daily_open_followups".to_string(),
                 pulses: json!([]),
-                reports: vec![json!({"id": 42})],
+                reports: vec![HermesDecisionReportOutcomePayload {
+                    report_id: 42,
+                    ..Default::default()
+                }],
             },
             end_of_day: HermesContextEndOfDayPayload {
                 cadence: "daily".to_string(),

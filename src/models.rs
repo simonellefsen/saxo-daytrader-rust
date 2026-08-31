@@ -778,7 +778,39 @@ pub struct HermesContextSchedulerPayload {
 pub struct HermesContextDecisionsPayload {
     pub cadence: String,
     pub pulses: JsonValue,
-    pub reports: Vec<JsonValue>,
+    pub reports: Vec<HermesDecisionReportOutcomePayload>,
+}
+
+/// Bounded, normalized local lifecycle evidence for one Decision Report made
+/// available to Hermes. Provider content, prompts, raw broker payloads, and
+/// free-form errors stay outside this advisory context. Realised P/L is limited
+/// to reconciled SELL ledger rows directly linked to this report; it is not a
+/// forward return forecast or a causal strategy score.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct HermesDecisionReportOutcomePayload {
+    pub report_id: i64,
+    pub created_at: String,
+    pub report_date: String,
+    pub report_status: String,
+    pub analysis_pulse_key: String,
+    pub analysis_pulse_label: String,
+    pub pulse_mode: String,
+    pub queue_eligible: bool,
+    pub decision_quality_status: String,
+    pub decision_quality_score: Option<i64>,
+    pub decision_quality_warning_count: Option<i64>,
+    pub candidate_count: Option<i64>,
+    pub manager_status: Option<String>,
+    pub execution_order_count: i64,
+    pub pending_execution_count: i64,
+    pub broker_working_count: i64,
+    pub partial_fill_count: i64,
+    pub filled_count: i64,
+    pub expired_count: i64,
+    pub cancelled_count: i64,
+    pub failed_or_rejected_count: i64,
+    pub realised_sell_count: i64,
+    pub realised_sell_gain_dkk: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

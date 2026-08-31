@@ -12,7 +12,10 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::{
     db::{value_f64, value_i64},
-    models::{HermesExperimentSummaryPayload, HermesReflectionSummaryPayload},
+    models::{
+        HermesDecisionReportOutcomePayload, HermesExperimentSummaryPayload,
+        HermesReflectionSummaryPayload,
+    },
     state::json_text,
 };
 
@@ -48,6 +51,82 @@ pub(crate) const HERMES_ADVISORY_EXPERIMENT_STATUSES: &[&str] = &[
 
 pub(crate) fn hermes_experiment_status_is_advisory_eligible(status: &str) -> bool {
     HERMES_ADVISORY_EXPERIMENT_STATUSES.contains(&status.trim())
+}
+
+/// Projects report-to-manager-to-execution evidence into the compact Hermes
+/// advisory boundary. It is intentionally local and retrospective: no current
+/// quote, broker request, provider output, or future-performance inference is
+/// introduced while reviewing an earlier decision.
+pub(crate) fn hermes_decision_report_outcomes_from_rows(
+    rows: Vec<JsonValue>,
+) -> Vec<HermesDecisionReportOutcomePayload> {
+    rows.into_iter()
+        .map(|row| {
+            let report = embedded_json(&row, "report_json");
+            let quality = report
+                .as_ref()
+                .and_then(|report| report.get("decision_quality"))
+                .filter(|quality| quality.is_object());
+            let quality_status = quality
+                .and_then(|quality| quality.get("status"))
+                .and_then(JsonValue::as_str)
+                .filter(|status| matches!(*status, "ready" | "review"))
+                .unwrap_or("not_recorded")
+                .to_string();
+            HermesDecisionReportOutcomePayload {
+                report_id: value_i64(&row, "report_id"),
+                created_at: json_text(&row, "created_at"),
+                report_date: json_text(&row, "report_date"),
+                report_status: json_text(&row, "report_status"),
+                analysis_pulse_key: json_text(&row, "analysis_pulse_key"),
+                analysis_pulse_label: json_text(&row, "analysis_pulse_label"),
+                pulse_mode: json_text(&row, "pulse_mode"),
+                queue_eligible: value_i64(&row, "queue_eligible") > 0,
+                decision_quality_status: quality_status,
+                decision_quality_score: quality.and_then(|quality| {
+                    quality
+                        .get("score")
+                        .and_then(JsonValue::as_i64)
+                        .filter(|score| (0..=100).contains(score))
+                }),
+                decision_quality_warning_count: quality.and_then(|quality| {
+                    quality
+                        .get("warning_count")
+                        .and_then(JsonValue::as_i64)
+                        .filter(|count| *count >= 0)
+                }),
+                candidate_count: quality.and_then(|quality| {
+                    quality
+                        .get("candidate_count")
+                        .and_then(JsonValue::as_i64)
+                        .filter(|count| *count >= 0)
+                }),
+                manager_status: optional_text(&row, "manager_status"),
+                execution_order_count: value_i64(&row, "execution_order_count"),
+                pending_execution_count: value_i64(&row, "pending_execution_count"),
+                broker_working_count: value_i64(&row, "broker_working_count"),
+                partial_fill_count: value_i64(&row, "partial_fill_count"),
+                filled_count: value_i64(&row, "filled_count"),
+                expired_count: value_i64(&row, "expired_count"),
+                cancelled_count: value_i64(&row, "cancelled_count"),
+                failed_or_rejected_count: value_i64(&row, "failed_or_rejected_count"),
+                realised_sell_count: value_i64(&row, "realised_sell_count"),
+                realised_sell_gain_dkk: value_f64(&row, "realised_sell_gain_dkk"),
+            }
+        })
+        .collect()
+}
+
+fn embedded_json(row: &JsonValue, key: &str) -> Option<JsonValue> {
+    match row.get(key)? {
+        JsonValue::String(value) => serde_json::from_str(value).ok(),
+        value => Some(value.clone()),
+    }
+}
+
+fn optional_text(row: &JsonValue, key: &str) -> Option<String> {
+    let value = json_text(row, key);
+    (!value.is_empty()).then_some(value)
 }
 
 const HERMES_EXPERIMENT_REVIEW_FAMILIES: &[(&str, &str)] = &[
@@ -880,5 +959,47 @@ mod tests {
             assert!(hermes_experiment_status_is_advisory_eligible(status));
         }
         assert!(!hermes_experiment_status_is_advisory_eligible("rejected"));
+    }
+
+    #[test]
+    fn decision_outcomes_are_normalized_and_exclude_provider_and_broker_documents() {
+        let outcomes = hermes_decision_report_outcomes_from_rows(vec![json!({
+            "report_id": 42,
+            "created_at": "2026-08-31T08:30:00Z",
+            "report_date": "2026-08-31",
+            "report_status": "completed",
+            "analysis_pulse_key": "us_open_followup:2026-08-31",
+            "analysis_pulse_label": "US opening follow-up",
+            "pulse_mode": "execution_eligible",
+            "queue_eligible": 1,
+            "report_json": {
+                "decision_quality": {
+                    "status": "ready",
+                    "score": 100,
+                    "warning_count": 0,
+                    "candidate_count": 2
+                },
+                "provider_rationale": "must-not-reach-hermes",
+                "raw_broker_document": {"AccountKey": "must-not-reach-hermes"}
+            },
+            "manager_status": "completed",
+            "execution_order_count": 2,
+            "pending_execution_count": 0,
+            "broker_working_count": 1,
+            "partial_fill_count": 0,
+            "filled_count": 1,
+            "expired_count": 0,
+            "cancelled_count": 0,
+            "failed_or_rejected_count": 0,
+            "realised_sell_count": 1,
+            "realised_sell_gain_dkk": 125.5
+        })]);
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].decision_quality_status, "ready");
+        assert_eq!(outcomes[0].filled_count, 1);
+        assert_eq!(outcomes[0].realised_sell_gain_dkk, 125.5);
+        let serialized = serde_json::to_string(&outcomes).expect("outcomes serialize");
+        assert!(!serialized.contains("must-not-reach-hermes"));
     }
 }

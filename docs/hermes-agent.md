@@ -478,6 +478,23 @@ outcome, and stable gate-code fields. The dashboard never renders raw Hermes
 rationale or broker data from this projection, and viewing it makes no Hermes
 or Saxo request.
 
+## Decision Outcome Context
+
+Hermes can retrieve the bounded historical outcome projection through
+`get_context.decisions.reports` or the dedicated `get_decision_reports` MCP
+tool. Each row describes only the local lifecycle of one stored Decision
+Report: its report/pulse metadata, compact completion-quality audit result,
+latest Trading Manager status, execution queue and broker/fill terminal counts,
+and realised DKK P/L for reconciled SELL ledger rows directly linked to that
+report.
+
+The projection deliberately allow-lists server-owned audit values from the
+stored report and does not expose provider text, prompts, rationales,
+free-form error details, or raw broker documents. It does not fetch a current
+quote, predict a future return, or establish causality between Hermes advice
+and P/L. The historical evidence is read-only: it cannot modify a queue,
+change a manager gate, call Saxo, or extend Hermes authority.
+
 When an advisory block or reduction removes a positive quantity, the manager
 also creates one `hermes_counterfactuals` row for that prevented quantity. A
 report-supplied price is retained only as labelled diagnostic context; it is
