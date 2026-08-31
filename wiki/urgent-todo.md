@@ -236,7 +236,20 @@ That number is an estimate, and it should not have to be. Both `cost_basis_fx_ra
 
 **The cap that exists would not have helped.** `strategy.concentration.max_assets_per_currency` counts *distinct assets* per currency, not value. On the table above a cap of 5 would have permitted exactly the book that exists: five USD positions holding 63% of the value. Any policy that intends to constrain currency risk has to act on share, not count — the measurement landed 2026-08-31 reports both side by side for that reason.
 
-**`xome` had no currency for a month.** Found 2026-08-31 while wiring that measurement. U11 moved 20 symbols — the whole Swedish leg, a tenth of the universe — from `:xsto` to `:xome`, and updated `exchange_id_for_suffix` but not `currency_for_exchange`. It survived because neither failure is loud: `order_currency` falls back to **DKK** for an unmapped exchange, and the concentration cap *refuses to evaluate* rather than erroring. The second one is the trap — enabling the currency cap while any Swedish position was held would have blocked **every** BUY with "cannot be evaluated because one or more held symbols have no canonical currency mapping". Both spellings now map to SEK, pinned by a test that reads the universe out of both shipped configs.
+**`xome` had no currency for a month.** Found 2026-08-31 while wiring that measurement. U11 moved 20 symbols — the whole Swedish leg, a tenth of the universe — from `:xsto` to `:xome`, and updated `exchange_id_for_suffix` but not `currency_for_exchange`. Both spellings now map to SEK, pinned by a test that reads the universe out of both shipped configs and asserts every suffix it references has a currency.
+
+**Traced before assuming the worst, and the answer is reassuring: nothing was mis-valued, and no backfill is needed.** Every path that could have corrupted money reads a currency from Saxo before it reaches this map.
+
+| Path | Swedish impact |
+| --- | --- |
+| Held-position valuation | **None.** `held_instruments` reads `currency` from `broker_position_snapshots` and only falls back to the map when the broker snapshot has none. |
+| Trade ledger rows | **Effectively none.** `resolve_order_currency` prefers the order's own currency, then the broker payload's `Currency`/`DisplayAndFormat.Currency`, then a local position snapshot. The map is the fourth resort, reachable only on a first-ever Swedish fill whose broker payload omitted the currency — and no Swedish name was even resolvable before 2026-08-02. |
+| Hermes counterfactual and missed-trade shadow ledgers | **None.** Their metrics are computed entirely in local currency (`estimated_return_pct`, `estimated_pnl_local`), so FX never enters. |
+| Configured extra watch symbols | **None today.** The list is two US symbols. |
+| `portfolio_price_snapshots` rows for Swedish *watch* symbols | Labelled DKK at rate 1.0. Display only, and self-healing: the next poll rewrites both columns. |
+| **Currency concentration cap** | **The real exposure, and it was latent rather than active.** The gate refuses to evaluate any held symbol it cannot classify, so enabling `max_assets_per_currency` — the very lever this item asks about — while holding any Swedish name would have blocked **every** BUY with "cannot be evaluated because one or more held symbols have no canonical currency mapping". |
+
+The lesson is the shape, not the size: the gap survived a month because *both* of its failure modes are quiet. One falls back to a plausible default, the other declines to act. Neither raises anything.
 
 Two smaller observations from the same query:
 
