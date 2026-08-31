@@ -14035,6 +14035,51 @@ mod tests {
         );
     }
 
+    /// The summary tests above check the projection. This one checks that the
+    /// panel actually reaches HTML: an rsx block is compile-checked for syntax
+    /// but not for rendering, so a panel can type-check and still be the thing
+    /// that panics an SSR page load.
+    #[test]
+    fn the_currency_concentration_row_renders_into_the_cash_deployment_panel() {
+        let trading_manager: TradingManagerPayload = serde_json::from_value(json!({
+            "status": "available",
+            "latest_run": {
+                "id": 52,
+                "created_at": "2026-08-31T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "concentration_policy": {"max_assets_per_currency": 0, "currency_mode": "unlimited"},
+                    "position_exposure": {
+                        "currency_exposure": {
+                            "status": "available",
+                            "total_valued_dkk": 139_104.0,
+                            "largest_currency": "USD",
+                            "largest_share": 0.6318,
+                            "reporting_currency": "DKK",
+                            "currencies": [
+                                {"currency": "USD", "position_count": 5, "value_dkk": 87_892.0, "share": 0.6318},
+                                {"currency": "NOK", "position_count": 1, "value_dkk": 9_323.0, "share": 0.0670}
+                            ]
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("Trading Manager fixture has the dashboard contract");
+
+        let html = dioxus_ssr::render_element(rsx! {
+            CashDeploymentPanel { trading_manager, prefs: default_prefs() }
+        });
+
+        assert!(html.contains("Currency concentration"), "got {html}");
+        assert!(html.contains("USD"), "the largest exposure is named");
+        assert!(html.contains("NOK"));
+        assert!(
+            html.contains("counts assets, not value"),
+            "the panel states why the configured cap does not constrain this"
+        );
+    }
+
     /// Every manager run recorded before this measurement shipped has no
     /// currency_exposure block. Reading that as an empty book would show a
     /// balanced portfolio that was never measured, which is the same mistake
