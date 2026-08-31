@@ -1885,7 +1885,7 @@ pub struct MarketWatchlistsPayload {
 /// Allowlisted provenance and membership counts for the active watch universe.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistUniversePayload {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub source: String,
     #[serde(default)]
     pub configured_symbol_count: i64,
@@ -1898,9 +1898,9 @@ pub struct MarketWatchlistUniversePayload {
 /// Stable category metadata with allowlisted watchlist rows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistCategoryPayload {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub key: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub label: String,
     #[serde(default)]
     pub target_limit: i64,
@@ -1949,15 +1949,15 @@ pub struct MarketWatchlistRowPayload {
 /// provider/source document; it cannot authorize or create an order.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistDecisionPayload {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub sentiment: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub action: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub rationale: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub trend_bias: String,
 }
 
@@ -1970,7 +1970,7 @@ pub struct MarketWatchlistDecisionPayload {
 pub struct MarketWatchlistSupportRiskPayload {
     #[serde(default)]
     pub run_date: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub status: String,
     #[serde(default)]
     pub nearest_support: Option<f64>,
@@ -1982,7 +1982,7 @@ pub struct MarketWatchlistSupportRiskPayload {
     pub downside_after_break_pct: Option<f64>,
     #[serde(default)]
     pub break_risk: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub break_risk_label: String,
     #[serde(default)]
     pub confidence: Option<f64>,
