@@ -220,6 +220,14 @@ const CONTRACT: &[ContractEntry] = &[
         "Markov model parameter.",
     ),
     advisory(
+        &["strategy", "markov", "session_minutes"],
+        "Trading session length used to scale Markov calendar tunings into bar counts.",
+    ),
+    advisory(
+        &["strategy", "markov", "intraday_runs"],
+        "Extra Markov refresh slots ahead of each decision report.",
+    ),
+    advisory(
         &["strategy", "markov", "sample_count"],
         "Markov chart history depth.",
     ),

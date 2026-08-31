@@ -407,11 +407,29 @@ strategy:
     run_weekdays_only: true
     window_days: 20
     threshold: 0.05
-    horizon_minutes: 1440
-    sample_count: 520
+    # Intraday bars. Every tuning here is expressed in calendar units and
+    # scaled into bar counts by session_minutes / horizon_minutes, so a
+    # 20-day window stays 20 days rather than becoming 20 hours.
+    horizon_minutes: 60
+    session_minutes: 510
+    # 180 window + 540 min-labeled bars needs 722; 900 leaves real headroom
+    # for symbols with a shorter intraday history. Saxo caps a request at 1200.
+    sample_count: 900
     min_labeled_days: 60
     signal_horizon_days: 5
     forecast_steps: [1, 2, 3, 5, 10]
+    # Refresh before each decision report rather than only overnight. The
+    # scheduler runs Markov after decision reports within one tick, and ticks
+    # are 10 minutes apart, so each slot sits well ahead of the report it
+    # feeds. us_open is anchored to the report's own zone so the two do not
+    # drift apart when US and EU daylight saving disagree.
+    intraday_runs:
+      - name: europe_open
+        local_time: "10:15"
+        time_zone: Europe/Copenhagen
+      - name: us_open
+        local_time: "10:30"
+        time_zone: America/New_York
     max_symbols: 0
     instrument_negative_cache_retry_days: 7
     # Read-only analysis aliases for stale portfolio/watchlist symbols. These
@@ -491,7 +509,9 @@ strategy:
         enabled: true
         # Stable pulse identity uses the local trading date in this zone.
         time_zone: Europe/Copenhagen
-        minutes_after_open: 75
+        # 105 minutes after the 09:00 open, so the report lands at 10:45 and
+        # reads the 10:15 intraday Markov refresh rather than last night's.
+        minutes_after_open: 105
         exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
       us_open_followup:
         enabled: true

@@ -53,6 +53,20 @@ impl Regime {
 struct MarkovRunSlot {
     name: String,
     local_time: NaiveTime,
+    /// Zone `local_time` is read in. A slot that has to stay on one side of a
+    /// report anchored to another zone must share that zone, or the two drift
+    /// apart for the weeks each year when US and EU daylight saving disagree.
+    timezone: Tz,
+}
+
+impl MarkovRunSlot {
+    /// The instant this slot becomes due on `run_date`, in its own zone.
+    fn due_at(&self, run_date: NaiveDate) -> Option<DateTime<Utc>> {
+        self.timezone
+            .from_local_datetime(&run_date.and_time(self.local_time))
+            .earliest()
+            .map(|due| due.with_timezone(&Utc))
+    }
 }
 
 /// How many bars the chart feed emits per trading session at `horizon_minutes`.
@@ -173,7 +187,7 @@ pub async fn run_markov_method_cycle(state: &AppState) -> Result<JsonValue> {
     // Pick the most recent slot that is already due today. The nightly pass is
     // just the last slot of the day, so a single-slot config behaves exactly as
     // it did before intraday refreshes existed.
-    let Some(slot) = due_markov_slot(&config, now_local.time()) else {
+    let Some(slot) = due_markov_slot(&config, run_date, Utc::now()) else {
         let next = config
             .run_slots
             .first()
@@ -190,11 +204,7 @@ pub async fn run_markov_method_cycle(state: &AppState) -> Result<JsonValue> {
 
     // Dedup per slot rather than per date: a slot has run when a run for today
     // was created at or after that slot became due.
-    let slot_due_utc = config
-        .timezone
-        .from_local_datetime(&run_date.and_time(slot.local_time))
-        .earliest()
-        .map(|due| due.with_timezone(&Utc));
+    let slot_due_utc = slot.due_at(run_date);
     if markov_run_exists_since(state, run_date, slot_due_utc).await? {
         return Ok(json!({
             "status": "skipped",
@@ -216,9 +226,22 @@ pub async fn run_markov_method_cycle(state: &AppState) -> Result<JsonValue> {
     run_markov_method_for_date(state, &config, run_date).await
 }
 
-/// The latest configured slot whose local time has already passed.
-fn due_markov_slot(config: &MarkovConfig, now: NaiveTime) -> Option<&MarkovRunSlot> {
-    config.run_slots.iter().rfind(|slot| slot.local_time <= now)
+/// The latest configured slot already due on `run_date`.
+///
+/// Compared as instants rather than wall-clock times, so slots in different
+/// zones still order correctly against each other.
+fn due_markov_slot(
+    config: &MarkovConfig,
+    run_date: NaiveDate,
+    now: DateTime<Utc>,
+) -> Option<&MarkovRunSlot> {
+    config
+        .run_slots
+        .iter()
+        .filter_map(|slot| slot.due_at(run_date).map(|due| (slot, due)))
+        .filter(|(_, due)| *due <= now)
+        .max_by_key(|(_, due)| *due)
+        .map(|(slot, _)| slot)
 }
 
 async fn run_markov_method_for_date(
@@ -1566,11 +1589,15 @@ fn markov_config(state: &AppState) -> MarkovConfig {
         .iter()
         .map(|step| step.saturating_mul(bars_per_session).max(1))
         .collect::<Vec<_>>();
-    let mut run_slots = markov_intraday_runs(&state.config);
-    if !run_slots.iter().any(|slot| slot.local_time == daily_time) {
+    let mut run_slots = markov_intraday_runs(&state.config, timezone);
+    if !run_slots
+        .iter()
+        .any(|slot| slot.local_time == daily_time && slot.timezone == timezone)
+    {
         run_slots.push(MarkovRunSlot {
             name: "nightly".to_string(),
             local_time: daily_time,
+            timezone,
         });
     }
     run_slots.sort_by_key(|slot| slot.local_time);
@@ -1613,7 +1640,7 @@ fn markov_config(state: &AppState) -> MarkovConfig {
 ///
 /// Entries without a parsable `local_time` are dropped rather than defaulted,
 /// so a typo cannot silently move a refresh to midnight.
-fn markov_intraday_runs(config: &serde_yaml::Value) -> Vec<MarkovRunSlot> {
+fn markov_intraday_runs(config: &serde_yaml::Value, default_timezone: Tz) -> Vec<MarkovRunSlot> {
     let Some(entries) = yaml_at(config, &["strategy", "markov", "intraday_runs"])
         .and_then(|value| value.as_sequence().cloned())
     else {
@@ -1640,10 +1667,22 @@ fn markov_intraday_runs(config: &serde_yaml::Value) -> Vec<MarkovRunSlot> {
             .and_then(serde_yaml::Value::as_str)
             .unwrap_or("intraday")
             .to_string();
-        if slots.iter().any(|slot| slot.local_time == local_time) {
+        let timezone = entry
+            .get("time_zone")
+            .and_then(serde_yaml::Value::as_str)
+            .and_then(|value| value.parse::<Tz>().ok())
+            .unwrap_or(default_timezone);
+        if slots
+            .iter()
+            .any(|slot| slot.local_time == local_time && slot.timezone == timezone)
+        {
             continue;
         }
-        slots.push(MarkovRunSlot { name, local_time });
+        slots.push(MarkovRunSlot {
+            name,
+            local_time,
+            timezone,
+        });
     }
     slots.sort_by_key(|slot| slot.local_time);
     slots
@@ -1687,7 +1726,8 @@ fn markov_config_json(config: &MarkovConfig) -> JsonValue {
             .iter()
             .map(|slot| json!({
                 "name": slot.name,
-                "local_time": slot.local_time.format("%H:%M").to_string()
+                "local_time": slot.local_time.format("%H:%M").to_string(),
+                "time_zone": slot.timezone.name()
             }))
             .collect::<Vec<_>>(),
         "max_symbols": config.max_symbols,
@@ -2189,6 +2229,7 @@ mod tests {
             run_slots: vec![MarkovRunSlot {
                 name: "nightly".to_string(),
                 local_time: NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+                timezone: chrono_tz::Europe::Copenhagen,
             }],
         }
     }
@@ -2656,10 +2697,23 @@ mod tests {
     }
 
     fn slot(name: &str, hour: u32, minute: u32) -> MarkovRunSlot {
+        slot_in(name, hour, minute, chrono_tz::Europe::Copenhagen)
+    }
+
+    fn slot_in(name: &str, hour: u32, minute: u32, timezone: Tz) -> MarkovRunSlot {
         MarkovRunSlot {
             name: name.to_string(),
             local_time: NaiveTime::from_hms_opt(hour, minute, 0).unwrap(),
+            timezone,
         }
+    }
+
+    fn copenhagen(date: NaiveDate, hour: u32, minute: u32) -> DateTime<Utc> {
+        chrono_tz::Europe::Copenhagen
+            .from_local_datetime(&date.and_time(NaiveTime::from_hms_opt(hour, minute, 0).unwrap()))
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]
@@ -2667,22 +2721,48 @@ mod tests {
         let mut config = test_config();
         config.run_slots = vec![
             slot("europe_open", 10, 15),
-            slot("us_open", 15, 0),
+            slot("us_open", 16, 30),
             slot("nightly", 23, 30),
         ];
+        let date = NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
 
-        assert!(due_markov_slot(&config, NaiveTime::from_hms_opt(9, 0, 0).unwrap()).is_none());
+        assert!(due_markov_slot(&config, date, copenhagen(date, 9, 0)).is_none());
         for (hour, minute, expected) in [
             (10, 15, "europe_open"),
-            (14, 59, "europe_open"),
-            (15, 0, "us_open"),
+            (16, 29, "europe_open"),
+            (16, 30, "us_open"),
             (23, 29, "us_open"),
             (23, 30, "nightly"),
         ] {
-            let due = due_markov_slot(&config, NaiveTime::from_hms_opt(hour, minute, 0).unwrap())
+            let due = due_markov_slot(&config, date, copenhagen(date, hour, minute))
                 .expect("a slot is due");
             assert_eq!(due.name, expected, "at {hour:02}:{minute:02}");
         }
+    }
+
+    #[test]
+    fn a_slot_anchored_to_new_york_tracks_that_zone_not_copenhagen() {
+        // The US decision report is anchored to America/New_York. In mid-March
+        // the US has moved to daylight saving and Europe has not, so 10:15 in
+        // New York is 15:15 in Copenhagen rather than the usual 16:15. A slot
+        // that has to stay ahead of that report must move with it.
+        let mut config = test_config();
+        config.run_slots = vec![slot_in("us_open", 10, 15, chrono_tz::America::New_York)];
+        let march = NaiveDate::from_ymd_opt(2026, 3, 12).unwrap();
+
+        assert!(
+            due_markov_slot(&config, march, copenhagen(march, 15, 0)).is_none(),
+            "not yet due at 15:00 Copenhagen"
+        );
+        assert!(
+            due_markov_slot(&config, march, copenhagen(march, 15, 20)).is_some(),
+            "due at 15:20 Copenhagen, which is 10:20 in New York"
+        );
+
+        // In August both zones observe DST, so the same slot is an hour later.
+        let august = NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        assert!(due_markov_slot(&config, august, copenhagen(august, 16, 0)).is_none());
+        assert!(due_markov_slot(&config, august, copenhagen(august, 16, 20)).is_some());
     }
 
     #[test]
@@ -2706,7 +2786,7 @@ strategy:
 "#,
         )
         .unwrap();
-        let slots = markov_intraday_runs(&config);
+        let slots = markov_intraday_runs(&config, chrono_tz::Europe::Copenhagen);
         assert_eq!(
             slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             vec!["europe_open", "us_open"],
