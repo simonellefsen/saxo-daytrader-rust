@@ -3002,6 +3002,10 @@ mod tests {
             vec![AiProviderCapabilityPayload {
                 provider: "openrouter".to_string(),
                 model: "openai/gpt-5.5".to_string(),
+                fallback_retry_attempt_count: 2,
+                fallback_retry_completed_count: 1,
+                fallback_retry_failed_count: 1,
+                fallback_retry_completion_rate: Some(0.5),
                 observed_cost_usd: Some(0.045),
                 ..Default::default()
             }],
@@ -3010,6 +3014,11 @@ mod tests {
         let serialized = serde_json::to_value(payload).expect("matrix payload serializes");
         assert_eq!(serialized["generated_at"], "2026-08-31T09:15:00Z");
         assert_eq!(serialized["items"][0]["model"], "openai/gpt-5.5");
+        assert_eq!(serialized["items"][0]["fallback_retry_attempt_count"], 2);
+        assert_eq!(
+            serialized["items"][0]["fallback_retry_completion_rate"],
+            0.5
+        );
         assert!(serialized["items"][0].get("response_json").is_none());
         assert!(serialized["items"][0].get("error_text").is_none());
     }

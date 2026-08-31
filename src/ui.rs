@@ -5826,7 +5826,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "prompt-card",
                 h3 { "Provider Capability Matrix" }
-                p { class: "muted", "Observed local Decision Report history only. Request-contract counts show what this runtime sent; completion rate excludes in-flight reports; cost is shown only when the stored provider response supplied it. This is not a live provider catalog or price sheet." }
+                p { class: "muted", "Observed local Decision Report history only. Request-contract counts show what this runtime sent; completion rate excludes in-flight reports; fallback recovery is limited to explicit operator-confirmed fallback dry runs; cost is shown only when the stored provider response supplied it. This is not a live provider catalog or price sheet." }
                 if provider_capabilities.is_empty() {
                     div { class: "event muted", "No persisted Decision Report provider observations are available yet." }
                 } else {
@@ -5946,6 +5946,21 @@ fn ProviderCapabilityRow(
         }
         values.join(" · ")
     };
+    let fallback_retries = if row.fallback_retry_attempt_count == 0 {
+        String::new()
+    } else {
+        let completion = row
+            .fallback_retry_completion_rate
+            .map(|rate| format!("{} completion", format_percent(rate, &prefs)))
+            .unwrap_or_else(|| "no terminal sample".to_string());
+        format!(
+            "fallback retries {} · completed {} · failed {} · {}",
+            row.fallback_retry_attempt_count,
+            row.fallback_retry_completed_count,
+            row.fallback_retry_failed_count,
+            completion,
+        )
+    };
     let usage = format!(
         "prompt {} · completion {}",
         format_number(row.observed_prompt_token_count as f64, 0, &prefs),
@@ -5970,6 +5985,9 @@ fn ProviderCapabilityRow(
                 div { "{failures}" }
                 if !failure_detail.is_empty() {
                     div { class: "muted", "{failure_detail}" }
+                }
+                if !fallback_retries.is_empty() {
+                    div { class: "muted", "{fallback_retries}" }
                 }
             }
             td {

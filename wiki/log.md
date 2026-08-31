@@ -10,6 +10,11 @@ updated: 2026-08-31
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-31] decision pipeline | Measure fallback retry outcomes
+
+- Extended the bounded provider/model reliability matrix with explicit fallback-dry-run attempts, completed/failed terminal outcomes, and recovery completion rate. Regular dry-run completions now count as terminal provider evidence rather than being left out of completion-rate denominators.
+- The matrix reads only persisted model/status/pulse/request/usage metadata. It excludes retry provenance, prompts, response documents, free-form errors, credentials, and all provider/Saxo/Hermes activity; it does not select or promote a fallback model.
+
 ## [2026-08-31] decision pipeline | Add confirmed provider fallback dry runs
 
 - Added an operator-confirmed fallback form for retained `xai_error` and `dry_run_error` Decision Reports. It retries only the exact persisted prompt snapshot with a validated supplied model and the current strict response schema, while retaining source-report ID/status/model provenance in a separate fallback report.

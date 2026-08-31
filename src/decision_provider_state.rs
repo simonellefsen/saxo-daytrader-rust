@@ -21,6 +21,9 @@ struct CapabilityAccumulator {
     schema_failure_count: i64,
     timeout_failure_count: i64,
     parse_failure_count: i64,
+    fallback_retry_attempt_count: i64,
+    fallback_retry_completed_count: i64,
+    fallback_retry_failed_count: i64,
     observed_prompt_token_count: i64,
     observed_completion_token_count: i64,
     observed_cost_report_count: i64,
@@ -65,16 +68,25 @@ pub(crate) fn ai_provider_capabilities_from_rows(
             stats.fusion_plugin_request_count += 1;
         }
 
+        let status = json_text(&row, "status");
         let error_category = local_failure_category(&json_text(&row, "error_text"));
-        if json_text(&row, "status") == "completed" {
+        if terminal_completed_status(&status) {
             stats.completed_count += 1;
-        } else if !error_category.is_empty() {
+        } else if terminal_failed_status(&status) {
             stats.failed_count += 1;
             match error_category {
                 "schema" => stats.schema_failure_count += 1,
                 "timeout" => stats.timeout_failure_count += 1,
                 "parse" => stats.parse_failure_count += 1,
                 _ => {}
+            }
+        }
+        if fallback_retry_report(&row) {
+            stats.fallback_retry_attempt_count += 1;
+            if terminal_completed_status(&status) {
+                stats.fallback_retry_completed_count += 1;
+            } else if terminal_failed_status(&status) {
+                stats.fallback_retry_failed_count += 1;
             }
         }
 
@@ -99,6 +111,8 @@ pub(crate) fn ai_provider_capabilities_from_rows(
         .into_iter()
         .map(|((provider, model), stats)| {
             let terminal_count = stats.completed_count + stats.failed_count;
+            let fallback_retry_terminal_count =
+                stats.fallback_retry_completed_count + stats.fallback_retry_failed_count;
             AiProviderCapabilityPayload {
                 provider,
                 model,
@@ -114,6 +128,13 @@ pub(crate) fn ai_provider_capabilities_from_rows(
                 parse_failure_count: stats.parse_failure_count,
                 completion_rate: (terminal_count > 0)
                     .then_some(stats.completed_count as f64 / terminal_count as f64),
+                fallback_retry_attempt_count: stats.fallback_retry_attempt_count,
+                fallback_retry_completed_count: stats.fallback_retry_completed_count,
+                fallback_retry_failed_count: stats.fallback_retry_failed_count,
+                fallback_retry_completion_rate: (fallback_retry_terminal_count > 0).then_some(
+                    stats.fallback_retry_completed_count as f64
+                        / fallback_retry_terminal_count as f64,
+                ),
                 observed_prompt_token_count: stats.observed_prompt_token_count,
                 observed_completion_token_count: stats.observed_completion_token_count,
                 observed_cost_report_count: stats.observed_cost_report_count,
@@ -122,6 +143,18 @@ pub(crate) fn ai_provider_capabilities_from_rows(
             }
         })
         .collect()
+}
+
+fn terminal_completed_status(status: &str) -> bool {
+    matches!(status, "completed" | "dry_run_completed" | "xai_fallback")
+}
+
+fn terminal_failed_status(status: &str) -> bool {
+    matches!(status, "xai_error" | "dry_run_error" | "error" | "failed")
+}
+
+fn fallback_retry_report(row: &JsonValue) -> bool {
+    json_text(row, "analysis_pulse_key").starts_with("provider_fallback_dry_run:")
 }
 
 fn embedded_json(row: &JsonValue, key: &str) -> Option<JsonValue> {
@@ -258,5 +291,51 @@ mod tests {
 
         assert_eq!(matrix[0].attempt_count, 1);
         assert_eq!(matrix[0].completion_rate, None);
+    }
+
+    #[test]
+    fn fallback_retry_metrics_are_terminal_dry_run_evidence_only() {
+        let matrix = ai_provider_capabilities_from_rows(
+            vec![
+                json!({
+                    "model": "openai/known-safe",
+                    "status": "dry_run_completed",
+                    "analysis_pulse_key": "provider_fallback_dry_run:44:2026-08-31T10:00:00Z",
+                    "request_json": {"plugins": [{"id": "response-healing"}]},
+                    "response_json": null,
+                    "error_text": null
+                }),
+                json!({
+                    "model": "openai/known-safe",
+                    "status": "dry_run_error",
+                    "analysis_pulse_key": "provider_fallback_dry_run:45:2026-08-31T11:00:00Z",
+                    "request_json": {"plugins": [{"id": "response-healing"}]},
+                    "response_json": null,
+                    "error_text": "provider timed out: must-not-reach-matrix"
+                }),
+                json!({
+                    "model": "openai/known-safe",
+                    "status": "dry_run_completed",
+                    "analysis_pulse_key": "manual_model_comparison:2026-08-31T12:00:00Z",
+                    "request_json": {"plugins": [{"id": "response-healing"}]},
+                    "response_json": null,
+                    "error_text": null
+                }),
+            ],
+            600,
+        );
+
+        assert_eq!(matrix.len(), 1);
+        let row = &matrix[0];
+        assert_eq!(row.completed_count, 2);
+        assert_eq!(row.failed_count, 1);
+        assert_eq!(row.completion_rate, Some(2.0 / 3.0));
+        assert_eq!(row.fallback_retry_attempt_count, 2);
+        assert_eq!(row.fallback_retry_completed_count, 1);
+        assert_eq!(row.fallback_retry_failed_count, 1);
+        assert_eq!(row.fallback_retry_completion_rate, Some(0.5));
+        let serialized = serde_json::to_string(row).expect("fallback metrics serialize");
+        assert!(!serialized.contains("provider_fallback_dry_run:44"));
+        assert!(!serialized.contains("must-not-reach-matrix"));
     }
 }

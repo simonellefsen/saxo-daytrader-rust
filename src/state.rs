@@ -14560,7 +14560,7 @@ impl AppState {
     ) -> Result<Vec<AiProviderCapabilityPayload>> {
         let rows = self
             .select_json(&format!(
-                "SELECT model, status, request_json, response_json, error_text
+                "SELECT model, status, analysis_pulse_key, request_json, response_json, error_text
                  FROM decision_reports
                  ORDER BY created_at DESC, id DESC
                  LIMIT {}",
