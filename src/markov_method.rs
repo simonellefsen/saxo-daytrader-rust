@@ -1436,15 +1436,21 @@ pub async fn latest_markov_signal_count_filtered(
 /// Returns the latest persisted signal for one asset. This is read-only
 /// attribution context; it does not refresh a signal, call Saxo, or influence
 /// Markov scheduling and trading decisions.
+/// The freshest signal for one symbol, whichever run produced it.
+///
+/// Deliberately *not* scoped to the newest run. A targeted refresh writes a run
+/// containing only the symbols it was asked for, so pinning to the newest run
+/// reports every other symbol as unavailable until the next full pass -- which
+/// would blank the Markov column for exactly the candidates a refresh was meant
+/// to leave untouched.
 pub async fn latest_markov_signal_summary(state: &AppState, symbol: &str) -> Result<JsonValue> {
     let sql = format!(
         "SELECT run_date, status, current_state, current_close, rolling_return,
                 bull_prob, sideways_prob, bear_prob, signed_signal, direction, conviction,
                 error_text
          FROM markov_asset_signals
-         WHERE symbol = '{}' AND run_id = (
-            SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
-         )
+         WHERE symbol = '{}'
+         ORDER BY run_date DESC, created_at DESC
          LIMIT 1",
         sql_escape(symbol)
     );
@@ -2791,6 +2797,82 @@ strategy:
             slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             vec!["europe_open", "us_open"],
             "sorted, de-duplicated, typo and disabled entries dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_targeted_refresh_does_not_blank_the_other_symbols() {
+        // Regression for 2026-08-31 report 257: a one-symbol targeted refresh
+        // became the newest run, and the per-symbol lookup was scoped to that
+        // run, so the rebuilt preflight reported DE:xnys Markov as unavailable
+        // while a fresh 0.1281 signal existed. The refresh is meant to improve
+        // one symbol's evidence, never to remove anyone else's.
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory markov database");
+        for sql in create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("create markov tables");
+        }
+        let state = AppState {
+            config_path: std::path::PathBuf::from("markov-test.yaml"),
+            config: serde_yaml::from_str("{}").expect("parse test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+        let insert = |run_id: &str, created_at: &str, symbol: &str, signal: f64| {
+            format!(
+                "INSERT INTO markov_asset_signals
+                 (id, run_id, created_at, run_date, status, symbol, window_days, threshold,
+                  horizon_minutes, sample_count, min_labeled_days, signal_horizon_days,
+                  signed_signal, direction)
+                 VALUES ('{symbol}-{run_id}', '{run_id}', '{created_at}', '2026-08-31', 'ok',
+                         '{symbol}', 20, 0.05, 60, 900, 60, 5, {signal}, 'long')"
+            )
+        };
+        // A full pass covering both symbols, then a targeted refresh of one.
+        for sql in [
+            insert("full", "2026-08-31T14:38:38Z", "DE:xnys", 0.1281),
+            insert("full", "2026-08-31T14:38:38Z", "PLTR:xnas", 0.1289),
+            // Distinct value so the assertions can tell which row won.
+            insert("targeted", "2026-08-31T14:54:18Z", "PLTR:xnas", 0.3000),
+        ] {
+            sqlx::query(&sql)
+                .execute(&state.pool)
+                .await
+                .expect("insert signal");
+        }
+
+        let refreshed = latest_markov_signal_summary(&state, "PLTR:xnas")
+            .await
+            .expect("read refreshed symbol");
+        assert_eq!(
+            refreshed.get("signed_signal").and_then(JsonValue::as_f64),
+            Some(0.3),
+            "the refreshed symbol should resolve to the targeted row, not the full run"
+        );
+
+        let untouched = latest_markov_signal_summary(&state, "DE:xnys")
+            .await
+            .expect("read untouched symbol");
+        assert!(
+            !untouched.is_null(),
+            "a symbol absent from the targeted refresh must keep its last full-run signal"
+        );
+        assert_eq!(
+            untouched.get("status").and_then(JsonValue::as_str),
+            Some("ok")
+        );
+        assert_eq!(
+            untouched.get("signed_signal").and_then(JsonValue::as_f64),
+            Some(0.1281),
+            "and it should still carry its own full-run value"
         );
     }
 }

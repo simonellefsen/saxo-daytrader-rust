@@ -98,6 +98,15 @@ Runs are keyed by named slots, deduplicated on `created_at` within the slot
 window rather than by date alone. A config with only `daily_time` collapses to
 the previous one-run-per-day behaviour.
 
+**A targeted refresh writes a run containing only the symbols it names.** Any
+"latest signal" lookup must therefore resolve per *symbol*, ordering by
+`run_date DESC, created_at DESC`, never by pinning to the newest run. Scoping to
+the newest run reports every symbol the refresh did not name as unavailable --
+which is precisely backwards, since a refresh exists to improve one symbol's
+evidence without touching anyone else's. `latest_markov_run` is the deliberate
+exception: it excludes targeted runs so a three-symbol refresh cannot be read as
+a degraded nightly pass.
+
 Two scheduling facts constrain slot placement:
 
 - The scheduler runs Markov **after** decision reports within one tick, so a

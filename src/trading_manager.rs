@@ -4602,13 +4602,17 @@ async fn apply_verified_technical(
 
 /// Latest Markov regime signal for one symbol from the most recent run.
 /// Queried server-side so the gate never trusts model-reported signal values.
+/// The freshest signal for one symbol, whichever run produced it.
+///
+/// See `markov_method::latest_markov_signal_summary`: scoping this to the
+/// newest run would make a targeted refresh suppress the Markov starter gate
+/// for every candidate that refresh did not name.
 async fn latest_markov_signal(state: &AppState, symbol: &str) -> Result<Option<JsonValue>> {
     let sql = format!(
         "SELECT run_date, status, current_state, current_close, signed_signal, direction, conviction
          FROM markov_asset_signals
-         WHERE symbol = '{}' AND run_id = (
-            SELECT id FROM markov_signal_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
-         )
+         WHERE symbol = '{}'
+         ORDER BY run_date DESC, created_at DESC
          LIMIT 1",
         sql_escape(symbol)
     );
@@ -7028,6 +7032,7 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
+                created_at TEXT NOT NULL,
                 run_date TEXT NOT NULL,
                 status TEXT NOT NULL,
                 current_state TEXT,
@@ -7096,9 +7101,9 @@ mod tests {
         .await
         .expect("seed markov run");
         sqlx::query(
-            "INSERT INTO markov_asset_signals (run_id, symbol, run_date, status, current_state, current_close, signed_signal, direction, conviction)
-             VALUES (1, 'CSCO:xnas', '2026-07-15', 'ok', 'Bull', 60.0, 0.31, 'long', 0.6),
-                    (1, 'NNIT:xcse', '2026-07-15', 'ok', 'Bear', 38.0, -0.32, 'short', 0.5)",
+            "INSERT INTO markov_asset_signals (run_id, symbol, created_at, run_date, status, current_state, current_close, signed_signal, direction, conviction)
+             VALUES (1, 'CSCO:xnas', '2026-07-15T21:32:00Z', '2026-07-15', 'ok', 'Bull', 60.0, 0.31, 'long', 0.6),
+                    (1, 'NNIT:xcse', '2026-07-15T21:32:00Z', '2026-07-15', 'ok', 'Bear', 38.0, -0.32, 'short', 0.5)",
         )
         .execute(&state.pool)
         .await
@@ -7160,8 +7165,8 @@ mod tests {
         .await
         .expect("seed stale markov run");
         sqlx::query(
-            "INSERT INTO markov_asset_signals (run_id, symbol, run_date, status, current_state, current_close, signed_signal, direction, conviction)
-             VALUES (1, 'ARM:xnas', '2026-07-05', 'ok', 'Bear', 100.0, -0.4, 'short', 0.5)",
+            "INSERT INTO markov_asset_signals (run_id, symbol, created_at, run_date, status, current_state, current_close, signed_signal, direction, conviction)
+             VALUES (1, 'ARM:xnas', '2026-07-05T21:32:00Z', '2026-07-05', 'ok', 'Bear', 100.0, -0.4, 'short', 0.5)",
         )
         .execute(&state.pool)
         .await
