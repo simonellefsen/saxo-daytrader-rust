@@ -3400,6 +3400,16 @@ pub struct SupportRiskEvidencePayload {
 pub struct DecisionGateReplayPayload {
     pub status: String,
     pub run_count: usize,
+    /// Distinct Markov configurations and gate thresholds across the retained
+    /// runs. More than one means the comparison pools evidence produced by
+    /// different models, which a threshold proposal must not treat as one
+    /// sample.
+    #[serde(default)]
+    pub evidence_generations: Vec<JsonValue>,
+    #[serde(default)]
+    pub evidence_is_mixed: bool,
+    #[serde(default)]
+    pub evidence_caveat: String,
     pub scenarios: Vec<DecisionGateReplayScenarioPayload>,
     pub safety: String,
     pub interpretation: String,

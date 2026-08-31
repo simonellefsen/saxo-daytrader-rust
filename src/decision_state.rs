@@ -57,6 +57,9 @@ pub(crate) fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayP
     DecisionGateReplayPayload {
         status: "not_loaded".to_string(),
         run_count: 0,
+        evidence_generations: Vec::new(),
+        evidence_is_mixed: false,
+        evidence_caveat: String::new(),
         scenarios: Vec::new(),
         safety: "not_loaded_outside_decisions_tab".to_string(),
         interpretation: String::new(),
