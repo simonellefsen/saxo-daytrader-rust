@@ -33,6 +33,38 @@ const SUPPORT_SHORT_WINDOW: usize = 252;
 const SUPPORT_LONG_WINDOW: usize = 1_260;
 const SUPPORT_PIVOT_RADIUS: usize = 2;
 
+/// The only horizon these indicators are defined for.
+pub(crate) const DAILY_HORIZON_MINUTES: i64 = 1440;
+
+/// Force the chart horizon back to daily, warning when configuration asked for
+/// anything else.
+///
+/// Every window in this module is a hardcoded **bar count** named for a daily
+/// meaning: `RSI_PERIOD` 14, `ATR_PERIOD` 14, the MACD 12/26/9,
+/// `RESISTANCE_LOOKBACK` 60, `SUPPORT_SHORT_WINDOW` 252 ("one trading year")
+/// and `SUPPORT_LONG_WINDOW` 1260 ("five trading years"). `horizon_minutes` is
+/// configurable and contracted, so an intraday value would silently reinterpret
+/// a 14-day RSI as a 14-hour one and a one-year support window as about 28
+/// days, with no error and a plausible-looking output. `markov_method` scales
+/// its tunings instead, because a Markov regime window has no canonical
+/// duration; these indicators do, so the right move is to refuse the horizon
+/// rather than rescale a definition.
+///
+/// Clamping rather than failing: an empty indicator run leaves the technical
+/// gate with no evidence, which blocks every BUY. Daily is what the constants
+/// already mean, so it is also the correct reading of the intent.
+fn daily_horizon_minutes(configured: i64) -> i64 {
+    if configured != DAILY_HORIZON_MINUTES {
+        warn!(
+            configured,
+            using = DAILY_HORIZON_MINUTES,
+            "daily indicator windows are fixed bar counts defined on daily bars; \
+             ignoring the configured horizon"
+        );
+    }
+    DAILY_HORIZON_MINUTES
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct IndicatorConfig {
     pub(crate) enabled: bool,
@@ -97,7 +129,9 @@ pub(crate) fn indicator_config(state: &AppState) -> IndicatorConfig {
         timezone,
         daily_time,
         run_weekdays_only: yaml_bool(&state.config, &key("run_weekdays_only")).unwrap_or(true),
-        horizon_minutes: yaml_i64(&state.config, &key("horizon_minutes")).unwrap_or(1440),
+        horizon_minutes: daily_horizon_minutes(
+            yaml_i64(&state.config, &key("horizon_minutes")).unwrap_or(DAILY_HORIZON_MINUTES),
+        ),
         sample_count: yaml_i64(&state.config, &key("sample_count"))
             .unwrap_or(260)
             .max(60) as usize,
@@ -1229,5 +1263,41 @@ mod tests {
         assert_eq!(support.break_risk_label, "high");
         assert!(support.confidence > 0.2);
         assert_eq!(support.touch_count, 2);
+    }
+
+    #[test]
+    fn the_indicator_horizon_stays_daily_whatever_configuration_asks_for() {
+        // Every window in this module is a bar count named for a daily meaning.
+        // An intraday horizon would make RSI-14 a fourteen-hour RSI and the
+        // 252-bar "one trading year" support window about 28 days, silently.
+        // This is the trap that bit markov_method the same day, which scales
+        // instead -- correct there, because a regime window has no canonical
+        // duration, and wrong here, because RSI-14 does.
+        assert_eq!(
+            daily_horizon_minutes(DAILY_HORIZON_MINUTES),
+            DAILY_HORIZON_MINUTES
+        );
+        for configured in [1, 15, 30, 60, 240, 720, 10080] {
+            assert_eq!(
+                daily_horizon_minutes(configured),
+                DAILY_HORIZON_MINUTES,
+                "configured horizon {configured} must not reach the indicator windows"
+            );
+        }
+    }
+
+    #[test]
+    fn the_support_windows_still_mean_what_their_names_say() {
+        // Guards the constants the clamp exists to protect: if one is ever
+        // retuned, the "one year"/"five years" reading in the docs and in the
+        // Support/Risk projection has to be revisited with it.
+        assert_eq!(SUPPORT_SHORT_WINDOW, 252, "one trading year in daily bars");
+        assert_eq!(
+            SUPPORT_LONG_WINDOW, 1_260,
+            "five trading years in daily bars"
+        );
+        assert_eq!(RSI_PERIOD, 14);
+        assert_eq!(ATR_PERIOD, 14);
+        assert_eq!((MACD_FAST, MACD_SLOW, MACD_SIGNAL), (12, 26, 9));
     }
 }
