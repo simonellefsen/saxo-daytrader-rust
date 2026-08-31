@@ -1005,6 +1005,13 @@ async fn run_exists(state: &AppState, run_date: NaiveDate) -> Result<bool> {
 
 /// Latest stored indicator signal for one symbol, if the most recent run has
 /// one. Used by the Trading Manager to verify model claims server-side.
+/// The freshest indicator row for one symbol, whichever run produced it.
+///
+/// Resolved per symbol rather than pinned to the newest run. Indicator runs
+/// currently always cover the full universe, so the two are equivalent today --
+/// but the Markov path had the identical query and a partial run made every
+/// other symbol read as unavailable, so this is the shape that stays correct if
+/// a targeted indicator refresh is ever added.
 pub(crate) async fn latest_indicator_signal(
     state: &AppState,
     symbol: &str,
@@ -1017,9 +1024,8 @@ pub(crate) async fn latest_indicator_signal(
                 support_touch_count, trend_bias, sentiment,
                 confluence_count, min_confluences, confluences_json
          FROM daily_indicator_signals
-         WHERE symbol = '{}' AND run_id = (
-            SELECT id FROM daily_indicator_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
-         )
+         WHERE symbol = '{}'
+         ORDER BY run_date DESC, created_at DESC
          LIMIT 1",
         sql_escape(symbol)
     );

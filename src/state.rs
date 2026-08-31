@@ -10683,9 +10683,8 @@ impl AppState {
                     support_confidence, support_history_coverage, support_touch_count,
                     trend_bias, sentiment, confluence_count, min_confluences, error_text
              FROM daily_indicator_signals
-             WHERE symbol = '{}' AND run_id = (
-                SELECT id FROM daily_indicator_runs ORDER BY run_date DESC, created_at DESC LIMIT 1
-             )
+             WHERE symbol = '{}'
+             ORDER BY run_date DESC, created_at DESC
              LIMIT 1",
             sql_escape(symbol)
         );

@@ -2499,7 +2499,7 @@ async fn run_for_report(
             "symbol": order.symbol,
             "action": order.action,
             "gate_code": "approved",
-            "final_technical": compact_hermes_preflight_technical(order),
+            "final_technical": compact_hermes_preflight_technical(order, None, Utc::now().date_naive()),
             "final_cost_guard": compact_cost_guard(order),
             "final_holding_limit": compact_holding_limit(order),
             "final_concentration": compact_concentration(order),
@@ -2711,6 +2711,13 @@ async fn hermes_decision_preflight_bundle(
             ),
             Err(_) => json!({"status": "unavailable"}),
         };
+        // The confluence evidence's own age, from the indicator run that
+        // produced it rather than from the report that quoted it.
+        let verified_technical =
+            crate::daily_indicators::latest_indicator_signal(state, &order.symbol)
+                .await
+                .ok()
+                .flatten();
         let quarantine = matching_instrument_quarantine(active_quarantines, order).map(|item| {
             json!({
                 "active": !item.override_active,
@@ -2748,7 +2755,7 @@ async fn hermes_decision_preflight_bundle(
             },
             "sellable_quantity": sellable_quantity,
             "sellable_context_status": sellable_context_status,
-            "technical": compact_hermes_preflight_technical(order),
+            "technical": compact_hermes_preflight_technical(order, verified_technical.as_ref(), today),
             "markov": markov_signal,
         }));
     }
@@ -2860,7 +2867,27 @@ fn compact_hermes_preflight_completion_quality(report_json: &JsonValue) -> JsonV
     })
 }
 
-fn compact_hermes_preflight_technical(order: &CandidateOrder) -> JsonValue {
+/// Project a candidate's technical evidence, stamped with a server-verified age.
+///
+/// The reported block comes from the decision report, because that is what the
+/// candidate was actually judged on. Its age does not: `run_date` and `source`
+/// were read here but never written, because `technical_metadata_schema`
+/// declares `additionalProperties: false` and has no date field, so a provider
+/// structurally cannot supply one. Meanwhile `markov_metadata_schema` requires
+/// `run_date`, so a reader could see how old the regime signal was and had no
+/// way at all to see how old the confluence evidence was.
+///
+/// That asymmetry stopped being cosmetic on 2026-08-31, when Markov moved to
+/// three refreshes a weekday while the indicators stayed on one nightly pass:
+/// a 10:45 report now reads a same-morning regime signal beside overnight
+/// technicals, and `min_confluences` gates on the older half. The age is a
+/// server-side fact rather than something to ask a model for, so it is looked
+/// up here and reported next to the age the Markov block already carries.
+fn compact_hermes_preflight_technical(
+    order: &CandidateOrder,
+    verified: Option<&JsonValue>,
+    today: chrono::NaiveDate,
+) -> JsonValue {
     let technical = order
         .raw
         .get("strategy_metadata")
@@ -2868,10 +2895,15 @@ fn compact_hermes_preflight_technical(order: &CandidateOrder) -> JsonValue {
     let Some(technical) = technical else {
         return json!({"status": "unavailable"});
     };
+    let run_date = verified
+        .and_then(|row| row.get("run_date"))
+        .and_then(JsonValue::as_str)
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
     json!({
         "status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
-        "source": technical.get("source").cloned().unwrap_or(JsonValue::Null),
-        "run_date": technical.get("run_date").cloned().unwrap_or(JsonValue::Null),
+        "source": if verified.is_some() { json!("server_verified_indicator_run") } else { JsonValue::Null },
+        "run_date": run_date.map(|date| date.to_string()),
+        "age_days": run_date.map(|date| (today - date).num_days()),
         "sentiment": technical.get("sentiment").cloned().unwrap_or(JsonValue::Null),
         "trend_bias": technical.get("trend_bias").cloned().unwrap_or(JsonValue::Null),
         "confluence_count": technical.get("confluence_count").cloned().unwrap_or(JsonValue::Null),
@@ -3465,7 +3497,7 @@ fn compact_trade_thesis(
         })
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let technical = compact_hermes_preflight_technical(order);
+    let technical = compact_hermes_preflight_technical(order, None, Utc::now().date_naive());
     let markov = order
         .raw
         .get("strategy_metadata")
@@ -5485,7 +5517,7 @@ fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
         // The final gate may have replaced model-provided technical metadata
         // with a fresh database signal. Persist only compact safe fields so the
         // audit UI can explain the decision without raw inputs.
-        "final_technical": compact_hermes_preflight_technical(order),
+        "final_technical": compact_hermes_preflight_technical(order, None, Utc::now().date_naive()),
         "final_cost_guard": compact_cost_guard(order),
         "final_holding_limit": compact_holding_limit(order),
         "final_concentration": compact_concentration(order),
@@ -7107,6 +7139,7 @@ mod tests {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
+                created_at TEXT NOT NULL,
                 run_date TEXT NOT NULL,
                 status TEXT NOT NULL,
                 close REAL,
@@ -7198,9 +7231,9 @@ mod tests {
         .await
         .expect("seed broker positions");
         sqlx::query(
-            "INSERT INTO daily_indicator_signals (run_id, symbol, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
-             VALUES (1, 'ARM:xnas', '2026-07-15', 'ok', 147.2, 'neutral', 'HOLD', 1, 3),
-                    (1, 'CSCO:xnas', '2026-07-15', 'ok', 60.0, 'neutral', 'HOLD', 1, 3)",
+            "INSERT INTO daily_indicator_signals (run_id, symbol, created_at, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
+             VALUES (1, 'ARM:xnas', '2026-07-15T21:45:00Z', '2026-07-15', 'ok', 147.2, 'neutral', 'HOLD', 1, 3),
+                    (1, 'CSCO:xnas', '2026-07-15T21:45:00Z', '2026-07-15', 'ok', 60.0, 'neutral', 'HOLD', 1, 3)",
         )
         .execute(&state.pool)
         .await
@@ -7263,8 +7296,8 @@ mod tests {
         .await
         .expect("seed broker position");
         sqlx::query(
-            "INSERT INTO daily_indicator_signals (run_id, symbol, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
-             VALUES (1, 'ARM:xnas', '2026-07-05', 'ok', 100.0, 'neutral', 'HOLD', 1, 3)",
+            "INSERT INTO daily_indicator_signals (run_id, symbol, created_at, run_date, status, close, trend_bias, sentiment, confluence_count, min_confluences)
+             VALUES (1, 'ARM:xnas', '2026-07-05T21:45:00Z', '2026-07-05', 'ok', 100.0, 'neutral', 'HOLD', 1, 3)",
         )
         .execute(&state.pool)
         .await
@@ -8589,5 +8622,51 @@ mod tests {
                 "{path}: a soft reduction of {multiplier} does not reduce"
             );
         }
+    }
+
+    #[test]
+    fn technical_evidence_reports_its_own_age_beside_the_markov_signal() {
+        // Before 2026-08-31 both sources ran once a night, so their ages were
+        // the same by construction and only Markov reported one. Markov now
+        // refreshes three times a weekday while the indicators still run once,
+        // so a report can be judging a same-morning regime signal against
+        // overnight confluence evidence with nothing saying so.
+        let order = CandidateOrder::from_json(json!({
+            "symbol": "PLTR:xnas",
+            "action": "BUY",
+            "quantity": 8.0,
+            "order_type": "Limit",
+            "strategy_key": "us_open_followup:2026-08-31:PLTR:xnas:BUY",
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "sentiment": "BUY",
+                    "trend_bias": "bullish",
+                    "confluence_count": 5,
+                    "min_confluences": 3
+                }
+            }
+        }))
+        .expect("valid candidate order");
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        let verified = json!({"run_date": "2026-08-30", "status": "ok"});
+
+        let stamped = compact_hermes_preflight_technical(&order, Some(&verified), today);
+        assert_eq!(stamped["run_date"], "2026-08-30");
+        assert_eq!(
+            stamped["age_days"], 1,
+            "the confluence evidence is a day old"
+        );
+        assert_eq!(stamped["source"], "server_verified_indicator_run");
+        // The judgement itself still comes from the report, not the lookup.
+        assert_eq!(stamped["confluence_count"], 5);
+        assert_eq!(stamped["sentiment"], "BUY");
+
+        // Without a verified run the age is absent rather than guessed at.
+        let unstamped = compact_hermes_preflight_technical(&order, None, today);
+        assert!(unstamped["run_date"].is_null());
+        assert!(unstamped["age_days"].is_null());
+        assert!(unstamped["source"].is_null());
+        assert_eq!(unstamped["confluence_count"], 5);
     }
 }
