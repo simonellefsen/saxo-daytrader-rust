@@ -2018,12 +2018,19 @@ async fn run_for_report(
                 match advice.max_quantity {
                     Some(max_quantity) if max_quantity >= 1.0 && max_quantity < order.quantity => {
                         let original_quantity = order.quantity;
+                        let original_value = order.estimated_value_dkk.unwrap_or(0.0);
                         let new_quantity = max_quantity.floor();
                         let factor = new_quantity / original_quantity;
                         order.quantity = new_quantity;
                         if let Some(value) = order.estimated_value_dkk {
                             order.estimated_value_dkk = Some(value * factor);
                         }
+                        record_size_reduction(
+                            &mut order,
+                            "Hermes advisory reduce",
+                            original_quantity,
+                            original_value,
+                        );
                     }
                     Some(max_quantity) if max_quantity < 1.0 => {
                         skipped.push(skip_order(
@@ -2150,6 +2157,12 @@ async fn run_for_report(
                     let original_quantity = order.quantity;
                     order.quantity = affordable_quantity;
                     order.estimated_value_dkk = Some(per_share_dkk * affordable_quantity);
+                    record_size_reduction(
+                        &mut order,
+                        "available cash budget",
+                        original_quantity,
+                        estimated_value_dkk,
+                    );
                     if let Some(metadata) = order
                         .raw
                         .as_object_mut()
@@ -2185,13 +2198,13 @@ async fn run_for_report(
             let floor = buy_value_floor_dkk(&order.symbol);
             let estimated = order.estimated_value_dkk.unwrap_or(0.0);
             if estimated < floor {
-                skipped.push(skip_order(
+                let reason = commission_floor_skip_reason(
                     &order,
-                    &format!(
-                        "BUY of {estimated:.0} DKK is below the commission-efficiency floor of {floor:.0} DKK (minimum commission must stay under {:.2}% per side).",
-                        max_commission_pct_per_side * 100.0
-                    ),
-                ));
+                    estimated,
+                    floor,
+                    max_commission_pct_per_side,
+                );
+                skipped.push(skip_order(&order, &reason));
                 continue;
             }
         } else if order.estimated_value_dkk.unwrap_or(0.0) < min_trade_value_dkk {
@@ -5361,6 +5374,88 @@ async fn broker_position_snapshots_available(state: &AppState) -> Result<bool> {
         > 0)
 }
 
+/// Record that this manager cycle shrank a BUY, and why.
+///
+/// Three separate caps can downsize a clip -- the cash budget, Hermes advisory
+/// reduce, and the risk-per-trade / position-weight caps -- and each is applied
+/// well before the commission-efficiency floor is tested. Without a trail the
+/// floor rejection reads as if the model had proposed the small size, when the
+/// manager itself produced it.
+fn record_size_reduction(
+    order: &mut CandidateOrder,
+    cause: &str,
+    from_quantity: f64,
+    from_value_dkk: f64,
+) {
+    let entry = json!({
+        "cause": cause,
+        "from_quantity": from_quantity,
+        "to_quantity": order.quantity,
+        "from_value_dkk": from_value_dkk,
+        "to_value_dkk": order.estimated_value_dkk.unwrap_or(0.0),
+    });
+    if let Some(metadata) = order
+        .raw
+        .as_object_mut()
+        .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+        .and_then(JsonValue::as_object_mut)
+    {
+        metadata
+            .entry("size_reductions")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .map(|list| list.push(entry));
+    }
+}
+
+/// Explain a commission-floor rejection in terms of what actually produced the
+/// size, naming the caps that shrank it and whether the original would have
+/// cleared.
+fn commission_floor_skip_reason(
+    order: &CandidateOrder,
+    estimated: f64,
+    floor: f64,
+    max_pct: f64,
+) -> String {
+    let base = format!(
+        "BUY of {estimated:.0} DKK is below the commission-efficiency floor of {floor:.0} DKK (minimum commission must stay under {:.2}% per side).",
+        max_pct * 100.0
+    );
+    let reductions = order
+        .raw
+        .get("strategy_metadata")
+        .and_then(|metadata| metadata.get("size_reductions"))
+        .and_then(JsonValue::as_array)
+        .filter(|list| !list.is_empty());
+    let Some(reductions) = reductions else {
+        return base;
+    };
+    let causes = reductions
+        .iter()
+        .filter_map(|entry| entry.get("cause").and_then(JsonValue::as_str))
+        .collect::<Vec<_>>()
+        .join(", then ");
+    let original_quantity = reductions
+        .first()
+        .and_then(|entry| entry.get("from_quantity"))
+        .and_then(JsonValue::as_f64)
+        .unwrap_or(order.quantity);
+    let original_value = reductions
+        .first()
+        .and_then(|entry| entry.get("from_value_dkk"))
+        .and_then(JsonValue::as_f64)
+        .unwrap_or(0.0);
+    let verdict = if original_value >= floor {
+        " The proposed size would have cleared the floor, so the reduction is what blocked it."
+    } else {
+        " The proposed size was already below the floor."
+    };
+    format!(
+        "{base} Downsized from {original_quantity:.0} to {:.0} shares ({original_value:.0} -> {estimated:.0} DKK) by: {causes}.{verdict}",
+        order.quantity
+    )
+}
+
 fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
     json!({
         "strategy_key": order.strategy_key,
@@ -8362,5 +8457,88 @@ mod tests {
 
         let advice = advice_row("review", json!(null));
         assert!(advice.honored_data_requests().is_empty());
+    }
+
+    #[test]
+    fn a_commission_floor_skip_names_what_shrank_the_order() {
+        // Report 257: the model proposed 8 PLTR (9,594 DKK, above the 7,021
+        // floor), Hermes capped it at 4 (4,797 DKK), and the floor check then
+        // rejected it with a message that read as though the model had asked
+        // for 4,797 DKK. The operator could not see that the reduction, not
+        // the proposal, was what blocked the trade.
+        let mut order = CandidateOrder::from_json(json!({
+            "symbol": "PLTR:xnas",
+            "action": "BUY",
+            "quantity": 8.0,
+            "order_type": "Limit",
+            "strategy_key": "us_open_followup:2026-08-31:PLTR:xnas:BUY",
+            "estimated_value_dkk": 9594.0,
+        }))
+        .expect("valid candidate order");
+        order.quantity = 4.0;
+        order.estimated_value_dkk = Some(4797.0);
+        record_size_reduction(&mut order, "Hermes advisory reduce", 8.0, 9594.0);
+
+        let reason = commission_floor_skip_reason(&order, 4797.0, 7021.0, 0.003);
+        assert!(reason.contains("below the commission-efficiency floor"));
+        assert!(reason.contains("Downsized from 8 to 4 shares"), "{reason}");
+        assert!(reason.contains("Hermes advisory reduce"), "{reason}");
+        assert!(
+            reason.contains("would have cleared the floor"),
+            "the operator needs to know the proposal was viable: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_genuinely_small_proposal_is_not_blamed_on_a_reduction() {
+        let mut order = CandidateOrder::from_json(json!({
+            "symbol": "DE:xnys",
+            "action": "BUY",
+            "quantity": 1.0,
+            "order_type": "Limit",
+            "strategy_key": "us_open_followup:2026-08-31:DE:xnys:BUY",
+            "estimated_value_dkk": 4058.0,
+        }))
+        .expect("valid candidate order");
+        // No reduction recorded: the model asked for exactly this size.
+        let reason = commission_floor_skip_reason(&order, 4058.0, 7021.0, 0.003);
+        assert!(reason.contains("below the commission-efficiency floor"));
+        assert!(!reason.contains("Downsized"), "{reason}");
+
+        // A reduction that was already doomed says so rather than implying the
+        // proposal was viable.
+        order.quantity = 1.0;
+        record_size_reduction(&mut order, "available cash budget", 2.0, 5000.0);
+        let reason = commission_floor_skip_reason(&order, 4058.0, 7021.0, 0.003);
+        assert!(reason.contains("already below the floor"), "{reason}");
+    }
+
+    #[test]
+    fn successive_reductions_are_all_named_in_order() {
+        let mut order = CandidateOrder::from_json(json!({
+            "symbol": "AUTO:xosl",
+            "action": "BUY",
+            "quantity": 800.0,
+            "order_type": "Limit",
+            "strategy_key": "europe_open_followup:2026-08-24:AUTO:xosl:BUY",
+            "estimated_value_dkk": 8657.0,
+        }))
+        .expect("valid candidate order");
+        order.quantity = 600.0;
+        order.estimated_value_dkk = Some(6493.0);
+        record_size_reduction(&mut order, "available cash budget", 800.0, 8657.0);
+        order.quantity = 496.0;
+        order.estimated_value_dkk = Some(5367.0);
+        record_size_reduction(&mut order, "position-weight cap", 600.0, 6493.0);
+
+        let reason = commission_floor_skip_reason(&order, 5367.0, 8320.0, 0.003);
+        assert!(
+            reason.contains("available cash budget, then position-weight cap"),
+            "both caps should be named in the order they applied: {reason}"
+        );
+        assert!(
+            reason.contains("Downsized from 800 to 496 shares"),
+            "{reason}"
+        );
     }
 }
