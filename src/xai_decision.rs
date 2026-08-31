@@ -15,7 +15,7 @@ use crate::{
     },
     decision_quality::completion_quality_audit,
     models::{DecisionReportSchemaHealth, DecisionReportSchemaIssue},
-    state::AppState,
+    state::{AppState, validated_ai_model},
 };
 
 const DEFAULT_DUE_WINDOW_MINUTES: i64 = 20;
@@ -227,19 +227,55 @@ pub async fn submit_manual_dry_run_decision_report(state: &AppState) -> Result<J
     submit_manual_decision_report_with_mode(state, DecisionReportSubmissionMode::DryRun).await
 }
 
+/// Runs a deliberately non-actionable comparison report with an explicitly
+/// supplied model. It does not update settings, queue candidates, invoke the
+/// Trading Manager, or reach Saxo.
+pub async fn submit_manual_model_comparison_report(
+    state: &AppState,
+    model: &str,
+) -> Result<JsonValue> {
+    let model = validated_ai_model(model)?;
+    submit_manual_decision_report_with_mode_and_model(
+        state,
+        DecisionReportSubmissionMode::DryRun,
+        Some(&model),
+    )
+    .await
+}
+
 async fn submit_manual_decision_report_with_mode(
     state: &AppState,
     mode: DecisionReportSubmissionMode,
 ) -> Result<JsonValue> {
+    submit_manual_decision_report_with_mode_and_model(state, mode, None).await
+}
+
+async fn submit_manual_decision_report_with_mode_and_model(
+    state: &AppState,
+    mode: DecisionReportSubmissionMode,
+    model_override: Option<&str>,
+) -> Result<JsonValue> {
     let now = Utc::now();
     let pulse = DecisionPulse {
-        key: format!("manual:{}", now.format("%Y-%m-%dT%H:%M:%SZ")),
-        label: if mode.is_dry_run() {
+        key: format!(
+            "{}:{}",
+            if model_override.is_some() {
+                "manual_model_comparison"
+            } else {
+                "manual"
+            },
+            now.format("%Y-%m-%dT%H:%M:%SZ")
+        ),
+        label: if model_override.is_some() {
+            "Manual Model Comparison (Dry Run)".to_string()
+        } else if mode.is_dry_run() {
             "Manual Decision Report (Dry Run)".to_string()
         } else {
             "Manual Decision Report".to_string()
         },
-        kind: if mode.is_dry_run() {
+        kind: if model_override.is_some() {
+            "manual_model_comparison".to_string()
+        } else if mode.is_dry_run() {
             "manual_dry_run".to_string()
         } else {
             "manual".to_string()
@@ -259,7 +295,7 @@ async fn submit_manual_decision_report_with_mode(
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
     };
-    submit_deferred_report(state, &pulse, true, mode).await
+    submit_deferred_report(state, &pulse, true, mode, model_override).await
 }
 
 async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
@@ -287,8 +323,14 @@ async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
             continue;
         }
         submitted.push(
-            submit_deferred_report(state, &pulse, false, DecisionReportSubmissionMode::Live)
-                .await?,
+            submit_deferred_report(
+                state,
+                &pulse,
+                false,
+                DecisionReportSubmissionMode::Live,
+                None,
+            )
+            .await?,
         );
     }
     Ok(json!({
@@ -302,11 +344,15 @@ async fn submit_deferred_report(
     pulse: &DecisionPulse,
     manual: bool,
     mode: DecisionReportSubmissionMode,
+    model_override: Option<&str>,
 ) -> Result<JsonValue> {
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt = build_decision_prompt(state, pulse, manual).await?;
     let provider = ai_provider(state);
-    let model = state.effective_xai_model().await?;
+    let model = match model_override {
+        Some(model) => validated_ai_model(model)?,
+        None => state.effective_xai_model().await?,
+    };
     let request_json = build_chat_request(state, &prompt, &model)?;
 
     let Some(api_key) = ai_api_key(state).await else {
@@ -4114,6 +4160,23 @@ mod tests {
         assert_eq!(report["status"], "dry_run_completed");
         assert_eq!(report["execution_safety"]["trading_manager"], "blocked");
         assert_eq!(report["execution_safety"]["execution_queue"], "blocked");
+    }
+
+    #[test]
+    fn model_comparison_reuses_the_non_actionable_dry_run_contract() {
+        let safety = report_execution_safety(
+            DecisionReportSubmissionMode::DryRun,
+            DecisionPulseMode::Shadow,
+        );
+
+        assert_eq!(
+            DecisionReportSubmissionMode::DryRun.completed_status(),
+            "dry_run_completed"
+        );
+        assert_eq!(safety["mode"], "dry_run");
+        assert_eq!(safety["queue_eligible"], false);
+        assert_eq!(safety["trading_manager"], "blocked");
+        assert_eq!(safety["execution_queue"], "blocked");
     }
 
     #[test]

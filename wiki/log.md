@@ -10,6 +10,11 @@ updated: 2026-08-31
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-31] decision pipeline | Add confirmed model-comparison dry runs
+
+- Added an explicit Decisions form for one supplied-model comparison. The model identifier is validated without modifying the active setting, and the job shares the existing single manual-report claim to prevent overlapping provider work.
+- Every comparison persists only through the existing `DryRun` path, so its terminal lifecycle is `dry_run_completed` or `dry_run_error`; Trading Manager, execution queue, Saxo, and Hermes are blocked. This is evidence collection, not provider fallback, model promotion, or a trading action.
+
 ## [2026-08-31] decision pipeline | Observe provider/model reliability locally
 
 - Added a typed, bounded provider capability matrix to AI Prompts and `/api/ai/provider-capabilities`. It aggregates only persisted Decision Report request-contract counts (strict schema, response healing, Fusion), configured timeout, terminal completion/failure categories, and provider-returned usage/cost totals.

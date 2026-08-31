@@ -14712,21 +14712,7 @@ impl AppState {
     }
 
     pub async fn save_ai_settings(&self, model: &str) -> Result<JsonValue> {
-        let model = model.trim();
-        if model.is_empty() {
-            anyhow::bail!("AI model cannot be empty");
-        }
-        if model.len() > 160 {
-            anyhow::bail!("AI model is too long");
-        }
-        // '~' is OpenRouter's floating-alias prefix (e.g. ~openai/gpt-5) and
-        // must round-trip unmodified.
-        if !model
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | ':' | '~'))
-        {
-            anyhow::bail!("AI model contains unsupported characters");
-        }
+        let model = validated_ai_model(model)?;
         let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let value = json!({
             "model": model,
@@ -16353,6 +16339,28 @@ impl AppState {
         let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_json).collect())
     }
+}
+
+/// Validates a model identifier without changing the active runtime setting.
+/// A dry-run comparison may use this contract, but cannot promote itself to the
+/// configured model or affect report execution eligibility.
+pub(crate) fn validated_ai_model(model: &str) -> Result<String> {
+    let model = model.trim();
+    if model.is_empty() {
+        anyhow::bail!("AI model cannot be empty");
+    }
+    if model.len() > 160 {
+        anyhow::bail!("AI model is too long");
+    }
+    // '~' is OpenRouter's floating-alias prefix (e.g. ~openai/gpt-5) and must
+    // round-trip unmodified.
+    if !model
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '-' | '_' | '.' | ':' | '~'))
+    {
+        anyhow::bail!("AI model contains unsupported characters");
+    }
+    Ok(model.to_string())
 }
 
 fn goal_period_value(

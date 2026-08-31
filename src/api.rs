@@ -26,22 +26,22 @@ use crate::{
         AssetLadderHistoryPayload, AssetLadderSummaryPayload, CashBufferRequest,
         CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
-        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
-        ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
-        ExecutionOrderEventTimelinePayload, ExecutionOrderSummaryPayload, ExecutionPayload,
-        HermesCapabilitiesPayload, HermesContextPayload, HermesExperimentRequest,
-        HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
-        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
-        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
-        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
-        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
-        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
-        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
-        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
-        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
-        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
-        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
-        ViewParams,
+        DecisionReportListPayload, DecisionReportModelComparisonRequest,
+        DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
+        ExecutionOrderEventTimelineEntryPayload, ExecutionOrderEventTimelinePayload,
+        ExecutionOrderSummaryPayload, ExecutionPayload, HermesCapabilitiesPayload,
+        HermesContextPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
+        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
+        HermesReflectionSummaryPayload, HermesReflectionsPayload,
+        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
+        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
+        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
+        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
+        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
+        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
+        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
+        SchedulerPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
+        StrategyJournalPayload, ViewParams,
     },
     portfolio_state::{dashboard_positions_from_json, portfolio_trades_from_json},
     quiver_state::dashboard_quiver_signals_from_json,
@@ -55,7 +55,7 @@ use crate::{
     state::{
         AppState, execution_event_summaries_from_json, execution_fill_summaries_from_json,
         execution_order_event_timeline_entries_from_json, execution_order_summaries_from_json,
-        signal_run_summary_from_json,
+        signal_run_summary_from_json, validated_ai_model,
     },
     strategy_journal_state::strategy_journal_summaries_from_json,
     trading_manager::run_trading_manager_cycle,
@@ -187,6 +187,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/actions/decision-report-dry-run",
             post(action_generate_decision_report_dry_run),
+        )
+        .route(
+            "/api/actions/decision-report-model-comparison",
+            post(action_generate_decision_report_model_comparison),
         )
         .route("/api/actions/queue-process", post(action_process_queue))
         .route(
@@ -2388,6 +2392,51 @@ async fn action_generate_decision_report(State(state): State<Arc<AppState>>) -> 
 
 async fn action_generate_decision_report_dry_run(State(state): State<Arc<AppState>>) -> Response {
     action_generate_decision_report_with_mode(state, DecisionReportActionMode::DryRun).await
+}
+
+async fn action_generate_decision_report_model_comparison(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<DecisionReportModelComparisonRequest>,
+) -> Response {
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.confirm_dry_run.as_deref() != Some("true") {
+        warn!("model-comparison dry-run confirmation missing");
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    let model = match validated_ai_model(request.model.as_deref().unwrap_or("")) {
+        Ok(model) => model,
+        Err(err) => {
+            warn!("model-comparison model rejected: {err:#}");
+            return redirect_to_app(&state, return_to).into_response();
+        }
+    };
+    match state.claim_manual_decision_report().await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("manual decision report already in flight; not starting model comparison");
+            return redirect_to_app(&state, return_to).into_response();
+        }
+        Err(err) => {
+            error!("model-comparison claim failed: {err:#}");
+            return json_result(Err(err));
+        }
+    }
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        match xai_decision::submit_manual_model_comparison_report(&task_state, &model).await {
+            Ok(report) => info!(
+                report_id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0),
+                status = report.get("status").and_then(JsonValue::as_str).unwrap_or("unknown"),
+                model = %model,
+                "manual model-comparison dry run completed without manager or Saxo execution"
+            ),
+            Err(err) => error!(model = %model, "manual model-comparison dry run failed: {err:#}"),
+        }
+        if let Err(err) = task_state.release_manual_decision_report_claim().await {
+            warn!("releasing model-comparison claim failed: {err:#}");
+        }
+    });
+    redirect_to_app(&state, return_to).into_response()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

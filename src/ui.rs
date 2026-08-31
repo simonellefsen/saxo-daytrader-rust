@@ -4315,6 +4315,11 @@ fn QuiverSignalRow(row: DashboardQuiverSignalPayload, prefs: LocalizationPrefs) 
 
 #[component]
 fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
+    let comparison_model = if data.ai_settings.model.is_empty() {
+        "openai/gpt-5.5".to_string()
+    } else {
+        data.ai_settings.model.clone()
+    };
     let candidate_waterfall = data
         .selected_decision
         .as_ref()
@@ -4476,6 +4481,27 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             "data-pending-label": "Generating Report...",
                             "{generate_label}"
                         }
+                    }
+                }
+            }
+            details { class: "prompt-card",
+                summary { "Run a model comparison dry run" }
+                p { class: "muted", "This sends one Decision Report request using the supplied model and stores a dry-run report. It never changes the active model, runs Trading Manager, creates an execution order, or contacts Saxo." }
+                form { method: "post", action: "/api/actions/decision-report-model-comparison", class: "settings-form settings-form-wide", "data-decision-report-form": "true",
+                    input { r#type: "hidden", name: "return_to", value: "/?view=decisions" }
+                    label { "Comparison model"
+                        input { name: "model", value: "{comparison_model}" }
+                    }
+                    label { class: "checkbox-label",
+                        input { r#type: "checkbox", name: "confirm_dry_run", value: "true" }
+                        span { "I confirm this is a non-actionable dry run that may incur provider usage." }
+                    }
+                    button {
+                        class: "button secondary",
+                        r#type: "submit",
+                        disabled: report_generation_pending,
+                        "data-pending-label": "Running Comparison...",
+                        "Run model comparison"
                     }
                 }
             }

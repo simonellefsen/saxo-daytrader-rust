@@ -3559,6 +3559,13 @@ pub struct AiSettingsRequest {
     pub return_to: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DecisionReportModelComparisonRequest {
+    pub model: Option<String>,
+    pub confirm_dry_run: Option<String>,
+    pub return_to: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct AiApiKeyRequest {
     pub api_key: Option<String>,
