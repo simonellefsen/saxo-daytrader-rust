@@ -1542,7 +1542,7 @@ fn monthly_loss_soft_reduction_active(
 /// A read failure disables the guardrail rather than halting the strategy: see
 /// the direction-of-failure note in `drawdown_guard`. It is logged at warn so a
 /// blind guardrail is never mistaken for a satisfied one.
-async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard {
+pub(crate) async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard {
     let policy = DrawdownPolicy::from_config(&state.config);
     let rows = state
         .portfolio_drawdown_history(policy.lookback_days)
@@ -1569,7 +1569,7 @@ async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard {
 /// event seen from two angles -- so multiplying them double-counts one decline
 /// and lands on a deployed capacity nobody chose. Taking the minimum keeps the
 /// reduced budget a number the operator can predict from configuration.
-fn combined_soft_buy_multiplier(multipliers: &[f64]) -> Option<f64> {
+pub(crate) fn combined_soft_buy_multiplier(multipliers: &[f64]) -> Option<f64> {
     multipliers
         .iter()
         .copied()

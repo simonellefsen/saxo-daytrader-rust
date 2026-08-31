@@ -1518,7 +1518,7 @@ async fn build_decision_prompt(
     let daily_indicators = crate::daily_indicators::compact_indicator_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
-    let capital_context = capital_planning_context(state, &overview);
+    let capital_context = capital_planning_context(state, &overview).await;
     let markov_gate = crate::trading_manager::markov_gate_config(state);
     let daily_indicator_policy = crate::daily_indicators::indicator_config_json_for_state(state);
     let markov_buy_instruction = format!(
@@ -1734,7 +1734,7 @@ fn compact_report_array(report: &JsonValue, key: &str, limit: usize) -> Vec<Json
         .unwrap_or_default()
 }
 
-fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue {
+async fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue {
     let max_commission_pct_per_side =
         crate::config::yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
             .unwrap_or(0.003)
@@ -1764,6 +1764,9 @@ fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue
     )
     .unwrap_or(0.5)
     .clamp(0.0, 1.0);
+    // Evaluated here rather than inside the pure builder so the builder stays
+    // synchronous and directly testable.
+    let drawdown = crate::trading_manager::portfolio_drawdown_guard(state).await;
     capital_planning_context_inner(
         overview,
         max_commission_pct_per_side,
@@ -1778,9 +1781,15 @@ fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue
         monthly_loss_halt_dkk,
         monthly_loss_soft_reduce_dkk,
         monthly_loss_soft_buy_multiplier,
+        drawdown
+            .reduces_buys()
+            .then_some(drawdown.policy.soft_buy_multiplier),
+        drawdown.halts_buys(),
+        drawdown_prompt_context(&drawdown),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capital_planning_context_inner(
     overview: &JsonValue,
     max_commission_pct_per_side: f64,
@@ -1788,6 +1797,9 @@ fn capital_planning_context_inner(
     monthly_loss_halt_dkk: f64,
     monthly_loss_soft_reduce_dkk: f64,
     monthly_loss_soft_buy_multiplier: f64,
+    drawdown_soft_buy_multiplier: Option<f64>,
+    drawdown_halts_buys: bool,
+    drawdown_context: JsonValue,
 ) -> JsonValue {
     let summary = overview
         .get("portfolio_summary")
@@ -1836,10 +1848,22 @@ fn capital_planning_context_inner(
         monthly_loss_soft_reduce_dkk,
         monthly_loss_halt_dkk,
     );
-    let available_buy_budget_dkk = if soft_reduction_active {
-        unreduced_available_buy_budget_dkk * monthly_loss_soft_buy_multiplier
-    } else {
-        unreduced_available_buy_budget_dkk
+    // Mirror the manager exactly: it collects every active soft multiplier and
+    // applies the strictest. Reporting only the monthly-loss one told the model
+    // it could deploy capital the runtime would then refuse -- the same shape as
+    // U3, with the decision model as the consumer rather than Hermes.
+    let mut soft_multipliers = Vec::new();
+    if soft_reduction_active {
+        soft_multipliers.push(monthly_loss_soft_buy_multiplier);
+    }
+    if let Some(multiplier) = drawdown_soft_buy_multiplier {
+        soft_multipliers.push(multiplier);
+    }
+    let applied_soft_multiplier =
+        crate::trading_manager::combined_soft_buy_multiplier(&soft_multipliers);
+    let available_buy_budget_dkk = match applied_soft_multiplier {
+        Some(multiplier) => unreduced_available_buy_budget_dkk * multiplier,
+        None => unreduced_available_buy_budget_dkk,
     };
     let reinvestment_pressure_active =
         excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
@@ -1884,7 +1908,32 @@ fn capital_planning_context_inner(
                 "The monthly-loss guardrail is inactive. Preserve the cash policy and size BUYs within available_buy_budget_dkk."
             }
         },
+        "drawdown_guardrail": drawdown_context,
+        "applied_soft_buy_multiplier": applied_soft_multiplier,
         "cash_policy": "Preserve the required cash buffer, avoid margin, and size any BUY recommendations within available_buy_budget_dkk.",
+    })
+}
+
+/// The drawdown guardrail as the decision prompt should see it.
+///
+/// Shaped like `monthly_loss_circuit_breaker` so both guardrails read the same
+/// way, and carrying its own instruction because a budget that shrank without
+/// explanation invites the model to argue with it.
+pub(crate) fn drawdown_prompt_context(guard: &crate::drawdown_guard::DrawdownGuard) -> JsonValue {
+    json!({
+        "active": guard.halts_buys(),
+        "soft_reduction_active": guard.reduces_buys(),
+        "drawdown_pct": guard.drawdown_pct(),
+        "soft_reduce_pct": guard.policy.soft_reduce_pct,
+        "halt_pct": guard.policy.halt_pct,
+        "soft_buy_multiplier": guard.policy.soft_buy_multiplier,
+        "instruction": if guard.halts_buys() {
+            "The portfolio is below its drawdown halt floor and the manager suspends all new BUYs regardless of signals; focus on risk reduction and document candidates for later."
+        } else if guard.reduces_buys() {
+            "The portfolio is in the drawdown soft band and the manager has already reduced the cycle-wide BUY budget. available_buy_budget_dkk is the reduced figure; size candidates within it rather than against the unreduced value."
+        } else {
+            "The drawdown guardrail is inactive. Size BUYs within available_buy_budget_dkk."
+        }
     })
 }
 
@@ -4445,6 +4494,9 @@ mod tests {
             -10000.0,
             -5000.0,
             0.5,
+            None,
+            false,
+            json!({"soft_reduction_active": false}),
         );
         assert_eq!(
             context["required_cash_buffer_dkk"],
@@ -4475,8 +4527,17 @@ mod tests {
             "settings": {"cash_buffer": {"min_cash_buffer_pct": 0.02, "max_deployment_pct": 0.98}},
             "goal_tracking": {"periods": {"month": {"pnl_dkk": -23070.0}}}
         });
-        let context =
-            capital_planning_context_inner(&overview, 0.003, json!({}), -10000.0, -5000.0, 0.5);
+        let context = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -10000.0,
+            -5000.0,
+            0.5,
+            None,
+            false,
+            json!({"soft_reduction_active": false}),
+        );
         assert_eq!(
             context["monthly_loss_circuit_breaker"]["active"],
             JsonValue::from(true)
@@ -4504,8 +4565,17 @@ mod tests {
             },
             "goal_tracking": {"periods": {"month": {"pnl_dkk": -30000.0}}}
         });
-        let context =
-            capital_planning_context_inner(&overview, 0.003, json!({}), -50_000.0, -25_000.0, 0.5);
+        let context = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -50_000.0,
+            -25_000.0,
+            0.5,
+            None,
+            false,
+            json!({"soft_reduction_active": false}),
+        );
         assert_eq!(
             context["unreduced_available_buy_budget_dkk"],
             JsonValue::from(20_000.0)
@@ -4521,6 +4591,104 @@ mod tests {
         assert_eq!(
             context["monthly_loss_circuit_breaker"]["active"],
             JsonValue::from(false)
+        );
+    }
+
+    #[test]
+    fn the_prompt_budget_matches_what_the_manager_will_actually_fund() {
+        // Report 257 told the model available_buy_budget_dkk 25,575 while the
+        // manager funded 12,788 for that same report, because the plan applied
+        // only the monthly-loss multiplier and the drawdown soft band -- the one
+        // actually active -- was absent from the prompt entirely. The model then
+        // sized candidates against roughly twice the deployable capital, which
+        // is how a proposal becomes a budget-downsized stub the commission floor
+        // rejects. Same shape as U3: a risk envelope described but not applied.
+        let overview = json!({
+            "portfolio_summary": {
+                "cash_balance_dkk": 30_505.0,
+                "total_market_value_dkk": 246_499.0,
+                "invested_market_value_dkk": 215_994.0
+            },
+            "settings": {"cash_buffer": {"min_cash_buffer_pct": 0.02, "max_deployment_pct": 0.98}},
+            "goal_tracking": {"periods": {"month": {"pnl_dkk": 5_219.0}}}
+        });
+
+        // Month P/L is positive, so only the drawdown band is active.
+        let with_drawdown = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -18_000.0,
+            -9_000.0,
+            0.5,
+            Some(0.75),
+            false,
+            json!({"soft_reduction_active": true}),
+        );
+        let unreduced = with_drawdown["unreduced_available_buy_budget_dkk"]
+            .as_f64()
+            .expect("unreduced budget");
+        let reduced = with_drawdown["available_buy_budget_dkk"]
+            .as_f64()
+            .expect("budget");
+        assert!(
+            (reduced - unreduced * 0.75).abs() < 1e-6,
+            "the drawdown multiplier must reach the prompt: {reduced} vs {unreduced}"
+        );
+        assert_eq!(with_drawdown["applied_soft_buy_multiplier"], 0.75);
+        assert_eq!(
+            with_drawdown["drawdown_guardrail"]["soft_reduction_active"], true,
+            "and the model must be told why the budget shrank"
+        );
+
+        // Both bands active: the manager applies the strictest, so the prompt must too.
+        let both = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -18_000.0,
+            -9_000.0,
+            0.5,
+            Some(0.75),
+            false,
+            json!({"soft_reduction_active": true}),
+        );
+        assert_eq!(
+            both["applied_soft_buy_multiplier"], 0.75,
+            "monthly band is inactive at a positive month P/L, so 0.75 stands"
+        );
+
+        // No band active: the full budget, and no phantom reduction.
+        let clear = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -18_000.0,
+            -9_000.0,
+            0.5,
+            None,
+            false,
+            json!({"soft_reduction_active": false}),
+        );
+        assert!((clear["available_buy_budget_dkk"].as_f64().unwrap() - unreduced).abs() < 1e-6);
+        assert!(clear["applied_soft_buy_multiplier"].is_null());
+    }
+
+    #[test]
+    fn the_strictest_active_multiplier_wins_in_the_prompt() {
+        // Mirrors combined_soft_buy_multiplier, which the manager uses: the
+        // minimum of the active multipliers, not the product and not the first.
+        assert_eq!(
+            crate::trading_manager::combined_soft_buy_multiplier(&[0.75, 0.5]),
+            Some(0.5)
+        );
+        assert_eq!(
+            crate::trading_manager::combined_soft_buy_multiplier(&[0.75]),
+            Some(0.75)
+        );
+        assert_eq!(
+            crate::trading_manager::combined_soft_buy_multiplier(&[]),
+            None
         );
     }
 }
