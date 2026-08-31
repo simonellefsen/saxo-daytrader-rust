@@ -543,10 +543,14 @@ impl PositionExposure {
                 "share": JsonValue::Null,
             })
         }));
+        // Unvalued buckets sort last. `NEG_INFINITY` rather than a negative
+        // sentinel, so a bucket that ever carries a negative value still ranks
+        // above "we could not measure this one".
         currencies.sort_by(|left, right| {
-            json_number(&right["value_dkk"])
-                .unwrap_or(-1.0)
-                .total_cmp(&json_number(&left["value_dkk"]).unwrap_or(-1.0))
+            let rank =
+                |row: &JsonValue| json_number(&row["value_dkk"]).unwrap_or(f64::NEG_INFINITY);
+            rank(right)
+                .total_cmp(&rank(left))
                 .then_with(|| left["currency"].as_str().cmp(&right["currency"].as_str()))
         });
 

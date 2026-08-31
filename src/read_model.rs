@@ -45,17 +45,59 @@ pub(crate) fn decode<T>(boundary: &'static str, value: JsonValue) -> serde_json:
 where
     T: DeserializeOwned,
 {
+    let (decoded, tolerated) = decode_tolerating_nulls(value)?;
+    if let Some(strict) = tolerated {
+        warn_tolerated(boundary, &strict, 1);
+    }
+    Ok(decoded)
+}
+
+/// Decodes a list of typed read-model rows under the same invariant.
+///
+/// The conversion stays all-or-nothing on purpose: a row that cannot be
+/// decoded at all is a malformed row, and silently dropping it would draw a
+/// partial list that looks complete.
+///
+/// A list warns **once** for the whole batch rather than once per row. A field
+/// that is null in one row is usually null in most of them, and a page of
+/// identical warnings buries the boundary name it is trying to report.
+pub(crate) fn decode_each<T>(
+    boundary: &'static str,
+    values: Vec<JsonValue>,
+) -> serde_json::Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let mut decoded = Vec::with_capacity(values.len());
+    let mut first_tolerated: Option<serde_json::Error> = None;
+    let mut tolerated_rows = 0_usize;
+    for value in values {
+        let (row, tolerated) = decode_tolerating_nulls(value)?;
+        if let Some(strict) = tolerated {
+            tolerated_rows += 1;
+            first_tolerated.get_or_insert(strict);
+        }
+        decoded.push(row);
+    }
+    if let Some(strict) = first_tolerated {
+        warn_tolerated(boundary, &strict, tolerated_rows);
+    }
+    Ok(decoded)
+}
+
+/// Decodes strictly, then retries with nulls dropped. The returned error is
+/// `Some` when the retry was what saved the payload, carrying the strict error
+/// so the caller can report why.
+fn decode_tolerating_nulls<T>(
+    value: JsonValue,
+) -> serde_json::Result<(T, Option<serde_json::Error>)>
+where
+    T: DeserializeOwned,
+{
     match T::deserialize(&value) {
-        Ok(decoded) => Ok(decoded),
+        Ok(decoded) => Ok((decoded, None)),
         Err(strict) => match serde_json::from_value(null_as_absent(value)) {
-            Ok(decoded) => {
-                warn!(
-                    boundary,
-                    error = %strict,
-                    "typed read model decoded only after explicit nulls were treated as absent keys"
-                );
-                Ok(decoded)
-            }
+            Ok(decoded) => Ok((decoded, Some(strict))),
             // The strict error names the first real problem with the payload.
             // The tolerant retry can only report whatever is left once the
             // nulls are gone, which is the less useful diagnostic.
@@ -64,22 +106,13 @@ where
     }
 }
 
-/// Decodes a list of typed read-model rows under the same invariant.
-///
-/// The conversion stays all-or-nothing on purpose: a row that cannot be
-/// decoded at all is a malformed row, and silently dropping it would draw a
-/// partial list that looks complete.
-pub(crate) fn decode_each<T>(
-    boundary: &'static str,
-    values: Vec<JsonValue>,
-) -> serde_json::Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    values
-        .into_iter()
-        .map(|value| decode(boundary, value))
-        .collect()
+fn warn_tolerated(boundary: &'static str, strict: &serde_json::Error, rows: usize) {
+    warn!(
+        boundary,
+        rows,
+        error = %strict,
+        "typed read model decoded only after explicit nulls were treated as absent keys"
+    );
 }
 
 /// Rewrites a payload so an explicit `null` reads as an absent key.
@@ -296,6 +329,44 @@ mod tests {
 
         assert_eq!(envelope.rows.len(), 2);
         assert_eq!(envelope.rows[1].currency, "");
+    }
+
+    /// Lists take the same invariant row by row. The batch warns once rather
+    /// than once per row, so this also covers the path where several rows need
+    /// the tolerant pass.
+    #[test]
+    fn a_list_tolerates_nulls_in_several_rows_at_once() {
+        let rows: Vec<Row> = decode_each(
+            "test_rows",
+            vec![
+                json!({"symbol": "AAPL:xnas", "currency": "USD"}),
+                json!({"symbol": "ABB:xome", "currency": null}),
+                json!({"symbol": "NOVO-B:xcse", "currency": null, "quantity": null}),
+            ],
+        )
+        .expect("nulls across rows must not fail the list");
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].currency, "USD");
+        assert_eq!(rows[1].currency, "");
+        assert_eq!(rows[2].quantity, 0);
+    }
+
+    /// A list stays all-or-nothing: a row that cannot be decoded at all is
+    /// malformed, and dropping it would draw a partial list that looks
+    /// complete.
+    #[test]
+    fn a_list_still_fails_on_a_row_that_is_malformed_rather_than_null() {
+        assert!(
+            decode_each::<Row>(
+                "test_rows",
+                vec![
+                    json!({"symbol": "AAPL:xnas"}),
+                    json!({"symbol": {"not": "a string"}}),
+                ],
+            )
+            .is_err()
+        );
     }
 
     /// Tolerance is for values the read model already treats as optional. A

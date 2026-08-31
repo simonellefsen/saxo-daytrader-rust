@@ -14035,6 +14035,34 @@ mod tests {
         );
     }
 
+    /// Every manager run recorded before this measurement shipped has no
+    /// currency_exposure block. Reading that as an empty book would show a
+    /// balanced portfolio that was never measured, which is the same mistake
+    /// the drawdown guardrail avoided when it shipped.
+    #[test]
+    fn a_run_predating_the_currency_measurement_reads_as_unmeasured_not_balanced() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "created_at": "2026-08-20T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "position_exposure": {"status": "available", "held_symbol_count": 10},
+                    "concentration_policy": {"max_assets_per_currency": 0}
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+
+        assert_eq!(
+            summary.currency_status, "",
+            "an absent block is unmeasured, not `available` with no currencies"
+        );
+        assert!(summary.currency_rows.is_empty());
+        assert!(summary.currency_largest.is_empty());
+    }
+
     /// A bucket whose symbols could not be valued reports its positions with no
     /// share. Rendering that as 0% would read as "no exposure here", which is
     /// the opposite of what it means.
