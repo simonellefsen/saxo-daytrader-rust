@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration as StdDuration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use reqwest::header;
 use serde_json::{Value as JsonValue, json};
@@ -18,6 +18,9 @@ use crate::{
 
 const STATES: [Regime; 3] = [Regime::Bull, Regime::Sideways, Regime::Bear];
 const DEFAULT_DAILY_TIME: &str = "23:30";
+/// Length of a regular cash-equity session in minutes. Used only to convert
+/// calendar tunings into bar counts at an intraday horizon.
+const DEFAULT_SESSION_MINUTES: i64 = 510;
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
 const SAXO_MARKOV_MAX_ATTEMPTS: usize = 4;
 const DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS: i64 = 7;
@@ -44,6 +47,31 @@ impl Regime {
     }
 }
 
+/// A named time of day at which a Markov refresh should run, in addition to
+/// the nightly `daily_time` pass.
+#[derive(Clone, Debug, PartialEq)]
+struct MarkovRunSlot {
+    name: String,
+    local_time: NaiveTime,
+}
+
+/// How many bars the chart feed emits per trading session at `horizon_minutes`.
+///
+/// Every Markov tuning below (`window_days`, `min_labeled_days`,
+/// `signal_horizon_days`, `forecast_steps`) is applied as an index offset into
+/// the bar series, so each one counts *bars*, not calendar days. That is only
+/// the same thing while the horizon is daily. Returning 1 for daily-or-coarser
+/// horizons keeps those tunings byte-identical to their historical meaning; an
+/// intraday horizon scales them up so "20 days" stays 20 days.
+fn bars_per_session(horizon_minutes: i64, session_minutes: i64) -> usize {
+    if horizon_minutes >= 1440 {
+        return 1;
+    }
+    let horizon = horizon_minutes.max(1);
+    let session = session_minutes.max(horizon);
+    (((session + horizon - 1) / horizon).max(1)) as usize
+}
+
 #[derive(Clone, Debug)]
 struct MarkovConfig {
     enabled: bool,
@@ -57,6 +85,19 @@ struct MarkovConfig {
     min_labeled_days: usize,
     signal_horizon_days: usize,
     forecast_steps: Vec<usize>,
+    /// Minutes in one regular trading session, used to convert the calendar
+    /// tunings above into bar counts when `horizon_minutes` is intraday.
+    session_minutes: i64,
+    /// Bars the chart feed returns per session at `horizon_minutes`; 1 for
+    /// daily-or-coarser horizons.
+    bars_per_session: usize,
+    window_bars: usize,
+    min_labeled_bars: usize,
+    signal_horizon_bars: usize,
+    forecast_step_bars: Vec<usize>,
+    /// Every refresh slot for one trading day, ascending. Always contains the
+    /// nightly `daily_time` pass; intraday slots are prepended by config.
+    run_slots: Vec<MarkovRunSlot>,
     max_symbols: usize,
     instrument_negative_cache_retry_days: i64,
     symbol_aliases: HashMap<String, String>,
@@ -129,24 +170,55 @@ pub async fn run_markov_method_cycle(state: &AppState) -> Result<JsonValue> {
             "timezone": config.timezone.name()
         }));
     }
-    if now_local.time() < config.daily_time {
+    // Pick the most recent slot that is already due today. The nightly pass is
+    // just the last slot of the day, so a single-slot config behaves exactly as
+    // it did before intraday refreshes existed.
+    let Some(slot) = due_markov_slot(&config, now_local.time()) else {
+        let next = config
+            .run_slots
+            .first()
+            .map(|slot| slot.local_time)
+            .unwrap_or(config.daily_time);
         return Ok(json!({
             "status": "idle",
             "reason": "not_due",
             "run_date": run_date.to_string(),
-            "due_time": config.daily_time.format("%H:%M").to_string(),
+            "due_time": next.format("%H:%M").to_string(),
             "timezone": config.timezone.name()
         }));
-    }
-    if markov_run_exists(state, run_date).await? {
+    };
+
+    // Dedup per slot rather than per date: a slot has run when a run for today
+    // was created at or after that slot became due.
+    let slot_due_utc = config
+        .timezone
+        .from_local_datetime(&run_date.and_time(slot.local_time))
+        .earliest()
+        .map(|due| due.with_timezone(&Utc));
+    if markov_run_exists_since(state, run_date, slot_due_utc).await? {
         return Ok(json!({
             "status": "skipped",
             "reason": "already_ran",
-            "run_date": run_date.to_string()
+            "run_date": run_date.to_string(),
+            "slot": slot.name,
+            "due_time": slot.local_time.format("%H:%M").to_string()
         }));
     }
 
+    info!(
+        run_date = %run_date,
+        slot = %slot.name,
+        due_time = %slot.local_time.format("%H:%M"),
+        horizon_minutes = config.horizon_minutes,
+        bars_per_session = config.bars_per_session,
+        "starting Markov refresh"
+    );
     run_markov_method_for_date(state, &config, run_date).await
+}
+
+/// The latest configured slot whose local time has already passed.
+fn due_markov_slot(config: &MarkovConfig, now: NaiveTime) -> Option<&MarkovRunSlot> {
+    config.run_slots.iter().rfind(|slot| slot.local_time <= now)
 }
 
 async fn run_markov_method_for_date(
@@ -281,12 +353,12 @@ fn asset_analysis_label(asset: &MarkovAsset) -> String {
 }
 
 fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalysis> {
-    let labels = label_regimes(bars, config.window_days, config.threshold);
-    if labels.len() < config.min_labeled_days {
+    let labels = label_regimes(bars, config.window_bars, config.threshold);
+    if labels.len() < config.min_labeled_bars {
         bail!(
-            "not enough labeled daily bars: {} available, {} required",
+            "not enough labeled bars: {} available, {} required",
             labels.len(),
-            config.min_labeled_days
+            config.min_labeled_bars
         );
     }
     let counts = transition_counts(&labels);
@@ -299,10 +371,18 @@ fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalys
         .forecast_steps
         .iter()
         .copied()
-        .map(|step| (step, forecast_distribution(matrix, current.regime, step)))
+        .zip(config.forecast_step_bars.iter().copied())
+        // Keep the persisted key in calendar steps so stored forecasts stay
+        // comparable across a horizon change; only the lookup depth scales.
+        .map(|(step, step_bars)| {
+            (
+                step,
+                forecast_distribution(matrix, current.regime, step_bars),
+            )
+        })
         .collect::<Vec<_>>();
     let signal_distribution =
-        forecast_distribution(matrix, current.regime, config.signal_horizon_days);
+        forecast_distribution(matrix, current.regime, config.signal_horizon_bars);
     let signed_signal =
         signal_distribution[Regime::Bull.index()] - signal_distribution[Regime::Bear.index()];
     let conviction = signed_signal.abs();
@@ -994,6 +1074,11 @@ fn signal_row_json(
         "sample_count": bars.map(|items| items.len()).unwrap_or(0),
         "min_labeled_days": config.min_labeled_days,
         "signal_horizon_days": config.signal_horizon_days,
+        "session_minutes": config.session_minutes,
+        "bars_per_session": config.bars_per_session,
+        "window_bars": config.window_bars,
+        "min_labeled_bars": config.min_labeled_bars,
+        "signal_horizon_bars": config.signal_horizon_bars,
         "current_state": analysis.map(|value| value.current_state.label()),
         "current_close": analysis.map(|value| value.current_close),
         "rolling_return": analysis.map(|value| value.rolling_return),
@@ -1114,6 +1199,28 @@ async fn insert_markov_run(
         .await
         .context("inserting Markov signal run")?;
     Ok(())
+}
+
+/// True when a run for `run_date` was created at or after `since`.
+///
+/// `created_at` is stored as second-precision RFC3339 in UTC, so the string
+/// comparison below is a chronological one.
+async fn markov_run_exists_since(
+    state: &AppState,
+    run_date: NaiveDate,
+    since: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    let Some(since) = since else {
+        return markov_run_exists(state, run_date).await;
+    };
+    let row = sqlx::query(&format!(
+        "SELECT id FROM markov_signal_runs WHERE run_date = '{}' AND created_at >= '{}' LIMIT 1",
+        sql_escape(&run_date.to_string()),
+        sql_escape(&since.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+    ))
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.is_some())
 }
 
 async fn markov_run_exists(state: &AppState, run_date: NaiveDate) -> Result<bool> {
@@ -1375,6 +1482,36 @@ fn markov_config(state: &AppState) -> MarkovConfig {
     let min_labeled_days = yaml_i64(&state.config, &["strategy", "markov", "min_labeled_days"])
         .unwrap_or(60)
         .max(5) as usize;
+    let horizon_minutes = yaml_i64(&state.config, &["strategy", "markov", "horizon_minutes"])
+        .unwrap_or(1440)
+        .max(1);
+    let session_minutes = yaml_i64(&state.config, &["strategy", "markov", "session_minutes"])
+        .unwrap_or(DEFAULT_SESSION_MINUTES)
+        .max(1);
+    let signal_horizon_days = yaml_i64(
+        &state.config,
+        &["strategy", "markov", "signal_horizon_days"],
+    )
+    .unwrap_or(5)
+    .max(1) as usize;
+    // Scale the calendar tunings into bar counts. At a daily horizon this is a
+    // multiply by one, so the deployed behavior is unchanged.
+    let bars_per_session = bars_per_session(horizon_minutes, session_minutes);
+    let window_bars = window_days.saturating_mul(bars_per_session).max(1);
+    let min_labeled_bars = min_labeled_days.saturating_mul(bars_per_session).max(1);
+    let signal_horizon_bars = signal_horizon_days.saturating_mul(bars_per_session).max(1);
+    let forecast_step_bars = forecast_steps
+        .iter()
+        .map(|step| step.saturating_mul(bars_per_session).max(1))
+        .collect::<Vec<_>>();
+    let mut run_slots = markov_intraday_runs(&state.config);
+    if !run_slots.iter().any(|slot| slot.local_time == daily_time) {
+        run_slots.push(MarkovRunSlot {
+            name: "nightly".to_string(),
+            local_time: daily_time,
+        });
+    }
+    run_slots.sort_by_key(|slot| slot.local_time);
     MarkovConfig {
         enabled: yaml_bool(&state.config, &["strategy", "markov", "enabled"]).unwrap_or(true),
         timezone,
@@ -1386,26 +1523,68 @@ fn markov_config(state: &AppState) -> MarkovConfig {
             .unwrap_or(0.05)
             .abs()
             .max(0.0001),
-        horizon_minutes: yaml_i64(&state.config, &["strategy", "markov", "horizon_minutes"])
-            .unwrap_or(1440)
-            .max(1),
+        horizon_minutes,
+        // The floor has to be expressed in bars too, otherwise an intraday
+        // horizon would request fewer samples than it needs to label anything.
         sample_count: yaml_i64(&state.config, &["strategy", "markov", "sample_count"])
             .unwrap_or(520)
-            .max((window_days + min_labeled_days + 2) as i64) as usize,
+            .max((window_bars + min_labeled_bars + 2) as i64) as usize,
         min_labeled_days,
-        signal_horizon_days: yaml_i64(
-            &state.config,
-            &["strategy", "markov", "signal_horizon_days"],
-        )
-        .unwrap_or(5)
-        .max(1) as usize,
+        signal_horizon_days,
         forecast_steps,
+        session_minutes,
+        bars_per_session,
+        window_bars,
+        min_labeled_bars,
+        signal_horizon_bars,
+        forecast_step_bars,
+        run_slots,
         max_symbols: yaml_i64(&state.config, &["strategy", "markov", "max_symbols"])
             .unwrap_or(0)
             .max(0) as usize,
         instrument_negative_cache_retry_days: instrument_negative_cache_retry_days(state),
         symbol_aliases: analysis_symbol_aliases(&state.config),
     }
+}
+
+/// Parse `strategy.markov.intraday_runs` into ordered, de-duplicated slots.
+///
+/// Entries without a parsable `local_time` are dropped rather than defaulted,
+/// so a typo cannot silently move a refresh to midnight.
+fn markov_intraday_runs(config: &serde_yaml::Value) -> Vec<MarkovRunSlot> {
+    let Some(entries) = yaml_at(config, &["strategy", "markov", "intraday_runs"])
+        .and_then(|value| value.as_sequence().cloned())
+    else {
+        return Vec::new();
+    };
+    let mut slots: Vec<MarkovRunSlot> = Vec::new();
+    for entry in entries {
+        if !entry
+            .get("enabled")
+            .and_then(serde_yaml::Value::as_bool)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let Some(local_time) = entry
+            .get("local_time")
+            .and_then(serde_yaml::Value::as_str)
+            .and_then(parse_hh_mm)
+        else {
+            continue;
+        };
+        let name = entry
+            .get("name")
+            .and_then(serde_yaml::Value::as_str)
+            .unwrap_or("intraday")
+            .to_string();
+        if slots.iter().any(|slot| slot.local_time == local_time) {
+            continue;
+        }
+        slots.push(MarkovRunSlot { name, local_time });
+    }
+    slots.sort_by_key(|slot| slot.local_time);
+    slots
 }
 
 fn forecast_steps_from_yaml(value: &serde_yaml::Value) -> Option<Vec<usize>> {
@@ -1435,7 +1614,20 @@ fn markov_config_json(config: &MarkovConfig) -> JsonValue {
         "sample_count": config.sample_count,
         "min_labeled_days": config.min_labeled_days,
         "signal_horizon_days": config.signal_horizon_days,
+        "session_minutes": config.session_minutes,
+        "bars_per_session": config.bars_per_session,
+        "window_bars": config.window_bars,
+        "min_labeled_bars": config.min_labeled_bars,
+        "signal_horizon_bars": config.signal_horizon_bars,
         "forecast_steps": config.forecast_steps,
+        "run_slots": config
+            .run_slots
+            .iter()
+            .map(|slot| json!({
+                "name": slot.name,
+                "local_time": slot.local_time.format("%H:%M").to_string()
+            }))
+            .collect::<Vec<_>>(),
         "max_symbols": config.max_symbols,
         "instrument_negative_cache_retry_days": config.instrument_negative_cache_retry_days,
         "symbol_aliases": config.symbol_aliases
@@ -1926,6 +2118,16 @@ mod tests {
             max_symbols: 0,
             instrument_negative_cache_retry_days: DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS,
             symbol_aliases: HashMap::new(),
+            session_minutes: DEFAULT_SESSION_MINUTES,
+            bars_per_session: 1,
+            window_bars: 2,
+            min_labeled_bars: 3,
+            signal_horizon_bars: 2,
+            forecast_step_bars: vec![1, 2],
+            run_slots: vec![MarkovRunSlot {
+                name: "nightly".to_string(),
+                local_time: NaiveTime::from_hms_opt(23, 30, 0).unwrap(),
+            }],
         }
     }
 
@@ -2346,5 +2548,107 @@ mod tests {
     #[test]
     fn normalized_symbol_key_is_case_insensitive_and_trimmed() {
         assert_eq!(normalized_symbol_key(" cost:XNYS "), "cost:xnys");
+    }
+
+    #[test]
+    fn a_daily_horizon_leaves_every_tuning_in_calendar_units() {
+        // The deployed config is daily. Scaling must be a no-op there, or this
+        // refactor would silently change live regime labelling.
+        assert_eq!(bars_per_session(1440, 510), 1);
+        assert_eq!(bars_per_session(10080, 510), 1);
+    }
+
+    #[test]
+    fn an_intraday_horizon_scales_a_window_back_up_to_calendar_days() {
+        // 510-minute session at hourly bars is 9 bars per day, so a 20-day
+        // window has to span 180 bars to still mean twenty days.
+        assert_eq!(bars_per_session(60, 510), 9);
+        assert_eq!(20 * bars_per_session(60, 510), 180);
+        assert_eq!(bars_per_session(30, 510), 17);
+        assert_eq!(bars_per_session(240, 510), 3);
+    }
+
+    #[test]
+    fn an_unscaled_intraday_window_would_collapse_the_regime_signal() {
+        // Guards the bug this refactor exists to prevent: at hourly bars an
+        // unscaled 20-"day" window covers ~2 sessions, so a 5% threshold never
+        // trips and every bar labels Sideways.
+        let bars = (0..400)
+            .map(|index| ChartBar {
+                time: format!("2026-01-01T{:02}:00:00Z", index % 24),
+                close: 100.0 * (1.0 + 0.0008 * index as f64),
+            })
+            .collect::<Vec<_>>();
+        let unscaled = label_regimes(&bars, 20, 0.05);
+        assert!(
+            unscaled
+                .iter()
+                .all(|point| point.regime == Regime::Sideways),
+            "unscaled intraday window should see no trend at all"
+        );
+        let scaled = label_regimes(&bars, 20 * bars_per_session(60, 510), 0.05);
+        assert!(
+            scaled.iter().any(|point| point.regime == Regime::Bull),
+            "scaled window should recover the underlying uptrend"
+        );
+    }
+
+    fn slot(name: &str, hour: u32, minute: u32) -> MarkovRunSlot {
+        MarkovRunSlot {
+            name: name.to_string(),
+            local_time: NaiveTime::from_hms_opt(hour, minute, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn the_due_slot_is_the_latest_one_already_passed() {
+        let mut config = test_config();
+        config.run_slots = vec![
+            slot("europe_open", 10, 15),
+            slot("us_open", 15, 0),
+            slot("nightly", 23, 30),
+        ];
+
+        assert!(due_markov_slot(&config, NaiveTime::from_hms_opt(9, 0, 0).unwrap()).is_none());
+        for (hour, minute, expected) in [
+            (10, 15, "europe_open"),
+            (14, 59, "europe_open"),
+            (15, 0, "us_open"),
+            (23, 29, "us_open"),
+            (23, 30, "nightly"),
+        ] {
+            let due = due_markov_slot(&config, NaiveTime::from_hms_opt(hour, minute, 0).unwrap())
+                .expect("a slot is due");
+            assert_eq!(due.name, expected, "at {hour:02}:{minute:02}");
+        }
+    }
+
+    #[test]
+    fn intraday_slots_drop_bad_times_and_keep_one_entry_per_time() {
+        let config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+strategy:
+  markov:
+    intraday_runs:
+      - name: us_open
+        local_time: "15:00"
+      - name: europe_open
+        local_time: "10:15"
+      - name: duplicate
+        local_time: "10:15"
+      - name: typo
+        local_time: "not a time"
+      - name: disabled
+        local_time: "12:00"
+        enabled: false
+"#,
+        )
+        .unwrap();
+        let slots = markov_intraday_runs(&config);
+        assert_eq!(
+            slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["europe_open", "us_open"],
+            "sorted, de-duplicated, typo and disabled entries dropped"
+        );
     }
 }
