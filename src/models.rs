@@ -883,6 +883,10 @@ pub struct HermesContextSafetyPayload {
     pub saxo_sessions_excluded: bool,
     pub broker_mutations_excluded: bool,
     pub raw_oauth_payloads_excluded: bool,
+    /// Raw Saxo request/response documents are projected out of the execution
+    /// rows. They embed `AccountKey` and `ClientKey`, which this context is
+    /// explicitly not allowed to carry.
+    pub raw_broker_payloads_excluded: bool,
 }
 
 /// Display-safe metadata for the promoted baseline audit record.

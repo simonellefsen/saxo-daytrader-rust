@@ -1475,12 +1475,69 @@ pub async fn latest_markov_run(state: &AppState) -> Result<JsonValue> {
     Ok(row.as_ref().map(row_to_json).unwrap_or(JsonValue::Null))
 }
 
+/// Cap on symbols one scoped request may name.
+pub(crate) const MARKOV_CONTEXT_MAX_SYMBOLS: usize = 40;
+
+/// Signals for exactly the symbols named, rather than a page of the universe.
+///
+/// The unscoped page returns `limit` rows ordered by run then symbol, so with
+/// ~200 symbols and a 50-row default whether a candidate appears depends on its
+/// alphabetical position. On 2026-08-31 that made DE:xnys (55th) visible and
+/// PLTR:xnas (141st) invisible to the same advisory round, and Hermes had to
+/// spend a data-request round recovering a signal that already existed.
+pub async fn compact_markov_context_for_symbols(
+    state: &AppState,
+    symbols: &[String],
+) -> Result<JsonValue> {
+    let mut seen = HashSet::new();
+    let mut wanted = Vec::new();
+    for symbol in symbols {
+        let trimmed = symbol.trim();
+        if trimmed.is_empty() || !seen.insert(normalized_symbol_key(trimmed)) {
+            continue;
+        }
+        wanted.push(trimmed.to_string());
+        if wanted.len() >= MARKOV_CONTEXT_MAX_SYMBOLS {
+            break;
+        }
+    }
+    let mut rows = Vec::new();
+    let mut missing = Vec::new();
+    for symbol in &wanted {
+        let row = latest_markov_signal_summary(state, symbol).await?;
+        if row.is_null() {
+            missing.push(symbol.clone());
+            continue;
+        }
+        // `latest_markov_signal_summary` does not echo the symbol back.
+        let mut row = row;
+        if let Some(object) = row.as_object_mut() {
+            object.insert("symbol".to_string(), json!(symbol));
+        }
+        rows.push(row);
+    }
+    let mut context = compact_markov_context_from_rows(state, rows).await?;
+    if let Some(object) = context.as_object_mut() {
+        object.insert("requested_symbols".to_string(), json!(wanted));
+        object.insert("missing_symbols".to_string(), json!(missing));
+        object.insert("scope".to_string(), json!("requested_symbols"));
+    }
+    Ok(context)
+}
+
 pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<JsonValue> {
     let rows = latest_markov_signals(state, limit)
         .await?
         .into_iter()
         .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
         .collect::<Vec<_>>();
+    compact_markov_context_from_rows(state, rows).await
+}
+
+async fn compact_markov_context_from_rows(
+    state: &AppState,
+    rows: Vec<JsonValue>,
+) -> Result<JsonValue> {
     let mut signals = Vec::new();
     for row in rows {
         let symbol_text = row.get("symbol").and_then(JsonValue::as_str).unwrap_or("");

@@ -6470,6 +6470,106 @@ fn position_identity_key(symbol: &str, isin: Option<&str>) -> String {
         .unwrap_or_else(|| format!("symbol:{}", canonical_symbol_key(symbol)))
 }
 
+/// Reduce one scheduler `cycle_json` to per-step health.
+///
+/// The stored document is the cycle's full internal diagnostic dump -- 28 KB
+/// each, and 20 of them made `scheduler.cycles` 1.81 MB, 59% of a 4.66 MB
+/// `get_context` payload that the transport then truncated. What an advisory
+/// reader needs from cycle history is whether each step ran and whether it
+/// failed, so each step collapses to its status and any short reason. Scalars
+/// and `step_durations` survive because they are already small and are the
+/// health signal itself.
+fn compact_scheduler_cycle_document(cycle: &JsonValue) -> JsonValue {
+    let Some(object) = cycle.as_object() else {
+        return cycle.clone();
+    };
+    let mut compact = serde_json::Map::new();
+    for (key, value) in object {
+        match value {
+            JsonValue::Object(step) => {
+                if key == "step_durations" {
+                    compact.insert(key.clone(), value.clone());
+                    continue;
+                }
+                let mut summary = serde_json::Map::new();
+                for field in ["status", "reason", "error", "state"] {
+                    if let Some(found) = step.get(field) {
+                        // Keep only short scalars: a nested document here is
+                        // the bloat this function exists to remove.
+                        let short = found
+                            .as_str()
+                            .map(|text| text.len() <= 200)
+                            .unwrap_or_else(|| !found.is_object() && !found.is_array());
+                        if short {
+                            summary.insert(field.to_string(), found.clone());
+                        }
+                    }
+                }
+                for field in ["error_count", "success_count", "asset_count", "processed"] {
+                    if let Some(found) = step.get(field).filter(|v| v.is_number()) {
+                        summary.insert(field.to_string(), found.clone());
+                    }
+                }
+                if summary.is_empty() {
+                    summary.insert("status".to_string(), json!("recorded"));
+                }
+                compact.insert(key.clone(), JsonValue::Object(summary));
+            }
+            JsonValue::Array(items) => {
+                compact.insert(key.clone(), json!({"count": items.len()}));
+            }
+            scalar => {
+                compact.insert(key.clone(), scalar.clone());
+            }
+        }
+    }
+    JsonValue::Object(compact)
+}
+
+/// Apply `compact_scheduler_cycle_document` to the `cycle_json` of each row.
+fn compact_scheduler_cycles(rows: Vec<JsonValue>) -> Vec<JsonValue> {
+    rows.into_iter()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                if let Some(cycle) = object.get("cycle_json") {
+                    let compact = compact_scheduler_cycle_document(cycle);
+                    object.insert("cycle_json".to_string(), compact);
+                }
+            }
+            row
+        })
+        .collect()
+}
+
+/// Stored Saxo request/response documents that must never reach Hermes.
+///
+/// Measured on the live 2026-08-31 payload, `get_context` carried `AccountKey`
+/// 25 times and `ClientKey` 20 times, every one of them inside a broker
+/// document nested in these two columns. The execution-order events API already
+/// allowlists its columns and excludes them; this path reused the dashboard
+/// readers wholesale and never got the same treatment.
+const HERMES_RAW_BROKER_DOCUMENT_KEYS: &[&str] = &["raw_payload_json", "execution_result_json"];
+
+/// Project the raw broker documents out of execution rows bound for Hermes.
+///
+/// Dropped whole rather than redacted key by key: the credentials sit at
+/// varying depths inside provider-shaped documents, so a field-level denylist
+/// would silently reopen the moment Saxo nests them somewhere new. The
+/// classified failure taxonomy carries the diagnostic signal Hermes actually
+/// reasons from.
+fn strip_raw_broker_documents(rows: Vec<JsonValue>) -> Vec<JsonValue> {
+    rows.into_iter()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                for key in HERMES_RAW_BROKER_DOCUMENT_KEYS {
+                    object.remove(*key);
+                }
+            }
+            row
+        })
+        .collect()
+}
+
 impl AppState {
     // Associated functions are like static/class methods. `Self` means
     // `AppState`, so this returns a fully initialized application state.
@@ -11744,18 +11844,33 @@ impl AppState {
             warn!("Hermes overview context degraded: {err:#}");
             json!({"status": "degraded", "detail": err.to_string()})
         });
-        let scheduler_status = self.scheduler_status_value().await.unwrap_or_else(|err| {
+        let mut scheduler_status = self.scheduler_status_value().await.unwrap_or_else(|err| {
             warn!("Hermes scheduler status degraded: {err:#}");
             json!({"status": "degraded", "detail": err.to_string()})
         });
-        let scheduler_cycles = self.scheduler_cycles(limit).await.unwrap_or_default();
+        // The status row embeds the same full cycle document as the history.
+        if let Some(object) = scheduler_status.as_object_mut() {
+            if let Some(cycle) = object.get("last_cycle_json") {
+                let compact = compact_scheduler_cycle_document(cycle);
+                object.insert("last_cycle_json".to_string(), compact);
+            }
+        }
+        let scheduler_cycles =
+            compact_scheduler_cycles(self.scheduler_cycles(limit).await.unwrap_or_default());
         let decision_reports = self.hermes_decision_report_items(limit).await?;
         let journals = self.strategy_journal_items(limit).await.unwrap_or_default();
         let end_of_day_reports = self.hermes_end_of_day_report_items(limit).await?;
-        let execution_orders = self.execution_orders(limit).await.unwrap_or_default();
-        let execution_failures = self.hermes_execution_failures(limit).await?;
-        let execution_events = self.execution_events(limit).await.unwrap_or_default();
-        let execution_fills = self.execution_fills(limit).await.unwrap_or_default();
+        // These readers are shared with the dashboard, which is allowed to see
+        // the stored broker documents. This context is not: see
+        // `strip_raw_broker_documents`.
+        let execution_orders =
+            strip_raw_broker_documents(self.execution_orders(limit).await.unwrap_or_default());
+        let execution_failures =
+            strip_raw_broker_documents(self.hermes_execution_failures(limit).await?);
+        let execution_events =
+            strip_raw_broker_documents(self.execution_events(limit).await.unwrap_or_default());
+        let execution_fills =
+            strip_raw_broker_documents(self.execution_fills(limit).await.unwrap_or_default());
         let protective_stop_coverage = self
             .protective_stop_coverage()
             .await
@@ -11889,6 +12004,7 @@ impl AppState {
                 saxo_sessions_excluded: true,
                 broker_mutations_excluded: true,
                 raw_oauth_payloads_excluded: true,
+                raw_broker_payloads_excluded: true,
             },
         })
     }
@@ -21458,6 +21574,7 @@ market_data:
                 saxo_sessions_excluded: true,
                 broker_mutations_excluded: true,
                 raw_oauth_payloads_excluded: true,
+                raw_broker_payloads_excluded: true,
             },
         };
 
@@ -26109,6 +26226,112 @@ analysis_windows:
         assert_eq!(
             scheduler_history_policy_values(Some(500), Some(14)),
             (500, 14)
+        );
+    }
+
+    #[test]
+    fn the_hermes_execution_context_carries_no_raw_broker_documents() {
+        // Regression for the live 2026-08-31 get_context payload, which
+        // carried AccountKey 25 times and ClientKey 20 times -- every one
+        // inside a broker document nested in these two columns, and handed to
+        // an external model that the prompt explicitly tells not to expose
+        // them.
+        let rows = vec![
+            json!({
+                "id": 274,
+                "symbol": "PLTR:xnas",
+                "status": "filled",
+                "raw_payload_json": {
+                    "broker_payload": {
+                        "AccountKey": "must-not-reach-hermes",
+                        "ClientKey": "must-not-reach-hermes",
+                        "OrderId": "12345"
+                    },
+                    "payload": {"AccountKey": "must-not-reach-hermes"}
+                }
+            }),
+            json!({
+                "id": 275,
+                "symbol": "DE:xnys",
+                "status": "execution_failed",
+                "execution_result_json": {
+                    "broker_sync": {
+                        "broker_payload": {"AccountKey": "must-not-reach-hermes", "ClientKey": "must-not-reach-hermes"}
+                    },
+                    "payload": {"AccountKey": "must-not-reach-hermes"}
+                }
+            }),
+        ];
+
+        let stripped = strip_raw_broker_documents(rows);
+        let serialized = serde_json::to_string(&stripped).expect("rows serialize");
+
+        assert!(
+            !serialized.contains("must-not-reach-hermes"),
+            "{serialized}"
+        );
+        assert!(!serialized.contains("AccountKey"), "{serialized}");
+        assert!(!serialized.contains("ClientKey"), "{serialized}");
+        // The rows themselves survive: only the raw documents are projected out.
+        assert_eq!(stripped.len(), 2);
+        assert_eq!(stripped[0]["symbol"], "PLTR:xnas");
+        assert_eq!(stripped[1]["status"], "execution_failed");
+    }
+
+    #[test]
+    fn a_scheduler_cycle_keeps_step_health_and_drops_the_diagnostic_dump() {
+        // 20 stored cycle documents at ~28 KB each made scheduler.cycles 1.81 MB
+        // of a 4.66 MB get_context payload, which the transport then truncated
+        // and Hermes reported as missing portfolio context.
+        let cycle = json!({
+            "duration_ms": 41234,
+            "step_durations": {"markov_method": 210_000, "decision_reports": 4_000},
+            "portfolio_position_snapshot_integrity": {
+                "status": "ok",
+                "error_count": 0,
+                "rows": (0..200).map(|i| json!({"symbol": format!("S{i}"), "detail": "x".repeat(40)})).collect::<Vec<_>>()
+            },
+            "decision_reports": {
+                "status": "completed",
+                "reason": "pulse due",
+                "report": {"prompt_text": "y".repeat(5000)}
+            },
+            "protective_stop_sweep": {"status": "error", "error": "broker rejected"},
+            "notifications": ["a", "b", "c"],
+            "saxo_session": {"state": "connected"}
+        });
+
+        let compact = compact_scheduler_cycle_document(&cycle);
+
+        // Health survives.
+        assert_eq!(compact["duration_ms"], 41234);
+        assert_eq!(compact["step_durations"]["markov_method"], 210_000);
+        assert_eq!(
+            compact["portfolio_position_snapshot_integrity"]["status"],
+            "ok"
+        );
+        assert_eq!(
+            compact["portfolio_position_snapshot_integrity"]["error_count"],
+            0
+        );
+        assert_eq!(compact["protective_stop_sweep"]["status"], "error");
+        assert_eq!(compact["protective_stop_sweep"]["error"], "broker rejected");
+        assert_eq!(compact["decision_reports"]["reason"], "pulse due");
+        assert_eq!(compact["saxo_session"]["state"], "connected");
+        assert_eq!(compact["notifications"]["count"], 3);
+
+        // The dumps do not.
+        let serialized = serde_json::to_string(&compact).expect("serialize");
+        assert!(
+            !serialized.contains("prompt_text"),
+            "{}",
+            &serialized[..200.min(serialized.len())]
+        );
+        assert!(!serialized.contains("S199"));
+        assert!(
+            serialized.len() < 600,
+            "compacted cycle should be small, got {} bytes",
+            serialized.len()
         );
     }
 }

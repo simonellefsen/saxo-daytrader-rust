@@ -195,11 +195,29 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
             })
         }
         "get_markov_signals" => {
-            let limit = arguments
-                .get("limit")
-                .and_then(JsonValue::as_i64)
-                .unwrap_or(50);
-            crate::markov_method::compact_markov_context(&state, limit).await?
+            // Prefer the scoped form: a page of the universe makes candidate
+            // visibility depend on alphabetical position rather than on
+            // relevance.
+            let symbols = arguments
+                .get("symbols")
+                .and_then(JsonValue::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if symbols.is_empty() {
+                let limit = arguments
+                    .get("limit")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(50);
+                crate::markov_method::compact_markov_context(&state, limit).await?
+            } else {
+                crate::markov_method::compact_markov_context_for_symbols(&state, &symbols).await?
+            }
         }
         "get_quiver_signals" => {
             let limit = arguments
@@ -369,10 +387,16 @@ fn mcp_tools() -> Vec<JsonValue> {
         ),
         tool_schema(
             "get_markov_signals",
-            "Return recent advisory Markov regime signals for portfolio and watchlist assets.",
+            "Return advisory Markov regime signals. Pass `symbols` to get exactly the instruments you are reviewing; without it you get a page of the universe ordered by run then symbol, so whether a given candidate appears depends on its alphabetical position rather than on relevance.",
             json!({
                 "type": "object",
                 "properties": {
+                    "symbols": {
+                        "type": "array",
+                        "description": "Instrument symbols to return signals for, e.g. [\"PLTR:xnas\", \"DE:xnys\"]. Prefer this over limit when reviewing named candidates. Symbols with no signal come back in missing_symbols rather than being silently absent.",
+                        "items": {"type": "string"},
+                        "maxItems": 40
+                    },
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100}
                 },
                 "additionalProperties": false
@@ -613,6 +637,31 @@ mod tests {
                 .as_str()
                 .expect("tool description")
                 .contains("Pending-review proposal values are deliberately excluded")
+        );
+    }
+
+    #[test]
+    fn the_markov_tool_advertises_symbol_scoping() {
+        let names_and_schemas = mcp_tools();
+        let markov = names_and_schemas
+            .iter()
+            .find(|t| t.get("name").and_then(JsonValue::as_str) == Some("get_markov_signals"))
+            .expect("get_markov_signals is defined");
+        let props = markov
+            .get("inputSchema")
+            .and_then(|s| s.get("properties"))
+            .expect("schema properties");
+        assert!(
+            props.get("symbols").is_some(),
+            "a reviewer must be able to ask for the candidates it is reviewing"
+        );
+        let description = markov
+            .get("description")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        assert!(
+            description.contains("alphabetical"),
+            "the description should warn why the unscoped page is unreliable: {description}"
         );
     }
 }
