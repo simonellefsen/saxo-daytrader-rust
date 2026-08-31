@@ -48,6 +48,7 @@ use crate::{
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
         TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
     },
+    read_model,
 };
 
 pub const CSS: &str = include_str!("../assets/app.css");
@@ -2253,7 +2254,8 @@ fn cash_deployment_summary(
         .get("reinvestment_diagnostics")
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let diagnostics = serde_json::from_value::<TradingManagerReinvestmentDiagnosticsPayload>(
+    let diagnostics = read_model::decode::<TradingManagerReinvestmentDiagnosticsPayload>(
+        "dashboard_cash_deployment_diagnostics",
         diagnostics_value.clone(),
     )
     .unwrap_or_default();
@@ -2261,20 +2263,34 @@ fn cash_deployment_summary(
         .get("capital_budget")
         .or_else(|| manager.get("capital_budget"))
         .cloned()
-        .and_then(|value| serde_json::from_value::<TradingManagerCashBudgetPayload>(value).ok())
+        .and_then(|value| {
+            read_model::decode::<TradingManagerCashBudgetPayload>(
+                "dashboard_cash_deployment_budget",
+                value,
+            )
+            .ok()
+        })
         .unwrap_or_default();
     let breaker = manager
         .get("monthly_loss_circuit_breaker")
         .cloned()
         .and_then(|value| {
-            serde_json::from_value::<TradingManagerMonthlyLossBreakerPayload>(value).ok()
+            read_model::decode::<TradingManagerMonthlyLossBreakerPayload>(
+                "dashboard_cash_deployment_monthly_loss_breaker",
+                value,
+            )
+            .ok()
         })
         .unwrap_or_default();
     let drawdown = manager
         .get("drawdown_guardrail")
         .cloned()
         .and_then(|value| {
-            serde_json::from_value::<TradingManagerDrawdownGuardrailPayload>(value).ok()
+            read_model::decode::<TradingManagerDrawdownGuardrailPayload>(
+                "dashboard_cash_deployment_drawdown_guardrail",
+                value,
+            )
+            .ok()
         })
         .unwrap_or_default();
     let status = if diagnostics.status.is_empty() {
@@ -2312,7 +2328,11 @@ fn cash_deployment_summary(
             .into_iter()
             .flatten()
             .filter_map(|row| {
-                serde_json::from_value::<TradingManagerBlockedBuyGatePayload>(row.clone()).ok()
+                read_model::decode::<TradingManagerBlockedBuyGatePayload>(
+                    "dashboard_cash_deployment_blocked_buy_gate",
+                    row.clone(),
+                )
+                .ok()
             })
             .filter(|row| !row.gate_code.trim().is_empty())
             .collect(),
@@ -2641,7 +2661,8 @@ fn instrument_quarantine_summary(
         .and_then(|value| value.get("instrument_quarantine"))
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let quarantine = serde_json::from_value::<TradingManagerInstrumentQuarantineSummaryPayload>(
+    let quarantine = read_model::decode::<TradingManagerInstrumentQuarantineSummaryPayload>(
+        "dashboard_instrument_quarantine_summary",
         quarantine_value.clone(),
     )
     .unwrap_or_default();
@@ -2651,7 +2672,11 @@ fn instrument_quarantine_summary(
         .into_iter()
         .flatten()
         .filter_map(|row| {
-            serde_json::from_value::<TradingManagerInstrumentQuarantinePayload>(row.clone()).ok()
+            read_model::decode::<TradingManagerInstrumentQuarantinePayload>(
+                "dashboard_instrument_quarantine_row",
+                row.clone(),
+            )
+            .ok()
         })
         .collect::<Vec<_>>();
     let active_count = quarantine.active_count.unwrap_or(active.len() as i64);
@@ -6511,7 +6536,9 @@ fn end_of_day_benchmark_readthrough(diary_json: &JsonValue) -> EndOfDayBenchmark
                 references
                     .iter()
                     .cloned()
-                    .filter_map(|reference| serde_json::from_value(reference).ok())
+                    .filter_map(|reference| {
+                        read_model::decode("dashboard_eod_benchmark_readthrough", reference).ok()
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -13716,5 +13743,138 @@ mod tests {
         assert!(prefixed.contains(r#"value="/saxo-daytrader/?view=market""#));
         assert!(prefixed.contains(r#"src="/saxo-daytrader/favicon.svg""#));
         assert!(prefixed.contains(r#"href="https://example.com""#));
+    }
+
+    /// The dashboard panels that read a staged manager sub-document swallow
+    /// their decode error with `.ok()`, so an explicit null blanks the panel
+    /// with no warning at all -- the quietest form of the 2026-08-31 defect.
+    /// The builders that write these blocks emit a null for anything they do
+    /// not have: no override, no peak yet, a count not computed this cycle.
+    #[test]
+    fn an_explicit_null_never_blanks_cash_deployment() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "created_at": "2026-08-31T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "reinvestment_diagnostics": {
+                        "status": "reinvestment_candidates_approved",
+                        "description": null,
+                        "approved_buy_count": 2,
+                        "skipped_buy_count": null,
+                        "buy_candidate_count": 3,
+                        "capital_budget": {
+                            "available_buy_budget_dkk": 12_500.0,
+                            "excess_cash_pct": null
+                        },
+                        "blocked_buy_gates": [{"gate_code": "cash_budget", "count": null}]
+                    },
+                    "monthly_loss_circuit_breaker": {
+                        "active": true,
+                        "threshold_breached": null,
+                        "month_pnl_dkk": -12_000.0,
+                        "threshold_dkk": -18_000.0,
+                        "override": {"month_key": "2026-08", "notes": null}
+                    },
+                    "drawdown_guardrail": {
+                        "status": "halt",
+                        "active": true,
+                        "drawdown_pct": 0.223,
+                        "halt_pct": 0.25,
+                        "soft_reduce_pct": null,
+                        "peak_value_dkk": 318_400.0,
+                        "peak_at": null,
+                        "lookback_days": 90,
+                        "override": {"enabled": null}
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+
+        assert_eq!(summary.status, "reinvestment_candidates_approved");
+        assert_eq!(summary.approved_buy_count, 2);
+        assert_eq!(summary.candidate_buy_count, 3);
+        assert_eq!(summary.available_buy_budget_dkk, 12_500.0);
+        assert_eq!(summary.blocked_buy_gates.len(), 1);
+        assert!(summary.breaker_active);
+        assert_eq!(summary.breaker_month_pnl_dkk, -12_000.0);
+        assert_eq!(summary.drawdown_status, "halt");
+        assert!(summary.drawdown_active);
+        assert_eq!(summary.drawdown_pct, 0.223);
+        assert_eq!(summary.drawdown_peak_value_dkk, 318_400.0);
+    }
+
+    #[test]
+    fn an_explicit_null_never_blanks_instrument_quarantine() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "created_at": "2026-08-31T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "instrument_quarantine": {
+                        "enabled": true,
+                        "active_count": 1,
+                        "blocked_count": 1,
+                        "override_count": null,
+                        "lookback_days": 7,
+                        "min_failures": null,
+                        "active": [{
+                            "symbol": "SPCX:xnas",
+                            "action": "BUY",
+                            "signature": "instrument_not_found",
+                            "failure_count": null,
+                            "expires_at": "2026-09-07T00:00:00Z",
+                            "override_active": false
+                        }]
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = instrument_quarantine_summary(&latest_run);
+
+        assert!(summary.enabled);
+        assert_eq!(summary.active_count, 1);
+        assert_eq!(summary.blocked_count, 1);
+        assert_eq!(summary.lookback_days, 7);
+        assert_eq!(
+            summary.active.len(),
+            1,
+            "a null field must not drop the row"
+        );
+        assert_eq!(summary.active[0].symbol, "SPCX:xnas");
+    }
+
+    /// The readthrough reference is the one panel payload with no defaulted
+    /// non-Option field, so the null gap never reached it: every optional
+    /// analytic is already `Option`, and a null on a required field fails the
+    /// row whether the key is null or missing. What is worth pinning is that a
+    /// benchmark with no baseline close yet still renders.
+    #[test]
+    fn a_benchmark_reference_without_analytics_still_renders() {
+        let readthrough = end_of_day_benchmark_readthrough(&json!({
+            "diary": {
+                "benchmark_readthrough": {
+                    "status": "ready",
+                    "caveat": "Observed proxy prices only.",
+                    "references": [{
+                        "key": "sp500",
+                        "label": "S&P 500 proxy",
+                        "symbol": "SPY:xnas",
+                        "status": "aligned_close",
+                        "benchmark_return_pct": null,
+                        "portfolio_return_pct": null
+                    }]
+                }
+            }
+        }));
+
+        assert_eq!(readthrough.references.len(), 1);
+        assert_eq!(readthrough.references[0].symbol, "SPY:xnas");
+        assert_eq!(readthrough.references[0].benchmark_return_pct, None);
     }
 }
