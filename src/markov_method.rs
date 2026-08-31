@@ -1377,6 +1377,19 @@ pub(crate) fn markov_filter_sql(filter: &str, min_signed_signal: f64) -> String 
     }
 }
 
+/// One page of the newest signal per symbol.
+///
+/// Selected per symbol rather than from the newest *run*. A targeted refresh
+/// writes a run containing only the symbols it names, so run-scoping collapsed
+/// the whole Markov view to that one instrument while the run card beside it --
+/// which excludes targeted runs -- still reported the full nightly pass. The
+/// two disagreed on screen: "Signals: 200" above a list of one.
+///
+/// The universe is then pinned to the symbols in the latest *full* run, because
+/// "latest per symbol" across all history also resurrects retired tickers: the
+/// 27 symbols U11 remapped still hold rows under their old suffixes, which took
+/// the live count from 201 to 230. Pinning keeps the list equal to the run card
+/// while still preferring a targeted refresh row where one is fresher.
 pub async fn latest_markov_signals_page_filtered(
     state: &AppState,
     limit: i64,
@@ -1393,11 +1406,23 @@ pub async fn latest_markov_signals_page_filtered(
                 sideways_prob, bear_prob, signed_signal, direction, conviction,
                 error_text, raw_payload_json
          FROM markov_asset_signals
-         WHERE run_id = (
-            SELECT id
-            FROM markov_signal_runs
-            ORDER BY run_date DESC, created_at DESC
+         WHERE id = (
+            SELECT inner_signal.id
+            FROM markov_asset_signals AS inner_signal
+            WHERE inner_signal.symbol = markov_asset_signals.symbol
+            ORDER BY inner_signal.run_date DESC, inner_signal.created_at DESC, inner_signal.id DESC
             LIMIT 1
+         )
+         AND symbol IN (
+            SELECT universe.symbol
+            FROM markov_asset_signals AS universe
+            WHERE universe.run_id = (
+               SELECT id
+               FROM markov_signal_runs
+               WHERE status <> 'targeted_refresh'
+               ORDER BY run_date DESC, created_at DESC
+               LIMIT 1
+            )
          ){}
          ORDER BY run_date DESC, created_at DESC, symbol ASC
          LIMIT {} OFFSET {}",
@@ -1417,11 +1442,23 @@ pub async fn latest_markov_signal_count_filtered(
     let row = sqlx::query(&format!(
         "SELECT COUNT(*) AS count
          FROM markov_asset_signals
-         WHERE run_id = (
-            SELECT id
-            FROM markov_signal_runs
-            ORDER BY run_date DESC, created_at DESC
+         WHERE id = (
+            SELECT inner_signal.id
+            FROM markov_asset_signals AS inner_signal
+            WHERE inner_signal.symbol = markov_asset_signals.symbol
+            ORDER BY inner_signal.run_date DESC, inner_signal.created_at DESC, inner_signal.id DESC
             LIMIT 1
+         )
+         AND symbol IN (
+            SELECT universe.symbol
+            FROM markov_asset_signals AS universe
+            WHERE universe.run_id = (
+               SELECT id
+               FROM markov_signal_runs
+               WHERE status <> 'targeted_refresh'
+               ORDER BY run_date DESC, created_at DESC
+               LIMIT 1
+            )
          ){}",
         markov_filter_sql(filter, min_signed_signal)
     ))
