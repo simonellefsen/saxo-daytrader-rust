@@ -1056,10 +1056,66 @@ fn gate_replay_technical_scenario(runs: &[JsonValue]) -> JsonValue {
 /// Read-only counterfactual projection over persisted manager snapshots. It
 /// isolates each threshold and never re-runs a decision report, calls Saxo, or
 /// changes runtime configuration.
+/// Distinct Markov configurations represented in the retained runs.
+///
+/// A replay pools the last N manager runs into one aggregate, which is only
+/// meaningful while every run was produced by the same model under the same
+/// threshold. The 2026-08-31 move from daily to hourly bars changed the signal
+/// distribution, so evidence spanning that boundary describes two models under
+/// one label -- and Hermes is explicitly permitted to propose
+/// `strategy.swing.markov_gate.min_signed_signal`, which makes silently mixed
+/// evidence a live hazard rather than a presentation nit.
+///
+/// Runs predating the fingerprint report their threshold with an unrecorded
+/// model, which is itself the useful signal: the evidence is older than the
+/// stamp.
+fn gate_replay_evidence_generations(runs: &[JsonValue]) -> Vec<JsonValue> {
+    let mut generations: Vec<(JsonValue, JsonValue, usize)> = Vec::new();
+    for run in runs {
+        let markov = run
+            .get("manager_json")
+            .and_then(|manager| manager.get("hermes_preflight"))
+            .and_then(|preflight| preflight.get("markov"))
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let model = markov
+            .get("model")
+            .cloned()
+            .unwrap_or(JsonValue::String("not_recorded".to_string()));
+        let threshold = markov
+            .get("min_signed_signal")
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        match generations
+            .iter_mut()
+            .find(|(seen_model, seen_threshold, _)| {
+                *seen_model == model && *seen_threshold == threshold
+            }) {
+            Some((_, _, count)) => *count += 1,
+            None => generations.push((model, threshold, 1)),
+        }
+    }
+    generations
+        .into_iter()
+        .map(|(model, min_signed_signal, run_count)| {
+            json!({"model": model, "min_signed_signal": min_signed_signal, "run_count": run_count})
+        })
+        .collect()
+}
+
 fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
+    let generations = gate_replay_evidence_generations(runs);
+    let mixed = generations.len() > 1;
     json!({
         "status": if runs.is_empty() { "no_history" } else { "available" },
         "run_count": runs.len(),
+        "evidence_generations": generations,
+        "evidence_is_mixed": mixed,
+        "evidence_caveat": if mixed {
+            "The retained runs span more than one Markov configuration or gate threshold, so this comparison pools evidence produced by different models. Treat a target-gate flip as suggestive only, and prefer a proposal measured within a single generation."
+        } else {
+            "All retained runs share one Markov configuration and gate threshold."
+        },
         "scenarios": [
             gate_replay_markov_scenario(runs),
             gate_replay_technical_scenario(runs),
@@ -26508,6 +26564,62 @@ analysis_windows:
         assert_eq!(
             compact["scheduler_status"]["last_cycle_json"]["decision_reports"]["status"],
             "completed"
+        );
+    }
+
+    #[test]
+    fn gate_replay_flags_evidence_that_spans_a_model_change() {
+        // Hermes is permitted to propose min_signed_signal, and the replay
+        // pools the last N manager runs into one aggregate. On 2026-08-31 the
+        // Markov horizon moved from daily to hourly, which changed the signal
+        // distribution enough that the same 0.15 threshold went from admitting
+        // 111 of 200 symbols to 132. Evidence spanning that boundary describes
+        // two models under one label.
+        let run = |horizon: Option<i64>, threshold: f64| {
+            let model = match horizon {
+                Some(minutes) => json!({"horizon_minutes": minutes, "window_days": 20}),
+                None => json!("not_recorded"),
+            };
+            json!({"manager_json": {"hermes_preflight": {"markov": {
+                "min_signed_signal": threshold,
+                "model": model
+            }}}})
+        };
+
+        let one_generation = vec![run(Some(60), 0.20), run(Some(60), 0.20)];
+        let replay = gate_replay_from_manager_runs(&one_generation);
+        assert_eq!(replay["evidence_is_mixed"], false);
+        assert_eq!(replay["evidence_generations"].as_array().unwrap().len(), 1);
+        assert_eq!(replay["evidence_generations"][0]["run_count"], 2);
+
+        // A threshold change alone splits the evidence.
+        let threshold_change = vec![run(Some(60), 0.20), run(Some(60), 0.15)];
+        let replay = gate_replay_from_manager_runs(&threshold_change);
+        assert_eq!(replay["evidence_is_mixed"], true);
+        assert_eq!(replay["evidence_generations"].as_array().unwrap().len(), 2);
+
+        // So does a horizon change at one threshold.
+        let horizon_change = vec![run(Some(60), 0.15), run(Some(1440), 0.15)];
+        let replay = gate_replay_from_manager_runs(&horizon_change);
+        assert_eq!(replay["evidence_is_mixed"], true);
+        assert!(
+            replay["evidence_caveat"]
+                .as_str()
+                .unwrap()
+                .contains("more than one Markov configuration")
+        );
+
+        // Runs predating the stamp report an unrecorded model rather than
+        // being silently folded in with stamped ones.
+        let mixed_vintage = vec![run(Some(60), 0.15), run(None, 0.15)];
+        let replay = gate_replay_from_manager_runs(&mixed_vintage);
+        assert_eq!(replay["evidence_is_mixed"], true);
+        assert!(
+            replay["evidence_generations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|generation| generation["model"] == "not_recorded")
         );
     }
 }

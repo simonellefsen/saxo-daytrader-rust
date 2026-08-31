@@ -2799,6 +2799,9 @@ async fn hermes_decision_preflight_bundle(
         "markov": {
             "max_signal_age_days": markov_cfg.max_signal_age_days,
             "min_signed_signal": markov_cfg.min_signed_signal,
+            // Retained so a later gate replay can tell whether the evidence it
+            // pooled was produced by one model or several.
+            "model": crate::markov_method::markov_model_fingerprint(state),
             "latest_run": latest_markov_run,
         },
         "candidate_waterfall": candidate_waterfall,

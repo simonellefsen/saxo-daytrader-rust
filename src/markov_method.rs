@@ -1645,6 +1645,25 @@ pub(crate) fn trim_markov_run_for_prompt(run: &JsonValue) -> JsonValue {
     JsonValue::Object(trimmed)
 }
 
+/// The tunings that define what a Markov signal *means*, as a compact stamp.
+///
+/// Retained gate evidence is only comparable across runs that share these. The
+/// 2026-08-31 move from daily to hourly bars changed the signal distribution --
+/// the same 0.15 threshold went from admitting 111 of 200 symbols to 132 -- so
+/// a replay pooling runs from either side of it compares two different models
+/// under one label. `min_signed_signal` was already recorded per run and shows
+/// the threshold change; this records the model the threshold was applied to.
+pub(crate) fn markov_model_fingerprint(state: &AppState) -> JsonValue {
+    let config = markov_config(state);
+    json!({
+        "horizon_minutes": config.horizon_minutes,
+        "window_days": config.window_days,
+        "threshold": config.threshold,
+        "signal_horizon_days": config.signal_horizon_days,
+        "bars_per_session": config.bars_per_session,
+    })
+}
+
 pub fn markov_config_json_for_state(state: &AppState) -> JsonValue {
     markov_config_json(&markov_config(state))
 }
