@@ -1010,7 +1010,7 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
         .and_then(JsonValue::as_str)
         .unwrap_or_default();
     let rows = sqlx::query(&format!(
-        "SELECT symbol, run_date, close, sma20, sma50, sma200, rsi14, macd_histogram,
+        "SELECT symbol, uic, asset_type, run_date, close, sma20, sma50, sma200, rsi14, macd_histogram,
                 atr14, reward_risk, nearest_support, next_support, downside_to_support_pct,
                 downside_after_break_pct, support_break_risk, support_break_risk_label,
                 support_confidence, support_history_coverage, support_touch_count,
@@ -1041,6 +1041,8 @@ pub async fn compact_indicator_context(state: &AppState, limit: i64) -> Result<J
         };
         signals.push(json!({
             "symbol": row.get("symbol").cloned().unwrap_or(JsonValue::Null),
+            "uic": row.get("uic").cloned().unwrap_or(JsonValue::Null),
+            "asset_type": row.get("asset_type").cloned().unwrap_or(JsonValue::Null),
             "close": row.get("close").cloned().unwrap_or(JsonValue::Null),
             "currency": currency,
             "close_dkk": close_dkk,

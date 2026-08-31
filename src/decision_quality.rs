@@ -10,6 +10,7 @@ use serde_json::{Value as JsonValue, json};
 pub(crate) fn completion_quality_audit(
     report: &JsonValue,
     requested_capital_plan: Option<&JsonValue>,
+    decision_time_context: Option<&JsonValue>,
 ) -> JsonValue {
     let mut checks = Vec::new();
     let report_object = report.is_object();
@@ -90,6 +91,75 @@ pub(crate) fn completion_quality_audit(
         "Every suggested candidate has technical and Markov metadata.",
         &format!(
             "{missing_evidence_count} suggested candidate(s) are missing required technical or Markov metadata."
+        ),
+    );
+
+    let daily_indicator_context = decision_time_context
+        .and_then(|context| context.get("daily_indicators"))
+        .filter(|context| context.is_object());
+    let indicator_run_ok = daily_indicator_context
+        .and_then(|context| context.get("latest_run"))
+        .and_then(|run| run.get("status"))
+        .and_then(JsonValue::as_str)
+        == Some("ok");
+    push_check(
+        &mut checks,
+        "daily_indicator_run",
+        indicator_run_ok,
+        "A completed daily-indicator run was available at decision time.",
+        "No completed daily-indicator run was available in the persisted decision-time context.",
+    );
+
+    let indicator_signals = daily_indicator_context
+        .and_then(|context| context.get("signals"))
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let missing_indicator_count = suggested_trades
+        .iter()
+        .filter(|trade| decision_time_indicator_signal(trade, &indicator_signals).is_none())
+        .count();
+    push_check(
+        &mut checks,
+        "candidate_daily_indicator_evidence",
+        missing_indicator_count == 0,
+        "Every suggested candidate has a matching daily-indicator snapshot from decision time.",
+        &format!(
+            "{missing_indicator_count} suggested candidate(s) have no matching daily-indicator snapshot from decision time."
+        ),
+    );
+
+    let missing_instrument_count = suggested_trades
+        .iter()
+        .filter(|trade| {
+            !decision_time_indicator_signal(trade, &indicator_signals)
+                .is_some_and(indicator_signal_has_instrument_resolution)
+        })
+        .count();
+    push_check(
+        &mut checks,
+        "candidate_instrument_resolution",
+        missing_instrument_count == 0,
+        "Every suggested candidate has a resolved Saxo instrument snapshot from decision time.",
+        &format!(
+            "{missing_instrument_count} suggested candidate(s) are missing resolved Saxo instrument evidence."
+        ),
+    );
+
+    let missing_currency_count = suggested_trades
+        .iter()
+        .filter(|trade| {
+            !decision_time_indicator_signal(trade, &indicator_signals)
+                .is_some_and(indicator_signal_has_currency_context)
+        })
+        .count();
+    push_check(
+        &mut checks,
+        "candidate_currency_context",
+        missing_currency_count == 0,
+        "Every suggested candidate has trading-currency, local-close, and DKK-close evidence from decision time.",
+        &format!(
+            "{missing_currency_count} suggested candidate(s) are missing trading-currency or DKK-close evidence."
         ),
     );
 
@@ -191,6 +261,34 @@ fn candidate_has_required_evidence(trade: &JsonValue) -> bool {
             .is_some()
 }
 
+fn decision_time_indicator_signal<'a>(
+    trade: &JsonValue,
+    signals: &'a [JsonValue],
+) -> Option<&'a JsonValue> {
+    let candidate_symbol = canonical_symbol_key(&text(trade, "symbol"));
+    (!candidate_symbol.is_empty())
+        .then_some(candidate_symbol)
+        .and_then(|symbol| {
+            signals
+                .iter()
+                .find(|signal| canonical_symbol_key(&text(signal, "symbol")) == symbol)
+        })
+}
+
+fn indicator_signal_has_instrument_resolution(signal: &JsonValue) -> bool {
+    number(signal, "uic").is_some_and(|uic| uic > 0.0) && !text(signal, "asset_type").is_empty()
+}
+
+fn indicator_signal_has_currency_context(signal: &JsonValue) -> bool {
+    !text(signal, "currency").is_empty()
+        && number(signal, "close").is_some_and(|value| value > 0.0)
+        && number(signal, "close_dkk").is_some_and(|value| value > 0.0)
+}
+
+fn canonical_symbol_key(symbol: &str) -> String {
+    symbol.trim().to_ascii_uppercase()
+}
+
 fn capital_plan_matches(requested: &JsonValue, reported: Option<&JsonValue>) -> bool {
     let Some(reported) = reported else {
         return false;
@@ -242,6 +340,22 @@ mod tests {
         })
     }
 
+    fn decision_time_context() -> serde_json::Value {
+        json!({
+            "daily_indicators": {
+                "latest_run": {"status": "ok"},
+                "signals": [{
+                    "symbol": "AMD:xnas",
+                    "uic": 211,
+                    "asset_type": "Stock",
+                    "currency": "USD",
+                    "close": 170.0,
+                    "close_dkk": 1100.0
+                }]
+            }
+        })
+    }
+
     #[test]
     fn records_ready_evidence_for_canonical_report() {
         let suggested = vec![complete_trade()];
@@ -257,7 +371,8 @@ mod tests {
             "execution_safety": {"queue_eligible": true}
         });
 
-        let audit = completion_quality_audit(&report, Some(&capital));
+        let decision_time_context = decision_time_context();
+        let audit = completion_quality_audit(&report, Some(&capital), Some(&decision_time_context));
 
         assert_eq!(audit["status"], "ready");
         assert_eq!(audit["score"], 100);
@@ -275,11 +390,47 @@ mod tests {
             "execution_safety": {"queue_eligible": true}
         });
 
-        let audit = completion_quality_audit(&report, None);
+        let audit = completion_quality_audit(&report, None, None);
 
         assert_eq!(audit["status"], "review");
         assert_eq!(audit["candidate_count"], 1);
         assert_eq!(audit["admission"], "observational_only");
         assert_eq!(report["suggested_trades"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn records_missing_decision_time_currency_and_instrument_evidence() {
+        let suggested = vec![complete_trade()];
+        let report = json!({
+            "market_view": {},
+            "capital_plan": {},
+            "selected_assets": [],
+            "symbol_sentiment": [],
+            "suggested_trades": suggested,
+            "strategy_plan": {"swing_orders": suggested},
+            "market_scope_enforcement": {"status": "not_required"},
+            "execution_safety": {"queue_eligible": true}
+        });
+        let context = json!({
+            "daily_indicators": {
+                "latest_run": {"status": "failed"},
+                "signals": [{"symbol": "AMD:xnas"}]
+            }
+        });
+
+        let audit = completion_quality_audit(&report, None, Some(&context));
+        let checks = audit["checks"].as_array().expect("audit checks");
+        for key in [
+            "daily_indicator_run",
+            "candidate_instrument_resolution",
+            "candidate_currency_context",
+        ] {
+            assert!(
+                checks
+                    .iter()
+                    .any(|check| { check["key"] == key && check["status"] == "review" })
+            );
+        }
+        assert_eq!(audit["admission"], "observational_only");
     }
 }

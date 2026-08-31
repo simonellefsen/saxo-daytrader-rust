@@ -10,6 +10,11 @@ updated: 2026-08-30
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-30] safety | Audit decision-time currency and instrument evidence
+
+- Extended the server-owned Completion Quality Audit with persisted decision-time daily-indicator availability, candidate signal matching, resolved Saxo UIC/asset type, and trading-currency/local-close/DKK-close checks. The compact decision context now carries only the identity and pricing fields needed for this audit.
+- Missing or malformed historical context is a retained review finding. The audit does not query current markets, alter Trading Manager admission, create a queue entry, invoke Hermes, or reach Saxo.
+
 ## [2026-08-30] safety | Project reviewed execution taxonomy into event diagnostics
 
 - Execution-event rows now show only reviewed category, canonical next-step, retry posture, and the local queue-expiry stage. The projection resolves a persisted taxonomy code through the server-owned canonical taxonomy instead of rendering stored label/remediation text.

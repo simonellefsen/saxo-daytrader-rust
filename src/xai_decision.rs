@@ -954,11 +954,35 @@ fn completed_report_json_from_parts(
             }),
         );
     }
-    let quality_audit = completion_quality_audit(&parsed, requested_capital_plan.as_ref());
+    let decision_time_context = decision_request_user_context(request_json);
+    let quality_audit = completion_quality_audit(
+        &parsed,
+        requested_capital_plan.as_ref(),
+        decision_time_context.as_ref(),
+    );
     if let Some(obj) = parsed.as_object_mut() {
         obj.insert("decision_quality".to_string(), quality_audit);
     }
     Ok(parsed)
+}
+
+/// Decodes only the generated user context from the persisted provider request
+/// so completion-quality evidence can be checked against decision-time facts.
+/// A missing or malformed historical request becomes unavailable evidence; it
+/// never falls back to a newer market query.
+fn decision_request_user_context(request_json: &JsonValue) -> Option<JsonValue> {
+    request_json
+        .get("messages")
+        .and_then(JsonValue::as_array)
+        .and_then(|messages| {
+            messages.iter().rev().find_map(|message| {
+                (message.get("role").and_then(JsonValue::as_str) == Some("user"))
+                    .then(|| message.get("content").and_then(JsonValue::as_str))
+                    .flatten()
+            })
+        })
+        .and_then(|content| serde_json::from_str(content).ok())
+        .filter(JsonValue::is_object)
 }
 
 /// Normalize the provider's comparison into server-owned observation metadata.
@@ -3792,6 +3816,28 @@ mod tests {
             }
         });
         json!({"messages": [{"role": "user", "content": serde_json::to_string(&user).unwrap()}]})
+    }
+
+    #[test]
+    fn completion_quality_uses_only_the_persisted_user_request_context() {
+        let request = json!({
+            "messages": [
+                {"role": "system", "content": "ignored"},
+                {"role": "user", "content": "{\"daily_indicators\":{\"latest_run\":{\"status\":\"ok\"}}}"}
+            ]
+        });
+
+        assert_eq!(
+            decision_request_user_context(&request).expect("user context")["daily_indicators"]["latest_run"]
+                ["status"],
+            "ok"
+        );
+        assert!(
+            decision_request_user_context(&json!({
+                "messages": [{"role": "user", "content": "not JSON"}]
+            }))
+            .is_none()
+        );
     }
 
     struct DecisionReportRegressionFixture {
