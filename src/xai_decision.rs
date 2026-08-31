@@ -1535,6 +1535,7 @@ async fn build_decision_prompt(
         "When reinvestment_pressure.active is true, explicitly decide whether to redeploy excess cash, wait in cash, or rotate risk. If qualifying Markov-backed starter candidates exist, prefer proposing capped starter BUYs over waiting in cash; only wait when no candidate qualifies, and explain the blocker in capital_plan.cash_policy with watched candidates in capital_plan.near_term_opportunities.",
         "Think in two horizons: near-term opportunities for the next 2 weeks, and medium-term opportunities for the next 1-3 months.",
         "Use selected_assets and symbol_sentiment to document forward-looking opportunities even when they are not tradable or actionable today.",
+        "Emit up to 10 symbol_sentiment entries, not the minimum needed to justify the trades. Cover every held position in scope first, then the strongest candidates you considered and rejected, since a recorded view on a symbol you decided against is more useful later than no view at all. Symbols outside the supplied market_scope are removed by the server, so spending an entry on one wastes it.",
         "Suggested trades must be conservative and include strategy_metadata.technical when available.",
         "Only put a symbol in suggested_trades when its exchange is currently tradable under the supplied market_scope.",
         "Only put BUY trades in suggested_trades when the trade fits inside capital_plan.available_buy_budget_dkk after preserving the cash buffer.",
