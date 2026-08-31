@@ -10,6 +10,11 @@ updated: 2026-08-31
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-31] decision pipeline | Add confirmed provider fallback dry runs
+
+- Added an operator-confirmed fallback form for retained `xai_error` and `dry_run_error` Decision Reports. It retries only the exact persisted prompt snapshot with a validated supplied model and the current strict response schema, while retaining source-report ID/status/model provenance in a separate fallback report.
+- Fallback reports use the `DryRun` contract and a server-owned shadow pulse. The source failure is never changed; neither the fallback nor any dry-run completion can invoke Hermes, Trading Manager, queueing, Saxo reference capture, prechecks, or broker mutation. This is a one-shot provider/schema recovery observation, not automatic failover or a model-promotion path.
+
 ## [2026-08-31] decision pipeline | Add confirmed model-comparison dry runs
 
 - Added an explicit Decisions form for one supplied-model comparison. The model identifier is validated without modifying the active setting, and the job shares the existing single manual-report claim to prevent overlapping provider work.

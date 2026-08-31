@@ -26,8 +26,9 @@ use crate::{
         AssetLadderHistoryPayload, AssetLadderSummaryPayload, CashBufferRequest,
         CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
         DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
-        DecisionReportListPayload, DecisionReportModelComparisonRequest,
-        DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
+        DecisionReportFallbackRetryRequest, DecisionReportListPayload,
+        DecisionReportModelComparisonRequest, DrawdownGuardOverrideRequest,
+        ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
         ExecutionOrderEventTimelineEntryPayload, ExecutionOrderEventTimelinePayload,
         ExecutionOrderSummaryPayload, ExecutionPayload, HermesCapabilitiesPayload,
         HermesContextPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
@@ -191,6 +192,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/actions/decision-report-model-comparison",
             post(action_generate_decision_report_model_comparison),
+        )
+        .route(
+            "/api/actions/decision-report-fallback-dry-run",
+            post(action_generate_decision_report_fallback_dry_run),
         )
         .route("/api/actions/queue-process", post(action_process_queue))
         .route(
@@ -2434,6 +2439,60 @@ async fn action_generate_decision_report_model_comparison(
         }
         if let Err(err) = task_state.release_manual_decision_report_claim().await {
             warn!("releasing model-comparison claim failed: {err:#}");
+        }
+    });
+    redirect_to_app(&state, return_to).into_response()
+}
+
+async fn action_generate_decision_report_fallback_dry_run(
+    State(state): State<Arc<AppState>>,
+    Form(request): Form<DecisionReportFallbackRetryRequest>,
+) -> Response {
+    let return_to = safe_return_to(request.return_to.as_deref());
+    if request.source_report_id <= 0 || request.confirm_dry_run.as_deref() != Some("true") {
+        warn!(
+            source_report_id = request.source_report_id,
+            "provider fallback dry-run confirmation or source report missing"
+        );
+        return redirect_to_app(&state, return_to).into_response();
+    }
+    let model = match validated_ai_model(request.model.as_deref().unwrap_or("")) {
+        Ok(model) => model,
+        Err(err) => {
+            warn!("provider fallback retry model rejected: {err:#}");
+            return redirect_to_app(&state, return_to).into_response();
+        }
+    };
+    match state.claim_manual_decision_report().await {
+        Ok(true) => {}
+        Ok(false) => {
+            info!("manual decision report already in flight; not starting provider fallback retry");
+            return redirect_to_app(&state, return_to).into_response();
+        }
+        Err(err) => {
+            error!("provider fallback retry claim failed: {err:#}");
+            return json_result(Err(err));
+        }
+    }
+    let task_state = state.clone();
+    let source_report_id = request.source_report_id;
+    tokio::spawn(async move {
+        match xai_decision::submit_provider_fallback_dry_run(&task_state, source_report_id, &model)
+            .await
+        {
+            Ok(report) => info!(
+                report_id = report.get("id").and_then(JsonValue::as_i64).unwrap_or(0),
+                source_report_id,
+                status = report.get("status").and_then(JsonValue::as_str).unwrap_or("unknown"),
+                model = %model,
+                "confirmed provider fallback retry completed without manager or Saxo execution"
+            ),
+            Err(err) => {
+                error!(source_report_id, model = %model, "provider fallback retry failed: {err:#}")
+            }
+        }
+        if let Err(err) = task_state.release_manual_decision_report_claim().await {
+            warn!("releasing provider fallback retry claim failed: {err:#}");
         }
     });
     redirect_to_app(&state, return_to).into_response()

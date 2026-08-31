@@ -243,6 +243,84 @@ pub async fn submit_manual_model_comparison_report(
     .await
 }
 
+/// Retries one retained provider/schema failure against the exact prompt
+/// snapshot that produced it.  The retry is intentionally a fresh, separate
+/// dry-run report: it never changes the failed source, does not update the
+/// active model, and cannot enter Trading Manager, the execution queue, or
+/// Saxo.
+pub async fn submit_provider_fallback_dry_run(
+    state: &AppState,
+    source_report_id: i64,
+    model: &str,
+) -> Result<JsonValue> {
+    let model = validated_ai_model(model)?;
+    let source = state
+        .decision_report_item(source_report_id)
+        .await?
+        .ok_or_else(|| anyhow!("source Decision Report was not found"))?;
+    let source_status = source
+        .get("status")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    if !provider_fallback_retryable_status(source_status) {
+        return Err(anyhow!(
+            "source Decision Report is not a retained provider/schema failure"
+        ));
+    }
+    let prompt = stored_decision_prompt(source.get("prompt_text"))?;
+    let now = Utc::now();
+    let pulse = DecisionPulse {
+        key: format!(
+            "provider_fallback_dry_run:{source_report_id}:{}",
+            now.format("%Y-%m-%dT%H:%M:%SZ")
+        ),
+        label: format!("Fallback Retry for Decision Report #{source_report_id} (Dry Run)"),
+        kind: "provider_fallback_dry_run".to_string(),
+        mode: DecisionPulseMode::Shadow,
+        target_at_utc: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        target_at_local: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        local_date: now.date_naive().to_string(),
+        schedule_time_zone: "UTC".to_string(),
+        target_session: DecisionPulseSession::Manual,
+        market_scope_status: DecisionPulseMarketScopeStatus::NotApplicable,
+        configured_exchange_codes: Vec::new(),
+        exchange_codes: Vec::new(),
+        source_markets: Vec::new(),
+    };
+    let provenance = json!({
+        "source_report_id": source_report_id,
+        "source_status": source_status,
+        "source_model": source.get("model").and_then(JsonValue::as_str).unwrap_or_default(),
+        "requested_model": model,
+        "prompt_context": "exact_persisted_source_prompt",
+        "operator_confirmed": true,
+        "authority": "dry_run_only_no_trading_manager_queue_or_saxo",
+    });
+    submit_report_with_prompt(
+        state,
+        &pulse,
+        DecisionReportSubmissionMode::DryRun,
+        &model,
+        prompt,
+        Some(&provenance),
+    )
+    .await
+}
+
+pub(crate) fn provider_fallback_retryable_status(status: &str) -> bool {
+    matches!(status, "xai_error" | "dry_run_error")
+}
+
+fn stored_decision_prompt(value: Option<&JsonValue>) -> Result<JsonValue> {
+    let prompt = decode_json_field(value);
+    if !prompt.is_object() || prompt.get("user").is_none() {
+        return Err(anyhow!(
+            "source Decision Report does not retain a reusable prompt snapshot"
+        ));
+    }
+    Ok(prompt)
+}
+
 async fn submit_manual_decision_report_with_mode(
     state: &AppState,
     mode: DecisionReportSubmissionMode,
@@ -346,24 +424,36 @@ async fn submit_deferred_report(
     mode: DecisionReportSubmissionMode,
     model_override: Option<&str>,
 ) -> Result<JsonValue> {
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt = build_decision_prompt(state, pulse, manual).await?;
-    let provider = ai_provider(state);
     let model = match model_override {
         Some(model) => validated_ai_model(model)?,
         None => state.effective_xai_model().await?,
     };
-    let request_json = build_chat_request(state, &prompt, &model)?;
+    submit_report_with_prompt(state, pulse, mode, &model, prompt, None).await
+}
+
+async fn submit_report_with_prompt(
+    state: &AppState,
+    pulse: &DecisionPulse,
+    mode: DecisionReportSubmissionMode,
+    model: &str,
+    prompt: JsonValue,
+    fallback_retry: Option<&JsonValue>,
+) -> Result<JsonValue> {
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let provider = ai_provider(state);
+    let request_json = build_chat_request(state, &prompt, model)?;
 
     let Some(api_key) = ai_api_key(state).await else {
         let report = insert_xai_error_report(
             state,
             &created_at,
             pulse,
-            &model,
+            model,
             &prompt,
             &request_json,
             mode,
+            fallback_retry,
             &format!(
                 "{} is missing; decision report was not submitted.",
                 ai_api_key_env_name(state)
@@ -394,10 +484,11 @@ async fn submit_deferred_report(
             state,
             &created_at,
             pulse,
-            &model,
+            model,
             &prompt,
             &outbound_request,
             mode,
+            fallback_retry,
             &format!("{provider} decision submit failed with HTTP {status}: {response_excerpt}"),
         )
         .await?;
@@ -417,10 +508,11 @@ async fn submit_deferred_report(
                 state,
                 &created_at,
                 pulse,
-                &model,
+                model,
                 &prompt,
                 &outbound_request,
                 mode,
+                fallback_retry,
                 &format!(
                     "{provider} decision submit returned invalid JSON despite HTTP {status}: {err}; response excerpt: {response_excerpt}"
                 ),
@@ -441,10 +533,11 @@ async fn submit_deferred_report(
             .get("id")
             .and_then(JsonValue::as_str)
             .unwrap_or("");
-        let seed_report = json!({
+        let mut seed_report = json!({
             "created_at": created_at,
             "analysis_pulse": pulse_to_json(pulse)
         });
+        insert_fallback_retry_provenance(&mut seed_report, fallback_retry);
         let report_json = match completed_report_json_from_parts(
             &outbound_request,
             &seed_report,
@@ -464,11 +557,12 @@ async fn submit_deferred_report(
                     state,
                     &created_at,
                     pulse,
-                    &model,
+                    model,
                     &prompt,
                     &outbound_request,
                     Some(&response_json),
                     mode,
+                    fallback_retry,
                     &format!(
                         "{provider} decision report response could not be normalized into strict JSON: {err:#}; message content excerpt: {content_excerpt}"
                     ),
@@ -487,7 +581,7 @@ async fn submit_deferred_report(
             state,
             &created_at,
             pulse,
-            model.clone(),
+            model.to_string(),
             mode.completed_status(),
             Some(response_id),
             &prompt,
@@ -498,8 +592,14 @@ async fn submit_deferred_report(
         )
         .await?;
         let report_id = row.get("id").and_then(JsonValue::as_i64).unwrap_or(0);
-        let shadow_observations =
-            finalize_shadow_report_observations(state, report_id, &report_json, true).await;
+        let shadow_observations = if mode == DecisionReportSubmissionMode::Live {
+            finalize_shadow_report_observations(state, report_id, &report_json, true).await
+        } else {
+            json!({
+                "status": "not_applicable",
+                "safety": "dry_run_completion_does_not_request_hermes_or_saxo_reference_data",
+            })
+        };
         info!(
             report_id,
             pulse_key = %pulse.key,
@@ -519,7 +619,7 @@ async fn submit_deferred_report(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| anyhow!("xAI deferred submit response did not include request_id"))?;
 
-    let report_json = json!({
+    let mut report_json = json!({
         "status": mode.deferred_status(),
         "created_at": created_at,
         "report_title": pulse.label,
@@ -548,11 +648,12 @@ async fn submit_deferred_report(
         },
         "execution_safety": report_execution_safety(mode, pulse.mode)
     });
+    insert_fallback_retry_provenance(&mut report_json, fallback_retry);
     let row = insert_decision_report(
         state,
         &created_at,
         pulse,
-        model,
+        model.to_string(),
         mode.deferred_status(),
         Some(request_id),
         &prompt,
@@ -672,8 +773,14 @@ async fn poll_one_deferred_report(
         &report_json,
     )
     .await?;
-    let shadow_observations =
-        finalize_shadow_report_observations(state, pending.id, &report_json, true).await;
+    let shadow_observations = if pending.mode == DecisionReportSubmissionMode::Live {
+        finalize_shadow_report_observations(state, pending.id, &report_json, true).await
+    } else {
+        json!({
+            "status": "not_applicable",
+            "safety": "dry_run_completion_does_not_request_hermes_or_saxo_reference_data",
+        })
+    };
     info!(
         report_id = pending.id,
         request_id = pending.request_id,
@@ -965,6 +1072,9 @@ fn completed_report_json_from_parts(
         // authority. Replace any similarly named provider field with the
         // server-created pulse metadata used for persistence and admission.
         obj.insert("analysis_pulse".to_string(), pulse);
+        if let Some(fallback_retry) = report_json.get("fallback_retry").cloned() {
+            obj.insert("fallback_retry".to_string(), fallback_retry);
+        }
         obj.insert("market_scope_enforcement".to_string(), scope_enforcement);
         obj.insert(
             "shadow_change_assessment".to_string(),
@@ -2498,6 +2608,7 @@ async fn insert_xai_error_report(
     prompt: &JsonValue,
     request_json: &JsonValue,
     mode: DecisionReportSubmissionMode,
+    fallback_retry: Option<&JsonValue>,
     error_text: &str,
 ) -> Result<JsonValue> {
     insert_xai_error_report_with_response(
@@ -2509,6 +2620,7 @@ async fn insert_xai_error_report(
         request_json,
         None,
         mode,
+        fallback_retry,
         error_text,
     )
     .await
@@ -2523,9 +2635,10 @@ async fn insert_xai_error_report_with_response(
     request_json: &JsonValue,
     response_json: Option<&JsonValue>,
     mode: DecisionReportSubmissionMode,
+    fallback_retry: Option<&JsonValue>,
     error_text: &str,
 ) -> Result<JsonValue> {
-    let report_json = json!({
+    let mut report_json = json!({
         "status": mode.error_status(),
         "created_at": created_at,
         "report_title": pulse.label,
@@ -2535,6 +2648,7 @@ async fn insert_xai_error_report_with_response(
         "execution_notes": [error_text],
         "execution_safety": report_execution_safety(mode, pulse.mode)
     });
+    insert_fallback_retry_provenance(&mut report_json, fallback_retry);
     insert_decision_report(
         state,
         created_at,
@@ -2549,6 +2663,15 @@ async fn insert_xai_error_report_with_response(
         Some(error_text),
     )
     .await
+}
+
+fn insert_fallback_retry_provenance(report: &mut JsonValue, fallback_retry: Option<&JsonValue>) {
+    let Some(fallback_retry) = fallback_retry else {
+        return;
+    };
+    if let Some(object) = report.as_object_mut() {
+        object.insert("fallback_retry".to_string(), fallback_retry.clone());
+    }
 }
 
 fn truncate_error_text(value: &str, max_chars: usize) -> String {
@@ -4177,6 +4300,63 @@ mod tests {
         assert_eq!(safety["queue_eligible"], false);
         assert_eq!(safety["trading_manager"], "blocked");
         assert_eq!(safety["execution_queue"], "blocked");
+    }
+
+    #[test]
+    fn provider_fallback_retries_only_retained_provider_failures() {
+        assert!(provider_fallback_retryable_status("xai_error"));
+        assert!(provider_fallback_retryable_status("dry_run_error"));
+        assert!(!provider_fallback_retryable_status("completed"));
+        assert!(!provider_fallback_retryable_status("xai_deferred"));
+        assert!(!provider_fallback_retryable_status("rust_fallback"));
+    }
+
+    #[test]
+    fn provider_fallback_requires_the_exact_stored_prompt_shape() {
+        let prompt = stored_decision_prompt(Some(&json!({
+            "system": "Return strict JSON only.",
+            "user": {"capital_plan": {"available_buy_budget_dkk": 1000.0}}
+        })))
+        .expect("stored provider prompt is reusable");
+        assert_eq!(
+            prompt["user"]["capital_plan"]["available_buy_budget_dkk"],
+            1000.0
+        );
+        assert!(stored_decision_prompt(Some(&json!({"system": "missing user"}))).is_err());
+        assert!(stored_decision_prompt(Some(&JsonValue::String("not json".to_string()))).is_err());
+    }
+
+    #[test]
+    fn completed_fallback_retry_retains_provenance_and_stays_non_actionable() {
+        let response = json!({
+            "id": "fallback-dry-run",
+            "choices": [{"message": {"content": "{\"report_title\":\"Fallback\",\"suggested_trades\":[]}"}}]
+        });
+        let report = completed_report_json_from_parts(
+            &json!({}),
+            &json!({
+                "created_at": "2026-08-31T12:00:00Z",
+                "analysis_pulse": {
+                    "key": "provider_fallback_dry_run:99:2026-08-31T12:00:00Z",
+                    "pulse_mode": "shadow",
+                    "queue_eligible": false
+                },
+                "fallback_retry": {
+                    "source_report_id": 99,
+                    "prompt_context": "exact_persisted_source_prompt"
+                }
+            }),
+            &response,
+            "test",
+            json!({}),
+            DecisionReportSubmissionMode::DryRun,
+        )
+        .expect("fallback dry-run response normalizes");
+
+        assert_eq!(report["fallback_retry"]["source_report_id"], 99);
+        assert_eq!(report["status"], "dry_run_completed");
+        assert_eq!(report["execution_safety"]["trading_manager"], "blocked");
+        assert_eq!(report["execution_safety"]["execution_queue"], "blocked");
     }
 
     #[test]

@@ -4366,6 +4366,14 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
         .map(|report| report.model.clone())
         .or_else(|| data.latest_decision.model.clone())
         .unwrap_or_default();
+    let fallback_retry_available = selected_report
+        .is_some_and(|report| matches!(report.status.as_str(), "xai_error" | "dry_run_error"));
+    let fallback_retry_model = if report_model.is_empty() {
+        comparison_model.clone()
+    } else {
+        report_model.clone()
+    };
+    let fallback_return_to = format!("/?view=decisions&report_id={selected_id}");
     let strategy_status = fallback_text(
         &report_json,
         "strategy_status",
@@ -4502,6 +4510,30 @@ fn DecisionsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         disabled: report_generation_pending,
                         "data-pending-label": "Running Comparison...",
                         "Run model comparison"
+                    }
+                }
+            }
+            if fallback_retry_available {
+                details { class: "prompt-card",
+                    summary { "Retry this provider/schema failure as a dry run" }
+                    p { class: "muted", "This keeps Decision Report #{selected_id} unchanged and sends its exact stored prompt once with the supplied model and current strict schema. The new report is a dry run: it cannot invoke Hermes, Trading Manager, the execution queue, or Saxo." }
+                    form { method: "post", action: "/api/actions/decision-report-fallback-dry-run", class: "settings-form settings-form-wide", "data-decision-report-form": "true",
+                        input { r#type: "hidden", name: "return_to", value: "{fallback_return_to}" }
+                        input { r#type: "hidden", name: "source_report_id", value: "{selected_id}" }
+                        label { "Fallback model"
+                            input { name: "model", value: "{fallback_retry_model}" }
+                        }
+                        label { class: "checkbox-label",
+                            input { r#type: "checkbox", name: "confirm_dry_run", value: "true" }
+                            span { "I confirm this retry is non-actionable and may incur provider usage." }
+                        }
+                        button {
+                            class: "button secondary",
+                            r#type: "submit",
+                            disabled: report_generation_pending,
+                            "data-pending-label": "Retrying Provider...",
+                            "Retry failed report"
+                        }
                     }
                 }
             }
