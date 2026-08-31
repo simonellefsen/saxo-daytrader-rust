@@ -6470,6 +6470,79 @@ fn position_identity_key(symbol: &str, isin: Option<&str>) -> String {
         .unwrap_or_else(|| format!("symbol:{}", canonical_symbol_key(symbol)))
 }
 
+/// Reduce the account-value series to one observation per calendar day.
+///
+/// A snapshot is written every scheduler cycle, so a one-month range was 495
+/// points and 186 KB of ten-field rows -- roughly sixteen readings per trading
+/// day of a series whose shape is daily. The last observation of each day is
+/// kept, which preserves the closing level the range is read for; the newest
+/// point is always retained even when its day is still in progress, since that
+/// is the current value.
+fn compact_performance_history(history: Vec<JsonValue>) -> Vec<JsonValue> {
+    let mut by_day: Vec<(String, JsonValue)> = Vec::new();
+    for point in history {
+        let day = point
+            .get("recorded_at")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(10)
+            .collect::<String>();
+        match by_day.last_mut() {
+            // The series arrives in order, so a repeated day overwrites rather
+            // than appending: the last reading of a day is that day's close.
+            Some((last_day, slot)) if *last_day == day => *slot = point,
+            _ => by_day.push((day, point)),
+        }
+    }
+    by_day.into_iter().map(|(_, point)| point).collect()
+}
+
+/// Narrative and metric documents carried on each strategy-journal row.
+///
+/// `diary_json` (7.5 KB per row) and `metrics_json` (3.7 KB) are the rendered
+/// end-of-day documents. The advisory reader works from `summary` and
+/// `learnings_json`; twenty rows of the full documents were 233 KB.
+const HERMES_JOURNAL_DOCUMENT_KEYS: &[&str] = &["diary_json", "metrics_json"];
+
+fn compact_journal_rows(rows: Vec<JsonValue>) -> Vec<JsonValue> {
+    rows.into_iter()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                for key in HERMES_JOURNAL_DOCUMENT_KEYS {
+                    object.remove(*key);
+                }
+            }
+            row
+        })
+        .collect()
+}
+
+/// Strip the two operational documents the dashboard overview embeds verbatim.
+///
+/// `overview` is built for the UI, which renders both of these. Reusing it for
+/// the advisory context carried `markov_method.latest_run.summary_json` at
+/// 173 KB -- the same embedded signal array U12 removed from the decision
+/// prompt, in a second place that fix never reached -- plus another copy of the
+/// full scheduler cycle document at 28 KB.
+fn compact_overview_for_hermes(mut overview: JsonValue) -> JsonValue {
+    if let Some(run) = overview
+        .get_mut("markov_method")
+        .and_then(|markov| markov.get_mut("latest_run"))
+    {
+        *run = crate::markov_method::trim_markov_run_for_prompt(run);
+    }
+    if let Some(status) = overview.get_mut("scheduler_status") {
+        if let Some(cycle) = status.get("last_cycle_json") {
+            let compact = compact_scheduler_cycle_document(cycle);
+            if let Some(object) = status.as_object_mut() {
+                object.insert("last_cycle_json".to_string(), compact);
+            }
+        }
+    }
+    overview
+}
+
 /// Reduce one scheduler `cycle_json` to per-step health.
 ///
 /// The stored document is the cycle's full internal diagnostic dump -- 28 KB
@@ -11840,10 +11913,11 @@ impl AppState {
 
     pub async fn hermes_context(&self, limit: i64) -> Result<HermesContextPayload> {
         let limit = clamp_limit(limit, 1, 50);
-        let overview = self.overview_payload().await.unwrap_or_else(|err| {
-            warn!("Hermes overview context degraded: {err:#}");
-            json!({"status": "degraded", "detail": err.to_string()})
-        });
+        let overview =
+            compact_overview_for_hermes(self.overview_payload().await.unwrap_or_else(|err| {
+                warn!("Hermes overview context degraded: {err:#}");
+                json!({"status": "degraded", "detail": err.to_string()})
+            }));
         let mut scheduler_status = self.scheduler_status_value().await.unwrap_or_else(|err| {
             warn!("Hermes scheduler status degraded: {err:#}");
             json!({"status": "degraded", "detail": err.to_string()})
@@ -11858,8 +11932,19 @@ impl AppState {
         let scheduler_cycles =
             compact_scheduler_cycles(self.scheduler_cycles(limit).await.unwrap_or_default());
         let decision_reports = self.hermes_decision_report_items(limit).await?;
-        let journals = self.strategy_journal_items(limit).await.unwrap_or_default();
-        let end_of_day_reports = self.hermes_end_of_day_report_items(limit).await?;
+        // `strategy_journal` and `end_of_day` read the same table and returned
+        // byte-identical rows, so the payload carried one dataset twice. The
+        // end-of-day framing is the one the advisory prompt and the context
+        // self-check refer to, so it keeps the rows; the journal key stays as a
+        // pointer rather than being removed, since removing a documented key is
+        // a harsher contract change than emptying it.
+        let journal_count = self
+            .strategy_journal_items(limit)
+            .await
+            .unwrap_or_default()
+            .len();
+        let end_of_day_reports =
+            compact_journal_rows(self.hermes_end_of_day_report_items(limit).await?);
         // These readers are shared with the dashboard, which is allowed to see
         // the stored broker documents. This context is not: see
         // `strip_raw_broker_documents`.
@@ -11893,10 +11978,11 @@ impl AppState {
                 "safety": "read_only_local_broker_position_snapshot_execution_order_thesis_and_fill_audit_no_saxo_provider_hermes_or_order_mutation",
             })
         });
-        let performance = self
-            .performance_history_with_current("1M", 500)
-            .await
-            .unwrap_or_default();
+        let performance = compact_performance_history(
+            self.performance_history_with_current("1M", 500)
+                .await
+                .unwrap_or_default(),
+        );
         let active_experiments = self.hermes_experiments(10).await.unwrap_or_default();
         let learning_memory = self.hermes_learning_memory(limit).await.unwrap_or_default();
         let active_learning_memory = learning_memory
@@ -11972,7 +12058,12 @@ impl AppState {
                 cadence: "daily".to_string(),
                 reports: end_of_day_reports,
             },
-            strategy_journal: HermesContextItemsPayload { items: journals },
+            strategy_journal: HermesContextItemsPayload {
+                items: vec![json!({
+                    "note": "Strategy journal rows are the end-of-day reports; see end_of_day.reports to avoid carrying the same dataset twice.",
+                    "row_count": journal_count,
+                })],
+            },
             execution: HermesContextExecutionPayload {
                 orders: execution_orders,
                 failures: execution_failures,
@@ -26332,6 +26423,92 @@ analysis_windows:
             serialized.len() < 600,
             "compacted cycle should be small, got {} bytes",
             serialized.len()
+        );
+    }
+
+    #[test]
+    fn performance_history_keeps_one_closing_observation_per_day() {
+        // A snapshot per scheduler cycle made a one-month range 495 points and
+        // 186 KB, for a series whose shape is daily.
+        let history = vec![
+            json!({"recorded_at": "2026-08-29T09:00:00Z", "total_market_value_dkk": 100.0}),
+            json!({"recorded_at": "2026-08-29T13:00:00Z", "total_market_value_dkk": 110.0}),
+            json!({"recorded_at": "2026-08-29T17:00:00Z", "total_market_value_dkk": 120.0}),
+            json!({"recorded_at": "2026-08-30T09:00:00Z", "total_market_value_dkk": 130.0}),
+            json!({"recorded_at": "2026-08-31T09:00:00Z", "total_market_value_dkk": 140.0}),
+            json!({"recorded_at": "2026-08-31T17:41:42Z", "total_market_value_dkk": 150.0}),
+        ];
+
+        let compact = compact_performance_history(history);
+
+        assert_eq!(compact.len(), 3, "one point per calendar day");
+        assert_eq!(
+            compact[0]["total_market_value_dkk"], 120.0,
+            "the day's last reading is its close"
+        );
+        assert_eq!(compact[1]["total_market_value_dkk"], 130.0);
+        assert_eq!(
+            compact[2]["total_market_value_dkk"], 150.0,
+            "the newest reading is retained even mid-day"
+        );
+    }
+
+    #[test]
+    fn the_strategy_journal_documents_are_projected_out() {
+        let rows = vec![json!({
+            "id": 12,
+            "journal_date": "2026-08-31",
+            "summary": "flat session",
+            "learnings_json": [{"lesson": "keep"}],
+            "diary_json": {"narrative": "z".repeat(7000)},
+            "metrics_json": {"detail": "z".repeat(3000)}
+        })];
+
+        let compact = compact_journal_rows(rows);
+        let serialized = serde_json::to_string(&compact).expect("serialize");
+
+        assert!(!serialized.contains("diary_json"), "{serialized:.120}");
+        assert!(!serialized.contains("metrics_json"));
+        // The advisory-useful fields survive.
+        assert_eq!(compact[0]["summary"], "flat session");
+        assert_eq!(compact[0]["learnings_json"][0]["lesson"], "keep");
+        assert_eq!(compact[0]["journal_date"], "2026-08-31");
+    }
+
+    #[test]
+    fn the_overview_sheds_the_embedded_markov_run_and_cycle_document() {
+        let overview = json!({
+            "markov_method": {
+                "status": "ok",
+                "latest_run": {
+                    "id": 9,
+                    "status": "completed",
+                    "asset_count": 201,
+                    "summary_json": {
+                        "status": "completed",
+                        "signals": (0..20).map(|i| json!({"symbol": format!("S{i}"), "recent_labels": vec!["Bull"; 60]})).collect::<Vec<_>>()
+                    }
+                }
+            },
+            "scheduler_status": {
+                "status": "ok",
+                "last_cycle_json": {"decision_reports": {"status": "completed", "report": {"prompt_text": "y".repeat(4000)}}}
+            }
+        });
+
+        let compact = compact_overview_for_hermes(overview);
+        let serialized = serde_json::to_string(&compact).expect("serialize");
+
+        assert!(
+            !serialized.contains("recent_labels"),
+            "U12's array must not return here"
+        );
+        assert!(!serialized.contains("prompt_text"));
+        // Run-level health metadata is exactly what survives.
+        assert_eq!(compact["markov_method"]["latest_run"]["asset_count"], 201);
+        assert_eq!(
+            compact["scheduler_status"]["last_cycle_json"]["decision_reports"]["status"],
+            "completed"
         );
     }
 }

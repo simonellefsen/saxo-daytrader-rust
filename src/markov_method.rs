@@ -1594,7 +1594,7 @@ async fn compact_markov_context_from_rows(
 /// Everything else on the row -- `status`, `run_id`, `asset_count`,
 /// `success_count`, `error_count`, `config` -- is run-level metadata the model
 /// can use to judge signal freshness and coverage, and stays.
-fn trim_markov_run_for_prompt(run: &JsonValue) -> JsonValue {
+pub(crate) fn trim_markov_run_for_prompt(run: &JsonValue) -> JsonValue {
     let Some(object) = run.as_object() else {
         return run.clone();
     };
