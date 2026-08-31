@@ -417,7 +417,10 @@ strategy:
     sample_count: 900
     min_labeled_days: 60
     signal_horizon_days: 5
-    forecast_steps: [1, 2, 3, 5, 10]
+    # Diagnostic look-aheads, in calendar days. 10 was dropped: by then the
+    # forecast is within 0.08 of the stationary distribution, which is already
+    # persisted exactly in stationary_json. Information peaks at 2-3 days.
+    forecast_steps: [1, 2, 3, 5]
     # Refresh before each decision report rather than only overnight. The
     # scheduler runs Markov after decision reports within one tick, and ticks
     # are 10 minutes apart, so each slot sits well ahead of the report it
@@ -480,7 +483,10 @@ strategy:
       timezone: Europe/Copenhagen
     markov_gate:
       enabled: true
-      min_signed_signal: 0.15
+      # Recalibrated 2026-08-31 for hourly bars. At 0.15 the hourly model
+      # admitted 132 of 200 symbols where the daily model admitted 111; 0.20
+      # admits 113, holding the risk posture the threshold was chosen for.
+      min_signed_signal: 0.20
       max_position_pct: 0.05
       max_signal_age_days: 5
     trading_manager:
