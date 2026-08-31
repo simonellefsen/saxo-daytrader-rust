@@ -104,6 +104,7 @@ use crate::{
     quiver_state::{
         QUIVER_SIGNALS_PAGE_SIZE, dashboard_quiver_signals_from_json, quiver_signal_page,
     },
+    read_model,
     scheduler_state::{
         SCHEDULER_CYCLES_PAGE_SIZE, scheduler_cycle_page, scheduler_cycle_summaries_from_json,
     },
@@ -4325,7 +4326,7 @@ fn dashboard_json_item_count(row: &JsonValue, key: &str) -> usize {
 /// The broker auth module keeps the full status internally; this outer view omits
 /// path and credential-adjacent fields before UI rendering.
 fn dashboard_saxo_auth_from_json(auth: JsonValue) -> serde_json::Result<DashboardSaxoAuthPayload> {
-    serde_json::from_value(auth)
+    read_model::decode("dashboard_saxo_auth", auth)
 }
 
 fn dashboard_saxo_auth_unavailable() -> DashboardSaxoAuthPayload {
@@ -4341,13 +4342,14 @@ fn dashboard_saxo_auth_unavailable() -> DashboardSaxoAuthPayload {
 fn dashboard_ai_settings_from_json(
     settings: JsonValue,
 ) -> serde_json::Result<DashboardAiSettingsPayload> {
-    serde_json::from_value(settings)
+    read_model::decode("dashboard_ai_settings", settings)
 }
 
 fn dashboard_run_schedule_from_json(
     schedule: JsonValue,
 ) -> serde_json::Result<DashboardRunSchedulePayload> {
-    let mut schedule: DashboardRunSchedulePayload = serde_json::from_value(schedule)?;
+    let mut schedule: DashboardRunSchedulePayload =
+        read_model::decode("dashboard_run_schedule", schedule)?;
     schedule.available = true;
     Ok(schedule)
 }
@@ -4381,7 +4383,7 @@ fn dashboard_latest_run_from_json(run: JsonValue) -> serde_json::Result<Dashboar
     if run.is_null() {
         return Ok(DashboardLatestRunPayload::default());
     }
-    let mut run: DashboardLatestRunPayload = serde_json::from_value(run)?;
+    let mut run: DashboardLatestRunPayload = read_model::decode("dashboard_latest_run", run)?;
     run.available = true;
     Ok(run)
 }
@@ -4411,7 +4413,7 @@ pub(crate) fn signal_run_summary_from_json(
 fn dashboard_quiver_conflicts_from_json(
     conflicts: JsonValue,
 ) -> serde_json::Result<QuiverConflictPayload> {
-    serde_json::from_value(conflicts)
+    read_model::decode("dashboard_quiver_conflicts", conflicts)
 }
 
 fn dashboard_quiver_conflicts_not_loaded() -> QuiverConflictPayload {
@@ -19357,7 +19359,7 @@ mod tests {
 
     #[test]
     fn dashboard_saxo_auth_requires_the_sanitized_status_contract() {
-        let auth = dashboard_saxo_auth_from_json(json!({
+        let fixture = json!({
             "connected": true,
             "environment": "SIM",
             "token_valid": true,
@@ -19367,8 +19369,13 @@ mod tests {
             "status": "connected",
             "status_text": "Saxo SIM session ready.",
             "session_path": "/tmp/daytrader/saxo_session.json"
-        }))
-        .expect("sanitized Saxo status decodes");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            dashboard_saxo_auth_from_json,
+        );
+        let auth =
+            dashboard_saxo_auth_from_json(fixture.clone()).expect("sanitized Saxo status decodes");
 
         assert!(auth.connected);
         assert_eq!(auth.environment, "SIM");
@@ -19379,7 +19386,7 @@ mod tests {
 
     #[test]
     fn dashboard_ai_settings_require_masked_key_status() {
-        let settings = dashboard_ai_settings_from_json(json!({
+        let fixture = json!({
             "provider": "openrouter",
             "model": "openai/gpt-5.5",
             "config_model": "openai/gpt-5.5",
@@ -19392,8 +19399,13 @@ mod tests {
                 "updated_at": "2026-08-23T13:00:00Z",
                 "raw": "must-not-reach-the-dashboard"
             }
-        }))
-        .expect("sanitized AI settings decode");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            dashboard_ai_settings_from_json,
+        );
+        let settings =
+            dashboard_ai_settings_from_json(fixture.clone()).expect("sanitized AI settings decode");
 
         assert!(settings.api_key.configured);
         assert_eq!(settings.model, "openai/gpt-5.5");
@@ -19408,7 +19420,7 @@ mod tests {
 
     #[test]
     fn dashboard_run_schedules_retain_only_timing_metadata() {
-        let schedules = dashboard_run_schedules_from_json(json!({
+        let fixture = json!({
             "markov": {
                 "enabled": true,
                 "timezone": "Europe/Copenhagen",
@@ -19433,8 +19445,13 @@ mod tests {
                 "run_weekdays_only": true
             },
             "performance_benchmarks": {"retained": "staged"}
-        }))
-        .expect("dashboard schedule timing metadata decodes");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            dashboard_run_schedules_from_json,
+        );
+        let schedules = dashboard_run_schedules_from_json(fixture.clone())
+            .expect("dashboard schedule timing metadata decodes");
 
         assert!(schedules.markov.available);
         assert_eq!(schedules.quiver.minutes_after_open, Some(45));
@@ -19449,7 +19466,7 @@ mod tests {
 
     #[test]
     fn dashboard_latest_run_keeps_lifecycle_and_stages_detail() {
-        let run = dashboard_latest_run_from_json(json!({
+        let fixture = json!({
             "id": "run-42",
             "created_at": "2026-08-23T13:00:00Z",
             "run_date": "2026-08-23",
@@ -19460,8 +19477,12 @@ mod tests {
             "config_json": {"lookback_days": 120},
             "summary_json": {"signals": []},
             "raw_provider_field": "must-not-reach-the-dashboard"
-        }))
-        .expect("latest run decodes");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            dashboard_latest_run_from_json,
+        );
+        let run = dashboard_latest_run_from_json(fixture.clone()).expect("latest run decodes");
 
         assert!(run.available);
         assert_eq!(run.id.as_deref(), Some("run-42"));
@@ -19506,7 +19527,7 @@ mod tests {
 
     #[test]
     fn dashboard_quiver_conflicts_keep_advisory_outer_contract() {
-        let conflicts = dashboard_quiver_conflicts_from_json(json!({
+        let fixture = json!({
             "status": "conflicts_detected",
             "held_symbol_count": 4,
             "strong_bearish_signal_lte": -0.5,
@@ -19522,8 +19543,13 @@ mod tests {
             "safety": "advisory_quiver_context_only_no_gate_hermes_or_broker_mutation",
             "interpretation": "Review evidence only.",
             "raw_provider_field": "must-not-reach-the-dashboard"
-        }))
-        .expect("stable Quiver conflict evidence decodes");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            dashboard_quiver_conflicts_from_json,
+        );
+        let conflicts = dashboard_quiver_conflicts_from_json(fixture.clone())
+            .expect("stable Quiver conflict evidence decodes");
 
         assert_eq!(conflicts.status, "conflicts_detected");
         assert_eq!(conflicts.held_symbol_count, 4);

@@ -131,4 +131,30 @@ mod tests {
         );
         assert!(strategy_journal_summaries_from_json(vec![json!({"id": 17})]).is_err());
     }
+
+    /// An EOD entry written before its metrics exist carries nulls, and that must
+    /// not fail the whole journal.
+    #[test]
+    fn an_explicit_null_never_blanks_the_strategy_journal() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": 17,
+                "created_at": "2026-08-26T15:30:00Z",
+                "journal_date": "2026-08-26",
+                "cadence": "daily",
+                "status": "completed",
+                "summary": "Bounded EOD summary.",
+                "source_report_id": 42,
+                "metrics_json": {"total_value_dkk": 250000.0},
+                "learnings_json": {"theme": "observation"},
+                "diary_json": {"diary": {"benchmark_readthrough": {"status": "ready"}}},
+                "runtime_session": {"api_key": "must-not-reach-the-dashboard"}
+            }]),
+            |value| {
+                dashboard_strategy_journal_entries_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+    }
 }

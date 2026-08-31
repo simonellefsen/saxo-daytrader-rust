@@ -11,6 +11,7 @@ use crate::models::{
     ProtectiveStopCoverageSummaryPayload, ProtectiveStopLifecycleTestPayload,
     ProtectiveStopPrecheckPayload,
 };
+use crate::read_model;
 use crate::saxo_error::execution_error_taxonomy_for_code;
 
 pub(crate) const EXECUTION_ORDERS_PAGE_SIZE: i64 = 25;
@@ -59,7 +60,7 @@ pub(crate) fn execution_order_window(
 pub(crate) fn dashboard_execution_fills_from_json(
     fills: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DashboardExecutionFillPayload>> {
-    fills.into_iter().map(serde_json::from_value).collect()
+    read_model::decode_each("dashboard_execution_fills", fills)
 }
 
 /// Decodes only the stable lifecycle facts needed by the flat Execution-tab
@@ -75,7 +76,8 @@ pub(crate) fn dashboard_execution_events_from_json(
             let failure_stage = dashboard_execution_event_failure_stage(&event);
             let (failure_category, failure_remediation, failure_retry_policy) =
                 dashboard_execution_event_error_taxonomy(&event);
-            let mut event: DashboardExecutionEventPayload = serde_json::from_value(event)?;
+            let mut event: DashboardExecutionEventPayload =
+                read_model::decode("dashboard_execution_events", event)?;
             event.failure_stage = failure_stage;
             event.failure_category = failure_category;
             event.failure_remediation = failure_remediation;
@@ -143,7 +145,7 @@ fn dashboard_execution_event_payload(event: &JsonValue) -> Option<JsonValue> {
 pub(crate) fn dashboard_protective_stop_coverage_from_json(
     coverage: JsonValue,
 ) -> serde_json::Result<ProtectiveStopCoveragePayload> {
-    serde_json::from_value(coverage)
+    read_model::decode("dashboard_protective_stop_coverage", coverage)
 }
 
 /// Supplies the explicit, read-only state for dashboard views that do not load
@@ -531,5 +533,62 @@ mod tests {
         assert!(!serialized.contains("external_reference"));
         assert!(!serialized.contains("request_id"));
         assert!(!serialized.contains("raw_saxo_response"));
+    }
+
+    /// Execution rows are assembled from local order state that is routinely
+    /// incomplete mid-lifecycle, so a null must degrade one value rather than
+    /// the whole tab.
+    #[test]
+    fn an_explicit_null_never_blanks_an_execution_panel() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": 991,
+                "created_at": "2026-08-28T12:10:00Z",
+                "execution_order_id": 204,
+                "symbol": "NOVO-B:xcse",
+                "side": "BUY",
+                "fill_status": "final",
+                "cumulative_quantity": 12.0,
+                "delta_quantity": 12.0,
+                "average_price_local": 780.0,
+                "currency": "DKK",
+                "broker_order_id": null,
+                "order_status": null,
+                "ledger_id": null
+            }]),
+            |value| {
+                dashboard_execution_fills_from_json(
+                    value.as_array().cloned().expect("fill fixture is a list"),
+                )
+            },
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "created_at": "2026-08-28T12:10:00Z",
+                "execution_order_id": 204,
+                "event_type": "precheck",
+                "raw_payload_json": {"failure_stage": "precheck", "error_taxonomy": null}
+            }]),
+            |value| {
+                dashboard_execution_events_from_json(
+                    value.as_array().cloned().expect("event fixture is a list"),
+                )
+            },
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "summary": {"position_count": 3, "covered_count": 2},
+                "positions": [{"symbol": "NOVO-B:xcse", "quantity": 12.0}],
+                "exceptions": [],
+                "recent_prechecks": [],
+                "recent_lifecycle_tests": [],
+                "safety": "read_only",
+                "interpretation": "coverage audit"
+            }),
+            dashboard_protective_stop_coverage_from_json,
+        );
     }
 }

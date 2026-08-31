@@ -7,12 +7,13 @@
 use serde_json::Value as JsonValue;
 
 use crate::models::{MarketStatusPayload, OverviewIntegrityPayload, TradingManagerPayload};
+use crate::read_model;
 
 /// Decodes the stable, read-only Market Status envelope used by Overview.
 pub(crate) fn dashboard_market_status_from_json(
     market_status: JsonValue,
 ) -> serde_json::Result<MarketStatusPayload> {
-    serde_json::from_value(market_status)
+    read_model::decode("dashboard_market_status", market_status)
 }
 
 /// Decodes the stable Integrity status used by the dashboard. Individual
@@ -20,7 +21,7 @@ pub(crate) fn dashboard_market_status_from_json(
 pub(crate) fn dashboard_integrity_from_json(
     integrity: JsonValue,
 ) -> serde_json::Result<OverviewIntegrityPayload> {
-    serde_json::from_value(integrity)
+    read_model::decode("dashboard_integrity", integrity)
 }
 
 /// Decodes the stable Trading Manager boundary used by Overview panels. Its
@@ -28,7 +29,7 @@ pub(crate) fn dashboard_integrity_from_json(
 pub(crate) fn dashboard_trading_manager_from_json(
     trading_manager: JsonValue,
 ) -> serde_json::Result<TradingManagerPayload> {
-    serde_json::from_value(trading_manager)
+    read_model::decode("dashboard_trading_manager", trading_manager)
 }
 
 #[cfg(test)]
@@ -141,5 +142,77 @@ mod tests {
                 .is_none()
         );
         assert!(dashboard_trading_manager_from_json(json!({"latest_run": null})).is_err());
+    }
+
+    #[test]
+    fn an_explicit_null_never_blanks_an_overview_panel() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "items": [{
+                    "code": "xnas",
+                    "market": "US",
+                    "timezone": "America/New_York",
+                    "local_time": "2026-08-31T10:15:00",
+                    "status_reason": "regular_session",
+                    "session_open_local": "09:30",
+                    "session_close_local": "16:00",
+                    "tradable_close_local": "16:00",
+                    "is_open": true,
+                    "is_tradable": true,
+                    "pre_analysis_sync_active": false,
+                    "open_analysis_window_active": true,
+                    "close_analysis_window_active": false,
+                    "analysis_window_active": true,
+                    "next_open_at_utc": "2026-09-01T13:30:00Z",
+                    "next_open": "2026-09-01 09:30",
+                    "calendar_source": "saxo_exchanges",
+                    "calendar_last_checked": "2026-08-31T06:00:00Z",
+                    "saxo_session_state": "Open",
+                    "holiday_name": null
+                }],
+                "summary": {
+                    "analysis_window_active": false,
+                    "active_markets": [],
+                    "active_windows": [],
+                    "open_active_markets": [],
+                    "close_active_markets": [],
+                    "pre_sync_markets": [],
+                    "last_cycle_status": "completed",
+                    "calendar_refresh": {"status": "not_run"}
+                },
+                "scheduler": null,
+                "price_monitor": null
+            }),
+            dashboard_market_status_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "healthy": false,
+                "warnings": [{
+                    "code": "broker_cash_drift",
+                    "severity": "warning",
+                    "message": "cash drifted"
+                }],
+                "mismatches": [],
+                "expiry_pending_orders": [{"id": 204, "symbol": "BAC:xnys"}],
+                "acknowledged_issue_count": 1,
+                "checked_at": "2026-08-23T12:00:00Z"
+            }),
+            dashboard_integrity_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "latest_run": {
+                    "id": 52,
+                    "status": "completed",
+                    "created_at": "2026-08-28T08:00:00Z",
+                    "manager_json": {"status": "completed", "gate": null}
+                }
+            }),
+            dashboard_trading_manager_from_json,
+        );
     }
 }

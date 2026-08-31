@@ -19,6 +19,7 @@ use crate::{
         DashboardSelectedDecisionPayload, DecisionGateReplayPayload, DecisionPulseStatusPayload,
         LatestDecisionStatusPayload, SupportRiskEvidencePayload,
     },
+    read_model,
 };
 
 /// Decodes compact latest-report metadata used outside the detailed Decisions
@@ -29,7 +30,7 @@ pub(crate) fn dashboard_latest_decision_from_json(
     if decision.is_null() {
         Ok(LatestDecisionStatusPayload::default())
     } else {
-        serde_json::from_value(decision)
+        read_model::decode("dashboard_latest_decision", decision)
     }
 }
 
@@ -38,7 +39,7 @@ pub(crate) fn dashboard_latest_decision_from_json(
 pub(crate) fn dashboard_decision_pulse_statuses_from_json(
     statuses: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<DecisionPulseStatusPayload>> {
-    statuses.into_iter().map(serde_json::from_value).collect()
+    read_model::decode_each("dashboard_decision_pulse_statuses", statuses)
 }
 
 /// Decodes the stable Decision Gate Replay envelope used by the Decisions tab.
@@ -46,7 +47,7 @@ pub(crate) fn dashboard_decision_pulse_statuses_from_json(
 pub(crate) fn dashboard_decision_gate_replay_from_json(
     replay: JsonValue,
 ) -> serde_json::Result<DecisionGateReplayPayload> {
-    serde_json::from_value(replay)
+    read_model::decode("dashboard_decision_gate_replay", replay)
 }
 
 /// Supplies the explicit, offline-only state for views that do not load gate
@@ -483,5 +484,81 @@ mod tests {
         assert!(dashboard_selected_decision_from_json(json!({
             "id": 312, "created_at": "2026-08-26T12:00:00Z", "status": "completed", "queue_eligible": "unknown"
         })).is_err());
+    }
+
+    /// Report metadata is assembled from rows that carry nulls for a pulse
+    /// that has not run or a report that never reached a model, so a null must
+    /// not cost the whole card.
+    #[test]
+    fn an_explicit_null_never_blanks_a_decision_card() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "id": 312,
+                "created_at": "2026-08-31T08:15:00Z",
+                "status": "completed",
+                "model": "x-ai/grok-4",
+                "error_text": null
+            }),
+            dashboard_latest_decision_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "key": "europe_open",
+                "prefix": "EU",
+                "label": "EU Open",
+                "enabled": true,
+                "attempts_7d": 5,
+                "latest": {
+                    "id": 312,
+                    "created_at": "2026-08-31T08:15:00Z",
+                    "status": "completed"
+                },
+                "last_success": null,
+                "last_failure": null
+            }]),
+            |value| {
+                dashboard_decision_pulse_statuses_from_json(
+                    value.as_array().cloned().expect("pulse fixture is a list"),
+                )
+            },
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "run_count": 12,
+                "scenarios": [{
+                    "variable_path": "strategy.markov.min_signed_signal",
+                    "proposed_value": 0.25,
+                    "comparison": "target_gate",
+                    "summary": {
+                        "candidate_count": 12,
+                        "evaluated_count": 12,
+                        "would_block_target_gate_count": 3,
+                        "would_clear_target_gate_only_count": 1,
+                        "unchanged_target_gate_count": 8,
+                        "not_reached_count": 0,
+                        "insufficient_evidence_count": 0
+                    },
+                    "changes": [{
+                        "manager_run_id": 91,
+                        "report_id": 312,
+                        "created_at": "2026-08-31T08:20:00Z",
+                        "symbol": "NOVO-B:xcse",
+                        "action": "BUY",
+                        "recorded_outcome": "queued",
+                        "recorded_gate": "markov_starter",
+                        "effect": "would_block",
+                        "recorded_value": 0.18,
+                        "proposed_value": 0.25
+                    }]
+                }],
+                "safety": "read_only",
+                "interpretation": "offline replay",
+                "support_risk_evidence": {"status": "available"}
+            }),
+            dashboard_decision_gate_replay_from_json,
+        );
     }
 }

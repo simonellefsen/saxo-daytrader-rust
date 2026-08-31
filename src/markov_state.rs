@@ -165,4 +165,39 @@ mod tests {
             .is_err()
         );
     }
+
+    /// A collector row carries nulls for every symbol it could not resolve, so a
+    /// null must cost that value rather than the whole signal list.
+    #[test]
+    fn an_explicit_null_never_blanks_the_markov_signal_list() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": "markov-91",
+                "run_id": "run-91",
+                "created_at": "2026-08-26T08:30:00Z",
+                "run_date": "2026-08-26",
+                "status": "error",
+                "symbol": "EXAMPLE:xnas",
+                "instrument_name": "Example Corp",
+                "current_state": "Bull",
+                "sample_count": 240,
+                "rolling_return": 0.04,
+                "stationary_json": {"Bull": 0.6, "Sideways": 0.3, "Bear": 0.1},
+                "bull_prob": 0.7,
+                "sideways_prob": 0.2,
+                "bear_prob": 0.1,
+                "signed_signal": 0.6,
+                "direction": "long",
+                "error_text": "Saxo response included sk-must-not-reach-the-dashboard-1234567890",
+                "transition_matrix_json": {"api_key": "must-not-reach-the-dashboard"},
+                "forecasts_json": {"token": "must-not-reach-the-dashboard"},
+                "raw_payload_json": {"api_key": "must-not-reach-the-dashboard"}
+            }]),
+            |value| {
+                dashboard_markov_signals_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+    }
 }

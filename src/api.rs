@@ -46,6 +46,7 @@ use crate::{
     },
     portfolio_state::{dashboard_positions_from_json, portfolio_trades_from_json},
     quiver_state::dashboard_quiver_signals_from_json,
+    read_model,
     saxo_error::classify_execution_error,
     saxo_order::{
         cancel_sim_protective_stop_lifecycle_test, place_sim_protective_stop_lifecycle_test,
@@ -1736,7 +1737,7 @@ async fn performance(
 }
 
 fn performance_payload(value: JsonValue) -> Result<PerformancePayload> {
-    serde_json::from_value(value).map_err(Into::into)
+    read_model::decode("api_performance", value).map_err(Into::into)
 }
 
 async fn markov_signals(
@@ -1798,7 +1799,7 @@ async fn market_status(State(state): State<Arc<AppState>>) -> Response {
 }
 
 fn market_status_payload(value: JsonValue) -> Result<MarketStatusPayload> {
-    serde_json::from_value(value).map_err(Into::into)
+    read_model::decode("api_market_status", value).map_err(Into::into)
 }
 
 async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<MarketWatchlistsPayload> {
@@ -1815,7 +1816,7 @@ async fn market_watchlists(State(state): State<Arc<AppState>>) -> Json<MarketWat
 }
 
 fn market_watchlists_payload(value: JsonValue) -> Result<MarketWatchlistsPayload> {
-    serde_json::from_value(value).map_err(Into::into)
+    read_model::decode("api_market_watchlists", value).map_err(Into::into)
 }
 
 fn market_watchlists_degraded_payload(generated_at: String) -> MarketWatchlistsPayload {
@@ -1915,7 +1916,7 @@ async fn decision_latest(State(state): State<Arc<AppState>>) -> Json<DecisionLat
         })
         .into_iter()
         .next()
-        .and_then(|row| match serde_json::from_value(row) {
+        .and_then(|row| match read_model::decode("api_decision_latest", row) {
             Ok(report) => Some(report),
             Err(err) => {
                 warn!("latest decision lifecycle metadata degraded: {err:#}");
@@ -1949,10 +1950,8 @@ async fn decision_reports(
 }
 
 fn decision_report_list_payload(rows: Vec<JsonValue>) -> Result<DecisionReportListPayload> {
-    let items = rows
-        .into_iter()
-        .map(serde_json::from_value)
-        .collect::<serde_json::Result<Vec<DashboardDecisionReportSummaryPayload>>>()?;
+    let items: Vec<DashboardDecisionReportSummaryPayload> =
+        read_model::decode_each("api_decision_reports", rows)?;
     Ok(DecisionReportListPayload { items })
 }
 
@@ -2056,7 +2055,7 @@ async fn decision_gate_replay(
 }
 
 fn decision_gate_replay_payload(value: JsonValue) -> Result<DecisionGateReplayPayload> {
-    serde_json::from_value(value).map_err(Into::into)
+    read_model::decode("api_decision_gate_replay", value).map_err(Into::into)
 }
 
 async fn decision_schema() -> Response {
@@ -3092,6 +3091,22 @@ mod tests {
         assert_eq!(serialized["items"][0]["id"], 42);
         assert_eq!(serialized["items"][1]["id"], 43);
         assert!(!serialized.to_string().contains("must-not-reach-the-list"));
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": 42,
+                "created_at": "2026-08-26T12:00:00Z",
+                "status": "completed",
+                "model": "openai/gpt-5",
+                "analysis_pulse_key": "us_open_followup:2026-08-26",
+                "analysis_pulse_label": "US Open +1h15"
+            }]),
+            |value| {
+                decision_report_list_payload(
+                    value.as_array().cloned().expect("report fixture is a list"),
+                )
+            },
+        );
     }
 
     #[test]
@@ -3452,7 +3467,7 @@ mod tests {
 
     #[test]
     fn market_watchlists_response_keeps_the_typed_outer_contract() {
-        let payload = market_watchlists_payload(json!({
+        let fixture = json!({
             "generated_at": "2026-08-01T18:00:00Z",
             "cache_ttl_seconds": 300,
             "universe": {
@@ -3506,8 +3521,13 @@ mod tests {
                     "raw_quote": "must-not-reach-public-api"
                 }]
             }],
-        }))
-        .expect("watchlists compatibility payload has the public contract");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            market_watchlists_payload,
+        );
+        let payload = market_watchlists_payload(fixture.clone())
+            .expect("watchlists compatibility payload has the public contract");
 
         let serialized =
             serde_json::to_value(payload).expect("market watchlists payload serializes");
@@ -3588,7 +3608,7 @@ mod tests {
 
     #[test]
     fn market_status_response_keeps_the_typed_outer_contract() {
-        let payload = market_status_payload(json!({
+        let fixture = json!({
             "items": [{
                 "code": "XNAS",
                 "market": "US",
@@ -3679,8 +3699,10 @@ mod tests {
                     "fx_refresh": {"error": "must-not-reach-public-api"}
                 }
             },
-        }))
-        .expect("market status compatibility payload has the public contract");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(&fixture, market_status_payload);
+        let payload = market_status_payload(fixture.clone())
+            .expect("market status compatibility payload has the public contract");
 
         let serialized = serde_json::to_value(payload).expect("market status payload serializes");
         assert_eq!(serialized["items"][0]["market"], "US");
@@ -3747,7 +3769,7 @@ mod tests {
 
     #[test]
     fn performance_response_keeps_the_typed_outer_contract() {
-        let payload = performance_payload(json!({
+        let fixture = json!({
             "range_key": "1D",
             "history": [{
                 "recorded_at": "2026-08-01T18:00:00Z",
@@ -3962,8 +3984,10 @@ mod tests {
                 "safety": "local_snapshot_evidence_read_no_provider_hermes_gate_or_order_authority",
                 "interpretation": "Coverage identifies retained position evidence.",
             },
-        }))
-        .expect("performance compatibility payload has the public contract");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(&fixture, performance_payload);
+        let payload = performance_payload(fixture.clone())
+            .expect("performance compatibility payload has the public contract");
 
         let serialized = serde_json::to_value(payload).expect("performance payload serializes");
         assert_eq!(serialized["range_key"], "1D");
@@ -4020,7 +4044,7 @@ mod tests {
 
     #[test]
     fn decision_gate_replay_response_keeps_the_typed_outer_contract() {
-        let payload = decision_gate_replay_payload(json!({
+        let fixture = json!({
             "status": "available",
             "run_count": 3,
             "scenarios": [{
@@ -4053,8 +4077,13 @@ mod tests {
             "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
             "interpretation": "A target-gate clear is not an approval.",
             "support_risk_evidence": {"status": "collecting"},
-        }))
-        .expect("decision gate replay compatibility payload has the public contract");
+        });
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &fixture,
+            decision_gate_replay_payload,
+        );
+        let payload = decision_gate_replay_payload(fixture.clone())
+            .expect("decision gate replay compatibility payload has the public contract");
 
         let serialized =
             serde_json::to_value(payload).expect("decision gate replay payload serializes");

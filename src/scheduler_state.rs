@@ -228,4 +228,29 @@ mod tests {
                 .is_err()
         );
     }
+
+    /// A cycle row written mid-run carries nulls for what has not happened yet.
+    #[test]
+    fn an_explicit_null_never_blanks_the_scheduler_cycle_list() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "started_at": "2026-08-24T08:30:00Z",
+                "status": "ok",
+                "generated_decision": 1,
+                "queue_status": "queued",
+                "notifications_status": "ok",
+                "cycle_json": {
+                    "duration_ms": 65_123,
+                    "operational_notifications": {"status": "ok"},
+                    "portfolio_position_snapshot_integrity": {"status": "warning"},
+                    "provider_payload": "must-not-reach-the-dashboard"
+                }
+            }]),
+            |value| {
+                scheduler_cycle_summaries_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+    }
 }

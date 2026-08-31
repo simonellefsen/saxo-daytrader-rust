@@ -225,4 +225,39 @@ mod tests {
             .is_err()
         );
     }
+
+    /// A broker snapshot carries nulls for a position it could not price, so a
+    /// null must cost that value rather than the whole Overview list.
+    #[test]
+    fn an_explicit_null_never_blanks_the_position_list() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "symbol": "EXAMPLE:xnas",
+                "instrument_name": "Example Corp",
+                "isin": "US0000000001",
+                "quantity": 4.0,
+                "currency": "USD",
+                "paid_price_local": 101.0,
+                "open_price_local": 101.0,
+                "cost_basis_local": 101.0,
+                "current_price_local": 105.0,
+                "cost_basis_dkk": 2800.0,
+                "market_value_dkk": 2900.0,
+                "unrealised_pnl_dkk": 100.0,
+                "daily_pnl_dkk": 25.0,
+                "daily_change_pct": 0.01,
+                "total_return_pct": 0.0357,
+                "allocation_pct": 0.12,
+                "asset_class": "Stock",
+                "market_status": "Saxo broker snapshot",
+                "change_pct": 0.01,
+                "latest_quote_updated_at": "2026-08-26T12:00:00Z",
+                "decision": {"source": {"technical": {"trend_bias": "bullish"}}},
+                "broker_payload": {"api_key": "must-not-reach-the-dashboard"}
+            }]),
+            |value| {
+                dashboard_positions_from_json(value.as_array().cloned().expect("fixture is a list"))
+            },
+        );
+    }
 }

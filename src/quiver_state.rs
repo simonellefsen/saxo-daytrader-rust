@@ -142,4 +142,37 @@ mod tests {
             .is_err()
         );
     }
+
+    /// Alt-data rows are sparse by nature, so a null must not fail the list.
+    #[test]
+    fn an_explicit_null_never_blanks_the_quiver_signal_list() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": "quiver-91",
+                "run_id": "run-91",
+                "created_at": "2026-08-26T08:30:00Z",
+                "run_date": "2026-08-26",
+                "status": "error",
+                "symbol": "EXAMPLE:xnas",
+                "ticker": "EXAMPLE",
+                "instrument_name": "Example Corp",
+                "signal": 0.4,
+                "direction": "bullish",
+                "confidence": 0.8,
+                "event_count": 3,
+                "congress_purchase_count": 2,
+                "congress_sale_count": 1,
+                "net_congress_amount": 120000.0,
+                "latest_event_date": "2026-08-25",
+                "error_text": "Quiver response included sk-must-not-reach-the-dashboard-1234567890",
+                "source_status_json": {"api_key": "must-not-reach-the-dashboard"},
+                "top_events_json": [{"token": "must-not-reach-the-dashboard"}]
+            }]),
+            |value| {
+                dashboard_quiver_signals_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+    }
 }

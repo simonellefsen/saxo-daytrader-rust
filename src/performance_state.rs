@@ -14,6 +14,7 @@ use crate::models::{
     PerformancePnlReconciliationPayload, PerformanceRealisedSellOutcomesPayload,
     PerformanceSnapshotEvidencePayload, PerformanceSummaryPayload,
 };
+use crate::read_model;
 
 pub(crate) fn performance_summary_from_history(
     history: &[JsonValue],
@@ -163,7 +164,7 @@ pub(crate) fn performance_confidence(history: &[JsonValue], now: DateTime<Utc>) 
 pub(crate) fn dashboard_performance_history_from_json(
     history: Vec<JsonValue>,
 ) -> serde_json::Result<Vec<PerformanceHistoryRowPayload>> {
-    history.into_iter().map(serde_json::from_value).collect()
+    read_model::decode_each("dashboard_performance_history", history)
 }
 
 /// Decodes the selected-range summary for SSR while preserving the non-Performance
@@ -174,7 +175,7 @@ pub(crate) fn dashboard_performance_summary_from_json(
     if summary.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(summary).map(Some)
+        read_model::decode("dashboard_performance_summary", summary).map(Some)
     }
 }
 
@@ -186,7 +187,7 @@ pub(crate) fn dashboard_performance_benchmarks_from_json(
     if benchmarks.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(benchmarks).map(Some)
+        read_model::decode("dashboard_performance_benchmarks", benchmarks).map(Some)
     }
 }
 
@@ -198,7 +199,7 @@ pub(crate) fn dashboard_performance_goal_tracking_from_json(
     if goal_tracking.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(goal_tracking).map(Some)
+        read_model::decode("dashboard_performance_goal_tracking", goal_tracking).map(Some)
     }
 }
 
@@ -210,7 +211,7 @@ pub(crate) fn dashboard_performance_snapshot_evidence_from_json(
     if evidence.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(evidence).map(Some)
+        read_model::decode("dashboard_performance_snapshot_evidence", evidence).map(Some)
     }
 }
 
@@ -222,7 +223,7 @@ pub(crate) fn dashboard_performance_pnl_reconciliation_from_json(
     if reconciliation.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(reconciliation).map(Some)
+        read_model::decode("dashboard_performance_pnl_reconciliation", reconciliation).map(Some)
     }
 }
 
@@ -234,7 +235,7 @@ pub(crate) fn dashboard_performance_exposure_attribution_from_json(
     if attribution.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(attribution).map(Some)
+        read_model::decode("dashboard_performance_exposure_attribution", attribution).map(Some)
     }
 }
 
@@ -246,7 +247,7 @@ pub(crate) fn dashboard_performance_realised_sell_outcomes_from_json(
     if outcomes.is_null() {
         Ok(None)
     } else {
-        serde_json::from_value(outcomes).map(Some)
+        read_model::decode("dashboard_performance_realised_sell_outcomes", outcomes).map(Some)
     }
 }
 
@@ -269,5 +270,153 @@ mod tests {
         assert_eq!(summary["points"], json!(2));
         assert_eq!(summary["change_dkk"], json!(20.0));
         assert_eq!(summary["confidence"]["status"], json!("current"));
+    }
+
+    /// Every Performance boundary decodes from JSON assembled at runtime, so
+    /// each one can be handed an explicit null for a value the builder does
+    /// not have. None of them may fail the whole panel over it.
+    #[test]
+    fn an_explicit_null_never_blanks_a_performance_panel() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "recorded_at": "2026-08-23T09:00:00Z",
+                "snapshot_type": "runtime_current",
+                "total_market_value_dkk": 244_404.95,
+                "invested_market_value_dkk": 214_118.30,
+                "cash_balance_dkk": 30_286.65,
+                "total_cost_basis_dkk": 202_849.06,
+                "total_unrealised_pnl_dkk": 14_824.65,
+                "total_daily_pnl_dkk": 2_263.17,
+                "position_count": 20,
+                "source": null
+            }]),
+            |value| {
+                dashboard_performance_history_from_json(
+                    value
+                        .as_array()
+                        .cloned()
+                        .expect("history fixture is a list"),
+                )
+            },
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "points": 2,
+                "first_total_market_value_dkk": 240_000.0,
+                "latest_total_market_value_dkk": 244_000.0,
+                "change_dkk": 4_000.0,
+                "daily_pnl_dkk": 250.0,
+                "position_count": 20,
+                "range_return_pct": 1.6667,
+                "range_max_drawdown_pct": -0.5,
+                "confidence": {
+                    "status": "current",
+                    "valid_points": 2,
+                    "scope": "account_value_only"
+                },
+                "unreliable_cost_basis_points": 0
+            }),
+            dashboard_performance_summary_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "references": [{
+                    "key": "sp500",
+                    "label": "S&P 500",
+                    "symbol": "SPY:arcx",
+                    "status": "ok"
+                }]
+            }),
+            dashboard_performance_benchmarks_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "weekly_target_dkk": 880.0,
+                "monthly_target_dkk": 3_800.0,
+                "basis": "configured_planning_target",
+                "periods": {
+                    "week": {
+                        "status": "tracking",
+                        "target_dkk": 880.0,
+                        "period_start_utc": "2026-08-24T00:00:00Z"
+                    },
+                    "month": {
+                        "status": "tracking",
+                        "target_dkk": 3_800.0,
+                        "period_start_utc": "2026-08-01T00:00:00Z"
+                    },
+                    "since_reset": {"status": "tracking"}
+                }
+            }),
+            dashboard_performance_goal_tracking_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "range_key": "1M",
+                "aggregate_snapshot_count": 30,
+                "covered_snapshot_count": 30,
+                "missing_legacy_snapshot_count": 0,
+                "snapshots_with_position_rows": 30,
+                "position_evidence_row_count": 600,
+                "latest_snapshot": {"status": "available", "items": [], "safety": "read_only"},
+                "latest_change": {"status": "available", "safety": "read_only"},
+                "detail_retention": "90d",
+                "integrity": {
+                    "status": "ok",
+                    "checked_snapshot_count": 30,
+                    "structural_mismatch_count": 0,
+                    "structural_mismatches": [],
+                    "broker_derived_unrealised_difference_count": 0,
+                    "broker_derived_unrealised_differences": [],
+                    "tolerance": {"absolute_dkk": 1.0, "relative": 0.001},
+                    "safety": "read_only"
+                },
+                "safety": "read_only",
+                "interpretation": "retained snapshot evidence"
+            }),
+            dashboard_performance_snapshot_evidence_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "scope": "unrealised_only",
+                "dashboard": {
+                    "status": "available",
+                    "source": "runtime",
+                    "snapshot_type": "runtime_current"
+                },
+                "latest_history": {
+                    "status": "available",
+                    "source": "history",
+                    "snapshot_type": "runtime_current"
+                },
+                "broker_exposure": {"status": "opt_in_disabled"}
+            }),
+            dashboard_performance_pnl_reconciliation_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({"status": "available", "scope": "currency", "exposure_count": 3}),
+            dashboard_performance_exposure_attribution_from_json,
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!({
+                "status": "available",
+                "scope": "closed_sales",
+                "counting_unit": "closed_sale",
+                "sample_requirement": 20,
+                "closed_sale_count": 20,
+                "holding_time_status": "available",
+                "slippage_status": "unavailable"
+            }),
+            dashboard_performance_realised_sell_outcomes_from_json,
+        );
     }
 }

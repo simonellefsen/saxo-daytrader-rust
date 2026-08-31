@@ -1136,4 +1136,44 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// Protected Hermes list rows are assembled from audit records that carry
+    /// nulls for an experiment without a baseline or a reflection without a
+    /// session, so a null must not fail the list.
+    #[test]
+    fn an_explicit_null_never_blanks_a_hermes_list() {
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": "reflection-91",
+                "created_at": "2026-08-31T18:00:00Z",
+                "period_start": "2026-08-24",
+                "period_end": "2026-08-31",
+                "goal_version": 2,
+                "summary": "Weekly reflection",
+                "source_session_id": null
+            }]),
+            |value| {
+                hermes_reflection_summaries_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+
+        crate::read_model::assert_null_is_never_worse_than_absent(
+            &json!([{
+                "id": "experiment-14",
+                "created_at": "2026-08-31T18:05:00Z",
+                "status": "pending_review",
+                "baseline_id": null,
+                "goal_version": 2,
+                "changed_variable_path": "strategy.markov.min_signed_signal",
+                "source_session_id": null
+            }]),
+            |value| {
+                hermes_experiment_summaries_from_json(
+                    value.as_array().cloned().expect("fixture is a list"),
+                )
+            },
+        );
+    }
 }
