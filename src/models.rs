@@ -1852,6 +1852,21 @@ pub struct HermesExperimentsPayload {
     pub items: Vec<HermesExperimentSummaryPayload>,
 }
 
+/// Accept an explicit JSON `null` where a `String` is expected, yielding `""`.
+///
+/// `#[serde(default)]` only covers a field that is *absent*; an explicit
+/// `null` still fails with "invalid type: null, expected a string". The
+/// watchlist rows are built as dynamic JSON and legitimately emit
+/// `"currency": null` for a symbol with no technical data (`src/state.rs`),
+/// so a single such symbol failed deserialization of the whole payload and
+/// blanked the entire Watchlists tab.
+pub fn null_tolerant_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// Bounded market-watchlists envelope.
 ///
 /// Universe metadata and category envelopes are typed, while individual
@@ -1903,21 +1918,23 @@ pub struct MarketWatchlistCategoryPayload {
 /// not cross the public Watchlists boundary.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MarketWatchlistRowPayload {
-    #[serde(default)]
+    // These come from dynamic JSON that may carry an explicit null rather than
+    // omitting the key; see `null_tolerant_string`.
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub symbol: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub instrument_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub exchange: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub region: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub currency: String,
     #[serde(default)]
     pub current_price_local: Option<f64>,
     #[serde(default)]
     pub change_pct: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_tolerant_string")]
     pub quote_status: String,
     #[serde(default)]
     pub decision: Option<MarketWatchlistDecisionPayload>,
@@ -3589,4 +3606,59 @@ pub struct SaxoCallbackParams {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reproduces the payload that blanked the Watchlists tab on 2026-08-31.
+    /// `#[serde(default)]` covers an absent key but not an explicit `null`,
+    /// and the watchlist builder emits `"currency": null` for a symbol with no
+    /// technical data. One such symbol failed the whole payload, so every
+    /// category rendered empty and the universe counts read zero.
+    #[test]
+    fn a_null_string_field_does_not_blank_the_whole_watchlist() {
+        let row: MarketWatchlistRowPayload = serde_json::from_value(serde_json::json!({
+            "symbol": "ABB:xome",
+            "instrument_name": "ABB Ltd",
+            "currency": serde_json::Value::Null,
+            "exchange": serde_json::Value::Null,
+            "region": serde_json::Value::Null,
+            "quote_status": "decision_snapshot",
+            "current_price_local": serde_json::Value::Null,
+            "change_pct": serde_json::Value::Null
+        }))
+        .expect("an explicit null must not fail deserialization");
+
+        assert_eq!(row.symbol, "ABB:xome");
+        assert_eq!(row.currency, "", "null becomes empty, not an error");
+        assert_eq!(row.exchange, "");
+        assert_eq!(row.quote_status, "decision_snapshot");
+        assert_eq!(row.current_price_local, None);
+    }
+
+    /// A whole category containing one such row must still deserialize, which
+    /// is the property that actually keeps the tab populated.
+    #[test]
+    fn one_null_bearing_row_does_not_drop_its_category() {
+        let payload: MarketWatchlistsPayload = serde_json::from_value(serde_json::json!({
+            "generated_at": "2026-08-31T08:40:58Z",
+            "cache_ttl_seconds": 300,
+            "universe": {"source": "configured_analysis_universe", "configured_symbol_count": 216},
+            "categories": [{
+                "key": "all",
+                "label": "All monitored",
+                "items": [
+                    {"symbol": "AAPL:xnas", "currency": "USD"},
+                    {"symbol": "ABB:xome", "currency": serde_json::Value::Null}
+                ]
+            }]
+        }))
+        .expect("category with a null-bearing row must deserialize");
+
+        assert_eq!(payload.universe.configured_symbol_count, 216);
+        assert_eq!(payload.categories.len(), 1);
+        assert_eq!(payload.categories[0].items.len(), 2);
+    }
 }
