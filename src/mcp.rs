@@ -449,6 +449,24 @@ fn mcp_tools() -> Vec<JsonValue> {
                         }
                     },
                     "learning_notes": {},
+                    "data_requests": {
+                        "type": "array",
+                        "description": "Read-only refreshes to run before a follow-up review, when an input is missing or stale. Prefer this over blocking a candidate whose own evidence is fine. Served at most once per report; the follow-up advisory sees the refreshed data.",
+                        "items": {
+                            "type": "object",
+                            "required": ["source", "reason"],
+                            "properties": {
+                                "source": {"type": "string", "enum": ["markov_signals", "technical_analysis", "fx_rates"]},
+                                "symbols": {
+                                    "type": "array",
+                                    "description": "Candidate symbols to recompute. Required for markov_signals; must already be in the configured universe.",
+                                    "items": {"type": "string"}
+                                },
+                                "reason": {"type": "string"}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
                     "context_self_check": {
                         "type": "object",
                         "required": [

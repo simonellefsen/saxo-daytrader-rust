@@ -15,6 +15,7 @@ mod drawdown_guard;
 mod editorial_research;
 mod execution_state;
 mod fx;
+mod hermes_data_requests;
 mod hermes_state;
 mod localization;
 mod market_state;

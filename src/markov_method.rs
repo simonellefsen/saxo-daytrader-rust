@@ -226,11 +226,63 @@ async fn run_markov_method_for_date(
     config: &MarkovConfig,
     run_date: NaiveDate,
 ) -> Result<JsonValue> {
+    let assets = markov_assets(state, config.max_symbols).await?;
+    run_markov_over_assets(state, config, run_date, assets, false).await
+}
+
+/// Refresh Markov signals for a named set of symbols, outside the slot
+/// schedule.
+///
+/// This exists so Hermes can ask for a stale signal to be recomputed instead of
+/// blocking a candidate on its age. It is deliberately narrow: it recomputes
+/// the same model over the same inputs for symbols that are already in the
+/// configured universe, and can neither widen the universe nor change any
+/// tuning.
+pub(crate) async fn refresh_markov_signals_for_symbols(
+    state: &AppState,
+    symbols: &[String],
+) -> Result<JsonValue> {
+    let config = markov_config(state);
+    if !config.enabled {
+        return Ok(json!({"status": "disabled"}));
+    }
+    let wanted = symbols
+        .iter()
+        .map(|symbol| normalized_symbol_key(symbol))
+        .collect::<HashSet<_>>();
+    if wanted.is_empty() {
+        return Ok(json!({"status": "skipped", "reason": "no_symbols"}));
+    }
+    let assets = markov_assets(state, 0)
+        .await?
+        .into_iter()
+        .filter(|asset| wanted.contains(&normalized_symbol_key(&asset.symbol)))
+        .collect::<Vec<_>>();
+    if assets.is_empty() {
+        return Ok(json!({
+            "status": "skipped",
+            "reason": "no_matching_universe_symbols",
+            "requested": symbols,
+        }));
+    }
+    let run_date = Utc::now().with_timezone(&config.timezone).date_naive();
+    run_markov_over_assets(state, &config, run_date, assets, true).await
+}
+
+/// Shared analyse-and-persist loop for both the scheduled pass and a targeted
+/// refresh. `targeted` only changes the recorded run status, so a partial
+/// refresh is distinguishable from a full nightly run in run health.
+async fn run_markov_over_assets(
+    state: &AppState,
+    config: &MarkovConfig,
+    run_date: NaiveDate,
+    assets: Vec<MarkovAsset>,
+    targeted: bool,
+) -> Result<JsonValue> {
     let session = state
         .ensure_saxo_session_json("markov_method")
         .await
         .context("loading Saxo session for Markov method run")?;
-    let assets = markov_assets(state, config.max_symbols).await?;
     let run_id = format!("markov-{}", Utc::now().timestamp_micros());
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut rows = Vec::new();
@@ -278,7 +330,11 @@ async fn run_markov_method_for_date(
     }
 
     let status = if success_count > 0 {
-        "completed"
+        if targeted {
+            "targeted_refresh"
+        } else {
+            "completed"
+        }
     } else if assets.is_empty() {
         "empty"
     } else {
@@ -312,7 +368,8 @@ async fn run_markov_method_for_date(
         run_date = %run_date,
         success_count,
         error_count,
-        "Markov method daily run completed"
+        targeted,
+        "Markov method run completed"
     );
     Ok(summary)
 }
@@ -1373,9 +1430,14 @@ pub async fn latest_markov_signal_summary(state: &AppState, symbol: &str) -> Res
 }
 
 pub async fn latest_markov_run(state: &AppState) -> Result<JsonValue> {
+    // Targeted refreshes cover only a handful of symbols, so treating one as
+    // "the latest run" would report a healthy full pass as a tiny degraded one.
+    // Run health stays anchored to full passes; per-symbol freshness is read
+    // from the signals themselves, which do pick up targeted rows.
     let row = sqlx::query(
         "SELECT id, created_at, run_date, status, asset_count, success_count, error_count, config_json, summary_json
          FROM markov_signal_runs
+         WHERE status <> 'targeted_refresh'
          ORDER BY run_date DESC, created_at DESC
          LIMIT 1",
     )

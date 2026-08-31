@@ -3468,6 +3468,10 @@ pub struct HermesDecisionAdviceRequest {
     pub order_advice: Option<JsonValue>,
     pub learning_notes: Option<JsonValue>,
     pub context_self_check: Option<JsonValue>,
+    /// Read-only refreshes Hermes wants before it can advise with confidence,
+    /// as `[{source, symbols?, reason}]`. Validated server-side against a fixed
+    /// allowlist; see `hermes_data_requests`.
+    pub data_requests: Option<JsonValue>,
     pub raw_payload: Option<JsonValue>,
 }
 

@@ -11,6 +11,7 @@ use sqlx::Row;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
+use crate::hermes_data_requests::{HermesDataRequest, execute_hermes_data_requests};
 use crate::{
     config::{yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
@@ -1034,6 +1035,53 @@ impl HermesDecisionAdvice {
         }
     }
 
+    /// True when this advice would zero candidates on its own, which is the
+    /// only situation where serving a refresh and asking again can change an
+    /// outcome.
+    fn blocks_candidates(&self) -> bool {
+        matches!(
+            self.overall_recommendation.as_str(),
+            "review" | "stand_down"
+        )
+    }
+
+    /// The allowlisted refreshes Hermes asked for, as normalized at record time.
+    fn honored_data_requests(&self) -> Vec<HermesDataRequest> {
+        self.raw
+            .get("raw_payload_json")
+            .and_then(|payload| payload.get("data_requests"))
+            .and_then(|requests| requests.get("honored"))
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let source = item.get("source").and_then(JsonValue::as_str)?;
+                        Some(HermesDataRequest {
+                            source: source.to_string(),
+                            symbols: item
+                                .get("symbols")
+                                .and_then(JsonValue::as_array)
+                                .map(|values| {
+                                    values
+                                        .iter()
+                                        .filter_map(JsonValue::as_str)
+                                        .map(str::to_string)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            reason: item
+                                .get("reason")
+                                .and_then(JsonValue::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn for_order(&self, order: &CandidateOrder) -> Option<&HermesOrderAdvice> {
         self.for_order_with_match_source(order)
             .map(|(advice, _)| advice)
@@ -1713,20 +1761,77 @@ async fn run_for_report(
         active_quarantines,
     )
     .await;
-    let hermes_advice = request_hermes_decision_advice(state, report, &hermes_preflight)
-        .await
-        .unwrap_or_else(|err| {
-            warn!(
+    let advise = async |preflight: &JsonValue, round: u8| {
+        request_hermes_decision_advice_round(state, report, preflight, round)
+            .await
+            .unwrap_or_else(|err| {
+                warn!(
+                    report_id = report.id,
+                    round, "Hermes decision advice degraded: {err:#}"
+                );
+                HermesDecisionAdvice::fallback(
+                    "error",
+                    hermes_advisory_mode(),
+                    format!("Hermes decision advice failed: {err:#}"),
+                    report.id,
+                )
+            })
+    };
+
+    let mut hermes_preflight = hermes_preflight;
+    let mut hermes_advice = advise(&hermes_preflight, 1).await;
+
+    // When Hermes blocked because an input was missing or stale, serve the
+    // refreshes it named and ask once more. Exactly one extra round: the point
+    // is to answer a fixable evidence gap, not to negotiate until the verdict
+    // changes. If round two still blocks, that verdict stands.
+    let mut hermes_data_refresh = JsonValue::Null;
+    if hermes_advice.blocks_candidates() {
+        let requests = hermes_advice.honored_data_requests();
+        if !requests.is_empty() {
+            info!(
                 report_id = report.id,
-                "Hermes decision advice degraded: {err:#}"
+                request_count = requests.len(),
+                "serving Hermes data requests before a second advisory round"
             );
-            HermesDecisionAdvice::fallback(
-                "error",
-                hermes_advisory_mode(),
-                format!("Hermes decision advice failed: {err:#}"),
-                report.id,
-            )
-        });
+            let outcomes = execute_hermes_data_requests(state, &requests).await;
+            let served = outcomes
+                .iter()
+                .any(|outcome| outcome.get("status").and_then(JsonValue::as_str) == Some("served"));
+            let first_recommendation = hermes_advice.overall_recommendation.clone();
+            if served {
+                // Rebuild the bundle so the follow-up round reads the refreshed
+                // Markov signals rather than the ones it just objected to.
+                hermes_preflight = hermes_decision_preflight_bundle(
+                    state,
+                    report,
+                    overview,
+                    &candidates,
+                    open_codes,
+                    &initial_capital_budget,
+                    position_exposure,
+                    position_weight,
+                    holding_limit,
+                    concentration,
+                    selected_asset_limit,
+                    &overlay_json,
+                    &excluded,
+                    buy_halt,
+                    drawdown,
+                    active_quarantines,
+                )
+                .await;
+                hermes_advice = advise(&hermes_preflight, 2).await;
+            }
+            hermes_data_refresh = json!({
+                "rounds": if served { 2 } else { 1 },
+                "first_round_recommendation": first_recommendation,
+                "final_recommendation": hermes_advice.overall_recommendation,
+                "requests": outcomes,
+            });
+        }
+    }
+    let hermes_advice = hermes_advice;
     let hermes_conservative = hermes_advice.mode == "conservative";
     let hermes_context_self_check = hermes_context_self_check_from_raw(&hermes_advice.raw);
     let hermes_context_gate_reason = hermes_context_self_check_gate_reason(&hermes_advice);
@@ -2268,6 +2373,7 @@ async fn run_for_report(
         "skipped_orders": skipped,
         "strategy_experiment_overlay": overlay_json,
         "hermes_preflight": hermes_preflight,
+        "hermes_data_refresh": hermes_data_refresh,
         "hermes_decision_advice": hermes_advice.to_json(),
         "hermes_advice_delta": hermes_advice_delta,
         "hermes_context_self_check_gate": {
@@ -2705,13 +2811,24 @@ fn compact_hermes_preflight_failures(rows: &[JsonValue]) -> Vec<JsonValue> {
         .collect()
 }
 
-async fn request_hermes_decision_advice(
+/// One advisory round for a report.
+///
+/// Round 1 is the normal review. Round 2 only happens when round 1 blocked and
+/// named refreshes that have since been served; it uses its own session id so
+/// it is still idempotent across a restart, but it deliberately bypasses the
+/// by-report cache, which would otherwise hand back round 1's own verdict.
+async fn request_hermes_decision_advice_round(
     state: &AppState,
     report: &DecisionReport,
     preflight: &JsonValue,
+    round: u8,
 ) -> Result<HermesDecisionAdvice> {
     let mode = hermes_advisory_mode();
-    let source_session_id = format!("decision-advice-{}", report.id);
+    let source_session_id = if round <= 1 {
+        format!("decision-advice-{}", report.id)
+    } else {
+        format!("decision-advice-{}-r{}", report.id, round)
+    };
     if !hermes_advisory_enabled() {
         return Ok(HermesDecisionAdvice::fallback(
             "disabled",
@@ -2730,7 +2847,11 @@ async fn request_hermes_decision_advice(
             source_session_id,
         ));
     }
-    if let Some(existing) = state.hermes_decision_advice_by_report(report.id).await? {
+    if let Some(existing) = state
+        .hermes_decision_advice_by_report(report.id)
+        .await?
+        .filter(|_| round <= 1)
+    {
         let source = text(&existing, "source_session_id");
         return Ok(HermesDecisionAdvice::from_row(
             existing,
@@ -2768,13 +2889,13 @@ async fn request_hermes_decision_advice(
         .min(60);
 
     let input = format!(
-        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, server-owned completion-quality audit, portfolio and candidate exposure, Markov freshness, operator-approved experiment state, and classified execution failures. Completion quality is observational only: a ready audit does not approve an order, while a review item may justify only a more conservative recommendation. Pending-review proposal values are omitted by the server and must never influence allow, reduce, stand_down, or review advice; the count is audit-only. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. The candidate orders under review are listed in metadata.preflight.candidate_waterfall and mirrored by get_decision_reports as reports[].candidates; that list is authoritative and complete for this cycle, so never treat candidate identity as missing context. Key every per-order advice item to a symbol and strategy_key taken verbatim from it, and emit one item per candidate. If a source you wanted is missing or stale, prefer naming it in data_requests and advising on the candidates from the evidence you do have, rather than issuing a blanket review that zeroes candidates you were not actually asked to doubt. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
+        "Review decision report {} before the Rust Trading Manager queues orders. The metadata contains a sanitized, deterministic preflight bundle built from this exact manager cycle: report/candidate waterfall, server-owned completion-quality audit, portfolio and candidate exposure, Markov freshness, operator-approved experiment state, and classified execution failures. Completion quality is observational only: a ready audit does not approve an order, while a review item may justify only a more conservative recommendation. Pending-review proposal values are omitted by the server and must never influence allow, reduce, stand_down, or review advice; the count is audit-only. Treat the bundle as supplied context, but use the configured daytrader MCP tools to independently retrieve the latest decision report, Markov signals, EOD reports, positions or overview exposure, and Hermes learnings before declaring each source reviewed. Before giving advice, complete a context_self_check with booleans for latest_report, markov_signals, end_of_day_report, current_positions, and active_experiments; set any missing source to false and explain it in notes. The candidate orders under review are listed in metadata.preflight.candidate_waterfall and mirrored by get_decision_reports as reports[].candidates; that list is authoritative and complete for this cycle, so never treat candidate identity as missing context. Key every per-order advice item to a symbol and strategy_key taken verbatim from it, and emit one item per candidate. If a source you wanted is missing or stale, name it in data_requests with source markov_signals|technical_analysis|fx_rates, the affected candidate symbols, and a reason. The server runs those refreshes and asks you again once with the fresher evidence, so a fixable evidence gap does not need a blocking verdict. Requesting a refresh is not itself a reason to block: still advise on the candidates from the evidence you do have, rather than issuing a blanket review that zeroes candidates you were not actually asked to doubt. You get one refresh round per report; if the second round still lacks what you need, advise conservatively and say so. Then call create_decision_advice exactly once with decision_report_id {}, source_session_id {}, overall_recommendation proceed|stand_down|review, context_self_check, a concise summary, and per-order advice items using action allow|reduce|stand_down|review. You may only make the system more conservative: do not add trades, increase size, approve live orders, place orders, access Saxo sessions, or request secrets.",
         report.id, report.id, source_session_id
     );
     let payload = json!({
         "session_id": "saxo-daytrader-trading-manager-advice",
         "input": input,
-        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Pending-review experiment proposals have not passed operator review: do not infer, request, or use their proposed values in advice. Be specific, use current Markov and approved learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate. Always include context_self_check so operators can audit whether you saw the latest report, Markov signals, EOD report, positions, and operator-approved or active experiments.",
+        "instructions": "You are Hermes Agent acting as an advisory risk and learning reviewer for one saxo-rust decision report. When an input you need is missing or stale, prefer requesting a refresh through data_requests over blocking on it; the refresh is a read-only recompute the server performs, and it does not relax any limit or approve anything. You must produce an audited advisory record through the daytrader MCP create_decision_advice tool. Your advice is not an order and cannot approve or execute trades. Pending-review experiment proposals have not passed operator review: do not infer, request, or use their proposed values in advice. Be specific, use current Markov and approved learning context, and only recommend proceed, stand_down, review, allow, reduce, or stand_down/review per candidate. Always include context_self_check so operators can audit whether you saw the latest report, Markov signals, EOD report, positions, and operator-approved or active experiments.",
         "metadata": {
             "source": "rust_trading_manager",
             "decision_report_id": report.id,
@@ -7973,5 +8094,59 @@ mod tests {
             candidate_gate_reason_code("Holding cap is 25; every slot is occupied"),
             "max_holdings"
         );
+    }
+
+    fn advice_row(recommendation: &str, data_requests: JsonValue) -> HermesDecisionAdvice {
+        HermesDecisionAdvice::from_row(
+            json!({
+                "status": "received",
+                "overall_recommendation": recommendation,
+                "summary": "test",
+                "order_advice_json": [],
+                "raw_payload_json": {"data_requests": data_requests},
+            }),
+            "conservative".to_string(),
+            "decision-advice-1".to_string(),
+        )
+    }
+
+    #[test]
+    fn only_a_blocking_verdict_can_trigger_a_refresh_round() {
+        // A refresh round exists to undo a block. If Hermes already said
+        // proceed, re-asking could only make the outcome worse, and Hermes may
+        // never make the system less conservative.
+        assert!(advice_row("review", json!(null)).blocks_candidates());
+        assert!(advice_row("stand_down", json!(null)).blocks_candidates());
+        assert!(!advice_row("proceed", json!(null)).blocks_candidates());
+    }
+
+    #[test]
+    fn honored_data_requests_read_back_the_normalized_record() {
+        let advice = advice_row(
+            "review",
+            json!({
+                "honored": [
+                    {"source": "markov_signals", "symbols": ["BMW:xetr", "ALV:xetr"], "reason": "3 days old"}
+                ],
+                "rejected": [{"source": "place_order", "reason": "unsupported_source"}]
+            }),
+        );
+        let requests = advice.honored_data_requests();
+
+        assert_eq!(requests.len(), 1, "only the honored set is actionable");
+        assert_eq!(requests[0].source, "markov_signals");
+        assert_eq!(requests[0].symbols, vec!["BMW:xetr", "ALV:xetr"]);
+    }
+
+    #[test]
+    fn a_block_without_requests_stays_a_block() {
+        // The refresh loop must not fire on every review, or a report with no
+        // fixable evidence gap would pay for a second advisory round.
+        let advice = advice_row("review", json!({"honored": [], "rejected": []}));
+        assert!(advice.blocks_candidates());
+        assert!(advice.honored_data_requests().is_empty());
+
+        let advice = advice_row("review", json!(null));
+        assert!(advice.honored_data_requests().is_empty());
     }
 }

@@ -13594,6 +13594,35 @@ impl AppState {
                 raw.insert("context_self_check".to_string(), normalized);
             }
         }
+        // Validate refresh requests at the point of record so what is stored is
+        // already the allowlisted set, with every refusal kept for audit.
+        let requested = request
+            .data_requests
+            .clone()
+            .or_else(|| raw_payload.get("data_requests").cloned());
+        let (honored, rejected) =
+            crate::hermes_data_requests::normalize_hermes_data_requests(requested.as_ref());
+        if !honored.is_empty() || !rejected.is_empty() {
+            let normalized = json!({
+                "honored": honored
+                    .iter()
+                    .map(|item| json!({
+                        "source": item.source,
+                        "symbols": item.symbols,
+                        "reason": item.reason,
+                    }))
+                    .collect::<Vec<_>>(),
+                "rejected": rejected,
+            });
+            if let Some(raw) = raw_payload.as_object_mut() {
+                raw.insert("data_requests".to_string(), normalized);
+            } else {
+                raw_payload = json!({
+                    "raw_payload": raw_payload,
+                    "data_requests": normalized,
+                });
+            }
+        }
         let sql = format!(
             "INSERT INTO hermes_decision_advice (
                 id, created_at, decision_report_id, status, source_session_id,
