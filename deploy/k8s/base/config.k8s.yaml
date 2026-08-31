@@ -398,7 +398,12 @@ strategy:
     # 90-day lookback (around 2026-09-28).
     drawdown_lookback_days: 90
     drawdown_soft_reduce_pct: 0.10
-    drawdown_soft_buy_multiplier: 0.50
+    # 0.75 from 2026-08-31. At 0.50 the halved budget funded exactly one
+    # order above the ~7,021 DKK commission-efficiency floor, so every second
+    # candidate was downsized into a stub the cost guard then rejected. The
+    # soft band stays armed at 10% and still cuts deployment by a quarter;
+    # only the severity moved, not the trigger or the 25% halt.
+    drawdown_soft_buy_multiplier: 0.75
     drawdown_halt_pct: 0.25
   markov:
     enabled: true

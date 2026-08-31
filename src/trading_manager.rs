@@ -2153,6 +2153,23 @@ async fn run_for_report(
                 } else {
                     0.0
                 };
+                // Refuse to manufacture an order the cost guard is certain to
+                // reject a few steps later: that consumes the candidate, reports
+                // a floor breach the model never caused, and leaves the budget
+                // unspent anyway. Leaving it intact lets a cheaper candidate
+                // later in the cycle use it.
+                let downsized_value = per_share_dkk * affordable_quantity;
+                let floor = buy_value_floor_dkk(&order.symbol);
+                if affordable_quantity >= 1.0 && downsized_value < floor {
+                    skipped.push(skip_order(
+                        &order,
+                        &format!(
+                            "BUY of {estimated_value_dkk:.0} DKK does not fit the remaining {:.0} DKK budget, and the {affordable_quantity:.0} shares it would buy are worth {downsized_value:.0} DKK, below the commission-efficiency floor of {floor:.0} DKK. Budget left unspent rather than queueing an uneconomic clip.",
+                            capital_budget.available_buy_budget_dkk
+                        ),
+                    ));
+                    continue;
+                }
                 if affordable_quantity >= 1.0 {
                     let original_quantity = order.quantity;
                     order.quantity = affordable_quantity;
@@ -8540,5 +8557,37 @@ mod tests {
             reason.contains("Downsized from 800 to 496 shares"),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn the_drawdown_soft_band_leaves_room_for_more_than_one_economic_order() {
+        // At 0.50 the halved budget funded exactly one order above the
+        // commission-efficiency floor, so the second candidate in every cycle
+        // was downsized into a stub the cost guard then rejected. This asserts
+        // the shipped multiplier keeps at least two economic orders fundable
+        // at the observed 2026-08-31 cash position and US floor.
+        let available_above_buffer = 25_575.17_f64;
+        let us_floor_dkk = 7_021.0_f64;
+        for path in ["config.yaml", "deploy/k8s/base/config.k8s.yaml"] {
+            let raw = std::fs::read_to_string(path).expect("read shipped config");
+            let config: serde_yaml::Value = serde_yaml::from_str(&raw).expect("parse config");
+            let multiplier = config
+                .get("strategy")
+                .and_then(|s| s.get("capital"))
+                .and_then(|c| c.get("drawdown_soft_buy_multiplier"))
+                .and_then(serde_yaml::Value::as_f64)
+                .expect("drawdown_soft_buy_multiplier is configured");
+            let budget = available_above_buffer * multiplier;
+            assert!(
+                budget >= us_floor_dkk * 2.0,
+                "{path}: multiplier {multiplier} funds only {:.0} DKK, under two {us_floor_dkk:.0} DKK orders",
+                budget
+            );
+            // The band must still reduce something, or it is not a soft band.
+            assert!(
+                multiplier < 1.0,
+                "{path}: a soft reduction of {multiplier} does not reduce"
+            );
+        }
     }
 }
