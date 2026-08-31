@@ -18,7 +18,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [urgent-todo](urgent-todo.md) - Short ranked list of verified exposures that should not wait for roadmap sequencing.
 - [todo](todo.md) - Open items that are not defects: decided-in-principle work and decisions that are the operator's to make.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - How the LLM wiki pattern applies to this repository.
-- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current Rust runtime, advisory inputs, deterministic execution boundary, broker authority, and ownership model.
+- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current Rust runtime, advisory inputs, deterministic execution boundary, typed read-model decoding, broker authority, and ownership model.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - How Hermes learning, expiring read-only memory, audits, baseline evidence, and strategy experiments connect to the wiki.
 - [concepts/markov-regime-model](concepts/markov-regime-model.md) - How the Markov signal is actually computed, why every tuning counts bars rather than days, and which model changes have been tested and rejected.
 - [QuiverQuant advisory signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md) - Rust alternative-data signal implementation for decision reports and Hermes.
@@ -34,7 +34,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 
 - [roadmap](roadmap.md) - Forward-looking improvement map for product, operations, strategy, AI, and refactoring work.
 - [concepts/llm-maintained-project-wiki](concepts/llm-maintained-project-wiki.md) - Persistent, compounding project knowledge layer maintained by agents.
-- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current advisory data flow, execution boundary, protective-stop scope, and service ownership.
+- [concepts/current-system-architecture](concepts/current-system-architecture.md) - Current advisory data flow, execution boundary, protective-stop scope, typed read-model decoding, and service ownership.
 - [concepts/hermes-self-improvement](concepts/hermes-self-improvement.md) - Safe loop for Hermes reflections, experiments, and strategy learning.
 - [concepts/markov-regime-model](concepts/markov-regime-model.md) - Implemented regime pipeline, bar-count semantics, exchange session lengths, and rejected model extensions.
 

@@ -5,7 +5,7 @@ tags:
   - architecture
   - execution-safety
   - advisory-signals
-updated: 2026-07-31
+updated: 2026-08-31
 sources:
   - /Users/lindau/codex/rust_daytrader/README.md
   - /Users/lindau/codex/rust_daytrader/docs/hermes-agent.md
@@ -88,6 +88,13 @@ Prompt-injection resistance reduces the likelihood of an unsafe suggestion, but 
 ## Protective Stops
 
 The scheduler separately maintains broker-hosted protective stops for eligible held positions under the configured ATR policy. A ratchet only moves a stop upward after sufficient favourable price movement, and stop changes use the same Saxo validation and audit path. Stops are a loss-containment mechanism, not a guarantee: gap risk, halted/closed markets, liquidity, broker availability, and cancellation/replacement timing remain real risks. A discretionary SELL cancels a matching resting protective stop only at the controlled execution chokepoint, then a later sweep may re-protect any residual holding.
+
+## Typed Read Models
+
+Every dashboard and public-API projection is a typed struct decoded from JSON *assembled at runtime* from database rows, broker snapshots, and analysis output. Two properties follow from that and are easy to get wrong:
+
+- **A null is not an absent key.** `#[serde(default)]` fills a field whose key is missing; an explicit `null` still fails, and serde rejects the whole payload on the first bad field — so one null anywhere blanks an entire tab and reads as a data outage. `src/read_model.rs` holds the invariant that an explicit `null` is never worse than an absent key, and every derive-based projection decodes through it. Its `assert_null_is_never_worse_than_absent` helper covers a new boundary by feeding a null at every object member of a fixture.
+- **Strictness is still right where the value can authorize work.** MCP request bodies, provider responses, and broker payloads keep strict decoders. Tolerance is for display evidence, where a blank panel is worse than a missing field; it is not for the execution boundary, where fail-closed is the point.
 
 ## Ownership And Secrets
 

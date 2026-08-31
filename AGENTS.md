@@ -78,6 +78,12 @@ Target these files for future Rust work:
   - Shared Rust structs for view models and request query/body types.
   - Add typed request/response structs here when replacing generic JSON.
 
+- `src/read_model.rs`
+  - Shared decoding boundary for typed read models built over dynamic JSON.
+  - Decode every dashboard/public-API projection through `read_model::decode` (or `decode_each`) rather than `serde_json::from_value`. It holds the invariant that an explicit `null` is never worse than an absent key, which `#[serde(default)]` alone does not give you — a single `null` otherwise fails the whole payload and blanks a tab.
+  - Not for MCP request bodies, provider responses, or broker payloads: those stay strict, because fail-closed is the right answer when the decoded value can authorize work.
+  - Cover each new boundary with `read_model::assert_null_is_never_worse_than_absent`, which feeds an explicit `null` at every object member of a fixture.
+
 - `src/scheduler.rs`
   - Rust scheduler entry point.
   - Maintains the Saxo session cache on each heartbeat; successful refreshes are persisted back to the database by `AppState`.

@@ -2990,3 +2990,12 @@ broker mutation was added.
 - The Watchlists view rendered empty because `#[serde(default)]` covers an absent key but not an explicit `null`, and one symbol carried `"currency": null`. One field failed deserialization of the whole payload, and the symptom pointed at configuration rather than at a decoder.
 - Recorded on the roadmap as a defect class affecting every typed read model built over dynamic JSON, not as a one-off incident.
 
+
+## [2026-08-31] reliability | Closed the serde-default-versus-null gap across every read model
+
+- Audited the defect class recorded that morning. 508 non-Option fields across the deserializable payloads in `src/models.rs` carried no null tolerance, which rules out annotating fields: the next field added reopens the hole.
+- Added `src/read_model.rs` holding one invariant — **an explicit `null` is never worse than an absent key**. `decode` tries strict first, so a payload valid today keeps its exact meaning (including nulls retained inside staged diagnostic `JsonValue` fields), and only retries with null object members dropped when the strict decode fails outright. A field with no default still fails closed on a null, exactly as it does when the key is missing, so this widens tolerance for optional data without weakening a structural contract.
+- The tolerant retry warns and names the boundary. A builder emitting `null` where the read model expects a value stays visible instead of being absorbed silently.
+- Every derive-based dashboard and public-API boundary now decodes through it. MCP request bodies, provider responses, and broker payloads deliberately keep strict decoders.
+- Each boundary is covered by a property test rather than a hand-picked null: the shared helper sets every object member of a fixture to `null` in turn and asserts the payload still decodes wherever removing the key decodes. It immediately found what the morning's per-field fix had left — `"categories": null` would still have blanked the Watchlists tab, because `null_tolerant_string` only covered strings.
+- The field-by-field projections the roadmap also listed (`markov_state`, `quiver_state`, `portfolio_state`, `strategy_journal_state`, `scheduler_state`, `hermes_state`) already held the invariant by construction, because they read each key as `.get(key).unwrap_or(Null)`. Their tests now prove it rather than assuming it.
