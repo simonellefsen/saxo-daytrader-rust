@@ -5749,6 +5749,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let report_id = latest.id.unwrap_or(0);
     let created_at = latest.created_at.as_deref().unwrap_or("");
     let status = latest.status.as_deref().unwrap_or("");
+    let provider_capabilities = data.ai_provider_capabilities.clone();
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -5764,6 +5765,30 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             div { class: "notice-banner good-banner",
                 strong { "Trading Manager objective" }
                 span { "Pick and manage stocks with conviction for daily, weekly, and monthly horizons. Selling requires thesis, technical, cash, risk, or opportunity evidence." }
+            }
+            div { class: "prompt-card",
+                h3 { "Provider Capability Matrix" }
+                p { class: "muted", "Observed local Decision Report history only. Request-contract counts show what this runtime sent; completion rate excludes in-flight reports; cost is shown only when the stored provider response supplied it. This is not a live provider catalog or price sheet." }
+                if provider_capabilities.is_empty() {
+                    div { class: "event muted", "No persisted Decision Report provider observations are available yet." }
+                } else {
+                    div { class: "table-wrap",
+                        table { class: "data-table compact-table",
+                            thead { tr {
+                                th { "Provider / model" }
+                                th { "Observed request contract" }
+                                th { "Timeout" }
+                                th { "Reliability" }
+                                th { "Observed usage / cost" }
+                            }}
+                            tbody {
+                                for row in provider_capabilities {
+                                    ProviderCapabilityRow { row, prefs: prefs.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             div { class: "prompt-card",
                 h3 { "Decision Report" }
@@ -5806,6 +5831,92 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     strong { "System Prompt" }
                     span { "You are the trading diary reviewer. Return strict JSON only." }
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProviderCapabilityRow(
+    row: crate::models::AiProviderCapabilityPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let contract = {
+        let mut values = Vec::new();
+        if row.strict_schema_request_count > 0 {
+            values.push(format!(
+                "strict schema {}/{}",
+                row.strict_schema_request_count, row.attempt_count
+            ));
+        }
+        if row.response_healing_request_count > 0 {
+            values.push(format!(
+                "response healing {}/{}",
+                row.response_healing_request_count, row.attempt_count
+            ));
+        }
+        if row.fusion_plugin_request_count > 0 {
+            values.push(format!(
+                "fusion {}/{}",
+                row.fusion_plugin_request_count, row.attempt_count
+            ));
+        }
+        if values.is_empty() {
+            "no recorded contract feature".to_string()
+        } else {
+            values.join(" · ")
+        }
+    };
+    let reliability = row
+        .completion_rate
+        .map(|rate| format!("{} completion", format_percent(rate, &prefs)))
+        .unwrap_or_else(|| "no terminal sample".to_string());
+    let failures = format!(
+        "{} · completed {} · failed {}",
+        reliability, row.completed_count, row.failed_count
+    );
+    let failure_detail = {
+        let mut values = Vec::new();
+        if row.schema_failure_count > 0 {
+            values.push(format!("schema {}", row.schema_failure_count));
+        }
+        if row.timeout_failure_count > 0 {
+            values.push(format!("timeout {}", row.timeout_failure_count));
+        }
+        if row.parse_failure_count > 0 {
+            values.push(format!("parse {}", row.parse_failure_count));
+        }
+        values.join(" · ")
+    };
+    let usage = format!(
+        "prompt {} · completion {}",
+        format_number(row.observed_prompt_token_count as f64, 0, &prefs),
+        format_number(row.observed_completion_token_count as f64, 0, &prefs),
+    );
+    let cost = row
+        .observed_cost_usd
+        .map(|value| {
+            format!(
+                "USD {} from {} response(s)",
+                format_number(value, 4, &prefs),
+                row.observed_cost_report_count
+            )
+        })
+        .unwrap_or_else(|| "cost not reported".to_string());
+    rsx! {
+        tr {
+            td { strong { "{row.provider}" } br {} span { class: "muted", "{row.model}" } }
+            td { "{contract}" }
+            td { "{row.configured_timeout_seconds}s configured" }
+            td {
+                div { "{failures}" }
+                if !failure_detail.is_empty() {
+                    div { class: "muted", "{failure_detail}" }
+                }
+            }
+            td {
+                div { "{usage}" }
+                div { class: "muted", "{cost}" }
             }
         }
     }

@@ -23,6 +23,7 @@ use crate::{
     config::{database_url, yaml_at, yaml_bool, yaml_f64, yaml_i64, yaml_string},
     db::{clamp_limit, json_f64, json_i64, pct, row_to_json, sql_escape, value_f64, value_i64},
     debug_redaction::{DEBUG_PAYLOAD_MAX_CHARS, compact_debug_text, compact_json_redacted},
+    decision_provider_state::ai_provider_capabilities_from_rows,
     decision_state::{
         dashboard_decision_gate_replay_from_json, dashboard_decision_gate_replay_not_loaded,
         dashboard_decision_pulse_statuses_from_json, dashboard_latest_decision_from_json,
@@ -50,19 +51,20 @@ use crate::{
         MARKOV_SIGNALS_PAGE_SIZE, dashboard_markov_signals_from_json, markov_signal_page,
     },
     models::{
-        CashBufferSettings, DashboardActiveStrategyBaselinePayload, DashboardAiSettingsPayload,
-        DashboardDecisionPulseDirectionalOutcomePayload, DashboardDecisionPulseEvidencePayload,
-        DashboardDecisionPulseOutcomePayload, DashboardDecisionPulseOutcomeRowPayload,
-        DashboardExecutionOrderPayload, DashboardHermesBaselineEvidencePackPayload,
-        DashboardHermesBaselineEvidenceWindowPayload, DashboardHermesCounterfactualPayload,
-        DashboardHermesDecisionAdviceAuditPayload, DashboardHermesExperimentPayload,
-        DashboardHermesLearningMemoryPayload, DashboardHermesLessonPendingReviewPayload,
-        DashboardHermesOneVariableAuditPayload, DashboardHermesProposalQualityPayload,
-        DashboardHermesReflectionPayload, DashboardHoldingThesisReviewPayload,
-        DashboardHoldingThesisReviewsPayload, DashboardLatestRunPayload,
-        DashboardMissedTradeShadowEvidencePayload, DashboardMissedTradeShadowGatePayload,
-        DashboardMissedTradeShadowOutcomePayload, DashboardMissedTradeShadowPayload,
-        DashboardRunSchedulePayload, DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
+        AiProviderCapabilityPayload, CashBufferSettings, DashboardActiveStrategyBaselinePayload,
+        DashboardAiSettingsPayload, DashboardDecisionPulseDirectionalOutcomePayload,
+        DashboardDecisionPulseEvidencePayload, DashboardDecisionPulseOutcomePayload,
+        DashboardDecisionPulseOutcomeRowPayload, DashboardExecutionOrderPayload,
+        DashboardHermesBaselineEvidencePackPayload, DashboardHermesBaselineEvidenceWindowPayload,
+        DashboardHermesCounterfactualPayload, DashboardHermesDecisionAdviceAuditPayload,
+        DashboardHermesExperimentPayload, DashboardHermesLearningMemoryPayload,
+        DashboardHermesLessonPendingReviewPayload, DashboardHermesOneVariableAuditPayload,
+        DashboardHermesProposalQualityPayload, DashboardHermesReflectionPayload,
+        DashboardHoldingThesisReviewPayload, DashboardHoldingThesisReviewsPayload,
+        DashboardLatestRunPayload, DashboardMissedTradeShadowEvidencePayload,
+        DashboardMissedTradeShadowGatePayload, DashboardMissedTradeShadowOutcomePayload,
+        DashboardMissedTradeShadowPayload, DashboardRunSchedulePayload,
+        DashboardRunSchedulesPayload, DashboardSaxoAuthPayload,
         DashboardTradeThesisEvidencePayload, DashboardTradeThesisOutcomePayload, DashboardView,
         DataFreshnessSourcePayload, DecisionReportDebugPayload, DecisionReportDebugPayloads,
         ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
@@ -7418,6 +7420,17 @@ impl AppState {
             warn!("dashboard typed AI settings degraded: {err:#}");
             self.default_dashboard_ai_settings()
         });
+        let ai_provider_capabilities =
+            if dashboard_loads_tab_exclusive_data(&active_view, "prompts") {
+                self.ai_provider_capabilities(500)
+                    .await
+                    .unwrap_or_else(|err| {
+                        warn!("dashboard AI provider capability matrix degraded: {err:#}");
+                        Vec::new()
+                    })
+            } else {
+                Vec::new()
+            };
         let run_schedules = dashboard_run_schedules_from_json(json!({
             "markov": crate::markov_method::markov_config_json_for_state(self),
             "quiver": crate::quiver::quiver_config_json_for_state(self),
@@ -7478,6 +7491,7 @@ impl AppState {
             saxo_auth,
             sso_session,
             ai_settings,
+            ai_provider_capabilities,
             localization,
             active_view,
             performance_range,
@@ -14535,6 +14549,33 @@ impl AppState {
             obj.insert("api_key".to_string(), self.ai_api_key_status_value().await?);
         }
         Ok(value)
+    }
+
+    /// Bounded local evidence for the provider/model request contract and
+    /// outcome reliability. This reads only persisted Decision Report metadata;
+    /// it neither exposes the documents selected from nor contacts a provider.
+    pub async fn ai_provider_capabilities(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<AiProviderCapabilityPayload>> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT model, status, request_json, response_json, error_text
+                 FROM decision_reports
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT {}",
+                clamp_limit(limit, 1, 1_000)
+            ))
+            .await?;
+        let configured_timeout_seconds = yaml_i64(&self.config, &["xai", "http_timeout_seconds"])
+            .or_else(|| yaml_i64(&self.config, &["xai", "deferred_http_timeout_seconds"]))
+            .or_else(|| yaml_i64(&self.config, &["xai", "timeout_seconds"]))
+            .unwrap_or(30)
+            .max(5);
+        Ok(ai_provider_capabilities_from_rows(
+            rows,
+            configured_timeout_seconds,
+        ))
     }
 
     /// Masked status of the AI provider API key. Never contains the key

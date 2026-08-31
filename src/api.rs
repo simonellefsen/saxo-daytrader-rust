@@ -21,26 +21,27 @@ use crate::{
     localization::LocalizationPrefs,
     markov_state::dashboard_markov_signals_from_json,
     models::{
-        AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiSettingsRequest,
-        AssetLadderChartPayload, AssetLadderHistoryPayload, AssetLadderSummaryPayload,
-        CashBufferRequest, CashBufferSettings, DashboardDecisionReportSummaryPayload,
-        DashboardPositionPayload, DecisionGateReplayPayload, DecisionLatestPayload,
-        DecisionPulseReportStatusPayload, DecisionReportListPayload, DrawdownGuardOverrideRequest,
-        ExecutionEventSummaryPayload, ExecutionFillSummaryPayload,
-        ExecutionOrderEventTimelineEntryPayload, ExecutionOrderEventTimelinePayload,
-        ExecutionOrderSummaryPayload, ExecutionPayload, HermesCapabilitiesPayload,
-        HermesContextPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
-        HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
-        HermesReflectionSummaryPayload, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
-        StrategyJournalPayload, ViewParams,
+        AiApiKeyRequest, AiPromptItem, AiPromptsPayload, AiProviderCapabilitiesPayload,
+        AiProviderCapabilityPayload, AiSettingsRequest, AssetLadderChartPayload,
+        AssetLadderHistoryPayload, AssetLadderSummaryPayload, CashBufferRequest,
+        CashBufferSettings, DashboardDecisionReportSummaryPayload, DashboardPositionPayload,
+        DecisionGateReplayPayload, DecisionLatestPayload, DecisionPulseReportStatusPayload,
+        DecisionReportListPayload, DrawdownGuardOverrideRequest, ExecutionEventSummaryPayload,
+        ExecutionFillSummaryPayload, ExecutionOrderEventTimelineEntryPayload,
+        ExecutionOrderEventTimelinePayload, ExecutionOrderSummaryPayload, ExecutionPayload,
+        HermesCapabilitiesPayload, HermesContextPayload, HermesExperimentRequest,
+        HermesExperimentSummaryPayload, HermesExperimentTransitionRequest,
+        HermesExperimentsPayload, HermesReflectionRequest, HermesReflectionSummaryPayload,
+        HermesReflectionsPayload, InstrumentQuarantineOverrideRequest, LimitParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
+        ViewParams,
     },
     portfolio_state::{dashboard_positions_from_json, portfolio_trades_from_json},
     quiver_state::dashboard_quiver_signals_from_json,
@@ -146,6 +147,10 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/market/status", get(market_status))
         .route("/api/market/watchlists", get(market_watchlists))
         .route("/api/prompts", get(prompts))
+        .route(
+            "/api/ai/provider-capabilities",
+            get(ai_provider_capabilities),
+        )
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -1830,12 +1835,24 @@ async fn prompts(State(state): State<Arc<AppState>>) -> Json<AiPromptsPayload> {
                 None
             }
         });
-    Json(ai_prompts_payload(Utc::now().to_rfc3339(), latest))
+    let capabilities = state
+        .ai_provider_capabilities(500)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("AI provider capability matrix degraded: {err:#}");
+            Vec::new()
+        });
+    Json(ai_prompts_payload(
+        Utc::now().to_rfc3339(),
+        latest,
+        capabilities,
+    ))
 }
 
 fn ai_prompts_payload(
     generated_at: String,
     latest_decision_report: Option<DashboardDecisionReportSummaryPayload>,
+    provider_capabilities: Vec<AiProviderCapabilityPayload>,
 ) -> AiPromptsPayload {
     AiPromptsPayload {
         generated_at,
@@ -1847,6 +1864,35 @@ fn ai_prompts_payload(
         }],
         latest_decision_report,
         latest_trading_manager_run: None,
+        provider_capabilities,
+    }
+}
+
+async fn ai_provider_capabilities(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Json<AiProviderCapabilitiesPayload> {
+    let limit = params.limit.unwrap_or(500);
+    let items = state
+        .ai_provider_capabilities(limit)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("AI provider capability endpoint degraded: {err:#}");
+            Vec::new()
+        });
+    Json(ai_provider_capabilities_payload(
+        Utc::now().to_rfc3339(),
+        items,
+    ))
+}
+
+fn ai_provider_capabilities_payload(
+    generated_at: String,
+    items: Vec<AiProviderCapabilityPayload>,
+) -> AiProviderCapabilitiesPayload {
+    AiProviderCapabilitiesPayload {
+        generated_at,
+        items,
     }
 }
 
@@ -2801,6 +2847,14 @@ mod tests {
                 analysis_pulse_key: "eu_open".to_string(),
                 analysis_pulse_label: "EU Opening Decision Report".to_string(),
             }),
+            vec![AiProviderCapabilityPayload {
+                provider: "openrouter".to_string(),
+                model: "openai/gpt-5".to_string(),
+                attempt_count: 1,
+                completed_count: 1,
+                completion_rate: Some(1.0),
+                ..Default::default()
+            }],
         );
 
         assert_eq!(payload.items.len(), 1);
@@ -2812,6 +2866,15 @@ mod tests {
         assert_eq!(serialized["items"][0]["status"], "not_ported");
         assert_eq!(serialized["latest_decision_report"]["id"], 42);
         assert!(serialized["latest_trading_manager_run"].is_null());
+        assert_eq!(
+            serialized["provider_capabilities"][0]["provider"],
+            "openrouter"
+        );
+        assert!(
+            serialized["provider_capabilities"][0]
+                .get("response_json")
+                .is_none()
+        );
         assert!(
             serialized["latest_decision_report"]
                 .get("prompt_text")
@@ -2822,6 +2885,25 @@ mod tests {
                 .get("report_json")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn provider_capability_matrix_keeps_the_typed_aggregate_envelope() {
+        let payload = ai_provider_capabilities_payload(
+            "2026-08-31T09:15:00Z".to_string(),
+            vec![AiProviderCapabilityPayload {
+                provider: "openrouter".to_string(),
+                model: "openai/gpt-5.5".to_string(),
+                observed_cost_usd: Some(0.045),
+                ..Default::default()
+            }],
+        );
+
+        let serialized = serde_json::to_value(payload).expect("matrix payload serializes");
+        assert_eq!(serialized["generated_at"], "2026-08-31T09:15:00Z");
+        assert_eq!(serialized["items"][0]["model"], "openai/gpt-5.5");
+        assert!(serialized["items"][0].get("response_json").is_none());
+        assert!(serialized["items"][0].get("error_text").is_none());
     }
 
     #[test]

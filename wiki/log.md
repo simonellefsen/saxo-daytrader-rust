@@ -10,6 +10,11 @@ updated: 2026-08-31
 
 Append-only timeline for project wiki maintenance. Use headings with the format `## [YYYY-MM-DD] kind | summary` so agents and shell tools can parse the log.
 
+## [2026-08-31] decision pipeline | Observe provider/model reliability locally
+
+- Added a typed, bounded provider capability matrix to AI Prompts and `/api/ai/provider-capabilities`. It aggregates only persisted Decision Report request-contract counts (strict schema, response healing, Fusion), configured timeout, terminal completion/failure categories, and provider-returned usage/cost totals.
+- The matrix never calls a provider and deliberately excludes prompts, response documents, free-form provider errors, API keys, and any live availability or price claim. It cannot submit a report, select a model, alter fallback behavior, invoke Hermes, queue work, or reach Saxo.
+
 ## [2026-08-31] safety | Normalize Decision Report outcomes for Hermes
 
 - Replaced the former raw report projection in Hermes context and `get_decision_reports` with typed report-to-manager-to-execution evidence: safe report/pulse metadata, completion-quality status/counts, latest manager state, queue/broker/fill terminal counts, and directly linked reconciled SELL realised P/L.

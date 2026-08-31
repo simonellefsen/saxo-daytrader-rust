@@ -31,6 +31,7 @@ pub struct DashboardView {
     pub saxo_auth: DashboardSaxoAuthPayload,
     pub sso_session: SsoSession,
     pub ai_settings: DashboardAiSettingsPayload,
+    pub ai_provider_capabilities: Vec<AiProviderCapabilityPayload>,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -1650,6 +1651,41 @@ pub struct AiPromptsPayload {
     pub items: Vec<AiPromptItem>,
     pub latest_decision_report: Option<DashboardDecisionReportSummaryPayload>,
     pub latest_trading_manager_run: Option<AiPromptTradingManagerRunPayload>,
+    pub provider_capabilities: Vec<AiProviderCapabilityPayload>,
+}
+
+/// Local, retrospective evidence for one Decision Report provider/model pair.
+///
+/// It records the request contract the Rust runtime actually used and only
+/// aggregate outcome/usage values returned in persisted reports. It is not a
+/// provider catalog or price sheet, and never contains prompts, responses,
+/// provider errors, credentials, or live provider data.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AiProviderCapabilityPayload {
+    pub provider: String,
+    pub model: String,
+    pub strict_schema_request_count: i64,
+    pub response_healing_request_count: i64,
+    pub fusion_plugin_request_count: i64,
+    pub configured_timeout_seconds: i64,
+    pub attempt_count: i64,
+    pub completed_count: i64,
+    pub failed_count: i64,
+    pub schema_failure_count: i64,
+    pub timeout_failure_count: i64,
+    pub parse_failure_count: i64,
+    pub completion_rate: Option<f64>,
+    pub observed_prompt_token_count: i64,
+    pub observed_completion_token_count: i64,
+    pub observed_cost_report_count: i64,
+    pub observed_cost_usd: Option<f64>,
+}
+
+/// Typed read-only envelope for the observed Decision Report provider matrix.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiProviderCapabilitiesPayload {
+    pub generated_at: String,
+    pub items: Vec<AiProviderCapabilityPayload>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
