@@ -473,6 +473,103 @@ impl PositionExposure {
         self.held_symbols.insert(normalize_symbol_key(symbol));
     }
 
+    /// Per-currency exposure by **value**, for the read-only concentration panel.
+    ///
+    /// `strategy.concentration.max_assets_per_currency` counts *assets*. Five
+    /// USD positions can be five percent of the book or ninety, and only the
+    /// second is the exposure U10 recorded: 63% of the book in USD against a
+    /// DKK reporting currency, through a month in which USD/DKK fell 7.66%.
+    /// That is roughly -4.8% of portfolio value from currency alone, on a
+    /// -18.9% drawdown, and no gate, signal, or measure observed it.
+    ///
+    /// This measures. It does not gate: whether currency becomes a gate input
+    /// is the operator's call, and this is the evidence that call needs.
+    ///
+    /// Shares are of **invested value**, not of the book: `values_dkk` holds
+    /// positions plus active BUY reservations and carries no cash. A symbol
+    /// whose value could not be determined counts toward its currency's
+    /// position count but contributes no value, so both numbers are reported
+    /// rather than one implied from the other.
+    fn currency_exposure_json(&self) -> JsonValue {
+        if !self.available {
+            return json!({
+                "status": "unavailable",
+                "reason": "position_snapshot_unavailable",
+                "currencies": [],
+                "scope": CURRENCY_EXPOSURE_SCOPE,
+            });
+        }
+
+        let mut value_dkk: BTreeMap<String, f64> = BTreeMap::new();
+        let mut position_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut unmapped_currency_value_dkk = 0.0;
+        for (symbol, symbol_value) in &self.values_dkk {
+            match currency_for_symbol(symbol) {
+                Some(currency) => *value_dkk.entry(currency).or_insert(0.0) += *symbol_value,
+                None => unmapped_currency_value_dkk += *symbol_value,
+            }
+        }
+        for symbol in &self.held_symbols {
+            if let Some(currency) = currency_for_symbol(symbol) {
+                *position_counts.entry(currency).or_insert(0) += 1;
+            }
+        }
+
+        let total_valued_dkk: f64 = value_dkk.values().sum();
+        let mut currencies = value_dkk
+            .into_iter()
+            .map(|(currency, currency_value_dkk)| {
+                let position_count = position_counts.remove(&currency).unwrap_or(0);
+                json!({
+                    "currency": currency,
+                    "position_count": position_count,
+                    "value_dkk": currency_value_dkk,
+                    "share": if total_valued_dkk > 0.0 {
+                        json!(currency_value_dkk / total_valued_dkk)
+                    } else {
+                        JsonValue::Null
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        // A currency whose every symbol is unvalued still holds positions, and
+        // omitting it would understate concentration in exactly the case where
+        // the data is worst.
+        currencies.extend(position_counts.into_iter().map(|(currency, count)| {
+            json!({
+                "currency": currency,
+                "position_count": count,
+                "value_dkk": JsonValue::Null,
+                "share": JsonValue::Null,
+            })
+        }));
+        currencies.sort_by(|left, right| {
+            json_number(&right["value_dkk"])
+                .unwrap_or(-1.0)
+                .total_cmp(&json_number(&left["value_dkk"]).unwrap_or(-1.0))
+                .then_with(|| left["currency"].as_str().cmp(&right["currency"].as_str()))
+        });
+
+        let largest = currencies
+            .first()
+            .filter(|_| total_valued_dkk > 0.0)
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        json!({
+            "status": if total_valued_dkk > 0.0 { "available" } else { "no_valued_exposure" },
+            "currency_count": currencies.len(),
+            "total_valued_dkk": total_valued_dkk,
+            "largest_currency": largest.get("currency").cloned().unwrap_or(JsonValue::Null),
+            "largest_share": largest.get("share").cloned().unwrap_or(JsonValue::Null),
+            "currencies": currencies,
+            "unvalued_symbol_count": self.invalid_symbols.len(),
+            "unmapped_currency_symbol_count": self.unmapped_currency_symbols().len(),
+            "unmapped_currency_value_dkk": unmapped_currency_value_dkk,
+            "reporting_currency": "DKK",
+            "scope": CURRENCY_EXPOSURE_SCOPE,
+        })
+    }
+
     fn to_json(&self) -> JsonValue {
         let mut exchange_counts = BTreeMap::new();
         let mut currency_counts = BTreeMap::new();
@@ -499,6 +596,7 @@ impl PositionExposure {
             "unvalued_buy_reservation_count": self.unvalued_buy_reservation_count,
             "exchange_counts": exchange_counts,
             "currency_counts": currency_counts,
+            "currency_exposure": self.currency_exposure_json(),
             "unmapped_exchange_symbols": unmapped_exchange_symbols,
             "unmapped_currency_symbols": unmapped_currency_symbols,
             "scope": "persisted_positions_plus_active_persisted_buys_plus_approved_buys_in_this_cycle",
@@ -649,6 +747,10 @@ impl PersistedBuyReservations {
         })
     }
 }
+
+/// Shares are of invested value: positions plus active BUY reservations, with
+/// no cash. Naming it once keeps the two emission sites from drifting.
+const CURRENCY_EXPOSURE_SCOPE: &str = "invested_value_persisted_positions_plus_active_persisted_buys_plus_approved_buys_in_this_cycle_excludes_cash";
 
 fn currency_for_symbol(symbol: &str) -> Option<String> {
     crate::saxo_order::currency_for_exchange(&exchange_code(symbol)).map(str::to_string)
@@ -7185,6 +7287,109 @@ mod tests {
             max_assets_per_exchange: exchange,
             max_assets_per_currency: currency,
         }
+    }
+
+    /// Reproduces the live shape U10 recorded on 2026-08-02: 63% of the book
+    /// in USD against a DKK reporting currency, through a month in which
+    /// USD/DKK fell 7.66%. Nothing gated it, nothing measured it, and no
+    /// signal source observed it.
+    #[test]
+    fn currency_exposure_measures_value_share_not_asset_count() {
+        let exposure = position_exposure(&[
+            ("AAPL:xnas", 20_000.0),
+            ("MSFT:xnas", 18_000.0),
+            ("NVDA:xnas", 17_892.0),
+            ("AMD:xnas", 16_000.0),
+            ("META:xnas", 16_000.0),
+            ("NOVO-B:xcse", 15_000.0),
+            ("MAERSK-B:xcse", 12_000.0),
+            ("DSV:xcse", 8_000.0),
+            ("VWS:xcse", 6_889.0),
+            ("EQNR:xosl", 9_323.0),
+        ]);
+
+        let currency = exposure.currency_exposure_json();
+        assert_eq!(currency["status"], "available");
+        assert_eq!(currency["total_valued_dkk"], json!(139_104.0));
+        assert_eq!(currency["reporting_currency"], "DKK");
+
+        let rows = currency["currencies"]
+            .as_array()
+            .expect("currency rows are a list");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["currency"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["USD", "DKK", "NOK"],
+            "largest exposure first, which is the order a reader needs"
+        );
+        assert_eq!(rows[0]["position_count"], json!(5));
+        assert_eq!(rows[0]["value_dkk"], json!(87_892.0));
+        assert!((json_number(&rows[0]["share"]).expect("USD share") - 0.6318).abs() < 0.0001);
+        assert_eq!(currency["largest_currency"], "USD");
+
+        // The count and the share are different facts, and the gap between
+        // them is the whole reason this exists: DKK holds more positions than
+        // NOK by four to one, and USD holds fewer positions than DKK plus NOK
+        // together while holding more than half the value.
+        let counts: i64 = rows
+            .iter()
+            .map(|row| row["position_count"].as_i64().unwrap_or_default())
+            .sum();
+        assert_eq!(counts, 10);
+        let shares: f64 = rows
+            .iter()
+            .filter_map(|row| json_number(&row["share"]))
+            .sum();
+        assert!((shares - 1.0).abs() < 1e-9, "shares account for the book");
+    }
+
+    /// A currency whose symbols cannot be valued still holds positions.
+    /// Omitting it would understate concentration in exactly the case where
+    /// the data is worst, so the bucket appears with a null share rather than
+    /// a zero one -- a different statement, kept distinguishable.
+    #[test]
+    fn currency_exposure_keeps_unvalued_and_unmapped_evidence_visible() {
+        let mut exposure = position_exposure(&[("AAPL:xnas", 20_000.0), ("NOVO-B:xcse", 5_000.0)]);
+        exposure.held_symbols.insert("ERIC-B:XOME".to_string());
+        exposure.invalid_symbols.insert("ERIC-B:XOME".to_string());
+        exposure.held_symbols.insert("MYSTERY".to_string());
+        exposure.values_dkk.insert("MYSTERY".to_string(), 1_000.0);
+
+        let currency = exposure.currency_exposure_json();
+        let rows = currency["currencies"]
+            .as_array()
+            .expect("currency rows are a list");
+        let sek = rows
+            .iter()
+            .find(|row| row["currency"] == "SEK")
+            .expect("an unvalued currency still reports its positions");
+        assert_eq!(sek["position_count"], json!(1));
+        assert_eq!(sek["value_dkk"], JsonValue::Null);
+        assert_eq!(sek["share"], JsonValue::Null);
+        assert_eq!(currency["unvalued_symbol_count"], json!(1));
+        assert_eq!(currency["unmapped_currency_symbol_count"], json!(1));
+        assert_eq!(currency["unmapped_currency_value_dkk"], json!(1_000.0));
+        assert_eq!(
+            currency["total_valued_dkk"],
+            json!(25_000.0),
+            "an unmappable symbol stays out of the denominator instead of \
+             being assigned to a currency it may not belong to"
+        );
+    }
+
+    /// A guardrail that cannot see is not a guardrail that is satisfied. The
+    /// same holds for a measurement.
+    #[test]
+    fn currency_exposure_reports_an_unavailable_snapshot_rather_than_zero() {
+        let currency = PositionExposure::unavailable().currency_exposure_json();
+        assert_eq!(currency["status"], "unavailable");
+        assert_eq!(currency["reason"], "position_snapshot_unavailable");
+        assert_eq!(
+            currency["currencies"].as_array().map(Vec::len),
+            Some(0),
+            "no buckets rather than an empty book"
+        );
     }
 
     fn position_exposure(values: &[(&str, f64)]) -> PositionExposure {

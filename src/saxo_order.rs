@@ -4304,13 +4304,25 @@ pub(crate) fn fx_rate_to_dkk(currency: &str) -> f64 {
 /// Trading currency implied by the exchange suffix of a symbol like
 /// "AMD:xnas". Deterministic for the exchanges this system trades; used to
 /// verify order values and as the fallback when no broker currency is known.
+/// Maps a canonical exchange suffix to the currency its instruments trade in.
+///
+/// `xome` is Saxo's spelling for Stockholm and carries the whole Swedish leg of
+/// the universe. The 2026-08-02 instrument-resolution fix moved 20 symbols from
+/// `:xsto` to `:xome` because that is what Saxo resolves, but only the Markov
+/// exchange-id map was updated with it -- this one still knew `xsto` alone, so
+/// a tenth of the universe silently had no currency. That is not a cosmetic
+/// gap: `order_currency` falls back to **DKK** for an unmapped exchange, and
+/// the currency concentration cap fail-closes on a held symbol it cannot
+/// classify, so switching that cap on would have blocked every BUY as long as
+/// one Swedish position was held. Both spellings map, as they do for the
+/// exchange id.
 pub(crate) fn currency_for_exchange(exchange: &str) -> Option<&'static str> {
     match exchange.trim().to_lowercase().as_str() {
         "xnas" | "xnys" => Some("USD"),
         "xcse" => Some("DKK"),
         "xetr" | "xfra" | "xmil" | "xams" | "xpar" | "xbru" | "xhel" => Some("EUR"),
         "xlon" | "xlse" => Some("GBP"),
-        "xsto" => Some("SEK"),
+        "xome" | "xsto" => Some("SEK"),
         "xosl" => Some("NOK"),
         "xwar" => Some("PLN"),
         _ => None,
@@ -4407,6 +4419,58 @@ fn now_iso() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The Swedish leg of the universe went uncurrencied for a month because
+    /// the 2026-08-02 `:xsto` to `:xome` fix updated the Markov exchange-id map
+    /// and not the currency map. Nothing failed loudly: `order_currency` falls
+    /// back to DKK and the concentration cap simply refuses, so the gap only
+    /// showed up when something finally measured currency.
+    ///
+    /// The configured universe is the authority on which suffixes exist, so it
+    /// is the authority here too. Adding an exchange to the universe without a
+    /// currency now fails in CI rather than in FX math.
+    #[test]
+    fn every_configured_exchange_suffix_has_a_currency() {
+        for (name, config) in [
+            ("config.yaml", include_str!("../config.yaml")),
+            (
+                "deploy/k8s/base/config.k8s.yaml",
+                include_str!("../deploy/k8s/base/config.k8s.yaml"),
+            ),
+        ] {
+            let suffixes = configured_exchange_suffixes(config);
+            assert!(
+                suffixes.len() >= 10,
+                "{name}: found only {} exchange suffixes, so this test is not reading the universe",
+                suffixes.len()
+            );
+            for suffix in suffixes {
+                assert!(
+                    currency_for_exchange(&suffix).is_some(),
+                    "{name}: configured exchange suffix `{suffix}` has no currency mapping"
+                );
+            }
+        }
+    }
+
+    /// Reads the analysis universe out of a shipped config and returns the
+    /// distinct exchange suffixes it references.
+    fn configured_exchange_suffixes(config: &str) -> std::collections::BTreeSet<String> {
+        let config: serde_yaml::Value =
+            serde_yaml::from_str(config).expect("shipped config parses as YAML");
+        let symbols = config
+            .get("market_data")
+            .and_then(|value| value.get("watchlists"))
+            .and_then(|value| value.get("universe_symbols"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .expect("shipped config carries the analysis universe");
+        symbols
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .filter_map(|symbol| symbol.split_once(':'))
+            .map(|(_, exchange)| exchange.trim().to_ascii_lowercase())
+            .collect()
+    }
+
     use super::*;
     use sqlx::{Row, any::AnyPoolOptions};
     use std::{path::PathBuf, sync::Once};

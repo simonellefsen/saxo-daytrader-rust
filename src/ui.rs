@@ -43,7 +43,9 @@ use crate::{
         ProtectiveStopPrecheckPayload, QuiverConflictPayload, SupportRiskEvidenceLabelPayload,
         SupportRiskEvidenceOutcomePayload, SupportRiskEvidencePayload,
         TradingManagerBlockedBuyGatePayload, TradingManagerCashBudgetPayload,
-        TradingManagerDrawdownGuardrailPayload, TradingManagerInstrumentQuarantinePayload,
+        TradingManagerConcentrationPolicyPayload, TradingManagerCurrencyExposurePayload,
+        TradingManagerCurrencyExposureRowPayload, TradingManagerDrawdownGuardrailPayload,
+        TradingManagerInstrumentQuarantinePayload,
         TradingManagerInstrumentQuarantineSummaryPayload, TradingManagerMonthlyLossBreakerPayload,
         TradingManagerPayload, TradingManagerReinvestmentDiagnosticsPayload,
         TradingManagerRunPayload, TuningExecutionPulseOutcome, TuningPulseComparison,
@@ -2111,6 +2113,15 @@ struct CashDeploymentSummary {
     drawdown_lookback_days: i64,
     drawdown_override_updated_at: String,
     drawdown_override_notes: String,
+    currency_status: String,
+    currency_rows: Vec<TradingManagerCurrencyExposureRowPayload>,
+    currency_largest: String,
+    currency_largest_share: Option<f64>,
+    currency_reporting: String,
+    currency_unvalued_symbol_count: i64,
+    currency_unmapped_symbol_count: i64,
+    currency_cap: i64,
+    currency_cap_mode: String,
     description: String,
 }
 
@@ -2237,6 +2248,31 @@ fn CashDeploymentPanel(
                             }
                         }
                     }
+                    // Unconditional, unlike the guardrail rows above. Those
+                    // appear when they act; this one exists because currency
+                    // was the exposure nothing showed at all, and a row that
+                    // only appears past some threshold would need a threshold
+                    // nobody has decided yet. It measures; it gates nothing.
+                    div { class: "event cash-diagnostic-reason",
+                        strong { "Currency concentration" }
+                        if summary.currency_status == "available" {
+                            span { "{currency_concentration_summary(&summary.currency_rows, &prefs)}" }
+                            span { class: "muted", "Share of invested value in {summary.currency_reporting}; cash excluded. Position counts in brackets." }
+                            if summary.currency_cap_mode == "unlimited" {
+                                span { class: "muted", "The configured cap counts assets, not value, and is unlimited — nothing restricts how much of the book sits in one currency." }
+                            } else {
+                                span { class: "muted", "The configured cap allows {summary.currency_cap} assets per currency. It counts assets, not value." }
+                            }
+                            if summary.currency_unvalued_symbol_count > 0 || summary.currency_unmapped_symbol_count > 0 {
+                                span { class: "muted", "{summary.currency_unvalued_symbol_count} held symbols could not be valued and {summary.currency_unmapped_symbol_count} have no currency mapping, so these shares are incomplete." }
+                            }
+                        } else if summary.currency_status == "no_valued_exposure" {
+                            span { "No valued positions in this run, so there is no currency exposure to report." }
+                        } else {
+                            span { "Currency exposure could not be measured for this run." }
+                            span { class: "muted", "This is not a statement that the book is balanced." }
+                        }
+                    }
                 }
             }
         }
@@ -2288,6 +2324,32 @@ fn cash_deployment_summary(
         .and_then(|value| {
             read_model::decode::<TradingManagerDrawdownGuardrailPayload>(
                 "dashboard_cash_deployment_drawdown_guardrail",
+                value,
+            )
+            .ok()
+        })
+        .unwrap_or_default();
+    // Currency exposure lives on the exposure block that owns the per-symbol
+    // values, and the cap lives on the concentration policy that owns the
+    // configuration. Reading each from its own authority beats duplicating one
+    // into the other.
+    let currency = manager
+        .pointer("/position_exposure/currency_exposure")
+        .cloned()
+        .and_then(|value| {
+            read_model::decode::<TradingManagerCurrencyExposurePayload>(
+                "dashboard_cash_deployment_currency_exposure",
+                value,
+            )
+            .ok()
+        })
+        .unwrap_or_default();
+    let concentration_policy = manager
+        .get("concentration_policy")
+        .cloned()
+        .and_then(|value| {
+            read_model::decode::<TradingManagerConcentrationPolicyPayload>(
+                "dashboard_cash_deployment_concentration_policy",
                 value,
             )
             .ok()
@@ -2361,11 +2423,42 @@ fn cash_deployment_summary(
         drawdown_lookback_days: drawdown.lookback_days,
         drawdown_override_updated_at: format_timestamp(&drawdown.override_record.updated_at, prefs),
         drawdown_override_notes: drawdown.override_record.notes,
+        currency_status: currency.status,
+        currency_rows: currency.currencies,
+        currency_largest: currency.largest_currency.unwrap_or_default(),
+        currency_largest_share: currency.largest_share,
+        currency_reporting: currency.reporting_currency,
+        currency_unvalued_symbol_count: currency.unvalued_symbol_count,
+        currency_unmapped_symbol_count: currency.unmapped_currency_symbol_count,
+        currency_cap: concentration_policy.max_assets_per_currency,
+        currency_cap_mode: concentration_policy.currency_mode,
         description: if diagnostics.description.is_empty() {
             "No reinvestment diagnostic was recorded for this Trading Manager run.".to_string()
         } else {
             diagnostics.description
         },
+    }
+}
+
+fn currency_concentration_summary(
+    rows: &[TradingManagerCurrencyExposureRowPayload],
+    prefs: &LocalizationPrefs,
+) -> String {
+    let shown = rows
+        .iter()
+        .take(5)
+        .map(|row| {
+            let share = row
+                .share
+                .map(|share| format_pct(share, prefs))
+                .unwrap_or_else(|| "unvalued".to_string());
+            format!("{} {share} ({})", row.currency, row.position_count)
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    match rows.len().saturating_sub(5) {
+        0 => shown,
+        rest => format!("{shown} · +{rest} more"),
     }
 }
 
@@ -13876,5 +13969,133 @@ mod tests {
         assert_eq!(readthrough.references.len(), 1);
         assert_eq!(readthrough.references[0].symbol, "SPY:xnas");
         assert_eq!(readthrough.references[0].benchmark_return_pct, None);
+    }
+
+    /// U10's remaining slice: currency was the one exposure nothing gated,
+    /// nothing measured, and no signal source observed. The panel states the
+    /// share of invested value per currency and, next to it, that the
+    /// configured cap counts assets rather than value -- which is the
+    /// distinction the operator's decision turns on.
+    #[test]
+    fn cash_deployment_surfaces_currency_concentration_beside_the_guardrail() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "created_at": "2026-08-31T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "concentration_policy": {
+                        "max_assets_per_currency": 0,
+                        "currency_mode": "unlimited",
+                        "bucket_source": "must not reach the panel"
+                    },
+                    "position_exposure": {
+                        "currency_exposure": {
+                            "status": "available",
+                            "currency_count": 3,
+                            "total_valued_dkk": 139_104.0,
+                            "largest_currency": "USD",
+                            "largest_share": 0.6318,
+                            "reporting_currency": "DKK",
+                            "unvalued_symbol_count": 0,
+                            "unmapped_currency_symbol_count": 0,
+                            "currencies": [
+                                {"currency": "USD", "position_count": 5, "value_dkk": 87_892.0, "share": 0.6318},
+                                {"currency": "DKK", "position_count": 4, "value_dkk": 41_889.0, "share": 0.3011},
+                                {"currency": "NOK", "position_count": 1, "value_dkk": 9_323.0, "share": 0.0670}
+                            ],
+                            "scope": "must not reach the panel"
+                        }
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+
+        assert_eq!(summary.currency_status, "available");
+        assert_eq!(summary.currency_largest, "USD");
+        assert_eq!(summary.currency_reporting, "DKK");
+        assert_eq!(summary.currency_cap, 0);
+        assert_eq!(summary.currency_cap_mode, "unlimited");
+        assert_eq!(summary.currency_rows.len(), 3);
+        assert_eq!(summary.currency_rows[0].position_count, 5);
+
+        let rendered = currency_concentration_summary(&summary.currency_rows, &default_prefs());
+        assert!(rendered.starts_with("USD 63"), "got {rendered}");
+        assert!(rendered.contains("(5)"));
+        assert!(rendered.contains("NOK"));
+
+        let serialized = serde_json::to_value(&summary.currency_rows)
+            .expect("typed currency rows serialize")
+            .to_string();
+        assert!(
+            !serialized.contains("must not reach the panel"),
+            "the panel takes allowlisted fields, not the exposure document"
+        );
+    }
+
+    /// A bucket whose symbols could not be valued reports its positions with no
+    /// share. Rendering that as 0% would read as "no exposure here", which is
+    /// the opposite of what it means.
+    #[test]
+    fn currency_concentration_summary_distinguishes_unvalued_from_zero() {
+        let rendered = currency_concentration_summary(
+            &[
+                TradingManagerCurrencyExposureRowPayload {
+                    currency: "USD".to_string(),
+                    position_count: 5,
+                    value_dkk: Some(87_892.0),
+                    share: Some(0.6318),
+                },
+                TradingManagerCurrencyExposureRowPayload {
+                    currency: "SEK".to_string(),
+                    position_count: 2,
+                    value_dkk: None,
+                    share: None,
+                },
+            ],
+            &default_prefs(),
+        );
+
+        assert!(rendered.contains("SEK unvalued (2)"), "got {rendered}");
+        assert!(!rendered.contains("SEK 0"));
+    }
+
+    /// The exposure block is assembled at runtime, so it can carry a null for
+    /// a share it could not compute.
+    #[test]
+    fn an_explicit_null_never_blanks_currency_concentration() {
+        let latest_run = Some(
+            serde_json::from_value(json!({
+                "created_at": "2026-08-31T08:00:00Z",
+                "status": "completed_no_orders",
+                "manager_json": {
+                    "concentration_policy": {"max_assets_per_currency": 0, "currency_mode": null},
+                    "position_exposure": {
+                        "currency_exposure": {
+                            "status": "available",
+                            "currency_count": null,
+                            "total_valued_dkk": 87_892.0,
+                            "largest_currency": "USD",
+                            "largest_share": null,
+                            "reporting_currency": "DKK",
+                            "unvalued_symbol_count": null,
+                            "currencies": [
+                                {"currency": "USD", "position_count": 5, "value_dkk": 87_892.0, "share": null}
+                            ]
+                        }
+                    }
+                }
+            }))
+            .expect("manager run fixture has typed envelope"),
+        );
+
+        let summary = cash_deployment_summary(&latest_run, &default_prefs());
+
+        assert_eq!(summary.currency_status, "available");
+        assert_eq!(summary.currency_rows.len(), 1);
+        assert_eq!(summary.currency_rows[0].currency, "USD");
+        assert_eq!(summary.currency_largest, "USD");
     }
 }

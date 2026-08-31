@@ -2438,6 +2438,64 @@ pub struct TradingManagerDrawdownGuardrailPayload {
     pub override_record: TradingManagerDrawdownGuardrailOverridePayload,
 }
 
+/// Allowlisted concentration-cap configuration for the Overview panel.
+///
+/// Only the currency dimension is projected, because that is what the panel
+/// beside it explains. The caps count distinct assets per bucket; they say
+/// nothing about how much value sits in one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerConcentrationPolicyPayload {
+    #[serde(default)]
+    pub max_assets_per_currency: i64,
+    #[serde(default)]
+    pub currency_mode: String,
+}
+
+/// Allowlisted per-currency exposure evidence rendered beside the drawdown
+/// guardrail in Overview.
+///
+/// Currency was the one exposure nothing measured: the configured cap
+/// (`strategy.concentration.max_assets_per_currency`) counts assets, not value,
+/// and it is unlimited. This is the measurement that a decision about gating it
+/// needs. It explains a completed Trading Manager run and cannot change a gate,
+/// queue work, precheck an order, or reach Saxo.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerCurrencyExposurePayload {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub currency_count: i64,
+    #[serde(default)]
+    pub total_valued_dkk: f64,
+    #[serde(default)]
+    pub largest_currency: Option<String>,
+    #[serde(default)]
+    pub largest_share: Option<f64>,
+    #[serde(default)]
+    pub currencies: Vec<TradingManagerCurrencyExposureRowPayload>,
+    #[serde(default)]
+    pub unvalued_symbol_count: i64,
+    #[serde(default)]
+    pub unmapped_currency_symbol_count: i64,
+    #[serde(default)]
+    pub reporting_currency: String,
+}
+
+/// One currency bucket. `value_dkk` and `share` are absent when the bucket
+/// holds positions whose value could not be determined, which is a different
+/// statement from a zero share and is kept distinguishable.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TradingManagerCurrencyExposureRowPayload {
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub position_count: i64,
+    #[serde(default)]
+    pub value_dkk: Option<f64>,
+    #[serde(default)]
+    pub share: Option<f64>,
+}
+
 /// Allowlisted aggregate protective-stop coverage evidence.
 ///
 /// Per-position, exception, and recorded SIM-test details remain staged because
