@@ -13,8 +13,8 @@ use serde_json::{Value as JsonValue, json};
 use crate::{
     db::{value_f64, value_i64},
     models::{
-        HermesDecisionReportOutcomePayload, HermesExperimentSummaryPayload,
-        HermesReflectionSummaryPayload,
+        HermesDecisionCandidatePayload, HermesDecisionReportOutcomePayload,
+        HermesExperimentSummaryPayload, HermesReflectionSummaryPayload,
     },
     state::json_text,
 };
@@ -57,6 +57,57 @@ pub(crate) fn hermes_experiment_status_is_advisory_eligible(status: &str) -> boo
 /// advisory boundary. It is intentionally local and retrospective: no current
 /// quote, broker request, provider output, or future-performance inference is
 /// introduced while reviewing an earlier decision.
+/// Cap on candidates exposed per report. Real reports carry a handful; the
+/// bound only stops a pathological row from bloating the MCP response the way
+/// embedded Markov signals once bloated the advisory prompt.
+const HERMES_MAX_REPORT_CANDIDATES: usize = 25;
+
+/// Project `report_json.suggested_trades` into the advisory candidate list.
+///
+/// Deliberately field-by-field rather than a passthrough: `strategy_metadata`
+/// and any future provider content stay out of the MCP surface, and only rows
+/// that actually name a symbol are exposed, so Hermes never sees a candidate it
+/// cannot key advice to.
+fn hermes_decision_candidates_from_report(
+    report: &JsonValue,
+) -> Vec<HermesDecisionCandidatePayload> {
+    let Some(trades) = report.get("suggested_trades").and_then(JsonValue::as_array) else {
+        return Vec::new();
+    };
+    trades
+        .iter()
+        .filter(|trade| {
+            trade
+                .get("symbol")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|symbol| !symbol.trim().is_empty())
+        })
+        .take(HERMES_MAX_REPORT_CANDIDATES)
+        .map(|trade| {
+            let text = |key: &str| {
+                trade
+                    .get(key)
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            HermesDecisionCandidatePayload {
+                symbol: text("symbol"),
+                action: text("action"),
+                quantity: trade
+                    .get("quantity")
+                    .and_then(JsonValue::as_f64)
+                    .unwrap_or_default(),
+                order_type: text("order_type"),
+                strategy_key: text("strategy_key"),
+                strategy_role: text("strategy_role"),
+                limit_price_local: trade.get("limit_price_local").and_then(JsonValue::as_f64),
+                estimated_value_dkk: trade.get("estimated_value_dkk").and_then(JsonValue::as_f64),
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn hermes_decision_report_outcomes_from_rows(
     rows: Vec<JsonValue>,
 ) -> Vec<HermesDecisionReportOutcomePayload> {
@@ -101,6 +152,10 @@ pub(crate) fn hermes_decision_report_outcomes_from_rows(
                         .and_then(JsonValue::as_i64)
                         .filter(|count| *count >= 0)
                 }),
+                candidates: report
+                    .as_ref()
+                    .map(hermes_decision_candidates_from_report)
+                    .unwrap_or_default(),
                 manager_status: optional_text(&row, "manager_status"),
                 execution_order_count: value_i64(&row, "execution_order_count"),
                 pending_execution_count: value_i64(&row, "pending_execution_count"),
@@ -1001,5 +1056,84 @@ mod tests {
         assert_eq!(outcomes[0].realised_sell_gain_dkk, 125.5);
         let serialized = serde_json::to_string(&outcomes).expect("outcomes serialize");
         assert!(!serialized.contains("must-not-reach-hermes"));
+    }
+
+    #[test]
+    fn the_mcp_report_view_names_each_candidate_not_just_a_count() {
+        // Regression for the blanket review hold on 2026-08-31: Hermes is asked
+        // for per-order advice, found only `candidate_count` over MCP, reported
+        // that candidate symbols were not exposed, and zeroed BMW, ALV and VWS.
+        let report = json!({
+            "decision_quality": {"status": "ready", "candidate_count": 2},
+            "suggested_trades": [
+                {
+                    "action": "BUY",
+                    "symbol": "BMW:xetr",
+                    "quantity": 20,
+                    "order_type": "Limit",
+                    "strategy_key": "manual:2026-08-31T08:25:17Z:BMW:xetr:BUY",
+                    "strategy_role": "swing_entry",
+                    "limit_price_local": 62.64,
+                    "estimated_value_dkk": 9364.57,
+                    "strategy_metadata": {"provider_notes": "must-not-reach-hermes"}
+                },
+                {
+                    "action": "BUY",
+                    "symbol": "ALV:xetr",
+                    "quantity": 3,
+                    "order_type": "Limit",
+                    "strategy_key": "manual:2026-08-31T08:25:17Z:ALV:xetr:BUY",
+                    "strategy_role": "swing_entry",
+                    "limit_price_local": 388.1,
+                    "estimated_value_dkk": 8687.0
+                }
+            ]
+        });
+        let candidates = hermes_decision_candidates_from_report(&report);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["BMW:xetr", "ALV:xetr"]
+        );
+        assert_eq!(candidates[0].quantity, 20.0);
+        assert_eq!(candidates[0].limit_price_local, Some(62.64));
+        assert_eq!(
+            candidates[0].strategy_key, "manual:2026-08-31T08:25:17Z:BMW:xetr:BUY",
+            "advice has to be keyable back to the exact candidate"
+        );
+
+        // strategy_metadata is projected away, not passed through.
+        let serialized = serde_json::to_string(&candidates).expect("candidates serialize");
+        assert!(!serialized.contains("must-not-reach-hermes"));
+        assert!(!serialized.contains("strategy_metadata"));
+    }
+
+    #[test]
+    fn candidates_without_a_symbol_are_dropped_and_the_list_is_bounded() {
+        let mut trades = vec![json!({"action": "BUY", "quantity": 1})];
+        trades.push(json!({"symbol": "   ", "action": "BUY"}));
+        for index in 0..40 {
+            trades.push(json!({"symbol": format!("SYM{index}:xetr"), "action": "BUY"}));
+        }
+        let candidates =
+            hermes_decision_candidates_from_report(&json!({"suggested_trades": trades}));
+
+        assert_eq!(candidates.len(), HERMES_MAX_REPORT_CANDIDATES);
+        assert!(
+            candidates.iter().all(|c| !c.symbol.trim().is_empty()),
+            "an unkeyable candidate is worse than an absent one"
+        );
+    }
+
+    #[test]
+    fn a_report_without_suggested_trades_yields_no_candidates() {
+        assert!(hermes_decision_candidates_from_report(&json!({})).is_empty());
+        assert!(
+            hermes_decision_candidates_from_report(&json!({"suggested_trades": "not-an-array"}))
+                .is_empty()
+        );
     }
 }

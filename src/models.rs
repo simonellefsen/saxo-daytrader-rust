@@ -782,6 +782,25 @@ pub struct HermesContextDecisionsPayload {
     pub reports: Vec<HermesDecisionReportOutcomePayload>,
 }
 
+/// One candidate order as exposed to Hermes over MCP.
+///
+/// Hermes is asked for per-order advice, so it needs to be able to name the
+/// orders. Before this existed the MCP report view carried only
+/// `candidate_count`, and Hermes -- correctly -- reported that it could not
+/// see candidate-level symbols or quantities, then fell back to a blanket
+/// review hold that zeroed every candidate.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct HermesDecisionCandidatePayload {
+    pub symbol: String,
+    pub action: String,
+    pub quantity: f64,
+    pub order_type: String,
+    pub strategy_key: String,
+    pub strategy_role: String,
+    pub limit_price_local: Option<f64>,
+    pub estimated_value_dkk: Option<f64>,
+}
+
 /// Bounded, normalized local lifecycle evidence for one Decision Report made
 /// available to Hermes. Provider content, prompts, raw broker payloads, and
 /// free-form errors stay outside this advisory context. Realised P/L is limited
@@ -801,6 +820,9 @@ pub struct HermesDecisionReportOutcomePayload {
     pub decision_quality_score: Option<i64>,
     pub decision_quality_warning_count: Option<i64>,
     pub candidate_count: Option<i64>,
+    /// The actual candidates behind `candidate_count`, so per-order advice can
+    /// be keyed to a real symbol and strategy_key.
+    pub candidates: Vec<HermesDecisionCandidatePayload>,
     pub manager_status: Option<String>,
     pub execution_order_count: i64,
     pub pending_execution_count: i64,
