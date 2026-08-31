@@ -3020,3 +3020,23 @@ broker mutation was added.
 - **Unvalued currency buckets sorted on a `-1.0` sentinel.** Every value in scope is non-negative today, so it ordered correctly, but a bucket that ever carried a negative value would have sorted below "could not measure" and could have been reported as the largest exposure. `NEG_INFINITY` makes that unreachable rather than merely unlikely.
 - **A manager run predating the currency measurement had no test.** Every run before today has no `currency_exposure` block, and reading that as an empty book would show a balanced portfolio that was never measured -- the same mistake the drawdown guardrail explicitly avoided when it shipped.
 - Added an SSR render test for the new panel. An rsx block is compile-checked for syntax but not for rendering, so a panel can type-check and still be the thing that panics a page load; the projection tests could not have caught that.
+
+## [2026-08-31] security | Broker credentials removed from the Hermes MCP context
+
+- Measured the live `get_context` payload while investigating a truncation Hermes reported, and found `AccountKey` 25 times and `ClientKey` 20 times in a document sent to an external model whose own prompt forbids exposing either.
+- All 45 sat inside raw Saxo request/response documents nested in two columns the execution-order events API already excludes. The Hermes path reused the dashboard readers wholesale and never got that treatment.
+- Both columns are projected out for this path, dropped whole rather than redacted, and `safety.raw_broker_payloads_excluded` now states the guarantee. Verified live at 0 occurrences.
+- Recorded as [urgent-todo](urgent-todo.md) U17 and in its Credential Hygiene section, where the lesson is about read-model reuse rather than about the field.
+
+## [2026-08-31] reliability | Hermes context reduced 4.66 MB to 595 KB
+
+- Five instances of one pattern: a document built for the dashboard, embedded verbatim in an advisory payload. U12 had already fixed the sixth.
+- `scheduler.cycles` 1.81 MB of per-step diagnostic dumps; `overview.markov_method.latest_run.summary_json` 173 KB of the same `recent_labels` array U12 removed from the decision prompt; `overview.scheduler_status` another cycle document; `strategy_journal` and `end_of_day` byte-identical at 233 KB each; `performance.history` 495 points for a 31-day range.
+- `get_markov_signals` gained a `symbols` filter after the unscoped page made `PLTR:xnas` invisible at alphabetical position 141 while `DE:xnys` at 55 was visible, in the same advisory round, for the two candidates under review.
+
+## [2026-08-31] risk | Commission-floor attribution and a wider soft band
+
+- 17 orders were skipped at the commission-efficiency floor in a month, and Hermes had allowed the full quantity in 14 of them, so the reduction that mattered was almost always the cash budget rather than advisory caution.
+- Reductions now record their cause and the rejection says whether the proposed size would have cleared. `budget_downsize` no longer manufactures an order it knows the cost guard will reject.
+- `drawdown_soft_buy_multiplier` 0.50 → 0.75 after confirming the 17.13% drawdown is real. At 0.50 the halved budget funded exactly one order above the floor, so every second candidate became a stub.
+

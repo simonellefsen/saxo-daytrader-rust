@@ -174,6 +174,16 @@ A caution from the same day: an initial 16-symbol sample indicated the opposite
 direction and was written into the roadmap before a larger sample corrected it.
 Sixteen symbols is not enough to characterise a distribution across 200.
 
+## Reading signals from outside
+
+`get_markov_signals` serves an advisory reader over MCP. Prefer its `symbols`
+argument: the unscoped page returns `limit` rows ordered by run then symbol, so
+with ~200 instruments and a 50-row default whether a given candidate appears
+depends on where its ticker falls alphabetically. On 2026-08-31 that made
+`DE:xnys` (55th) visible and `PLTR:xnas` (141st) invisible to the same advisory
+round reviewing both. A scoped request also distinguishes "no signal" from "not
+on this page" by returning `missing_symbols`, which the page form cannot.
+
 ## Related Pages
 
 - [sources/markov-hedge-fund-method](../sources/markov-hedge-fund-method.md) — the source method.
