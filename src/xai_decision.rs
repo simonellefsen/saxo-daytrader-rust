@@ -1861,9 +1861,16 @@ fn capital_planning_context_inner(
     }
     let applied_soft_multiplier =
         crate::trading_manager::combined_soft_buy_multiplier(&soft_multipliers);
-    let available_buy_budget_dkk = match applied_soft_multiplier {
-        Some(multiplier) => unreduced_available_buy_budget_dkk * multiplier,
-        None => unreduced_available_buy_budget_dkk,
+    let available_buy_budget_dkk = if drawdown_halts_buys || hard_halt_active {
+        // At either hard floor the manager skips every BUY, so the deployable
+        // budget is zero. Reporting a positive one would invite candidates that
+        // cannot be funded under any sizing.
+        0.0
+    } else {
+        match applied_soft_multiplier {
+            Some(multiplier) => unreduced_available_buy_budget_dkk * multiplier,
+            None => unreduced_available_buy_budget_dkk,
+        }
     };
     let reinvestment_pressure_active =
         excess_cash_pct >= reinvestment_pressure_threshold_pct && available_buy_budget_dkk > 0.0;
@@ -4672,6 +4679,28 @@ mod tests {
         );
         assert!((clear["available_buy_budget_dkk"].as_f64().unwrap() - unreduced).abs() < 1e-6);
         assert!(clear["applied_soft_buy_multiplier"].is_null());
+
+        // At the drawdown halt the manager skips every BUY, so a positive
+        // budget would invite candidates that cannot be funded under any sizing.
+        let halted = capital_planning_context_inner(
+            &overview,
+            0.003,
+            json!({}),
+            -18_000.0,
+            -9_000.0,
+            0.5,
+            None,
+            true,
+            json!({"active": true}),
+        );
+        assert_eq!(halted["available_buy_budget_dkk"], 0.0);
+        assert!(
+            halted["unreduced_available_buy_budget_dkk"]
+                .as_f64()
+                .unwrap()
+                > 0.0,
+            "the unreduced figure stays visible so the halt is legible as a halt"
+        );
     }
 
     #[test]
