@@ -79,6 +79,58 @@ impl MarkovRunSlot {
 /// the same thing while the horizon is daily. Returning 1 for daily-or-coarser
 /// horizons keeps those tunings byte-identical to their historical meaning; an
 /// intraday horizon scales them up so "20 days" stays 20 days.
+/// The tunings scaled into bar counts for one instrument's exchange.
+///
+/// Per exchange rather than global because a trading session is not the same
+/// length everywhere: measured against live SIM, NASDAQ and NYSE return 7
+/// hourly bars a day, Copenhagen and Oslo 8, and the rest 9. A single global
+/// value made `window_days: 20` mean 20 trading days on some exchanges and 26
+/// on others, silently, for roughly 40% of the universe.
+///
+/// Derived per *exchange* and never per instrument: a thin listing drops bars,
+/// so measuring one instrument's own series gives the wrong session length --
+/// `ARKI:xlon` reads 7 where every other London name reads 9.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MarkovScaling {
+    pub(crate) bars_per_session: usize,
+    pub(crate) window_bars: usize,
+    pub(crate) min_labeled_bars: usize,
+    pub(crate) signal_horizon_bars: usize,
+    pub(crate) forecast_step_bars: Vec<usize>,
+}
+
+impl MarkovScaling {
+    fn for_exchange(config: &MarkovConfig, exchange: &str) -> Self {
+        let per_session = bars_per_session(
+            config.horizon_minutes,
+            session_minutes_for_exchange(config, exchange),
+        );
+        Self {
+            bars_per_session: per_session,
+            window_bars: config.window_days.saturating_mul(per_session).max(1),
+            min_labeled_bars: config.min_labeled_days.saturating_mul(per_session).max(1),
+            signal_horizon_bars: config
+                .signal_horizon_days
+                .saturating_mul(per_session)
+                .max(1),
+            forecast_step_bars: config
+                .forecast_steps
+                .iter()
+                .map(|step| step.saturating_mul(per_session).max(1))
+                .collect(),
+        }
+    }
+}
+
+/// Session length for one exchange, falling back to the global default.
+fn session_minutes_for_exchange(config: &MarkovConfig, exchange: &str) -> i64 {
+    config
+        .session_minutes_by_exchange
+        .get(&exchange.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(config.session_minutes)
+}
+
 fn bars_per_session(horizon_minutes: i64, session_minutes: i64) -> usize {
     if horizon_minutes >= 1440 {
         return 1;
@@ -104,6 +156,10 @@ struct MarkovConfig {
     /// Minutes in one regular trading session, used to convert the calendar
     /// tunings above into bar counts when `horizon_minutes` is intraday.
     session_minutes: i64,
+    /// Per-exchange overrides, keyed by lowercase suffix. A session is not the
+    /// same length everywhere, so a single value makes `window_days` mean
+    /// different numbers of days on different exchanges.
+    session_minutes_by_exchange: HashMap<String, i64>,
     /// Bars the chart feed returns per session at `horizon_minutes`; 1 for
     /// daily-or-coarser horizons.
     bars_per_session: usize,
@@ -319,6 +375,10 @@ async fn run_markov_over_assets(
     let mut error_count = 0usize;
 
     for asset in &assets {
+        let scaling = MarkovScaling::for_exchange(
+            config,
+            asset.symbol.split_once(':').map(|(_, ex)| ex).unwrap_or(""),
+        );
         let result = analyze_asset(state, &session, config, asset).await;
         let row = match result {
             Ok((instrument, bars, analysis)) => {
@@ -330,6 +390,7 @@ async fn run_markov_over_assets(
                     config,
                     asset,
                     Some(&instrument),
+                    &scaling,
                     Some(&bars),
                     Some(&analysis),
                     None,
@@ -348,6 +409,7 @@ async fn run_markov_over_assets(
                     config,
                     asset,
                     None,
+                    &scaling,
                     None,
                     None,
                     Some(&format!("{err:#}")),
@@ -426,7 +488,13 @@ async fn analyze_asset(
                 asset_analysis_label(asset)
             )
         })?;
-    let analysis = analyze_bars(&bars, config)
+    // Scaled for this instrument's own exchange, so `window_days` means the
+    // same number of trading days everywhere.
+    let scaling = MarkovScaling::for_exchange(
+        config,
+        asset.symbol.split_once(':').map(|(_, ex)| ex).unwrap_or(""),
+    );
+    let analysis = analyze_bars(&bars, config, &scaling)
         .with_context(|| format!("running Markov model for {}", asset_analysis_label(asset)))?;
     Ok((instrument, bars, analysis))
 }
@@ -439,13 +507,17 @@ fn asset_analysis_label(asset: &MarkovAsset) -> String {
     }
 }
 
-fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalysis> {
-    let labels = label_regimes(bars, config.window_bars, config.threshold);
-    if labels.len() < config.min_labeled_bars {
+fn analyze_bars(
+    bars: &[ChartBar],
+    config: &MarkovConfig,
+    scaling: &MarkovScaling,
+) -> Result<MarkovAnalysis> {
+    let labels = label_regimes(bars, scaling.window_bars, config.threshold);
+    if labels.len() < scaling.min_labeled_bars {
         bail!(
             "not enough labeled bars: {} available, {} required",
             labels.len(),
-            config.min_labeled_bars
+            scaling.min_labeled_bars
         );
     }
     let counts = transition_counts(&labels);
@@ -458,7 +530,7 @@ fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalys
         .forecast_steps
         .iter()
         .copied()
-        .zip(config.forecast_step_bars.iter().copied())
+        .zip(scaling.forecast_step_bars.iter().copied())
         // Keep the persisted key in calendar steps so stored forecasts stay
         // comparable across a horizon change; only the lookup depth scales.
         .map(|(step, step_bars)| {
@@ -469,7 +541,7 @@ fn analyze_bars(bars: &[ChartBar], config: &MarkovConfig) -> Result<MarkovAnalys
         })
         .collect::<Vec<_>>();
     let signal_distribution =
-        forecast_distribution(matrix, current.regime, config.signal_horizon_bars);
+        forecast_distribution(matrix, current.regime, scaling.signal_horizon_bars);
     let signed_signal =
         signal_distribution[Regime::Bull.index()] - signal_distribution[Regime::Bear.index()];
     let conviction = signed_signal.abs();
@@ -1126,6 +1198,9 @@ fn signal_row_json(
     config: &MarkovConfig,
     asset: &MarkovAsset,
     instrument: Option<&SaxoInstrument>,
+    // The scaling actually applied to this instrument, which differs by
+    // exchange, rather than the configuration default.
+    scaling: &MarkovScaling,
     bars: Option<&[ChartBar]>,
     analysis: Option<&MarkovAnalysis>,
     error_text: Option<&str>,
@@ -1162,10 +1237,10 @@ fn signal_row_json(
         "min_labeled_days": config.min_labeled_days,
         "signal_horizon_days": config.signal_horizon_days,
         "session_minutes": config.session_minutes,
-        "bars_per_session": config.bars_per_session,
-        "window_bars": config.window_bars,
-        "min_labeled_bars": config.min_labeled_bars,
-        "signal_horizon_bars": config.signal_horizon_bars,
+        "bars_per_session": scaling.bars_per_session,
+        "window_bars": scaling.window_bars,
+        "min_labeled_bars": scaling.min_labeled_bars,
+        "signal_horizon_bars": scaling.signal_horizon_bars,
         "current_state": analysis.map(|value| value.current_state.label()),
         "current_close": analysis.map(|value| value.current_close),
         "rolling_return": analysis.map(|value| value.rolling_return),
@@ -1662,12 +1737,21 @@ pub(crate) fn trim_markov_run_for_prompt(run: &JsonValue) -> JsonValue {
 /// the threshold change; this records the model the threshold was applied to.
 pub(crate) fn markov_model_fingerprint(state: &AppState) -> JsonValue {
     let config = markov_config(state);
+    // Sorted so the stamp is stable across runs and two runs of the same model
+    // compare equal.
+    let mut by_exchange = config
+        .session_minutes_by_exchange
+        .iter()
+        .map(|(exchange, minutes)| (exchange.clone(), JsonValue::from(*minutes)))
+        .collect::<Vec<_>>();
+    by_exchange.sort_by(|left, right| left.0.cmp(&right.0));
     json!({
         "horizon_minutes": config.horizon_minutes,
         "window_days": config.window_days,
         "threshold": config.threshold,
         "signal_horizon_days": config.signal_horizon_days,
         "bars_per_session": config.bars_per_session,
+        "session_minutes_by_exchange": JsonValue::Object(by_exchange.into_iter().collect()),
     })
 }
 
@@ -1699,6 +1783,22 @@ fn markov_config(state: &AppState) -> MarkovConfig {
     let session_minutes = yaml_i64(&state.config, &["strategy", "markov", "session_minutes"])
         .unwrap_or(DEFAULT_SESSION_MINUTES)
         .max(1);
+    let session_minutes_by_exchange = yaml_at(
+        &state.config,
+        &["strategy", "markov", "session_minutes_by_exchange"],
+    )
+    .and_then(|value| value.as_mapping().cloned())
+    .map(|mapping| {
+        mapping
+            .into_iter()
+            .filter_map(|(key, value)| {
+                let exchange = key.as_str()?.trim().to_ascii_lowercase();
+                let minutes = value.as_i64().filter(|minutes| *minutes > 0)?;
+                (!exchange.is_empty()).then_some((exchange, minutes))
+            })
+            .collect::<HashMap<_, _>>()
+    })
+    .unwrap_or_default();
     let signal_horizon_days = yaml_i64(
         &state.config,
         &["strategy", "markov", "signal_horizon_days"],
@@ -1707,6 +1807,13 @@ fn markov_config(state: &AppState) -> MarkovConfig {
     .max(1) as usize;
     // Scale the calendar tunings into bar counts. At a daily horizon this is a
     // multiply by one, so the deployed behavior is unchanged.
+    // The sample_count floor sizes the chart request, so it has to satisfy
+    // whichever exchange needs the most bars, not merely the default session.
+    let most_bars_per_session = std::iter::once(session_minutes)
+        .chain(session_minutes_by_exchange.values().copied())
+        .map(|minutes| bars_per_session(horizon_minutes, minutes))
+        .max()
+        .unwrap_or(1);
     let bars_per_session = bars_per_session(horizon_minutes, session_minutes);
     let window_bars = window_days.saturating_mul(bars_per_session).max(1);
     let min_labeled_bars = min_labeled_days.saturating_mul(bars_per_session).max(1);
@@ -1743,11 +1850,13 @@ fn markov_config(state: &AppState) -> MarkovConfig {
         // horizon would request fewer samples than it needs to label anything.
         sample_count: yaml_i64(&state.config, &["strategy", "markov", "sample_count"])
             .unwrap_or(520)
-            .max((window_bars + min_labeled_bars + 2) as i64) as usize,
+            .max(((window_days + min_labeled_days) * most_bars_per_session + 2) as i64)
+            as usize,
         min_labeled_days,
         signal_horizon_days,
         forecast_steps,
         session_minutes,
+        session_minutes_by_exchange,
         bars_per_session,
         window_bars,
         min_labeled_bars,
@@ -2347,6 +2456,7 @@ mod tests {
             instrument_negative_cache_retry_days: DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS,
             symbol_aliases: HashMap::new(),
             session_minutes: DEFAULT_SESSION_MINUTES,
+            session_minutes_by_exchange: HashMap::new(),
             bars_per_session: 1,
             window_bars: 2,
             min_labeled_bars: 3,
@@ -2515,7 +2625,9 @@ mod tests {
         let bars = bars_from_closes(&[
             100.0, 101.0, 102.0, 104.0, 106.0, 108.0, 111.0, 113.0, 120.0, 126.0,
         ]);
-        let analysis = analyze_bars(&bars, &test_config()).unwrap();
+        let config = test_config();
+        let scaling = MarkovScaling::for_exchange(&config, "xome");
+        let analysis = analyze_bars(&bars, &config, &scaling).unwrap();
         assert_eq!(analysis.current_state, Regime::Bull);
         assert_eq!(analysis.direction, "long");
         assert!(analysis.conviction >= 0.0);
@@ -2993,6 +3105,82 @@ strategy:
             untouched.get("signed_signal").and_then(JsonValue::as_f64),
             Some(0.1281),
             "and it should still carry its own full-run value"
+        );
+    }
+
+    #[test]
+    fn a_twenty_day_window_is_twenty_days_on_every_exchange() {
+        // With one global session length, window_days: 20 meant 20 trading days
+        // on a 9-bar exchange and about 26 on a 7-bar one -- silently, for
+        // roughly 40% of the universe. Measured against live SIM hourly bars:
+        // NASDAQ/NYSE 7 bars a session, Copenhagen/Oslo 8, the rest 9.
+        let mut config = test_config();
+        config.horizon_minutes = 60;
+        config.window_days = 20;
+        config.min_labeled_days = 60;
+        config.signal_horizon_days = 5;
+        config.session_minutes = 510;
+        config.session_minutes_by_exchange = HashMap::from([
+            ("xnas".to_string(), 390),
+            ("xnys".to_string(), 390),
+            ("xcse".to_string(), 480),
+            ("xosl".to_string(), 480),
+        ]);
+
+        for (exchange, expected_bars) in [
+            ("xnas", 7),
+            ("xnys", 7),
+            ("xcse", 8),
+            ("xosl", 8),
+            ("xetr", 9),
+            ("xome", 9),
+        ] {
+            let scaling = MarkovScaling::for_exchange(&config, exchange);
+            assert_eq!(
+                scaling.bars_per_session, expected_bars,
+                "{exchange} session length"
+            );
+            assert_eq!(
+                scaling.window_bars,
+                20 * expected_bars,
+                "{exchange} window must span twenty of its own sessions"
+            );
+            assert_eq!(scaling.signal_horizon_bars, 5 * expected_bars);
+            assert_eq!(scaling.min_labeled_bars, 60 * expected_bars);
+        }
+
+        // The bug this replaces: a US window scaled at the global nine bars
+        // spans 180 bars, which is roughly 26 of its own seven-bar sessions.
+        let us = MarkovScaling::for_exchange(&config, "xnas");
+        assert_eq!(us.window_bars, 140);
+        assert!(
+            180 / us.bars_per_session >= 25,
+            "the old global scaling stretched a 20-day window past 25 US sessions"
+        );
+
+        // An unknown exchange falls back to the default rather than to nothing.
+        assert_eq!(
+            MarkovScaling::for_exchange(&config, "xnew").bars_per_session,
+            9
+        );
+        assert_eq!(MarkovScaling::for_exchange(&config, "").bars_per_session, 9);
+    }
+
+    #[test]
+    fn exchange_session_lengths_are_matched_case_insensitively() {
+        // Symbols carry a lowercase suffix, but a config written with an
+        // uppercase key must not silently fall back to the default.
+        let mut config = test_config();
+        config.horizon_minutes = 60;
+        config.session_minutes = 510;
+        config.session_minutes_by_exchange = HashMap::from([("xnas".to_string(), 390)]);
+        assert_eq!(
+            MarkovScaling::for_exchange(&config, "XNAS").bars_per_session,
+            7
+        );
+        assert_eq!(
+            MarkovScaling::for_exchange(&config, "xnas").bars_per_session,
+            7
         );
     }
 }

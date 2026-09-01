@@ -219,6 +219,10 @@ const CONTRACT: &[ContractEntry] = &[
         &["strategy", "markov", "horizon_minutes"],
         "Markov model parameter.",
     ),
+    advisory_subtree(
+        &["strategy", "markov", "session_minutes_by_exchange"],
+        "Per-exchange trading session length, keyed by lowercase suffix; overrides session_minutes when scaling Markov tunings. A data map that grows as exchanges are added, so it is contracted at the parent.",
+    ),
     advisory(
         &["strategy", "markov", "session_minutes"],
         "Trading session length used to scale Markov calendar tunings into bar counts.",

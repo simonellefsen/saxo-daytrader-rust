@@ -405,6 +405,16 @@ strategy:
     # 20-day window stays 20 days rather than becoming 20 hours.
     horizon_minutes: 60
     session_minutes: 510
+    # A trading session is not the same length everywhere, and every Markov
+    # tuning is scaled by it. With one global value, window_days: 20 meant 20
+    # trading days on a 9-bar exchange and about 26 on a 7-bar one, silently,
+    # for roughly 40% of the universe. Measured against live SIM hourly bars:
+    # NASDAQ/NYSE 7 bars a session, Copenhagen/Oslo 8, the rest 9.
+    session_minutes_by_exchange:
+      xnas: 390
+      xnys: 390
+      xcse: 480
+      xosl: 480
     # 180 window + 540 min-labeled bars needs 722; 900 leaves real headroom
     # for symbols with a shorter intraday history. Saxo caps a request at 1200.
     sample_count: 900
