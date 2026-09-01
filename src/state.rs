@@ -2890,7 +2890,12 @@ fn compact_shadow_report_reference_cost_estimate(
     let estimated_slippage_bps = yaml_f64(config, &["strategy", "estimated_slippage_bps"])
         .unwrap_or(8.0)
         .max(0.0);
-    let one_way_slippage_dkk = reference_notional_dkk * estimated_slippage_bps / 10_000.0;
+    // Same rule as the manager's cost guard, deliberately not the same
+    // round trip: see `trading_manager::one_way_slippage_dkk`.
+    let one_way_slippage_dkk = crate::trading_manager::one_way_slippage_dkk(
+        reference_notional_dkk,
+        estimated_slippage_bps,
+    );
     let estimated_round_trip_cost_dkk = 2.0 * (one_way_commission_dkk + one_way_slippage_dkk);
     if !reference_notional_dkk.is_finite()
         || !one_way_commission_dkk.is_finite()

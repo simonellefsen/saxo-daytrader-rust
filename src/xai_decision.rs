@@ -1849,7 +1849,7 @@ fn capital_planning_context_inner(
         .map(|value| value_f64(value, "pnl_dkk"))
         .unwrap_or(0.0);
     let hard_halt_active = monthly_loss_halt_dkk < 0.0 && month_pnl_dkk <= monthly_loss_halt_dkk;
-    let soft_reduction_active = monthly_loss_soft_reduction_active(
+    let soft_reduction_active = crate::trading_manager::monthly_loss_soft_reduction_active(
         month_pnl_dkk,
         monthly_loss_soft_reduce_dkk,
         monthly_loss_halt_dkk,
@@ -1948,18 +1948,6 @@ pub(crate) fn drawdown_prompt_context(guard: &crate::drawdown_guard::DrawdownGua
             "The drawdown guardrail is inactive. Size BUYs within available_buy_budget_dkk."
         }
     })
-}
-
-fn monthly_loss_soft_reduction_active(
-    month_pnl_dkk: f64,
-    soft_threshold_dkk: f64,
-    hard_threshold_dkk: f64,
-) -> bool {
-    hard_threshold_dkk < 0.0
-        && soft_threshold_dkk < 0.0
-        && soft_threshold_dkk > hard_threshold_dkk
-        && month_pnl_dkk <= soft_threshold_dkk
-        && month_pnl_dkk > hard_threshold_dkk
 }
 
 fn market_scope_for_pulse(

@@ -1522,7 +1522,7 @@ fn monthly_loss_threshold_breached(month_pnl_dkk: f64, threshold_dkk: f64) -> bo
     threshold_dkk < 0.0 && month_pnl_dkk <= threshold_dkk
 }
 
-fn monthly_loss_soft_reduction_active(
+pub(crate) fn monthly_loss_soft_reduction_active(
     month_pnl_dkk: f64,
     soft_threshold_dkk: f64,
     hard_threshold_dkk: f64,
@@ -1569,6 +1569,21 @@ pub(crate) async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard 
 /// event seen from two angles -- so multiplying them double-counts one decline
 /// and lands on a deployed capacity nobody chose. Taking the minimum keeps the
 /// reduced budget a number the operator can predict from configuration.
+/// One-way slippage in DKK for a notional, at the configured basis points.
+///
+/// Shared with the shadow book's after-cost estimate so
+/// `strategy.estimated_slippage_bps` means the same thing in the gate that
+/// blocks a trade and in the evidence that later judges it. The round-trip
+/// treatment around this deliberately differs and is *not* shared: the gate
+/// applies `strategy.cost_guard_multiple` as a safety margin on the minimum
+/// commission, because it is deciding whether a reward target clears a
+/// conservative hurdle, while the shadow estimate doubles the plain commission
+/// because it is estimating what a round trip actually costs. Consolidating
+/// those two would make one of them wrong.
+pub(crate) fn one_way_slippage_dkk(notional_dkk: f64, estimated_slippage_bps: f64) -> f64 {
+    notional_dkk * (estimated_slippage_bps / 10_000.0)
+}
+
 /// The smallest BUY value worth placing on one exchange.
 ///
 /// Shared with the decision prompt rather than reimplemented there. The prompt
@@ -4392,7 +4407,8 @@ fn cost_guard_gate(order: &mut CandidateOrder, config: CostGuardConfig) -> GateD
         &exchange_code(&order.symbol).to_lowercase(),
     );
     let round_trip_commission_dkk = one_way_commission_dkk * 2.0;
-    let one_way_slippage_dkk = estimated_value_dkk * (config.estimated_slippage_bps / 10_000.0);
+    let one_way_slippage_dkk =
+        one_way_slippage_dkk(estimated_value_dkk, config.estimated_slippage_bps);
     let required_reward_dkk =
         (round_trip_commission_dkk * config.cost_guard_multiple) + one_way_slippage_dkk;
     if !expected_reward_dkk.is_finite()
@@ -8726,6 +8742,23 @@ mod tests {
             buy_value_floor_dkk("xcse", 0.0, 0.0),
             0.0,
             "both disabled is genuinely no floor, and should say so"
+        );
+    }
+
+    #[test]
+    fn slippage_means_the_same_thing_in_the_gate_and_in_the_evidence() {
+        // strategy.estimated_slippage_bps is read by the cost guard that blocks
+        // a trade and by the shadow book's after-cost estimate that later
+        // judges it. Two copies of the formula would let the gate and the
+        // evidence disagree about what a trade cost.
+        assert_eq!(one_way_slippage_dkk(10_000.0, 8.0), 8.0);
+        assert_eq!(one_way_slippage_dkk(0.0, 8.0), 0.0);
+        assert_eq!(one_way_slippage_dkk(10_000.0, 0.0), 0.0);
+        // Linear in both arguments, which is what makes doubling it a
+        // round trip rather than an approximation of one.
+        assert_eq!(
+            one_way_slippage_dkk(20_000.0, 8.0),
+            2.0 * one_way_slippage_dkk(10_000.0, 8.0)
         );
     }
 }
