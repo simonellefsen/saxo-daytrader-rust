@@ -3040,3 +3040,15 @@ broker mutation was added.
 - Reductions now record their cause and the rejection says whether the proposed size would have cleared. `budget_downsize` no longer manufactures an order it knows the cost guard will reject.
 - `drawdown_soft_buy_multiplier` 0.50 → 0.75 after confirming the 17.13% drawdown is real. At 0.50 the halved budget funded exactly one order above the floor, so every second candidate became a stub.
 
+## [2026-09-01] documentation | README and docs brought back to the current runtime
+
+- Deleted the nine unreferenced legacy Python scripts. Six could not have run at all: five import `saxo_daytrader_xai` (removed in `b43f0b7`) and `stop_runtime.py` manages `main.py`, `run_scheduler` and `web_main` (removed in `dfc77e0`). Separating "unused" from "broken" made the decision obvious.
+- README's opening claimed the Python/FastAPI and Next.js implementation was "still present as legacy source" with broker paths "gated until their Rust paths have matching audit and status tests" — untrue on both counts.
+- Replaced the 57-bullet "Legacy Phase 42 Surface" changelog with a capability section grouped by boundary. That list mixed live features with dead ones (APScheduler, systemd templates, the FastAPI/Next.js UI, launcher auto-restart) and read as current capability with no way to tell which was which. Feature history belongs in this log, not in the README.
+- Validation and Project layout described `validate_phase*.py`, `main.py` and `requirements.txt` as the project shape; both now describe `make validate` and the real tree.
+- The deployment section claimed the `systemd`/`launchd` templates still existed in `deploy/`; they went with their renderer in `b27ae6f`.
+- Twelve absolute `/Users/lindau/...` links rewritten as repo-relative, including one pointing at a *different* checkout (`codex/daytrader`, not `codex/rust_daytrader`).
+- `app.launch_scheduler_with_ui`, `scheduler_restart_on_failure`, `scheduler_max_restarts` and `scheduler_restart_delay_seconds` were the Python launcher's supervision settings, read by nothing in Rust. Removed from both shipped configs. They survived U2's audit because `AUDITED_ROOTS` covers `strategy`, `risk` and `taxation` only — a deliberate scoping to risk-bearing keys, worth knowing when a non-risk key goes stale.
+- The architecture concept page still described Markov as a *daily* model; it has been hourly with three weekday refreshes since 2026-08-31. The README diagram gained the bounded read-only refresh request Hermes can now make.
+- `STRATEGY.md` was left as-is: it carries a banner marking it a historical record of the retired ladder strategy, so its Python references are correct in context.
+

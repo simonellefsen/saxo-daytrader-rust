@@ -5,10 +5,6 @@ app:
   simulation_mode: true
   public_base_path: /saxo-daytrader
   public_base_url: ENV:DAYTRADER_PUBLIC_BASE_URL
-  launch_scheduler_with_ui: false
-  scheduler_restart_on_failure: false
-  scheduler_max_restarts: 0
-  scheduler_restart_delay_seconds: 2.0
 
 localization:
   locale: da-DK

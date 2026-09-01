@@ -2,25 +2,25 @@
 
 Rust/Dioxus conversion of the Saxo day-trading dashboard. The active runtime is now a single Rust binary, `saxo-rust`, built with Axum for HTTP/API routes and Dioxus SSR for the dashboard UI.
 
-The previous Python/FastAPI and Next.js implementation is still present as legacy source while the remaining broker-management paths are ported. Rust owns the active dashboard, scheduler, Saxo session handling, decision reports, Trading Manager queue creation, and Saxo order placement. Broker status sync, replace/cancel management, fill reconciliation, and portfolio adoption remain gated until their Rust paths have matching audit and status tests.
+The Python/FastAPI and Next.js implementation this project began as has been removed; `saxo-rust` owns the dashboard, scheduler, Saxo session handling, decision reports, Trading Manager queue creation, order placement, broker status sync, fill reconciliation, and protective stops. `scripts/` retains four Python utilities that are still wired to something: two backup CronJob scripts, the Saxo OAuth helper, and an execution-regression validator. [wiki/log.md](wiki/log.md) holds the dated record of what was removed and when.
 
 ## Current Rust Runtime
 
-- Rust 2024 project at [Cargo.toml](/Users/lindau/codex/rust_daytrader/Cargo.toml).
+- Rust 2024 project at [Cargo.toml](Cargo.toml).
 - Single HTTP process serving the dashboard and `/api/*` JSON endpoints on port `8000`.
-- Dioxus-rendered dashboard in [src/main.rs](/Users/lindau/codex/rust_daytrader/src/main.rs).
+- Dioxus-rendered dashboard in [src/main.rs](src/main.rs).
 - Workspace-local Cargo cache supported through `CARGO_HOME=.cargo-home`.
-- Docker image built from [Dockerfile.api](/Users/lindau/codex/rust_daytrader/Dockerfile.api).
+- Docker image built from [Dockerfile.api](Dockerfile.api).
 - The Rust app runs in Kubernetes namespace `saxo`.
 - The existing CloudNativePG database remains in namespace `saxo`; the Rust app connects to it through the cross-namespace service DNS name `daytrader-postgres-rw.saxo.svc.cluster.local`.
 - Kubernetes now deploys `daytrader-api`, a `daytrader-frontend` service pointing at that Rust app, and `daytrader-scheduler` from the Rust image. The `daytrader-frontend` Service is a routing alias for the API pods (the shared ngrok gateway targets it); the legacy Next.js `frontend/` directory itself was removed 2026-07-04 — the Dioxus SSR dashboard is the committed UI.
-- Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
+- Hermes Agent self-improvement is designed as a separate, gated research/reflection workflow. See [docs/hermes-agent.md](docs/hermes-agent.md) for the goal contract, one-variable experiment model, Kubernetes shape, MCP boundary, and safety invariants.
 - The Markov method runs as a daily advisory regime skill for portfolio/watchlist assets and is exposed through the dashboard, API, Hermes context, and AI decision prompt context without mutating orders. See [docs/markov-method.md](docs/markov-method.md).
 - Daily indicators derive technical confluence, ATR, and support-risk context from Saxo chart history. The support view identifies a nearby historical support zone, downside to that zone, potential downside after a break, break risk, and evidence confidence. It is advisory context, not an automatic trading gate.
 - QuiverQuant Congress-trading signals run for the US universe 45 minutes after the calendar-aware US open. They are available to the dashboard, Hermes, and the later US Decision Report as corroborating or risk-reducing context only. See [docs/quiver-signals.md](docs/quiver-signals.md).
 - Read-only benchmark comparison stores Saxo-backed proxy price series and reports portfolio excess return in the End-of-Day view; it is deliberately excluded from strategy, sizing, and execution. See [docs/performance-benchmarks.md](docs/performance-benchmarks.md).
 - The scheduler maintains broker-hosted protective stops for covered holdings under a constrained ATR policy. Stops are separate from discretionary decision-report orders, are revalidated through Saxo, and cannot protect against every gap or unavailable-market scenario.
-- Project knowledge is organized through an LLM-maintained wiki under [wiki/](/Users/lindau/codex/rust_daytrader/wiki), with workflow details in [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md).
+- Project knowledge is organized through an LLM-maintained wiki under [wiki/](wiki), with workflow details in [docs/project-wiki.md](docs/project-wiki.md).
 
 ## Current Architecture And Execution Boundary
 
@@ -37,6 +37,8 @@ flowchart LR
     Q --> R
     R --> H["Hermes advisory\nconservative mode"]
   end
+
+  H -.->|"bounded read-only refresh request"| M
 
   R --> T["Trading Manager\ndeterministic policy gates"]
   H --> T
@@ -59,73 +61,46 @@ Prompt-injection resistance in provider instructions is useful, but it is not th
 
 For the full current-state map and boundaries, see [wiki/concepts/current-system-architecture.md](wiki/concepts/current-system-architecture.md).
 
-## Legacy Phase 42 Surface
+## What The System Does
 
-- Python 3.11+ project scaffold
-- Local SQLite support at `ledger.db`
-- PostgreSQL support for Kubernetes deployments through `portfolio.database_url`
-- CloudNativePG deployment with one primary and one standby instance for Docker Desktop Kubernetes
-- S3-compatible CloudNativePG backups for local development with RustFS
-- SQLite-to-PostgreSQL migration job for existing `ledger.db` data
-- SIM/LIVE trading-environment metadata, account metadata, app-user metadata, and account-access tables prepared for future multi-account access control
-- Configurable `config.yaml` with placeholders for API keys, Saxo credentials, exclusions, tax brackets, and commission settings
-- CSV importer for the attached Saxo position export
-- Versioned `NOVOb:xcse` and `TSLA:xnas` watchlist coverage, subject to the standard decision, technical, risk, and broker gates
-- Tax-lot tracking based on imported holdings
-- Danish share-income tax engine with 27% / 42% brackets
-- Configurable commission and FX-conversion cost handling
-- Immutable trade ledger and lot-realization records
-- OpenRouter-backed decision engine using `openai/gpt-5.5`
-- Structured JSON decision reports with step-by-step rationale, watchlist focus, and suggested trades
-- Decision report persistence with prompt, raw response, parsed report, and error tracking
-- Non-mutating Decision Report dry runs with distinct persisted statuses; they validate provider output and parsing but cannot enter Trading Manager or Saxo execution
-- APScheduler-based background worker for recurring analysis cycles
-- Exchange-calendar driven market hours, holiday closures, and daylight-saving aware session timing
-- Simulation execution queue with immutable ledger updates
-- Live-mode approval queue with dry-run protection
-- Saxo OpenAPI session cache with refresh-token reuse
-- Saxo instrument lookup, precheck, and order submission for approved live orders
-- Saxo broker-status synchronization for submitted live orders
-- Local ledger reconciliation when Saxo reports a confirmed final fill
-- Incremental local ledger reconciliation for confirmed partial fills
-- Immutable `execution_fills` records for broker fill history and deduplication
-- Immutable `execution_order_events` records for broker-side amendments, cancellations, rejections, and working-order state changes
-- Broker-side amendment reconciliation that updates local working order quantity and price from Saxo
-- Scheduler-driven daily performance summary generation
-- Optional Slack webhook and SMTP email delivery for daily, weekly, monthly, quarterly, and YTD summaries
-- Immutable `notification_deliveries` records and notification history in the UI
-- Renderable `systemd` and `launchd` service templates for unattended local deployment
-- Live Saxo order-management actions for broker-side replace and cancel requests
-- Notification throttling, retry backoff, and richer structured daily-summary formatting
-- Weekly and monthly digest generation with independent scheduling and per-kind notification deduplication
-- Quarterly and year-to-date digest generation using the same immutable notification pipeline
-- Broker alert notifications for fills, rejections, and cancel confirmations
-- Backend-backed decision pulse health cards for Nordic/EU, US, and manual reports, including latest report, last success, last failure, and 7-day attempts
-- Per-kind delivery routing so digests and broker alerts can target different Slack webhooks or email recipient lists
-- Severity-based broker alert suppression so repeated low-signal events can be throttled without disabling higher-value alerts
-- Named route profiles so several digest or alert kinds can share one delivery destination without repeated config
-- Grouped broker alerts so several broker updates for the same order can be collapsed into one delivery
-- Autonomous app launcher mode that starts the web UI and background scheduler together for hands-off simulation trading
-- Scheduler heartbeat and last-cycle status persisted to SQLite and shown in the web UI
-- One-click scheduler cycle controls in the web UI for live or mock manual runs
-- Route-profile formatting so subject prefixes, message preambles, and summary style can be shared across notification kinds
-- Immutable scheduler cycle history with recent-cycle visibility in the web UI
-- Scheduler stale-worker detection with bounded auto-restart for launcher-managed autonomous mode
-- Configurable scheduler cycle-history retention by age and row count
-- Detection and repair of invalid legacy simulation trades that exceed available holdings
-- Whole-share execution enforcement so queued and submitted equity orders use integer quantities only
-- Audit bundle CSV export for ledger, decisions, executions, and tax records
-- FastAPI backend plus Next.js web UI with:
-  - portfolio summary in DKK
-  - holdings allocation table with live quote refresh support
-  - daily refreshed Nordic and global watchlists
-  - news, earnings, and macro headline tabs
-  - market status and analysis-window detection
-  - realised gain / tax summary from the trade ledger
-  - a Decision Report tab that can auto-run during analysis windows or run on demand
-  - an Execution tab for queued orders, live approvals, Saxo submission status, broker sync, and audit export
-  - live broker order replace/cancel controls for manageable Saxo orders
-  - a Notifications tab with summary preview and delivery history
+Grouped by boundary rather than by history. Everything listed here is live; for
+what was removed and when, read [wiki/log.md](wiki/log.md).
+
+**Advisory, read-only.** Markov regime signals on intraday bars, daily technical
+indicators with ATR and support-risk zones, QuiverQuant congressional signals for
+the US universe, editorial-research headlines screened for prompt injection, and
+Saxo-backed benchmark proxies. None of these can place, size, or approve an order.
+
+**Decision.** An OpenRouter-backed report per analysis pulse produces structured
+JSON with rationale, symbol sentiment, and suggested trades. Reports are
+scope-filtered to the pulse's tradable exchanges, persisted with prompt and raw
+response, and audited for completion quality. Mid-session shadow reports are
+observation-only and can never enter the manager queue.
+
+**Advisory review.** Hermes reviews each report in conservative mode and may
+block, reduce, or require review; it cannot add a trade, increase a quantity,
+approve an order, or reach a Saxo mutation endpoint. When an input is missing or
+stale it can request a bounded read-only refresh instead of blocking on it.
+
+**Deterministic policy.** The Trading Manager applies order shape, market status,
+cash buffer, monthly-loss and drawdown circuit breakers, exclusions and instrument
+quarantine, technical and Markov evidence, ATR risk sizing, concentration and
+holding limits, commission floors, and minimum trade value. Model-supplied prices
+and indicators are never treated as authoritative.
+
+**Execution.** Approved queue rows only, behind explicit adapter and environment
+enablement, with whole-share quantities, Saxo instrument and tick validation, and
+a mandatory `/trade/v2/orders/precheck`. Broker-hosted protective stops are placed
+and ratcheted by a scheduler sweep, separate from decision-report orders.
+
+**Accounting.** Immutable trade ledger with lot realisation, Danish share-income
+tax brackets, FX-split realised gains, commission and FX-conversion costs, and
+immutable `execution_fills` / `execution_order_events` broker history.
+
+**Operations.** Postgres via CloudNativePG in Kubernetes and SQLite locally,
+scheduled backups with retention, exchange-calendar market hours, immutable
+scheduler cycle history, Slack and email digests with throttling and per-kind
+routing, and an LLM-maintained wiki under [wiki/](wiki).
 
 ## Install
 
@@ -235,7 +210,7 @@ make k8s-stop
 `make security-scan` runs RustSec advisory checks, Trivy high/critical fixed-CVE
 scans for the repository and local images, and a secret scan. Run it before
 releases, after base-image changes, and after adding dependencies. See
-[wiki/runbooks/build-test-deploy.md](/Users/lindau/codex/rust_daytrader/wiki/runbooks/build-test-deploy.md)
+[wiki/runbooks/build-test-deploy.md](wiki/runbooks/build-test-deploy.md)
 for the remediation workflow.
 
 `make k8s-deploy` builds local Rust and backup images tagged with the full committed Git SHA by default, prepares the configured S3-compatible backup target, creates the `daytrader-cnpg` bucket, installs or upgrades CloudNativePG via Helm, applies/keeps the database resources in `saxo`, applies the Rust app resources in `saxo`, and applies the app-owned internal `saxo-daytrader` AgentEndpoint. `IMAGE_TAG`, `API_IMAGE`, and `BACKUP_IMAGE` remain explicit operator overrides. It does not apply the shared public ngrok gateway; run `ENV_FILE=../rust_daytrader/.env make apply` from `../shared-ngrok-gateway` when shared edge routing or OAuth config changes. With `BACKUP_OBJECT_STORE=rustfs`, it leaves the external RustFS container running and only verifies/creates the bucket. At runtime the app writes the latest Saxo session to the `saxo_sessions` table, so future rollouts can recover without another OAuth login while the refresh token remains valid.
@@ -266,13 +241,13 @@ rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-da
 rtk kubectl --context docker-desktop -n saxo create job --from=cronjob/hermes-weekly-reflection hermes-weekly-reflection-manual
 ```
 
-See [docs/hermes-agent.md](/Users/lindau/codex/rust_daytrader/docs/hermes-agent.md) for the full architecture and rollout plan.
+See [docs/hermes-agent.md](docs/hermes-agent.md) for the full architecture and rollout plan.
 
 ## Project Knowledge Wiki
 
-The repository has a persistent LLM-maintained knowledge layer under [wiki/](/Users/lindau/codex/rust_daytrader/wiki). It is intended for maintained project synthesis: architecture decisions, Saxo safety lessons, Hermes reflections, strategy experiments, and operational runbooks. Use [wiki/index.md](/Users/lindau/codex/rust_daytrader/wiki/index.md) as the entry point and [wiki/schema.md](/Users/lindau/codex/rust_daytrader/wiki/schema.md) as the maintenance contract.
+The repository has a persistent LLM-maintained knowledge layer under [wiki/](wiki). It is intended for maintained project synthesis: architecture decisions, Saxo safety lessons, Hermes reflections, strategy experiments, and operational runbooks. Use [wiki/index.md](wiki/index.md) as the entry point and [wiki/schema.md](wiki/schema.md) as the maintenance contract.
 
-See [docs/project-wiki.md](/Users/lindau/codex/rust_daytrader/docs/project-wiki.md) for qmd and Obsidian setup.
+See [docs/project-wiki.md](docs/project-wiki.md) for qmd and Obsidian setup.
 
 PostgreSQL backup strategy:
 
@@ -292,7 +267,7 @@ PostgreSQL backup strategy:
 
 ## Config Reference
 
-The project is driven by [config.yaml](/Users/lindau/codex/daytrader/config.yaml). Values written as `ENV:NAME` are loaded from `.env`.
+The project is driven by [config.yaml](config.yaml). Values written as `ENV:NAME` are loaded from `.env`.
 
 ### `app`
 
@@ -300,10 +275,13 @@ The project is driven by [config.yaml](/Users/lindau/codex/daytrader/config.yaml
 - `environment`: free-form environment label such as `local`.
 - `dry_run`: when `true`, live broker submission and live broker management are blocked even if `execution.mode` is `live`.
 - `simulation_mode`: legacy convenience flag; execution behavior is primarily controlled by `execution.mode`.
-- `launch_scheduler_with_ui`: when `true`, `main.py` starts the background scheduler together with the FastAPI + Next.js UI stack.
-- `scheduler_restart_on_failure`: if the launcher-managed scheduler dies or becomes stale, `main.py` may restart it.
-- `scheduler_max_restarts`: maximum restart attempts per app run.
-- `scheduler_restart_delay_seconds`: wait time before each restart attempt.
+
+`launch_scheduler_with_ui`, `scheduler_restart_on_failure`, `scheduler_max_restarts`
+and `scheduler_restart_delay_seconds` were the Python launcher's supervision
+settings and are read by nothing in the Rust runtime. They were removed from the
+shipped configuration on 2026-09-01. In Kubernetes the API and scheduler are
+separate Deployments, so restart supervision belongs to Kubernetes rather than to
+the application.
 
 ### `portfolio`
 
@@ -488,14 +466,12 @@ Important limitation: OpenFIGI's official mapping response returns FIGI metadata
 Run the always-on background worker:
 
 ```bash
-.venv/bin/python scripts/run_scheduler.py
+make scheduler
 ```
 
-Run one mock scheduler cycle for smoke testing:
-
-```bash
-.venv/bin/python scripts/run_scheduler.py --once --mock-decisions --force-decision
-```
+That runs `saxo-rust --scheduler`. In Kubernetes it is the `daytrader-scheduler`
+Deployment rather than a local process. To trigger a single cycle against the
+running app, press `R` in the dashboard.
 
 The scheduler:
 
@@ -516,9 +492,8 @@ The scheduler:
 - supports named route profiles plus per-kind overrides for Slack webhooks and email recipients
 - supports route-profile formatting for subject prefixes, message preambles, and compact vs structured summary rendering
 - can group several broker updates for one execution order into a single notification payload
-- records scheduler activity in `audit_log`
-- exposes dead/stale worker detection in the web UI using heartbeat age plus stored scheduler PID
-- can be auto-restarted by `main.py` when launched in autonomous mode, using the configured restart budget in `app.scheduler_*`
+- records each cycle in `scheduler_cycle_history` with per-step status and durations
+- exposes stale-worker detection in the dashboard from heartbeat age
 - prunes old scheduler cycle-history rows automatically according to `scheduler.history_max_rows` and `scheduler.history_retention_days`
 - flags impossible simulation trades in the Execution tab and can quarantine them from the effective portfolio state
 - normalizes order quantities to whole shares before queueing, simulation execution, and Saxo order submission
@@ -612,7 +587,7 @@ would be much easier to miss if the scheduler happens to poll just before the wi
 
 ## Deployment
 
-The active deployment path is the Rust/Kubernetes flow in the Makefile. The old Python `systemd` and `launchd` templates remain in `deploy/` only as historical local-operation examples; they are no longer exposed as Makefile targets.
+The deployment path is the Rust/Kubernetes flow in the Makefile: `make release` runs `validate`, deploys to Docker Desktop Kubernetes, and then runs a post-deploy guard and smoke check. The Python `systemd` and `launchd` service templates were removed with their renderer in `b27ae6f`.
 
 ## Saxo OAuth helper
 
@@ -722,127 +697,67 @@ Before pushing this project to GitHub:
 
 ## Validation
 
-Run the Phase 36 validation script:
+```bash
+make validate
+```
+
+`validate` runs `fmt-check`, `test`, and `check` — rustfmt in check mode, the
+full test suite, and `cargo check`. It is the same gate `make release` runs
+before deploying, so a release cannot ship code that fails it.
+
+Individual steps:
 
 ```bash
-.venv/bin/python scripts/validate_phase36.py
+make fmt-check
+make test
+make check
 ```
 
-Earlier phase validations remain available. To validate the live AI decision provider path:
+`scripts/validate_execution_regressions.py` remains as a separate Python
+regression harness for execution paths; see
+[wiki/runbooks/build-test-deploy.md](wiki/runbooks/build-test-deploy.md).
 
-```bash
-.venv/bin/python scripts/validate_phase4.py --live
-```
-
-Expected output shape:
-
-```text
-Phase 34 validation passed.
-First baseline date: 2026-04-06
-MSTR daily pnl after move DKK: 3360.00
-Reset baseline date: 2026-04-07
-```
-
-The exact order id values can vary slightly with the imported portfolio snapshot.
-
-Earlier validation scripts remain available:
-
-```bash
-.venv/bin/python scripts/validate_phase1.py
-.venv/bin/python scripts/validate_phase2.py
-.venv/bin/python scripts/validate_phase3.py
-.venv/bin/python scripts/validate_phase4.py
-.venv/bin/python scripts/validate_phase5.py
-.venv/bin/python scripts/validate_phase6.py
-.venv/bin/python scripts/validate_phase7.py
-.venv/bin/python scripts/validate_phase8.py
-.venv/bin/python scripts/validate_phase9.py
-.venv/bin/python scripts/validate_phase10.py
-.venv/bin/python scripts/validate_phase11.py
-.venv/bin/python scripts/validate_phase12.py
-.venv/bin/python scripts/validate_phase13.py
-.venv/bin/python scripts/validate_phase14.py
-.venv/bin/python scripts/validate_phase15.py
-.venv/bin/python scripts/validate_phase16.py
-.venv/bin/python scripts/validate_phase17.py
-.venv/bin/python scripts/validate_phase18.py
-.venv/bin/python scripts/validate_phase19.py
-.venv/bin/python scripts/validate_phase20.py
-.venv/bin/python scripts/validate_phase21.py
-.venv/bin/python scripts/validate_phase22.py
-.venv/bin/python scripts/validate_phase23.py
-.venv/bin/python scripts/validate_phase24.py
-.venv/bin/python scripts/validate_phase25.py
-.venv/bin/python scripts/validate_phase26.py
-.venv/bin/python scripts/validate_phase27.py
-.venv/bin/python scripts/validate_phase28.py
-.venv/bin/python scripts/validate_phase29.py
-```
+CI runs the same suite on every push — see [.github/](.github).
 
 ## Project layout
 
 ```text
 .
-├── config.yaml
-├── main.py
-├── requirements.txt
+├── Cargo.toml                  Rust 2024 crate, binary `saxo-rust`
+├── Makefile                    install / run / scheduler / validate / release
+├── config.yaml                 local configuration
+├── Dockerfile.api              runtime image for API and scheduler
+├── Dockerfile.backup           image for the two Postgres backup CronJobs
+├── requirements.txt            Python deps for those backup scripts only
+├── build.rs
+├── assets/
+├── src/                        ~50 modules; the Rust runtime
+│   ├── main.rs                 wiring and module registration
+│   ├── api.rs  ui.rs           Axum routes and Dioxus SSR dashboard
+│   ├── scheduler.rs            one cycle: reports, manager, enrichment
+│   ├── trading_manager.rs      deterministic policy gates
+│   ├── saxo_order.rs  auth.rs  broker execution and session handling
+│   ├── decision_*.rs           report schema, provider, quality audit
+│   ├── markov_method.rs  daily_indicators.rs  quiver.rs
+│   ├── drawdown_guard.rs  saxo_rate_limit.rs  fx.rs
+│   ├── hermes_*.rs  mcp.rs     advisory boundary and MCP surface
+│   ├── *_state.rs              typed read models per dashboard tab
+│   └── read_model.rs           shared null-tolerant decode boundary
 ├── scripts/
-│   └── validate_phase1.py
-│   └── validate_phase2.py
-│   └── validate_phase3.py
-│   └── validate_phase4.py
-│   └── validate_phase5.py
-│   └── validate_phase6.py
-│   └── validate_phase7.py
-│   └── validate_phase8.py
-│   └── validate_phase9.py
-│   └── validate_phase10.py
-│   └── validate_phase11.py
-│   └── validate_phase12.py
-│   └── validate_phase13.py
-│   └── validate_phase14.py
-│   └── validate_phase15.py
-│   └── validate_phase16.py
-│   └── validate_phase17.py
-│   └── validate_phase18.py
-│   └── validate_phase19.py
-│   └── validate_phase20.py
-│   └── validate_phase21.py
-│   └── validate_phase22.py
-│   └── validate_phase23.py
-│   └── validate_phase24.py
-│   └── validate_phase25.py
-│   └── validate_phase26.py
-│   └── validate_phase27.py
-│   └── validate_phase28.py
-│   └── validate_phase29.py
-│   └── validate_phase40.py
-│   └── validate_phase41.py
-│   └── validate_phase42.py
-└── src/
-    └── saxo_daytrader_xai/
-        ├── api/
-        │   └── app.py
-        ├── config.py
-        ├── db.py
-        ├── execution_engine.py
-        ├── fx_service.py
-        ├── importer.py
-        ├── market_data.py
-        ├── market_news.py
-        ├── market_schedule.py
-        ├── market_symbols.py
-        ├── notifications.py
-        ├── portfolio.py
-        ├── saxo_openapi.py
-        ├── scheduler_service.py
-        ├── strategy_engine.py
-        ├── tax_engine.py
-        ├── watchlists.py
-        ├── xai_decision.py
+│   ├── create_postgres_backup.py   CronJob: scheduled backup
+│   ├── prune_postgres_backups.py   CronJob: retention
+│   ├── saxo_oauth_helper.py        operator OAuth helper
+│   └── validate_execution_regressions.py
+├── deploy/k8s/                 kustomize manifests for namespace `saxo`
+├── docs/                       feature-level design notes
+└── wiki/                       LLM-maintained project knowledge
 ```
+## Where Work Is Tracked
 
-## Next-phase todo
+This README describes the system as it is. Forward-looking work lives in the
+wiki, so there is one place to look rather than a stale list here:
 
-1. Add a launcher-visible incident counter and cooldown so repeated scheduler crashes can be surfaced more clearly in the web UI.
-2. Add a one-click web UI action to prune scheduler history immediately using the current retention policy.
+- [wiki/urgent-todo.md](wiki/urgent-todo.md) — verified gaps between what the runtime claims and what it enforces
+- [wiki/todo.md](wiki/todo.md) — decided-in-principle work and decisions that are the operator's
+- [wiki/roadmap.md](wiki/roadmap.md) — the long-horizon map and what recently landed
+- [wiki/log.md](wiki/log.md) — dated record of what changed and why

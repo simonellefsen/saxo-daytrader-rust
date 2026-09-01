@@ -7,13 +7,13 @@ tags:
   - advisory-signals
 updated: 2026-08-31
 sources:
-  - /Users/lindau/codex/rust_daytrader/README.md
-  - /Users/lindau/codex/rust_daytrader/docs/hermes-agent.md
-  - /Users/lindau/codex/rust_daytrader/docs/markov-method.md
-  - /Users/lindau/codex/rust_daytrader/docs/quiver-signals.md
-  - /Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md
-  - /Users/lindau/codex/rust_daytrader/src/trading_manager.rs
-  - /Users/lindau/codex/rust_daytrader/src/saxo_order.rs
+  - README.md
+  - docs/hermes-agent.md
+  - docs/markov-method.md
+  - docs/quiver-signals.md
+  - docs/performance-benchmarks.md
+  - src/trading_manager.rs
+  - src/saxo_order.rs
 ---
 
 # Current System Architecture
@@ -68,10 +68,10 @@ flowchart TB
 
 ## Advisory Inputs
 
-- **Markov:** a daily three-regime model for portfolio and watchlist assets. It labels rolling returns, estimates transition probabilities, forecasts horizon distributions, and emits a signed Bull-minus-Bear signal. It is context, not an order trigger. See [Markov Method](/Users/lindau/codex/rust_daytrader/docs/markov-method.md).
+- **Markov:** a three-regime model for portfolio and watchlist assets, running on hourly bars since 2026-08-31 and refreshed three times per weekday — before the EU report, before the US report, and overnight. It labels rolling returns, estimates transition probabilities, forecasts horizon distributions, and emits a signed Bull-minus-Bear signal. Every tuning is expressed in calendar units and scaled into bar counts, so a 20-day window stays 20 days; see [Markov Regime Model](markov-regime-model.md) for why that matters. It is context, not an order trigger. Hermes may request a bounded read-only refresh of it when a candidate's signal is missing or stale. See [Markov Method](../../docs/markov-method.md).
 - **Support Risk:** daily chart-history analysis identifies clustered support zones. For an available asset it records nearest support, downside to support, downside after a break, break risk, and confidence. The result helps an operator, Decision Report, and Hermes reason about downside; it does not independently block or approve an order.
-- **QuiverQuant:** a calendar-aware US Congress-trading run begins 45 minutes after the Saxo US open. Its signal is corroborating/risk-reducing context and must be fresh before the later US Decision Report treats it as current. See [QuiverQuant Advisory Signals](/Users/lindau/codex/rust_daytrader/docs/quiver-signals.md).
-- **Benchmarks:** Saxo-backed ETF proxy series compare stored portfolio return with selected regional/US reference returns in the End-of-Day view. Excess return is an observational performance measure and is deliberately excluded from selection, sizing, stops, and broker execution. See [Performance Benchmarks](/Users/lindau/codex/rust_daytrader/docs/performance-benchmarks.md).
+- **QuiverQuant:** a calendar-aware US Congress-trading run begins 45 minutes after the Saxo US open. Its signal is corroborating/risk-reducing context and must be fresh before the later US Decision Report treats it as current. See [QuiverQuant Advisory Signals](../../docs/quiver-signals.md).
+- **Benchmarks:** Saxo-backed ETF proxy series compare stored portfolio return with selected regional/US reference returns in the End-of-Day view. Excess return is an observational performance measure and is deliberately excluded from selection, sizing, stops, and broker execution. See [Performance Benchmarks](../../docs/performance-benchmarks.md).
 - **Hermes:** reads a sanitised MCP/API context, reflects daily and weekly, proposes one-variable experiments, and gives bounded per-report advice. In conservative mode it can reduce, block, or require review, never create or enlarge a candidate.
 
 ## Execution Boundary

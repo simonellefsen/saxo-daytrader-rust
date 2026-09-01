@@ -1,6 +1,6 @@
 # saxo-rust Project Guide
 
-This is a Rust Axum + Dioxus Saxo day-trading dashboard. It replaced an earlier Python/FastAPI + Next.js implementation; that predecessor is gone from the active runtime (Next.js was removed 2026-07-04, the remaining Python is queued for removal per `wiki/urgent-todo.md`'s Python Removal Plan — the only Python still live is two Postgres backup CronJob scripts, unrelated to the trading application).
+This is a Rust Axum + Dioxus Saxo day-trading dashboard. It replaced an earlier Python/FastAPI + Next.js implementation, which is gone: Next.js was removed 2026-07-04 and the Python removal plan finished 2026-09-01. Four Python utilities remain under `scripts/`, none in the trading path — two Postgres backup CronJob scripts, the Saxo OAuth helper, and an execution-regression validator.
 
 Follow the global instruction in `/Users/lindau/.codex/RTK.md`: prefix shell commands with `rtk`.
 
