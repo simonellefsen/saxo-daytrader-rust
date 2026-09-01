@@ -21,6 +21,8 @@ const DEFAULT_DAILY_TIME: &str = "23:30";
 /// Length of a regular cash-equity session in minutes. Used only to convert
 /// calendar tunings into bar counts at an intraday horizon.
 const DEFAULT_SESSION_MINUTES: i64 = 510;
+/// Saxo service group the chart sweep spends its quota in.
+const SAXO_CHART_SERVICE_GROUP: &str = "chart";
 const TRADABLE_ASSET_TYPES: &str = "Stock,Etf,Etn,Etc";
 const SAXO_MARKOV_MAX_ATTEMPTS: usize = 4;
 const DEFAULT_INSTRUMENT_NEGATIVE_CACHE_RETRY_DAYS: i64 = 7;
@@ -308,6 +310,10 @@ async fn run_markov_over_assets(
         .context("loading Saxo session for Markov method run")?;
     let run_id = format!("markov-{}", Utc::now().timestamp_micros());
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // Measure only this sweep's share of the chart quota. Wall-clock duration
+    // cannot separate "200 assets take this long" from "something else is
+    // spending the same budget"; pacer waiting can.
+    crate::saxo_rate_limit::reset(SAXO_CHART_SERVICE_GROUP);
     let mut rows = Vec::new();
     let mut success_count = 0usize;
     let mut error_count = 0usize;
@@ -366,6 +372,7 @@ async fn run_markov_over_assets(
     let summary = json!({
         "status": status,
         "run_id": run_id,
+        "rate_limiter": crate::saxo_rate_limit::snapshot(SAXO_CHART_SERVICE_GROUP),
         "run_date": run_date.to_string(),
         "asset_count": assets.len(),
         "success_count": success_count,

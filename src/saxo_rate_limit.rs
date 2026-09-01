@@ -39,6 +39,7 @@ use std::{
 };
 
 use reqwest::header::HeaderMap;
+use serde_json::{Value as JsonValue, json};
 use tokio::time::sleep;
 use tracing::{debug, warn};
 
@@ -63,6 +64,15 @@ pub(crate) fn service_group(path: &str) -> String {
 struct GroupState {
     /// Earliest time the next request in this group may go out.
     next_allowed_at: Option<Instant>,
+    /// Requests issued through the pacer for this group.
+    request_count: u64,
+    /// Requests that had to wait for their slot.
+    waited_count: u64,
+    /// Cumulative time spent waiting, in milliseconds.
+    total_waited_ms: u64,
+    /// Times a response's headers implied tighter pacing than the configured
+    /// baseline, meaning the quota was depleting faster than the floor assumes.
+    header_tightened_count: u64,
 }
 
 /// The floor spacing implied by a per-minute budget.
@@ -193,12 +203,56 @@ pub(crate) async fn acquire(path: &str, requests_per_minute: usize) {
             None => break,
         }
     }
+    if let Ok(mut guard) = buckets().lock() {
+        let group = guard.entry(group_key.clone()).or_default();
+        group.request_count += 1;
+        if !waited.is_zero() {
+            group.waited_count += 1;
+            group.total_waited_ms += waited.as_millis() as u64;
+        }
+    }
     if waited > Duration::from_millis(250) {
         debug!(
             group = %group_key,
             waited_ms = waited.as_millis() as u64,
             "paced Saxo request against the service-group limit"
         );
+    }
+}
+
+/// What the pacer did for one service group since the last reset.
+///
+/// A sweep's own timing cannot distinguish "slow because there are 200 assets"
+/// from "slow because something else is spending the same quota". These
+/// counters can: a market-hours sweep contending with the price monitor waits
+/// more often, and for longer, than the same sweep run against an idle session.
+pub(crate) fn snapshot(group_key: &str) -> JsonValue {
+    let Ok(guard) = buckets().lock() else {
+        return json!({"status": "unavailable"});
+    };
+    let Some(group) = guard.get(group_key) else {
+        return json!({"status": "no_requests", "group": group_key});
+    };
+    json!({
+        "status": "ok",
+        "group": group_key,
+        "request_count": group.request_count,
+        "waited_count": group.waited_count,
+        "total_waited_ms": group.total_waited_ms,
+        "header_tightened_count": group.header_tightened_count,
+    })
+}
+
+/// Zero one group's counters so the next sweep measures only itself.
+pub(crate) fn reset(group_key: &str) {
+    let Ok(mut guard) = buckets().lock() else {
+        return;
+    };
+    if let Some(group) = guard.get_mut(group_key) {
+        group.request_count = 0;
+        group.waited_count = 0;
+        group.total_waited_ms = 0;
+        group.header_tightened_count = 0;
     }
 }
 
@@ -212,6 +266,9 @@ pub(crate) fn observe(path: &str, headers: &HeaderMap) {
         return;
     };
     let group = guard.entry(group_key.clone()).or_default();
+    if spacing > baseline_spacing(DEFAULT_REQUESTS_PER_MINUTE) {
+        group.header_tightened_count += 1;
+    }
     let target = Instant::now() + spacing;
     if group.next_allowed_at.is_none_or(|current| target > current) {
         group.next_allowed_at = Some(target);
@@ -407,5 +464,49 @@ mod tests {
             plan_delay(&mut group, now, Duration::from_millis(600)),
             Some(MAX_SINGLE_WAIT)
         );
+    }
+
+    #[test]
+    fn the_pacer_reports_how_much_it_made_a_sweep_wait() {
+        // A sweep's wall-clock duration cannot separate "200 assets take this
+        // long" from "the price monitor is spending the same quota". Both
+        // intraday Markov sweeps on 2026-08-31 took about 210s and there was no
+        // idle-session control to compare against, which is what made the
+        // contention question unanswerable rather than merely unanswered.
+        let group = "chart-test-group";
+        reset(group);
+
+        let before = snapshot(group);
+        assert_eq!(before["status"], "no_requests");
+
+        {
+            let mut guard = buckets().lock().expect("bucket lock");
+            let state = guard.entry(group.to_string()).or_default();
+            state.request_count = 201;
+            state.waited_count = 187;
+            state.total_waited_ms = 112_000;
+            state.header_tightened_count = 3;
+        }
+
+        let during = snapshot(group);
+        assert_eq!(during["status"], "ok");
+        assert_eq!(during["request_count"], 201);
+        assert_eq!(during["waited_count"], 187);
+        assert_eq!(during["total_waited_ms"], 112_000);
+        assert_eq!(
+            during["header_tightened_count"], 3,
+            "header-derived tightening is the signal that quota was depleting faster than the floor assumes"
+        );
+
+        // Reset zeroes the counters so the next sweep measures only itself,
+        // without discarding the pacing state that keeps requests spaced.
+        reset(group);
+        let after = snapshot(group);
+        assert_eq!(
+            after["status"], "ok",
+            "the group still exists after a reset"
+        );
+        assert_eq!(after["request_count"], 0);
+        assert_eq!(after["total_waited_ms"], 0);
     }
 }
