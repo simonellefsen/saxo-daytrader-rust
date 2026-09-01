@@ -5730,6 +5730,21 @@ const FRESHNESS_SOURCES: &[FreshnessSource] = &[
         stale_after_minutes: 3 * 24 * 60,
     },
     FreshnessSource {
+        key: "wal_archiving",
+        label: "WAL archiving",
+        tab: "overview",
+        // The only backup signal reachable from the application's own
+        // connection. CNPG writes base backups to object storage and records
+        // their state in Kubernetes, which this process cannot read; continuous
+        // WAL archiving is visible here because `-rw` routes to the primary.
+        // A failing archiver stops advancing this timestamp, so a failure
+        // surfaces as staleness rather than needing its own signal.
+        sql: r#"SELECT to_char(last_archived_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS at FROM pg_stat_archiver"#,
+        // archive_timeout forces a segment switch every 5 minutes, so three
+        // missed switches is the signal -- the same rule as FX rates above.
+        stale_after_minutes: 15,
+    },
+    FreshnessSource {
         key: "quiver_run",
         label: "Quiver run",
         tab: "quiver",
@@ -26718,6 +26733,50 @@ analysis_windows:
         assert_eq!(
             contract["enforcement"]["constraints.slippage_tolerance"]["status"],
             "not_enforced"
+        );
+    }
+
+    #[test]
+    fn wal_archiving_is_watched_and_reads_the_primary_only() {
+        // Base backups stopped for ten days across the 2026-08-31 disk crisis
+        // and nothing surfaced it. CNPG records base-backup state in Kubernetes,
+        // which this process cannot read; continuous WAL archiving is the part
+        // that is visible from the application's own connection, because the
+        // `-rw` service routes to the primary. Querying a replica returns zeros
+        // and a null timestamp, which is how this was missed the first time.
+        let source = FRESHNESS_SOURCES
+            .iter()
+            .find(|s| s.key == "wal_archiving")
+            .expect("WAL archiving is a watched source");
+
+        assert!(source.sql.contains("pg_stat_archiver"));
+        assert!(
+            source.sql.contains("last_archived_time"),
+            "a stalled archiver stops advancing this, so staleness is the failure signal"
+        );
+        assert!(
+            source.sql.contains("AT TIME ZONE 'UTC'") && source.sql.contains(r#""T""#),
+            "the timestamp must reach the strip as RFC3339 or it cannot be aged"
+        );
+        // Three missed 5-minute segment switches, matching the FX rule.
+        assert_eq!(source.stale_after_minutes, 15);
+
+        // A replica answers with a null timestamp rather than an error, and
+        // SQLite has no such view at all, so the row must degrade to missing
+        // rather than reporting a freshness it does not have.
+        assert_eq!(freshness_state(None, source.stale_after_minutes), "missing");
+        assert_eq!(
+            freshness_state(Some(8), source.stale_after_minutes),
+            "aging",
+            "one missed segment switch should warn before it is a failure"
+        );
+        assert_eq!(
+            freshness_state(Some(4), source.stale_after_minutes),
+            "fresh"
+        );
+        assert_eq!(
+            freshness_state(Some(60), source.stale_after_minutes),
+            "stale"
         );
     }
 }
