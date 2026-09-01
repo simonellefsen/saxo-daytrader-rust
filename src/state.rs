@@ -5896,6 +5896,97 @@ pub(crate) fn freshness_age_label(age_minutes: Option<i64>) -> String {
 }
 
 /// Hermes sub-sections, in the order the tab strip presents them.
+/// Top-level `get_context` keys a caller may ask for by name.
+///
+/// Distinct from `HERMES_SECTIONS`, which names dashboard tabs. These are the
+/// fields of `HermesContextPayload`, minus the three in
+/// `HERMES_CONTEXT_ALWAYS_PRESENT`.
+pub(crate) const HERMES_CONTEXT_SECTIONS: &[&str] = &[
+    "capabilities",
+    "goal_contract",
+    "overview",
+    "scheduler",
+    "decisions",
+    "end_of_day",
+    "strategy_journal",
+    "execution",
+    "performance",
+    "markov_method",
+    "quiver_signals",
+    "quiver_conflicts",
+    "editorial_research",
+    "daily_indicators",
+    "hermes",
+];
+
+/// Never filtered out: a scoped payload must still say what it is and carry
+/// its own boundary statement, or a caller could request a context with the
+/// safety framing quietly removed.
+const HERMES_CONTEXT_ALWAYS_PRESENT: &[&str] = &["status", "generated_at", "safety"];
+
+/// Returns the recognised sections and, separately, the names that matched
+/// nothing -- reported rather than dropped, since a typo that silently widens
+/// the payload back to everything is the failure this function invites.
+fn normalize_hermes_context_sections(requested: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut sections: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for name in requested {
+        let key = name.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        if HERMES_CONTEXT_SECTIONS.contains(&key.as_str()) {
+            if !sections.contains(&key) {
+                sections.push(key);
+            }
+        } else if !unknown.contains(&key) {
+            unknown.push(key);
+        }
+    }
+    sections.sort();
+    unknown.sort();
+    (sections, unknown)
+}
+
+/// Drop every top-level key the caller did not ask for, and say so in the
+/// payload.
+///
+/// A no-op when `sections` is empty or names nothing recognised, so the
+/// default call is unchanged.
+fn scope_hermes_context(value: &mut JsonValue, sections: &[String]) {
+    if sections.is_empty() {
+        return;
+    }
+    let (requested, unknown) = normalize_hermes_context_sections(sections);
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let mut omitted: Vec<String> = Vec::new();
+    if !requested.is_empty() {
+        object.retain(|key, _| {
+            let keep = HERMES_CONTEXT_ALWAYS_PRESENT.contains(&key.as_str())
+                || requested.iter().any(|section| section == key);
+            if !keep {
+                omitted.push(key.clone());
+            }
+            keep
+        });
+        omitted.sort();
+    }
+    // A withheld section and an empty one are different facts. Without this, a
+    // reader concludes "no execution activity today" from a payload that was
+    // simply never asked for it.
+    object.insert(
+        "sections".to_string(),
+        json!({
+            "requested": requested,
+            "omitted": omitted,
+            "unknown": unknown,
+            "note": "Sections named in omitted were not requested and are absent from this payload. Absence here is not evidence that the underlying data is empty. An unrecognised name filters nothing.",
+        }),
+    );
+}
+
 pub(crate) const HERMES_SECTIONS: &[&str] = &[
     "overview",
     "advice",
@@ -12262,8 +12353,17 @@ impl AppState {
         })
     }
 
-    pub async fn hermes_context_value(&self, limit: i64) -> Result<JsonValue> {
-        serde_json::to_value(self.hermes_context(limit).await?).map_err(Into::into)
+    /// `sections` narrows the payload to the named top-level keys.
+    ///
+    /// The full context is ~430 KB. A caller that only needs the day's
+    /// decisions and outcomes otherwise pays for the quiver, editorial,
+    /// overview and capability blocks it never reads -- and pays again on
+    /// every turn of the agent loop, not once. An empty list keeps every
+    /// section, so callers that do not ask are unaffected.
+    pub async fn hermes_context_value(&self, limit: i64, sections: &[String]) -> Result<JsonValue> {
+        let mut value = serde_json::to_value(self.hermes_context(limit).await?)?;
+        scope_hermes_context(&mut value, sections);
+        Ok(value)
     }
 
     pub async fn hermes_decision_report_items(
@@ -26679,6 +26779,110 @@ analysis_windows:
     /// the compaction keeps only short top-level scalars. Without a scalar
     /// summary every cycle -- retry fired, retry declined, retry errored --
     /// persists as the same `{"status":"ok"}` and the record answers nothing.
+    /// A scoped context must be honest about what it left out. The failure
+    /// this guards is a reader concluding "no execution activity today" from a
+    /// payload that was never asked for execution.
+    #[test]
+    fn a_scoped_context_names_what_it_withheld() {
+        let mut value = json!({
+            "status": "ok",
+            "generated_at": "2026-09-01T21:45:00Z",
+            "safety": {"boundary": "read_only"},
+            "decisions": {"reports": []},
+            "end_of_day": {"reports": []},
+            "execution": {"orders": [1, 2, 3]},
+            "quiver_signals": {"signals": []},
+            "overview": {"portfolio": {}},
+        });
+
+        scope_hermes_context(
+            &mut value,
+            &["decisions".to_string(), "END_OF_DAY".to_string()],
+        );
+
+        // Requested and always-present survive.
+        assert!(value.get("decisions").is_some());
+        assert!(
+            value.get("end_of_day").is_some(),
+            "matching is case-insensitive"
+        );
+        assert!(value.get("status").is_some());
+        assert!(
+            value.get("safety").is_some(),
+            "the boundary statement is never filtered out"
+        );
+
+        // The rest are gone, and named.
+        assert!(value.get("execution").is_none());
+        assert!(value.get("quiver_signals").is_none());
+        assert_eq!(
+            value["sections"]["omitted"],
+            json!(["execution", "overview", "quiver_signals"])
+        );
+        assert_eq!(
+            value["sections"]["requested"],
+            json!(["decisions", "end_of_day"])
+        );
+    }
+
+    /// An unrecognised name silently widening the payload back to everything is
+    /// the failure mode this filter invites, so it is reported.
+    #[test]
+    fn an_unknown_context_section_filters_nothing_and_says_so() {
+        let mut value = json!({
+            "status": "ok",
+            "safety": {},
+            "decisions": {},
+            "execution": {},
+        });
+
+        scope_hermes_context(&mut value, &["decisons".to_string()]);
+
+        assert!(
+            value.get("execution").is_some(),
+            "a typo must not silently scope the payload"
+        );
+        assert_eq!(value["sections"]["unknown"], json!(["decisons"]));
+        assert_eq!(value["sections"]["requested"], json!([]));
+    }
+
+    #[test]
+    fn an_unscoped_context_is_untouched() {
+        let original = json!({"status": "ok", "execution": {}, "quiver_signals": {}});
+        let mut value = original.clone();
+        scope_hermes_context(&mut value, &[]);
+        assert_eq!(
+            value, original,
+            "callers that do not ask must see no change"
+        );
+    }
+
+    /// Every advertised section must be a real top-level key, or a caller that
+    /// names it gets an empty payload instead of the block it asked for.
+    #[test]
+    fn every_advertised_context_section_is_a_real_payload_key() {
+        let payload = json!({
+            "status": "", "generated_at": "", "capabilities": {}, "goal_contract": {},
+            "overview": {}, "scheduler": {}, "decisions": {}, "end_of_day": {},
+            "strategy_journal": {}, "execution": {}, "performance": {}, "markov_method": {},
+            "quiver_signals": {}, "quiver_conflicts": {}, "editorial_research": {},
+            "daily_indicators": {}, "hermes": {}, "safety": {},
+        });
+        let keys = payload.as_object().expect("object");
+        for section in HERMES_CONTEXT_SECTIONS {
+            assert!(
+                keys.contains_key(*section),
+                "{section} is not a context key"
+            );
+        }
+        for always in HERMES_CONTEXT_ALWAYS_PRESENT {
+            assert!(
+                !HERMES_CONTEXT_SECTIONS.contains(always),
+                "{always} is always present and must not also be requestable"
+            );
+        }
+    }
+
     #[test]
     fn a_retry_outcome_survives_cycle_compaction() {
         let cycle = json!({

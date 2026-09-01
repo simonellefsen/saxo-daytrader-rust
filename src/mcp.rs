@@ -145,7 +145,18 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                 .get("limit")
                 .and_then(JsonValue::as_i64)
                 .unwrap_or(20);
-            state.hermes_context_value(limit).await?
+            let sections = arguments
+                .get("sections")
+                .and_then(JsonValue::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            state.hermes_context_value(limit, &sections).await?
         }
         "list_reflections" => {
             let limit = arguments
@@ -313,11 +324,19 @@ fn mcp_tools() -> Vec<JsonValue> {
         ),
         tool_schema(
             "get_context",
-            "Return sanitized scheduler, decision, execution, journal, performance, experiment, and active baseline context.",
+            "Return sanitized scheduler, decision, execution, journal, performance, experiment, and active baseline context. Pass `sections` to receive only the named blocks: the full payload is large, and every section stays in the conversation for the rest of the run.",
             json!({
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "sections": {
+                        "type": "array",
+                        "description": "Top-level blocks to return. Omit for every block. status, generated_at and safety are always present.",
+                        "items": {
+                            "type": "string",
+                            "enum": crate::state::HERMES_CONTEXT_SECTIONS,
+                        }
+                    }
                 },
                 "additionalProperties": false
             }),
