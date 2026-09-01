@@ -162,11 +162,13 @@ struct MarkovConfig {
     session_minutes_by_exchange: HashMap<String, i64>,
     /// Bars the chart feed returns per session at `horizon_minutes`; 1 for
     /// daily-or-coarser horizons.
+    /// The three fields below are the scaled *defaults*, reported on the config
+    /// surface beside `session_minutes_by_exchange`. What an analysis actually
+    /// applies comes from `MarkovScaling::for_exchange`, never from here.
     bars_per_session: usize,
     window_bars: usize,
     min_labeled_bars: usize,
     signal_horizon_bars: usize,
-    forecast_step_bars: Vec<usize>,
     /// Every refresh slot for one trading day, ascending. Always contains the
     /// nightly `daily_time` pass; intraday slots are prepended by config.
     run_slots: Vec<MarkovRunSlot>,
@@ -1818,10 +1820,6 @@ fn markov_config(state: &AppState) -> MarkovConfig {
     let window_bars = window_days.saturating_mul(bars_per_session).max(1);
     let min_labeled_bars = min_labeled_days.saturating_mul(bars_per_session).max(1);
     let signal_horizon_bars = signal_horizon_days.saturating_mul(bars_per_session).max(1);
-    let forecast_step_bars = forecast_steps
-        .iter()
-        .map(|step| step.saturating_mul(bars_per_session).max(1))
-        .collect::<Vec<_>>();
     let mut run_slots = markov_intraday_runs(&state.config, timezone);
     if !run_slots
         .iter()
@@ -1861,7 +1859,6 @@ fn markov_config(state: &AppState) -> MarkovConfig {
         window_bars,
         min_labeled_bars,
         signal_horizon_bars,
-        forecast_step_bars,
         run_slots,
         max_symbols: yaml_i64(&state.config, &["strategy", "markov", "max_symbols"])
             .unwrap_or(0)
@@ -2461,7 +2458,6 @@ mod tests {
             window_bars: 2,
             min_labeled_bars: 3,
             signal_horizon_bars: 2,
-            forecast_step_bars: vec![1, 2],
             run_slots: vec![MarkovRunSlot {
                 name: "nightly".to_string(),
                 local_time: NaiveTime::from_hms_opt(23, 30, 0).unwrap(),

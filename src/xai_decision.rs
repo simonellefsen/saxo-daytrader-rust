@@ -472,8 +472,34 @@ pub async fn run_refused_candidate_retry(state: &AppState, manager: &JsonValue) 
             }
         }
     }
+    // The persisted scheduler cycle keeps only short scalars from each step, so
+    // an outcome that lives solely inside `attempts` compacts away to
+    // `{"status":"ok"}` and a fired retry reads exactly like a cycle that never
+    // needed one -- the very distinction this function exists to record.
+    let mut outcome = if attempts.is_empty() {
+        "no cycle refused every candidate".to_string()
+    } else {
+        attempts
+            .iter()
+            .map(|attempt| {
+                let pulse_key = crate::state::json_text(attempt, "pulse_key");
+                let status = crate::state::json_text(attempt, "status");
+                let reason = crate::state::json_text(attempt, "reason");
+                if reason.is_empty() {
+                    format!("{pulse_key}={status}")
+                } else {
+                    format!("{pulse_key}={status}({reason})")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    if outcome.chars().count() > 200 {
+        outcome = outcome.chars().take(197).collect::<String>() + "...";
+    }
     json!({
         "status": "ok",
+        "reason": outcome,
         "attempts": attempts,
         "safety": "replacement_candidates_come_from_a_new_audited_decision_report_and_face_every_gate",
     })

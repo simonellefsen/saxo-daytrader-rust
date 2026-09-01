@@ -5825,6 +5825,24 @@ const FRESHNESS_SOURCES: &[FreshnessSource] = &[
         sql: "SELECT MAX(created_at) AS at FROM quiver_signal_runs",
         stale_after_minutes: 3 * 24 * 60,
     },
+    FreshnessSource {
+        key: "hermes_reflection",
+        label: "Hermes daily reflection",
+        tab: "hermes",
+        // The watchdog placeholder the CronJob writes when the model never
+        // answered is a row in this table but not a reflection, so counting it
+        // would report the loop healthy on exactly the days it was dead. On
+        // 2026-09-01 the newest real reflection was 2026-08-25 while the newest
+        // row was the night before, and nothing on screen said so.
+        sql: "SELECT MAX(created_at) AS at FROM hermes_reflections \
+              WHERE source_session_id LIKE 'daily-eod-reflection-%' \
+                AND (raw_payload_json IS NULL \
+                     OR raw_payload_json NOT LIKE '%kubernetes-cronjob-watchdog%')",
+        // Weekday-only at 23:45, so a normal Friday-to-Monday gap is already
+        // 72h. Four days keeps the weekend quiet and still catches two
+        // consecutive missed runs.
+        stale_after_minutes: 4 * 24 * 60,
+    },
 ];
 
 /// Accepts both timestamp spellings in the database: the Rust runtime writes
@@ -26654,6 +26672,32 @@ analysis_windows:
             serialized.len() < 600,
             "compacted cycle should be small, got {} bytes",
             serialized.len()
+        );
+    }
+
+    /// The refused-candidate retry reports its outcome inside `attempts`, and
+    /// the compaction keeps only short top-level scalars. Without a scalar
+    /// summary every cycle -- retry fired, retry declined, retry errored --
+    /// persists as the same `{"status":"ok"}` and the record answers nothing.
+    #[test]
+    fn a_retry_outcome_survives_cycle_compaction() {
+        let cycle = json!({
+            "refused_candidate_retry": {
+                "status": "ok",
+                "reason": "us_open_followup:2026-09-01=requested",
+                "attempts": [
+                    {"pulse_key": "us_open_followup:2026-09-01", "status": "requested"}
+                ],
+                "safety": "replacement_candidates_come_from_a_new_audited_decision_report_and_face_every_gate",
+            },
+        });
+
+        let compact = compact_scheduler_cycle_document(&cycle);
+
+        assert_eq!(compact["refused_candidate_retry"]["status"], "ok");
+        assert_eq!(
+            compact["refused_candidate_retry"]["reason"], "us_open_followup:2026-09-01=requested",
+            "a retry that fired must not compact to the same record as one that declined"
         );
     }
 
