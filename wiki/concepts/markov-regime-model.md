@@ -157,6 +157,30 @@ Note the peak: information is highest at **2-3 days**, above both 1 and 5. That
 makes `signal_horizon_days: 5` a live open question — see
 [roadmap](../roadmap.md).
 
+## Why `min_labeled_days` is a floor, not a formality
+
+Measured 2026-09-01 across 30 symbols holding at least 540 labelled hourly
+bars, re-estimating the matrix from less history each time:
+
+| Labelled bars | Median \|signal\| | Median difference vs 540 | Gate side flips |
+| --- | --- | --- | --- |
+| 60 | 0.417 | 0.434 | 14/30 |
+| 120 | 0.358 | 0.394 | 14/30 |
+| 270 | 0.452 | 0.233 | 12/30 |
+| 540 | 0.324 | reference | — |
+
+Two things follow. The estimate is genuinely different with less history — half
+the symbols change which side of the gate they fall on — so the floor cannot be
+relaxed on the argument that 60 samples suffice to fit a 3x3 matrix.
+
+And less history makes the signal *stronger*, not weaker. A sparse matrix has
+near-deterministic rows and forecasts overconfidently, so a thinly-sampled
+symbol is **more** likely to clear `min_signed_signal` than a well-sampled one.
+The floor is therefore refusing estimates that would pass the gate on
+overconfidence, which is a stricter job than "enough data to compute
+something", and a reason to scale it with the horizon rather than leave it as a
+fixed sample count.
+
 ## The gate threshold is coupled to the horizon
 
 `min_signed_signal` is not portable across model changes. Moving from daily to
