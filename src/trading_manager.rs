@@ -1569,6 +1569,29 @@ pub(crate) async fn portfolio_drawdown_guard(state: &AppState) -> DrawdownGuard 
 /// event seen from two angles -- so multiplying them double-counts one decline
 /// and lands on a deployed capacity nobody chose. Taking the minimum keeps the
 /// reduced budget a number the operator can predict from configuration.
+/// The smallest BUY value worth placing on one exchange.
+///
+/// Shared with the decision prompt rather than reimplemented there. The prompt
+/// previously reported the commission floor alone, and reported `0.0` when the
+/// commission guard was disabled, where the manager falls back to
+/// `execution.min_trade_value_dkk`. Both differences are dormant at the shipped
+/// values -- `max(500, 4667)` is `4667` either way -- but a model told a floor
+/// the manager will not honour proposes orders the manager then rejects, which
+/// is the failure the capital-plan budget had on 2026-08-31.
+pub(crate) fn buy_value_floor_dkk(
+    exchange_code_lowercase: &str,
+    min_trade_value_dkk: f64,
+    max_commission_pct_per_side: f64,
+) -> f64 {
+    if max_commission_pct_per_side <= f64::EPSILON {
+        return min_trade_value_dkk;
+    }
+    let commission_floor =
+        crate::saxo_order::min_commission_dkk_for_exchange(exchange_code_lowercase)
+            / max_commission_pct_per_side;
+    min_trade_value_dkk.max(commission_floor)
+}
+
 pub(crate) fn combined_soft_buy_multiplier(multipliers: &[f64]) -> Option<f64> {
     multipliers
         .iter()
@@ -1965,13 +1988,11 @@ async fn run_for_report(
             .unwrap_or(0.003)
             .max(0.0);
     let buy_value_floor_dkk = |symbol: &str| -> f64 {
-        if max_commission_pct_per_side <= f64::EPSILON {
-            return min_trade_value_dkk;
-        }
-        let commission_floor = crate::saxo_order::min_commission_dkk_for_exchange(
+        buy_value_floor_dkk(
             &exchange_code(symbol).to_lowercase(),
-        ) / max_commission_pct_per_side;
-        min_trade_value_dkk.max(commission_floor)
+            min_trade_value_dkk,
+            max_commission_pct_per_side,
+        )
     };
     let overlay_min_confluences = overlay
         .and_then(|overlay| overlay.i64_value("strategy.swing.daily_indicators.min_confluences"));
@@ -8671,5 +8692,40 @@ mod tests {
         assert!(unstamped["age_days"].is_null());
         assert!(unstamped["source"].is_null());
         assert_eq!(unstamped["confluence_count"], 5);
+    }
+
+    #[test]
+    fn the_prompt_and_the_manager_quote_the_same_buy_floor() {
+        // The prompt used to compute this separately: commission floor alone,
+        // and 0.0 when the commission guard was disabled, where the manager
+        // falls back to min_trade_value_dkk. Both are dormant at shipped values
+        // but a model told a floor the manager will not honour proposes orders
+        // the manager then rejects -- the capital-plan budget failure of
+        // 2026-08-31 in a second place.
+        let pct = 0.003;
+
+        // Commission dominates at the shipped minimum, on the cheapest exchange
+        // and the dearest alike.
+        let xcse = buy_value_floor_dkk("xcse", 500.0, pct);
+        let xlon = buy_value_floor_dkk("xlon", 500.0, pct);
+        assert!(xcse > 500.0, "commission floor should dominate: {xcse}");
+        assert!(
+            xlon > xcse,
+            "a dearer minimum commission means a higher floor"
+        );
+
+        // Raising the configured minimum past the commission floor makes it
+        // bind again, which is the case the prompt could not have expressed.
+        let raised = buy_value_floor_dkk("xcse", 50_000.0, pct);
+        assert_eq!(raised, 50_000.0);
+
+        // Disabling the commission guard falls back to the configured minimum
+        // rather than to no floor at all.
+        assert_eq!(buy_value_floor_dkk("xcse", 500.0, 0.0), 500.0);
+        assert_eq!(
+            buy_value_floor_dkk("xcse", 0.0, 0.0),
+            0.0,
+            "both disabled is genuinely no floor, and should say so"
+        );
     }
 }

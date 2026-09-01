@@ -1740,14 +1740,19 @@ async fn capital_planning_context(state: &AppState, overview: &JsonValue) -> Jso
         crate::config::yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
             .unwrap_or(0.003)
             .max(0.0);
+    // The manager's own rule, not a second copy of it: the prompt must quote a
+    // floor the manager will actually enforce.
+    let min_trade_value_dkk =
+        crate::config::yaml_f64(&state.config, &["execution", "min_trade_value_dkk"])
+            .unwrap_or(500.0)
+            .max(0.0);
     let floor = |exchange: &str| -> f64 {
-        if max_commission_pct_per_side <= f64::EPSILON {
-            0.0
-        } else {
-            (crate::saxo_order::min_commission_dkk_for_exchange(exchange)
-                / max_commission_pct_per_side)
-                .round()
-        }
+        crate::trading_manager::buy_value_floor_dkk(
+            exchange,
+            min_trade_value_dkk,
+            max_commission_pct_per_side,
+        )
+        .round()
     };
     let monthly_loss_halt_dkk = crate::config::yaml_f64(
         &state.config,
