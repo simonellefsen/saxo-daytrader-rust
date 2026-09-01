@@ -1125,9 +1125,45 @@ fn gate_replay_evidence_generations(runs: &[JsonValue]) -> Vec<JsonValue> {
         .collect()
 }
 
+/// Which proposable variables the replay can actually speak to.
+///
+/// Hermes is told to check a scenario's reachability before proposing a
+/// threshold, which only helps for variables a scenario covers. Two of the four
+/// supported variables have no scenario at all, and silence there reads like
+/// absence of a problem rather than absence of evidence -- the same confusion
+/// `reachability` exists to remove. Reporting the gap keeps "we did not test
+/// this" distinct from "this is fine".
+fn gate_replay_variable_coverage(scenarios: &[JsonValue]) -> Vec<JsonValue> {
+    SUPPORTED_EXPERIMENT_VARIABLES
+        .iter()
+        .map(|path| {
+            let scenario = scenarios.iter().find(|scenario| {
+                scenario.get("variable_path").and_then(JsonValue::as_str) == Some(*path)
+            });
+            match scenario {
+                Some(scenario) => json!({
+                    "variable_path": path,
+                    "covered": true,
+                    "reachability": scenario.get("reachability").cloned().unwrap_or(JsonValue::Null),
+                }),
+                None => json!({
+                    "variable_path": path,
+                    "covered": false,
+                    "reachability": "no_replay_scenario",
+                }),
+            }
+        })
+        .collect()
+}
+
 fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
     let generations = gate_replay_evidence_generations(runs);
     let mixed = generations.len() > 1;
+    let scenarios = vec![
+        gate_replay_markov_scenario(runs),
+        gate_replay_technical_scenario(runs),
+    ];
+    let coverage = gate_replay_variable_coverage(&scenarios);
     json!({
         "status": if runs.is_empty() { "no_history" } else { "available" },
         "run_count": runs.len(),
@@ -1138,10 +1174,8 @@ fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
         } else {
             "All retained runs share one Markov configuration and gate threshold."
         },
-        "scenarios": [
-            gate_replay_markov_scenario(runs),
-            gate_replay_technical_scenario(runs),
-        ],
+        "scenarios": scenarios,
+        "supported_variable_coverage": coverage,
         "safety": "offline_historical_target_gate_only_no_model_broker_or_configuration_mutation",
         "interpretation": "A target-gate clear is not an approval: other recorded gates, capital, holdings, and market conditions remain outside this isolated comparison.",
     })
@@ -26877,5 +26911,48 @@ analysis_windows:
         // proposed, rather than proposed and not gated.
         let empty = gate_replay_markov_scenario(&[]);
         assert_eq!(empty["reachability"], "no_candidates");
+    }
+
+    #[test]
+    fn every_proposable_variable_reports_whether_the_replay_can_test_it() {
+        // Hermes is told to check a scenario's reachability before proposing a
+        // threshold. That only helps where a scenario exists, and two of the
+        // four supported variables have none -- silence there reads as "no
+        // problem" rather than "no evidence", which is the confusion
+        // reachability was added to remove.
+        let replay = gate_replay_from_manager_runs(&[]);
+        let coverage = replay["supported_variable_coverage"]
+            .as_array()
+            .expect("coverage is reported");
+
+        assert_eq!(
+            coverage.len(),
+            SUPPORTED_EXPERIMENT_VARIABLES.len(),
+            "every proposable variable must be accounted for, covered or not"
+        );
+        for path in SUPPORTED_EXPERIMENT_VARIABLES {
+            let row = coverage
+                .iter()
+                .find(|row| row["variable_path"] == *path)
+                .unwrap_or_else(|| panic!("{path} missing from coverage"));
+            assert!(row["reachability"].is_string());
+        }
+
+        let uncovered: Vec<&str> = coverage
+            .iter()
+            .filter(|row| row["covered"] == false)
+            .filter_map(|row| row["variable_path"].as_str())
+            .collect();
+        assert!(
+            uncovered.contains(&"execution.min_trade_value_dkk")
+                && uncovered.contains(&"strategy.capital.min_cash_buffer_pct"),
+            "the two variables with no scenario must say so, not stay silent: {uncovered:?}"
+        );
+        assert!(
+            coverage.iter().any(|row| row["variable_path"]
+                == "strategy.swing.markov_gate.min_signed_signal"
+                && row["covered"] == true),
+            "and the two with scenarios must be marked covered"
+        );
     }
 }

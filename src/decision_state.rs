@@ -60,6 +60,7 @@ pub(crate) fn dashboard_decision_gate_replay_not_loaded() -> DecisionGateReplayP
         evidence_generations: Vec::new(),
         evidence_is_mixed: false,
         evidence_caveat: String::new(),
+        supported_variable_coverage: Vec::new(),
         scenarios: Vec::new(),
         safety: "not_loaded_outside_decisions_tab".to_string(),
         interpretation: String::new(),

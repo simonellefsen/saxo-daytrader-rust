@@ -3410,6 +3410,10 @@ pub struct DecisionGateReplayPayload {
     pub evidence_is_mixed: bool,
     #[serde(default)]
     pub evidence_caveat: String,
+    /// Every variable Hermes may propose, and whether the replay can speak to
+    /// it. `no_replay_scenario` means untested rather than untroubled.
+    #[serde(default)]
+    pub supported_variable_coverage: Vec<JsonValue>,
     pub scenarios: Vec<DecisionGateReplayScenarioPayload>,
     pub safety: String,
     pub interpretation: String,
