@@ -12945,6 +12945,73 @@ impl AppState {
     /// It never reads a broker surface, invokes a manager, changes a gate, or
     /// creates an execution order. A missing/timeout advisory is persisted as
     /// unavailable evidence rather than being treated as no-op advice.
+    /// Re-classify shadow rows whose Hermes effect was written before the
+    /// advice existed.
+    ///
+    /// `record_shadow_report_hermes_effects` runs immediately after the shadow
+    /// advisory is *requested*, and Hermes answers asynchronously -- on report
+    /// 256 the outcome rows were written at 12:20:06Z and the advice landed at
+    /// 12:20:51Z. The lookup therefore found nothing, wrote
+    /// `record_only_unavailable`, and nothing revisited it, so 13 of 15 shadow
+    /// candidates carried no Hermes dimension at all even though matching
+    /// per-order advice existed for them. That is the half of the shadow book
+    /// meant to answer whether Hermes helps.
+    ///
+    /// Idempotent and bounded: it only touches rows still marked unresolved,
+    /// and only where the advice has since been recorded.
+    pub async fn repair_shadow_report_hermes_effects(&self) -> Result<JsonValue> {
+        let rows = self
+            .select_json(
+                "SELECT DISTINCT o.report_id
+                 FROM shadow_report_outcomes o
+                 JOIN hermes_decision_advice a
+                   ON a.decision_report_id = o.report_id
+                 WHERE o.hermes_effect IN ('record_only_unavailable', 'not_requested_shadow')
+                 ORDER BY o.report_id DESC
+                 LIMIT 20",
+            )
+            .await
+            .unwrap_or_default();
+        let mut repaired = 0usize;
+        let mut reports = Vec::new();
+        for row in &rows {
+            let report_id = value_i64(row, "report_id");
+            if report_id <= 0 {
+                continue;
+            }
+            let request = json!({
+                "status": "repaired_after_advice_arrived",
+                "source_session_id": format!("shadow-decision-advice-{report_id}"),
+            });
+            match self
+                .record_shadow_report_hermes_effects(report_id, &request)
+                .await
+            {
+                Ok(result) => {
+                    let updated = value_i64(&result, "updated");
+                    if updated > 0 {
+                        repaired += updated as usize;
+                        reports.push(report_id);
+                    }
+                }
+                Err(err) => warn!(report_id, "shadow Hermes effect repair degraded: {err:#}"),
+            }
+        }
+        if repaired > 0 {
+            info!(
+                repaired,
+                report_count = reports.len(),
+                "repaired shadow Hermes effects recorded before their advice arrived"
+            );
+        }
+        Ok(json!({
+            "status": "ok",
+            "candidates_repaired": repaired,
+            "reports": reports,
+            "safety": "record_only_shadow_repair_no_queue_gate_or_saxo_authority",
+        }))
+    }
+
     pub async fn record_shadow_report_hermes_effects(
         &self,
         report_id: i64,

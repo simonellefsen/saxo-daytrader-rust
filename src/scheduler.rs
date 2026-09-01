@@ -255,6 +255,18 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     .await;
     record_step_duration(&mut step_durations, "daily_indicators", step_started);
     let step_started = Instant::now();
+    // Shadow Hermes effects are written the moment the advisory is requested,
+    // so an answer that arrives seconds later never reaches the row. Read-only
+    // reclassification of already-stored evidence.
+    let shadow_hermes_repair = match state.repair_shadow_report_hermes_effects().await {
+        Ok(value) => value,
+        Err(err) => {
+            warn!("shadow Hermes effect repair failed: {err:#}");
+            json!({"status": "error", "error": err.to_string()})
+        }
+    };
+    record_step_duration(&mut step_durations, "shadow_hermes_repair", step_started);
+    let step_started = Instant::now();
     let performance_benchmarks = bounded_enrichment_step(
         "performance_benchmarks",
         enrichment_step_timeout("PERFORMANCE_BENCHMARKS", 75),
@@ -429,6 +441,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "quiver_signals": quiver_signals,
         "editorial_research": editorial_research,
         "daily_indicators": daily_indicators,
+        "shadow_hermes_repair": shadow_hermes_repair,
         "performance_benchmarks": performance_benchmarks,
         "execution_queue": execution_queue,
         "broker_order_sync_after_execution": broker_order_sync_after_execution,
