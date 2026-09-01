@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,6 +177,70 @@ def _delete_prefix(s3: Any, bucket: str, prefix: str) -> int:
     return deleted
 
 
+def _record_backup_heartbeat(valid_completed: list[BackupRecord], dry_run: bool) -> str:
+    """Publish the newest verified base backup where the application can read it.
+
+    CNPG records base-backup state in Kubernetes and the trading application has
+    no Kubernetes access, so a ten-day gap in base backups during the 2026-08-31
+    disk crisis was invisible to every operator-facing surface. This is the one
+    process that sees both halves: the Backup resources CNPG reports completed,
+    and whether their objects actually exist in the bucket. It writes the newest
+    backup that satisfies *both*, because a resource marked completed whose data
+    is missing is precisely the failure that hid.
+
+    Never fatal. Retention is the job; the heartbeat is observability, and
+    losing it must not stop old backups being pruned.
+    """
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        return "skipped_no_database_url"
+    if not valid_completed:
+        return "skipped_no_verified_backup"
+    if dry_run:
+        return "skipped_dry_run"
+    newest = max(valid_completed, key=lambda r: r.started_at)
+    try:
+        import psycopg
+    except ImportError:
+        return "skipped_psycopg_unavailable"
+    now = _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    summary = json.dumps(
+        {
+            "verified_backup_count": len(valid_completed),
+            "newest_backup_name": newest.name,
+            "server_name": newest.server_name,
+            "source": "prune_postgres_backups",
+        }
+    )
+    try:
+        with psycopg.connect(database_url, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO backup_status (
+                        singleton_key, updated_at, last_verified_backup_at,
+                        last_verified_backup_id, verified_backup_count, summary_json
+                    ) VALUES ('cnpg_base_backup', %s, %s, %s, %s, %s)
+                    ON CONFLICT (singleton_key) DO UPDATE SET
+                        updated_at = EXCLUDED.updated_at,
+                        last_verified_backup_at = EXCLUDED.last_verified_backup_at,
+                        last_verified_backup_id = EXCLUDED.last_verified_backup_id,
+                        verified_backup_count = EXCLUDED.verified_backup_count,
+                        summary_json = EXCLUDED.summary_json
+                    """,
+                    (
+                        now,
+                        newest.started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        newest.backup_id,
+                        len(valid_completed),
+                        summary,
+                    ),
+                )
+    except Exception as exc:  # noqa: BLE001 - observability must not fail retention
+        return f"failed: {type(exc).__name__}"
+    return "recorded"
+
+
 def prune(args: argparse.Namespace) -> dict[str, Any]:
     records = _list_backup_records(args.namespace, args.cluster)
     completed = [r for r in records if r.phase == "completed"]
@@ -232,6 +297,7 @@ def prune(args: argparse.Namespace) -> dict[str, Any]:
         "pruned_backup_resources": [r.name for r in pruned_records],
         "deleted_backup_resources": deleted_backup_resources,
         "deleted_object_prefixes": deleted_object_prefixes,
+        "heartbeat": _record_backup_heartbeat(valid_completed, args.dry_run),
     }
 
 

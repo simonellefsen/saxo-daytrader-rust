@@ -1,8 +1,14 @@
-FROM python:3.13-alpine
+# Debian rather than Alpine: psycopg ships manylinux binary wheels only, and on
+# musl the pure-Python fallback could not locate libpq through ctypes. A CronJob
+# that runs twice an hour does not care about the extra image size, and this
+# avoids carrying a build toolchain to compile the driver.
+FROM python:3.13-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir boto3 requests
+# psycopg is used only to publish the base-backup heartbeat the application
+# reads; boto3 and requests do the retention work itself.
+RUN pip install --no-cache-dir boto3 requests "psycopg[binary]" 
 
 COPY scripts/create_postgres_backup.py scripts/prune_postgres_backups.py /app/scripts/
 

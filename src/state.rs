@@ -5730,6 +5730,19 @@ const FRESHNESS_SOURCES: &[FreshnessSource] = &[
         stale_after_minutes: 3 * 24 * 60,
     },
     FreshnessSource {
+        key: "base_backup",
+        label: "Base backup",
+        tab: "overview",
+        // Written by the retention CronJob, which is the only process that sees
+        // both halves: CNPG's completed Backup resources and whether their
+        // objects actually landed in the bucket. Base backups stopped for ten
+        // days across the 2026-08-31 disk crisis with nothing surfacing it.
+        sql: "SELECT last_verified_backup_at AS at FROM backup_status WHERE singleton_key = 'cnpg_base_backup'",
+        // The schedule is every 30 minutes; three missed rounds is the signal,
+        // the same rule used for FX rates and WAL archiving.
+        stale_after_minutes: 90,
+    },
+    FreshnessSource {
         key: "wal_archiving",
         label: "WAL archiving",
         tab: "overview",
@@ -15673,6 +15686,26 @@ impl AppState {
                 singleton_key TEXT PRIMARY KEY,
                 updated_at TEXT NOT NULL,
                 status TEXT NOT NULL,
+                summary_json TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Written by the backup retention CronJob, read by the freshness strip.
+        // CNPG records base-backup state in Kubernetes, which this process
+        // cannot reach; this table is the one place both sides can meet. It
+        // carries the newest backup that CNPG reported completed *and* whose
+        // objects the retention pass then found in the bucket, because a
+        // Backup resource marked completed whose data is missing is exactly
+        // the failure that hid for ten days.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS backup_status (
+                singleton_key TEXT PRIMARY KEY,
+                updated_at TEXT NOT NULL,
+                last_verified_backup_at TEXT,
+                last_verified_backup_id TEXT,
+                verified_backup_count INTEGER,
                 summary_json TEXT NOT NULL
             )",
         )

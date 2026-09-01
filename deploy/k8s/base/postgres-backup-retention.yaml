@@ -56,6 +56,17 @@ spec:
               env:
                 - name: CLUSTER_NAME
                   value: daytrader-postgres
+                # Retention is the only process that sees both CNPG's completed
+                # Backup resources and whether their objects reached the bucket,
+                # so it publishes a base-backup heartbeat the application can
+                # read. The application has no Kubernetes access and so cannot
+                # observe base backups any other way. Writing that heartbeat is
+                # best-effort and never fails the retention pass.
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: daytrader-postgres-app
+                      key: database-url
                 - name: BACKUP_BUCKET
                   value: daytrader-cnpg
                 - name: S3_ENDPOINT_URL
