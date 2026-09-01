@@ -4917,7 +4917,17 @@ fn GateReplayScenario(
                 span { class: "status", "{evaluated_count} evaluated" }
             }
             if changes.is_empty() {
-                span { class: "muted", "No historical target-gate flip in the retained evidence." }
+                // An unreachable scenario and an evaluated one that changed
+                // nothing are opposite conclusions, and reading them as the
+                // same is how a threshold gets tuned on evidence that never
+                // touched it.
+                if evaluated_count == 0 {
+                    span { class: "status warn",
+                        "Not reachable in the retained evidence: no candidate ever met this gate's precondition, so the threshold could not have mattered either way."
+                    }
+                } else {
+                    span { class: "muted", "Evaluated against {evaluated_count} candidates with no target-gate flip." }
+                }
             } else {
                 div { class: "table-wrap candidate-scoring-table",
                     table {

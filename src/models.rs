@@ -3425,6 +3425,13 @@ pub struct DecisionGateReplayScenarioPayload {
     pub variable_path: String,
     pub proposed_value: JsonValue,
     pub comparison: String,
+    /// Whether the retained evidence could test this threshold at all.
+    /// `unreachable_in_retained_evidence` means no candidate met the gate's
+    /// precondition, so the value did nothing during the window — a different
+    /// conclusion from "evaluated and nothing changed", and the one a proposal
+    /// must not mistake for support.
+    #[serde(default)]
+    pub reachability: String,
     pub summary: DecisionGateReplayScenarioSummaryPayload,
     pub changes: Vec<DecisionGateReplayChangePayload>,
 }

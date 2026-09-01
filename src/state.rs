@@ -968,6 +968,17 @@ fn gate_replay_markov_scenario(runs: &[JsonValue]) -> JsonValue {
             "not_reached_count": not_reached_count,
             "insufficient_evidence_count": insufficient_evidence_count,
         },
+        "reachability": if candidate_count == 0 {
+            "no_candidates"
+        } else if evaluated_count == 0 {
+            // The gate's precondition never held, so the threshold was never
+            // consulted. Distinct from "evaluated and nothing changed", and a
+            // proposal built on this is reasoning about a value that did
+            // nothing during the whole retained window.
+            "unreachable_in_retained_evidence"
+        } else {
+            "evaluated"
+        },
         "changes": changes,
     })
 }
@@ -1048,6 +1059,17 @@ fn gate_replay_technical_scenario(runs: &[JsonValue]) -> JsonValue {
             "unchanged_target_gate_count": unchanged_count,
             "not_reached_count": not_reached_count,
             "insufficient_evidence_count": insufficient_evidence_count,
+        },
+        "reachability": if candidate_count == 0 {
+            "no_candidates"
+        } else if evaluated_count == 0 {
+            // The gate's precondition never held, so the threshold was never
+            // consulted. Distinct from "evaluated and nothing changed", and a
+            // proposal built on this is reasoning about a value that did
+            // nothing during the whole retained window.
+            "unreachable_in_retained_evidence"
+        } else {
+            "evaluated"
         },
         "changes": changes,
     })
@@ -26811,5 +26833,44 @@ analysis_windows:
             freshness_state(Some(60), source.stale_after_minutes),
             "stale"
         );
+    }
+
+    #[test]
+    fn a_scenario_that_never_ran_is_not_reported_as_one_that_changed_nothing() {
+        // The Markov BUY gate is a rescue path: it is consulted only when the
+        // technical gate rejects a BUY. Across the retained runs the technical
+        // gate rejected none, so min_signed_signal was never read -- yet the
+        // replay rendered that identically to "we tested it and nothing
+        // flipped". Hermes is allowed to propose this exact variable, so the
+        // two must not read the same.
+        let run = |signal: f64, technical_rejects: bool| {
+            json!({"manager_json": {"hermes_preflight": {"candidate_waterfall": [{
+                "symbol": "PLTR:xnas",
+                "action": "BUY",
+                "strategy_key": "k",
+                "technical": {
+                    "status": "ok",
+                    "sentiment": if technical_rejects { "HOLD" } else { "BUY" },
+                    "trend_bias": if technical_rejects { "neutral" } else { "bullish" },
+                    "confluence_count": if technical_rejects { 1 } else { 5 },
+                    "min_confluences": 3
+                },
+                "markov": {"status": "ok", "direction": "long", "signed_signal": signal, "age_days": 0}
+            }]}}})
+        };
+
+        // Technical approves every candidate, so the rescue path is never
+        // consulted and the threshold could not have mattered.
+        let unreachable = gate_replay_markov_scenario(&[run(0.30, false), run(0.10, false)]);
+        assert_eq!(unreachable["summary"]["evaluated_count"], 0);
+        assert_eq!(
+            unreachable["reachability"], "unreachable_in_retained_evidence",
+            "a threshold that was never read must say so"
+        );
+
+        // With no candidates at all the answer is different again: nothing was
+        // proposed, rather than proposed and not gated.
+        let empty = gate_replay_markov_scenario(&[]);
+        assert_eq!(empty["reachability"], "no_candidates");
     }
 }
