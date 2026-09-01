@@ -11743,7 +11743,7 @@ fn hermes_goal_contract_enforcement() -> JsonValue {
             },
             "constraints.slippage_tolerance": {
                 "status": "not_enforced",
-                "detail": "No cost model exists, so slippage is never estimated before queueing. Tracked with strategy.estimated_slippage_bps and strategy.cost_guard_multiple in the config contract audit."
+                "detail": "This 2% tolerance is never compared against anything. A cost model does exist and does gate BUYs: cost_guard_gate estimates one-way slippage as strategy.estimated_slippage_bps (8 bps) of the order value, adds the exchange minimum round-trip commission scaled by strategy.cost_guard_multiple, and refuses a BUY whose verified reward target cannot clear that floor. So slippage is modelled and enforced -- the runtime simply uses its own far stricter estimate rather than this contract value, and no check would fire if realised slippage approached 2%."
             },
             "constraints.min_cash_buffer_pct": {
                 "status": "runtime_enforced",
@@ -26687,6 +26687,37 @@ analysis_windows:
                 .unwrap()
                 .iter()
                 .any(|generation| generation["model"] == "not_recorded")
+        );
+    }
+
+    #[test]
+    fn the_enforcement_record_describes_the_cost_model_that_exists() {
+        // U3 exists to stop the contract advertising a risk envelope the
+        // runtime does not apply. This is the same drift inside U3's own
+        // record: the slippage entry claimed "no cost model exists, so
+        // slippage is never estimated before queueing" while cost_guard_gate
+        // was estimating one-way slippage from strategy.estimated_slippage_bps
+        // and refusing BUYs that could not clear it. Understating enforcement
+        // is a smaller error than overstating it, but it is the same failure.
+        let config: YamlValue = serde_yaml::from_str("{}").expect("parse empty config");
+        let contract = hermes_goal_contract_from_config(&config);
+        let detail = contract["enforcement"]["constraints.slippage_tolerance"]["detail"]
+            .as_str()
+            .expect("slippage enforcement detail");
+
+        assert!(
+            detail.contains("estimated_slippage_bps"),
+            "the record must name the mechanism that actually runs: {detail}"
+        );
+        assert!(
+            !detail.contains("never estimated"),
+            "slippage is estimated; only the contract's own value is unchecked: {detail}"
+        );
+        // The status itself stays not_enforced: the 2% tolerance is genuinely
+        // never compared against, even though slippage is modelled.
+        assert_eq!(
+            contract["enforcement"]["constraints.slippage_tolerance"]["status"],
+            "not_enforced"
         );
     }
 }
