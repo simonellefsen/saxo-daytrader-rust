@@ -5969,6 +5969,16 @@ fn reinvestment_diagnostics(
     })
 }
 
+/// The exclusion list as the decision prompt should see it.
+///
+/// The manager has always refused these, but the model was never told, so a
+/// candidate slot could be spent on a symbol that could not reach the queue.
+/// Naming them up front is strictly a narrowing: it cannot admit anything the
+/// manager would otherwise refuse.
+pub(crate) fn excluded_symbols_for_prompt(state: &AppState) -> Vec<String> {
+    excluded_symbols(state)
+}
+
 fn excluded_symbols(state: &AppState) -> Vec<String> {
     excluded_symbols_for_config(&state.config)
 }

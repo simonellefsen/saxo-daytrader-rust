@@ -223,6 +223,33 @@ async fn run_cycle(state: &AppState) -> Result<()> {
     };
     record_step_duration(&mut step_durations, "trading_manager", step_started);
     let step_started = Instant::now();
+    // When every candidate in a cycle was refused for a symbol-specific
+    // reason, ask the model once for replacements and gate those too. The
+    // replacements come from a new audited decision report, so the manager
+    // stays a filter rather than becoming an originator of trades.
+    let refused_candidate_retry =
+        crate::xai_decision::run_refused_candidate_retry(state, &trading_manager).await;
+    let retry_requested = refused_candidate_retry
+        .get("attempts")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|attempts| {
+            attempts.iter().any(|attempt| {
+                attempt.get("status").and_then(JsonValue::as_str) == Some("requested")
+            })
+        });
+    let trading_manager_retry = if retry_requested {
+        match run_trading_manager_cycle(state).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("Trading Manager retry cycle failed: {err:#}");
+                json!({"status": "error", "error": err.to_string()})
+            }
+        }
+    } else {
+        json!({"status": "not_required"})
+    };
+    record_step_duration(&mut step_durations, "refused_candidate_retry", step_started);
+    let step_started = Instant::now();
     let markov_method = bounded_enrichment_step(
         "markov_method",
         enrichment_step_timeout("MARKOV", 240),
@@ -437,6 +464,8 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "protective_stop_sweep": protective_stop_sweep,
         "decision_reports": decision_reports,
         "trading_manager": trading_manager,
+        "refused_candidate_retry": refused_candidate_retry,
+        "trading_manager_retry": trading_manager_retry,
         "markov_method": markov_method,
         "quiver_signals": quiver_signals,
         "editorial_research": editorial_research,

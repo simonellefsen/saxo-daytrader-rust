@@ -334,6 +334,7 @@ async fn submit_manual_decision_report_with_mode_and_model(
     model_override: Option<&str>,
 ) -> Result<JsonValue> {
     let now = Utc::now();
+    let do_not_propose = crate::trading_manager::excluded_symbols_for_prompt(state);
     let pulse = DecisionPulse {
         key: format!(
             "{}:{}",
@@ -373,10 +374,170 @@ async fn submit_manual_decision_report_with_mode_and_model(
         exchange_codes: Vec::new(),
         source_markets: Vec::new(),
     };
-    submit_deferred_report(state, &pulse, true, mode, model_override).await
+    submit_deferred_report(state, &pulse, true, mode, model_override, &do_not_propose).await
+}
+
+/// Gate codes that a different instrument could plausibly avoid.
+///
+/// A cycle blocked by cash, drawdown, a closed market or the monthly-loss
+/// breaker is blocked for every symbol, so asking for replacements would spend
+/// a provider call to be refused identically. These codes are symbol-specific.
+const RETRYABLE_GATE_CODES: &[&str] = &[
+    "hermes_advice",
+    "hermes_context",
+    "markov",
+    "technical",
+    "commission_floor",
+    "position_weight",
+    "concentration",
+    "holding_limit",
+    "cost_guard",
+    "instrument_quarantine",
+];
+
+/// Decide whether one manager run earned a replacement report, and run it.
+///
+/// Returns a record either way: a decision not to retry is as worth seeing as
+/// a retry, and silence would make the two indistinguishable.
+pub async fn run_refused_candidate_retry(state: &AppState, manager: &JsonValue) -> JsonValue {
+    let runs = manager
+        .get("runs")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut attempts = Vec::new();
+    for run in runs {
+        let approved = run
+            .get("approved_order_count")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0);
+        let skipped_orders = run
+            .get("skipped_orders")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let pulse_key = crate::state::json_text(&run, "manager_key");
+        if approved > 0 || skipped_orders.is_empty() {
+            continue;
+        }
+        if pulse_key.contains(CANDIDATE_RETRY_SUFFIX) {
+            // One replacement per pulse. A retry that is itself refused ends
+            // the cycle rather than asking again.
+            attempts.push(
+                json!({"pulse_key": pulse_key, "status": "skipped", "reason": "already_a_retry"}),
+            );
+            continue;
+        }
+        let gate_codes = skipped_orders
+            .iter()
+            .map(|order| crate::state::json_text(order, "gate_code"))
+            .collect::<Vec<_>>();
+        if !gate_codes
+            .iter()
+            .all(|code| RETRYABLE_GATE_CODES.contains(&code.as_str()))
+        {
+            attempts.push(json!({
+                "pulse_key": pulse_key,
+                "status": "skipped",
+                "reason": "blocked_for_every_symbol",
+                "gate_codes": gate_codes,
+            }));
+            continue;
+        }
+        let refused = skipped_orders
+            .iter()
+            .map(|order| crate::state::json_text(order, "symbol"))
+            .filter(|symbol| !symbol.is_empty())
+            .collect::<Vec<_>>();
+        let Some(pulse) = active_decision_pulses(state)
+            .into_iter()
+            .find(|pulse| pulse.key == pulse_key)
+        else {
+            attempts.push(json!({"pulse_key": pulse_key, "status": "skipped", "reason": "pulse_no_longer_active"}));
+            continue;
+        };
+        match submit_candidate_retry_report(state, &pulse, &refused).await {
+            Ok(result) => attempts.push(json!({
+                "pulse_key": pulse_key,
+                "status": "requested",
+                "refused_symbols": refused,
+                "gate_codes": gate_codes,
+                "report": result,
+            })),
+            Err(err) => {
+                warn!(pulse_key = %pulse_key, "refused-candidate retry failed: {err:#}");
+                attempts.push(
+                    json!({"pulse_key": pulse_key, "status": "error", "error": err.to_string()}),
+                );
+            }
+        }
+    }
+    json!({
+        "status": "ok",
+        "attempts": attempts,
+        "safety": "replacement_candidates_come_from_a_new_audited_decision_report_and_face_every_gate",
+    })
+}
+
+/// Marks a pulse key as a retry so one can never chain into another.
+pub(crate) const CANDIDATE_RETRY_SUFFIX: &str = ":retry";
+
+/// Ask for a second set of candidates after every candidate in a cycle was
+/// refused, excluding the ones already refused.
+///
+/// Deliberately a fresh **decision report** rather than a manager-side search.
+/// Every order traces to a model-proposed candidate in a persisted,
+/// scope-filtered, audited report, and having the manager pick replacement
+/// instruments would make the deterministic policy layer an originator of
+/// trades rather than a filter. This keeps the model as the only originator;
+/// the retry's candidates face the identical gate stack, Hermes included.
+///
+/// Conditional rather than unconditional on purpose: asking every cycle for
+/// more candidates puts them all in competition for the same cash and invites
+/// padding, where a retry costs a second provider call only on the cycles that
+/// would otherwise deploy nothing.
+pub(crate) async fn submit_candidate_retry_report(
+    state: &AppState,
+    source_pulse: &DecisionPulse,
+    refused_symbols: &[String],
+) -> Result<JsonValue> {
+    let mut do_not_propose = crate::trading_manager::excluded_symbols_for_prompt(state);
+    for symbol in refused_symbols {
+        if !do_not_propose.iter().any(|held| held == symbol) {
+            do_not_propose.push(symbol.clone());
+        }
+    }
+    let mut pulse = source_pulse.clone();
+    pulse.key = format!("{}{CANDIDATE_RETRY_SUFFIX}", source_pulse.key);
+    pulse.label = format!("{} (retry)", source_pulse.label);
+    if has_report_for_pulse(state, &pulse.key).await? {
+        return Ok(json!({
+            "status": "skipped",
+            "reason": "retry_already_ran",
+            "pulse_key": pulse.key,
+        }));
+    }
+    info!(
+        pulse_key = %pulse.key,
+        refused = refused_symbols.len(),
+        "every candidate was refused; requesting one replacement report"
+    );
+    submit_deferred_report(
+        state,
+        &pulse,
+        false,
+        DecisionReportSubmissionMode::Live,
+        None,
+        &do_not_propose,
+    )
+    .await
 }
 
 async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
+    // Symbols the manager would refuse anyway. Telling the model up front stops
+    // a candidate slot being spent on something that cannot reach the queue --
+    // exclusions were previously enforced only after the report was written.
+    let do_not_propose = crate::trading_manager::excluded_symbols_for_prompt(state);
     if let Err(err) = state.refresh_saxo_exchange_calendars_if_stale().await {
         warn!("xAI decision scheduler using fallback exchange calendar: {err:#}");
     }
@@ -407,6 +568,7 @@ async fn submit_due_scheduled_reports(state: &AppState) -> Result<JsonValue> {
                 false,
                 DecisionReportSubmissionMode::Live,
                 None,
+                &do_not_propose,
             )
             .await?,
         );
@@ -423,8 +585,9 @@ async fn submit_deferred_report(
     manual: bool,
     mode: DecisionReportSubmissionMode,
     model_override: Option<&str>,
+    do_not_propose: &[String],
 ) -> Result<JsonValue> {
-    let prompt = build_decision_prompt(state, pulse, manual).await?;
+    let prompt = build_decision_prompt(state, pulse, manual, do_not_propose).await?;
     let model = match model_override {
         Some(model) => validated_ai_model(model)?,
         None => state.effective_xai_model().await?,
@@ -1472,6 +1635,7 @@ async fn build_decision_prompt(
     state: &AppState,
     pulse: &DecisionPulse,
     manual: bool,
+    do_not_propose: &[String],
 ) -> Result<JsonValue> {
     let market = state
         .market_status_payload()
@@ -1519,6 +1683,10 @@ async fn build_decision_prompt(
         .await
         .unwrap_or_else(|_| json!({"latest_run": null, "signals": []}));
     let capital_context = capital_planning_context(state, &overview).await;
+    let do_not_propose_context = json!({
+        "symbols": do_not_propose,
+        "instruction": "Do not propose any of these symbols in suggested_trades or selected_assets. They are excluded by risk configuration, or were already evaluated and refused this cycle, and a candidate naming one cannot reach the execution queue. Spending a candidate on one wastes the slot. This list narrows what you may propose and never widens it: a symbol's absence here is not an endorsement.",
+    });
     let markov_gate = crate::trading_manager::markov_gate_config(state);
     let daily_indicator_policy = crate::daily_indicators::indicator_config_json_for_state(state);
     let markov_buy_instruction = format!(
@@ -1539,7 +1707,6 @@ async fn build_decision_prompt(
         "Suggested trades must be conservative and include strategy_metadata.technical when available.",
         "Only put a symbol in suggested_trades when its exchange is currently tradable under the supplied market_scope.",
         "Only put BUY trades in suggested_trades when the trade fits inside capital_plan.available_buy_budget_dkk after preserving the cash buffer.",
-        "Propose up to 5 BUY candidates, ordered strongest conviction first, when that many independently qualify. Downstream review or a sizing floor can remove any single candidate, and a cycle whose only candidate is removed deploys nothing at all, so a ranked alternative lets the cycle continue on its own merit. Rank is not a tiebreak between equals: every candidate must independently satisfy the market_scope, budget, evidence and conservatism rules above, and each is judged on its own evidence rather than as a substitute for a rejected one. Proposing fewer, or none, is the correct answer when fewer qualify — never pad the list to reach five, and never lower your bar for a later position. A weak candidate that passes the gates is worse than an empty cycle, because it consumes capital an actually good candidate would need.",
         "Prices in daily_indicators and markov_method are quoted in each instrument's trading currency; use the supplied close_dkk (close converted to DKK) when sizing orders: estimated_value_dkk must equal quantity times close_dkk. Instruments on XNAS/XNYS trade in USD, not DKK. The manager recomputes every BUY value from its own data and downsizes oversized orders to fit the budget.",
         "If order_type is Limit, include limit_price_local in the instrument's trading currency. Use Market when no explicit limit price is intended.",
         "For BUY trades backed by technical indicator data, strategy_metadata.technical must support the action with BUY or OVERWEIGHT sentiment, bullish trend_bias, and enough confluences.",
@@ -1578,6 +1745,7 @@ async fn build_decision_prompt(
         "goal_tracking": overview.get("goal_tracking").cloned().unwrap_or(JsonValue::Null),
         "cash_buffer": overview.get("settings").and_then(|v| v.get("cash_buffer")).cloned().unwrap_or(JsonValue::Null),
         "capital_plan": capital_context,
+        "do_not_propose": do_not_propose_context,
         "decision_time_gate_policy": {
             "daily_technical": {
                 "enabled": daily_indicator_policy.get("enabled").cloned().unwrap_or(JsonValue::Null),
@@ -4714,5 +4882,47 @@ mod tests {
             crate::trading_manager::combined_soft_buy_multiplier(&[]),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn a_cycle_blocked_for_every_symbol_does_not_ask_for_replacements() {
+        // Cash, drawdown, a closed market and the monthly-loss breaker block
+        // every symbol equally, so a replacement report would spend a provider
+        // call to be refused identically. Only symbol-specific refusals earn a
+        // retry.
+        for global in [
+            "cash_budget",
+            "market_closed",
+            "drawdown_halt",
+            "monthly_loss_halt",
+        ] {
+            assert!(
+                !RETRYABLE_GATE_CODES.contains(&global),
+                "{global} blocks every symbol and must not trigger a retry"
+            );
+        }
+        for specific in [
+            "hermes_advice",
+            "commission_floor",
+            "position_weight",
+            "markov",
+        ] {
+            assert!(
+                RETRYABLE_GATE_CODES.contains(&specific),
+                "{specific} is symbol-specific and a different instrument could avoid it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_retry_pulse_key_is_recognisable_so_a_retry_cannot_chain() {
+        // The whole cycle is bounded at one replacement. A retry that is itself
+        // refused must end the cycle rather than asking again, which relies on
+        // its own pulse key being detectable.
+        let source = "us_open_followup:2026-09-01";
+        let retry = format!("{source}{CANDIDATE_RETRY_SUFFIX}");
+        assert!(!source.contains(CANDIDATE_RETRY_SUFFIX));
+        assert!(retry.contains(CANDIDATE_RETRY_SUFFIX));
+        assert_ne!(source, retry, "the retry must persist as its own report");
     }
 }
