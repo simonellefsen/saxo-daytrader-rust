@@ -1863,7 +1863,16 @@ async fn run_for_report(
     quarantine_cfg: InstrumentQuarantineConfig,
     active_quarantines: &[InstrumentQuarantine],
 ) -> Result<JsonValue> {
-    let all_candidates = candidate_orders_from_report(&report.report_json);
+    let mut all_candidates = candidate_orders_from_report(&report.report_json);
+    // Stamp the age of the technical evidence onto each candidate once, here,
+    // because this is the last place that has both the orders and database
+    // access. `technical_metadata_schema` forbids the provider from supplying a
+    // date, so without this every downstream synchronous consumer -- the
+    // Candidate Scoring Waterfall and every skip reason among them -- reports a
+    // null `run_date` and an operator cannot tell how old the evidence behind a
+    // refusal was. Indicators run nightly over the full universe, so one run
+    // date is correct for every symbol in the cycle.
+    stamp_technical_evidence_age(state, &mut all_candidates).await;
     let candidate_order_count = all_candidates.len();
     let buy_candidate_count = all_candidates
         .iter()
@@ -2934,13 +2943,22 @@ fn compact_hermes_preflight_technical(
     let Some(technical) = technical else {
         return json!({"status": "unavailable"});
     };
+    // Prefer the per-symbol lookup where the caller had database access; fall
+    // back to the run date stamped onto the candidate for this cycle, which is
+    // what the synchronous callers -- the waterfall and every skip reason --
+    // rely on.
     let run_date = verified
         .and_then(|row| row.get("run_date"))
         .and_then(JsonValue::as_str)
+        .or_else(|| technical.get("run_date").and_then(JsonValue::as_str))
         .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
     json!({
         "status": technical.get("status").cloned().unwrap_or(JsonValue::Null),
-        "source": if verified.is_some() { json!("server_verified_indicator_run") } else { JsonValue::Null },
+        "source": if verified.is_some() {
+            json!("server_verified_indicator_run")
+        } else {
+            technical.get("source").cloned().unwrap_or(JsonValue::Null)
+        },
         "run_date": run_date.map(|date| date.to_string()),
         "age_days": run_date.map(|date| (today - date).num_days()),
         "sentiment": technical.get("sentiment").cloned().unwrap_or(JsonValue::Null),
@@ -5543,6 +5561,39 @@ fn commission_floor_skip_reason(
         "{base} Downsized from {original_quantity:.0} to {:.0} shares ({original_value:.0} -> {estimated:.0} DKK) by: {causes}.{verdict}",
         order.quantity
     )
+}
+
+/// Record which indicator run produced the technical evidence each candidate
+/// was judged on.
+///
+/// Written into `strategy_metadata.technical` so the existing readers pick it
+/// up unchanged. Server-supplied rather than model-supplied: evidence age is a
+/// fact about the pipeline, not a claim to accept from a provider.
+async fn stamp_technical_evidence_age(state: &AppState, candidates: &mut [CandidateOrder]) {
+    let run_date = state
+        .latest_daily_indicator_run()
+        .await
+        .ok()
+        .as_ref()
+        .map(|run| text(run, "run_date"))
+        .filter(|date| !date.trim().is_empty());
+    let Some(run_date) = run_date else {
+        return;
+    };
+    for order in candidates {
+        let Some(technical) = order
+            .raw
+            .as_object_mut()
+            .map(|raw| raw.entry("strategy_metadata").or_insert_with(|| json!({})))
+            .and_then(JsonValue::as_object_mut)
+            .map(|metadata| metadata.entry("technical").or_insert_with(|| json!({})))
+            .and_then(JsonValue::as_object_mut)
+        else {
+            continue;
+        };
+        technical.insert("run_date".to_string(), json!(run_date));
+        technical.insert("source".to_string(), json!("server_verified_indicator_run"));
+    }
 }
 
 fn skip_order(order: &CandidateOrder, reason: &str) -> JsonValue {
@@ -8770,5 +8821,52 @@ mod tests {
             one_way_slippage_dkk(20_000.0, 8.0),
             2.0 * one_way_slippage_dkk(10_000.0, 8.0)
         );
+    }
+
+    #[test]
+    fn a_skip_reason_carries_the_age_of_the_evidence_behind_it() {
+        // The Candidate Scoring Waterfall is where an operator looks to ask why
+        // something was refused, and it reported a null run_date because
+        // technical_metadata_schema forbids the provider from supplying one and
+        // the synchronous callers have no database access. The cycle stamps it
+        // onto the candidate instead.
+        let stamped = CandidateOrder::from_json(json!({
+            "symbol": "ALV:xetr",
+            "action": "BUY",
+            "quantity": 2.0,
+            "order_type": "Limit",
+            "strategy_key": "europe_open_followup:2026-09-01:ALV:xetr:BUY",
+            "strategy_metadata": {"technical": {
+                "status": "ok",
+                "sentiment": "BUY",
+                "confluence_count": 5,
+                "min_confluences": 3,
+                "run_date": "2026-08-31",
+                "source": "server_verified_indicator_run"
+            }}
+        }))
+        .expect("valid candidate order");
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+
+        // No per-symbol lookup available, as in every synchronous caller.
+        let projected = compact_hermes_preflight_technical(&stamped, None, today);
+        assert_eq!(projected["run_date"], "2026-08-31");
+        assert_eq!(projected["age_days"], 1, "one nightly run old");
+        assert_eq!(projected["source"], "server_verified_indicator_run");
+
+        // An unstamped candidate still reports absence rather than inventing a
+        // date, which is what a pre-stamp report replayed today must do.
+        let unstamped = CandidateOrder::from_json(json!({
+            "symbol": "ALV:xetr",
+            "action": "BUY",
+            "quantity": 2.0,
+            "order_type": "Limit",
+            "strategy_key": "k",
+            "strategy_metadata": {"technical": {"status": "ok", "sentiment": "BUY"}}
+        }))
+        .expect("valid candidate order");
+        let projected = compact_hermes_preflight_technical(&unstamped, None, today);
+        assert!(projected["run_date"].is_null());
+        assert!(projected["age_days"].is_null());
     }
 }
