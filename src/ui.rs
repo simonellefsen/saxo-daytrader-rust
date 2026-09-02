@@ -3344,7 +3344,8 @@ fn PerformanceRealisedSellOutcomesPanel(
                         }
                     }
                 }
-                p { class: "muted benchmark-caveat", "{outcomes.closed_sale_count} closed sale row(s), including partial sales, are counted independently; {outcomes.breakeven_count} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {outcomes.sample_requirement} rows. Holding time is unavailable because the ledger does not retain a durable FIFO lot-to-sale link; realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
+                HoldingPeriodRow { holding_period: outcomes.holding_period.clone(), }
+                p { class: "muted benchmark-caveat", "{outcomes.closed_sale_count} closed sale row(s), including partial sales, are counted independently; {outcomes.breakeven_count} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {outcomes.sample_requirement} rows. Realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
             }
         }
     }
@@ -4899,6 +4900,54 @@ fn GateReplayPanel(replay: DecisionGateReplayPayload, prefs: LocalizationPrefs) 
                     GateReplayScenario { scenario: scenario.clone(), prefs: prefs.clone() }
                 }
             }
+        }
+    }
+}
+
+/// Holding time, FIFO-matched from the ledger at read time.
+///
+/// Coverage sits beside the medians on purpose: a median over 68 of 70 sales
+/// and one over 46 are different claims, and the second would be biased toward
+/// positions this system opened itself rather than inherited.
+#[component]
+fn HoldingPeriodRow(holding_period: JsonValue) -> Element {
+    let status = text(&holding_period, "status");
+    if status.is_empty() {
+        return rsx! {};
+    }
+    let matched = holding_period
+        .get("matched_sale_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let unmatched = holding_period
+        .get("unmatched_sale_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let coverage = holding_period
+        .get("matched_quantity_pct")
+        .and_then(JsonValue::as_f64);
+    let days = |key: &str| {
+        holding_period
+            .get(key)
+            .and_then(JsonValue::as_f64)
+            .map(|value| format!("{value:.1}d"))
+            .unwrap_or_else(|| "n/a".to_string())
+    };
+    let overall = days("median_days_held");
+    let winners = days("winner_median_days_held");
+    let losers = days("loser_median_days_held");
+    let coverage_label = coverage
+        .map(|value| format!("{value:.0}% of sold quantity matched"))
+        .unwrap_or_else(|| "coverage unavailable".to_string());
+    rsx! {
+        div { class: "quality-score-row",
+            span { class: "status", "Median hold {overall}" }
+            span { class: "status good", "Winners {winners}" }
+            span { class: "status warn", "Losers {losers}" }
+            span { class: "status", "{matched} matched / {unmatched} unmatched" }
+        }
+        p { class: "muted",
+            "Holding time is FIFO-matched from the trade ledger at read time along each symbol's own timeline, so a symbol bought, sold and bought again is measured per episode. Positions that entered before the ledger are seeded from their import or bootstrap lot; {coverage_label}. A sale whose acquisitions cannot be found is counted unmatched rather than estimated. Status: {status}."
         }
     }
 }
@@ -14139,6 +14188,58 @@ mod tests {
         assert!(
             html.contains("counts assets, not value"),
             "the panel states why the configured cap does not constrain this"
+        );
+    }
+
+    /// The panel claimed for months that holding time was unavailable. Now
+    /// that it is derived, the panel must show it *and* its coverage — a
+    /// median over most sales and a median over half of them are different
+    /// claims, and only one of them is worth acting on.
+    #[test]
+    fn the_realised_sell_panel_shows_holding_time_with_its_coverage() {
+        let html = dioxus_ssr::render_element(rsx! {
+            HoldingPeriodRow {
+                holding_period: json!({
+                    "status": "available",
+                    "matched_sale_count": 68,
+                    "unmatched_sale_count": 2,
+                    "matched_quantity_pct": 97.7,
+                    "median_days_held": 18.4,
+                    "winner_median_days_held": 31.0,
+                    "loser_median_days_held": 12.6,
+                }),
+            }
+        });
+
+        assert!(html.contains("31.0d"), "winner median is shown, got {html}");
+        assert!(html.contains("12.6d"), "loser median is shown");
+        assert!(html.contains("68 matched / 2 unmatched"));
+        assert!(
+            html.contains("98% of sold quantity matched"),
+            "coverage must sit beside the medians, got {html}"
+        );
+    }
+
+    /// With nothing matched the panel must not render a median at all.
+    #[test]
+    fn the_holding_period_row_renders_nothing_it_cannot_support() {
+        let html = dioxus_ssr::render_element(rsx! {
+            HoldingPeriodRow {
+                holding_period: json!({
+                    "status": "unavailable_no_matched_sales",
+                    "matched_sale_count": 0,
+                    "unmatched_sale_count": 3,
+                    "matched_quantity_pct": 0.0,
+                    "median_days_held": null,
+                    "winner_median_days_held": null,
+                    "loser_median_days_held": null,
+                }),
+            }
+        });
+        assert!(html.contains("n/a"), "got {html}");
+        assert!(
+            !html.contains("0.0d"),
+            "an absent median must not render as zero days"
         );
     }
 

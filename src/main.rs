@@ -17,6 +17,7 @@ mod execution_state;
 mod fx;
 mod hermes_data_requests;
 mod hermes_state;
+mod holding_period;
 mod localization;
 mod market_state;
 mod markov_method;

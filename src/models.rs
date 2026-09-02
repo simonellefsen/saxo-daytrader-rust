@@ -3170,6 +3170,10 @@ pub struct PerformanceRealisedSellOutcomesPayload {
     #[serde(default)]
     pub recent_rows: Vec<PerformanceRealisedSellRowPayload>,
     pub holding_time_status: String,
+    /// FIFO-matched holding-period evidence, staged rather than typed because
+    /// it is diagnostic detail the panel renders as a block.
+    #[serde(default)]
+    pub holding_period: JsonValue,
     pub slippage_status: String,
 }
 

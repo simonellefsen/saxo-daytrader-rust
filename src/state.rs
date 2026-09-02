@@ -9930,7 +9930,34 @@ impl AppState {
             ))
             .await
             .unwrap_or_default();
-        let realised_sell_outcomes = realised_sell_outcome_evidence(&realised_sell_rows);
+        // Holding time needs the BUY side of the ledger and the acquisitions
+        // that predate it, neither of which the sell-outcome query carries.
+        let holding_ledger_rows = self
+            .select_json(
+                "SELECT symbol, side, quantity, created_at, realised_gain_dkk \
+                 FROM trade_ledger \
+                 WHERE status IN ('executed', 'approved') \
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .await
+            .unwrap_or_default();
+        // `buy_fill` lots duplicate a BUY ledger row and would double-count the
+        // acquisition; only the import and bootstrap lots add anything.
+        let holding_seed_lots = self
+            .select_json(
+                "SELECT symbol, quantity_original, \
+                        COALESCE(acquired_at, created_at) AS acquired_at \
+                 FROM position_lots \
+                 WHERE source_type <> 'buy_fill' \
+                 ORDER BY COALESCE(acquired_at, created_at) ASC",
+            )
+            .await
+            .unwrap_or_default();
+        let holding_period = crate::holding_period::holding_period_evidence_json(
+            &crate::holding_period::fifo_holding_periods(&holding_ledger_rows, &holding_seed_lots),
+        );
+        let realised_sell_outcomes =
+            realised_sell_outcome_evidence(&realised_sell_rows, holding_period);
         if broker_exposure_snapshot.is_null() {
             checks.insert(
                 "broker_exposure_aggregate".to_string(),
@@ -17710,7 +17737,7 @@ fn broker_exposure_pnl_attribution(
 /// one realised row, not a complete round-trip trade. The local ledger does
 /// not retain a durable lot-to-sale link or broker quote-at-submission record,
 /// so this deliberately excludes holding time and realised slippage.
-fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
+fn realised_sell_outcome_evidence(rows: &[JsonValue], holding_period: JsonValue) -> JsonValue {
     let mut realised_rows = rows
         .iter()
         .filter_map(|row| {
@@ -17972,7 +17999,8 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue]) -> JsonValue {
         "ambiguous_exit_link_count": ambiguous_exit_link_count,
         "exit_route_attribution": exit_route_attribution,
         "recent_rows": realised_rows,
-        "holding_time_status": "unavailable_no_lot_sale_linkage",
+        "holding_time_status": json_text(&holding_period, "status"),
+        "holding_period": holding_period,
         "slippage_status": "unavailable_no_quote_at_submission",
     })
 }
@@ -20837,61 +20865,64 @@ mod tests {
 
     #[test]
     fn realised_sell_outcomes_keep_partial_sales_and_sample_limits_explicit() {
-        let outcomes = realised_sell_outcome_evidence(&[
-            json!({
-                "created_at": "2026-07-30T10:00:00Z",
-                "symbol": "WIN1:xnas",
-                "quantity": 1.0,
-                "currency": "USD",
-                "realised_gain_dkk": 1_000.0,
-                "commission_dkk": 4.0,
-                "tax_dkk": 0.0,
-                "cost_basis_sold_dkk": 3_000.0,
-                "status": "executed",
-                "execution_order_id": 101,
-                "linked_order_count": 1,
-                "exit_strategy_type": "swing",
-                "exit_strategy_role": "risk_reduction",
-            }),
-            json!({
-                "created_at": "2026-07-29T10:00:00Z",
-                "symbol": "WIN2:xnas",
-                "quantity": 2.0,
-                "currency": "USD",
-                "realised_gain_dkk": 500.0,
-                "commission_dkk": 3.0,
-                "tax_dkk": 0.0,
-                "cost_basis_sold_dkk": 2_000.0,
-                "status": "executed",
-                "execution_order_id": 102,
-                "linked_order_count": 1,
-                "exit_strategy_type": "swing",
-                "exit_strategy_role": "take_profit",
-            }),
-            json!({
-                "created_at": "2026-07-28T10:00:00Z",
-                "symbol": "LOSS:xnas",
-                "quantity": 1.0,
-                "currency": "USD",
-                "realised_gain_dkk": -300.0,
-                "commission_dkk": 2.0,
-                "tax_dkk": 0.0,
-                "cost_basis_sold_dkk": 1_500.0,
-                "status": "approved",
-                "linked_order_count": 2,
-            }),
-            json!({
-                "created_at": "2026-07-27T10:00:00Z",
-                "symbol": "FLAT:xnas",
-                "quantity": 1.0,
-                "currency": "USD",
-                "realised_gain_dkk": 0.0,
-                "commission_dkk": 1.0,
-                "tax_dkk": 0.0,
-                "cost_basis_sold_dkk": 900.0,
-                "status": "executed",
-            }),
-        ]);
+        let outcomes = realised_sell_outcome_evidence(
+            &[
+                json!({
+                    "created_at": "2026-07-30T10:00:00Z",
+                    "symbol": "WIN1:xnas",
+                    "quantity": 1.0,
+                    "currency": "USD",
+                    "realised_gain_dkk": 1_000.0,
+                    "commission_dkk": 4.0,
+                    "tax_dkk": 0.0,
+                    "cost_basis_sold_dkk": 3_000.0,
+                    "status": "executed",
+                    "execution_order_id": 101,
+                    "linked_order_count": 1,
+                    "exit_strategy_type": "swing",
+                    "exit_strategy_role": "risk_reduction",
+                }),
+                json!({
+                    "created_at": "2026-07-29T10:00:00Z",
+                    "symbol": "WIN2:xnas",
+                    "quantity": 2.0,
+                    "currency": "USD",
+                    "realised_gain_dkk": 500.0,
+                    "commission_dkk": 3.0,
+                    "tax_dkk": 0.0,
+                    "cost_basis_sold_dkk": 2_000.0,
+                    "status": "executed",
+                    "execution_order_id": 102,
+                    "linked_order_count": 1,
+                    "exit_strategy_type": "swing",
+                    "exit_strategy_role": "take_profit",
+                }),
+                json!({
+                    "created_at": "2026-07-28T10:00:00Z",
+                    "symbol": "LOSS:xnas",
+                    "quantity": 1.0,
+                    "currency": "USD",
+                    "realised_gain_dkk": -300.0,
+                    "commission_dkk": 2.0,
+                    "tax_dkk": 0.0,
+                    "cost_basis_sold_dkk": 1_500.0,
+                    "status": "approved",
+                    "linked_order_count": 2,
+                }),
+                json!({
+                    "created_at": "2026-07-27T10:00:00Z",
+                    "symbol": "FLAT:xnas",
+                    "quantity": 1.0,
+                    "currency": "USD",
+                    "realised_gain_dkk": 0.0,
+                    "commission_dkk": 1.0,
+                    "tax_dkk": 0.0,
+                    "cost_basis_sold_dkk": 900.0,
+                    "status": "executed",
+                }),
+            ],
+            crate::holding_period::holding_period_evidence_json(&Default::default()),
+        );
 
         assert_eq!(json_text(&outcomes, "status"), "collecting");
         assert_eq!(value_i64(&outcomes, "closed_sale_count"), 4);
@@ -20927,7 +20958,8 @@ mod tests {
         assert_eq!(value_i64(&outcomes, "sample_requirement"), 20);
         assert_eq!(
             json_text(&outcomes, "holding_time_status"),
-            "unavailable_no_lot_sale_linkage"
+            "unavailable_no_matched_sales",
+            "with no ledger supplied there is nothing to match, which is a different claim from having no linkage at all"
         );
     }
 
@@ -27105,29 +27137,33 @@ analysis_windows:
 
     #[test]
     fn dashboard_realised_sell_outcomes_preserve_empty_and_collecting_states() {
-        let unavailable = dashboard_performance_realised_sell_outcomes_from_json(
-            realised_sell_outcome_evidence(&[]),
-        )
-        .expect("empty outcome evidence is typed")
-        .expect("non-null outcome evidence is present");
+        let unavailable =
+            dashboard_performance_realised_sell_outcomes_from_json(realised_sell_outcome_evidence(
+                &[],
+                crate::holding_period::holding_period_evidence_json(&Default::default()),
+            ))
+            .expect("empty outcome evidence is typed")
+            .expect("non-null outcome evidence is present");
         assert_eq!(unavailable.status, "unavailable");
         assert!(unavailable.recent_rows.is_empty());
 
-        let outcomes = dashboard_performance_realised_sell_outcomes_from_json(
-            realised_sell_outcome_evidence(&[json!({
-                "created_at": "2026-08-23T08:00:00Z",
-                "symbol": "TEST:xcse",
-                "quantity": 1.0,
-                "currency": "DKK",
-                "realised_gain_dkk": 100.0,
-                "commission_dkk": 2.0,
-                "tax_dkk": 0.0,
-                "cost_basis_sold_dkk": 1_000.0,
-                "status": "executed",
-            })]),
-        )
-        .expect("collecting outcome evidence is typed")
-        .expect("non-null outcome evidence is present");
+        let outcomes =
+            dashboard_performance_realised_sell_outcomes_from_json(realised_sell_outcome_evidence(
+                &[json!({
+                    "created_at": "2026-08-23T08:00:00Z",
+                    "symbol": "TEST:xcse",
+                    "quantity": 1.0,
+                    "currency": "DKK",
+                    "realised_gain_dkk": 100.0,
+                    "commission_dkk": 2.0,
+                    "tax_dkk": 0.0,
+                    "cost_basis_sold_dkk": 1_000.0,
+                    "status": "executed",
+                })],
+                crate::holding_period::holding_period_evidence_json(&Default::default()),
+            ))
+            .expect("collecting outcome evidence is typed")
+            .expect("non-null outcome evidence is present");
         assert_eq!(outcomes.status, "collecting");
         assert_eq!(outcomes.recent_rows[0].symbol, "TEST:xcse");
         assert_eq!(outcomes.symbol_attribution[0].closed_sale_count, 1);
