@@ -9,8 +9,12 @@ IMAGE ?= daytrader-api:local
 GIT_SHA ?= $(shell git rev-parse HEAD)
 DEPLOY_GIT_SHA := $(shell git rev-parse HEAD)
 SHARED_NGROK_GATEWAY_DIR ?= ../shared-ngrok-gateway
+# CI sets this for every cargo step. `make validate` must match it or a warning
+# that fails the workflow reads as a passing local run -- which is exactly how
+# a private-interface warning kept CI red for ten commits from 2026-09-01.
+VALIDATE_RUSTFLAGS ?= -D warnings
 
-.PHONY: help install fmt fmt-check test check validate run api scheduler docker-build security-scan deps-dry-run release k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke post-deploy-guard diagnostics diagnostics-artifact shared-ngrok-status shared-ngrok-apply
+.PHONY: help install fmt fmt-check test check script-check validate run api scheduler docker-build security-scan deps-dry-run release k8s-deploy k8s-status k8s-db-status k8s-stop k8s-logs k8s-port-forward post-deploy-smoke post-deploy-guard diagnostics diagnostics-artifact shared-ngrok-status shared-ngrok-apply
 
 help:
 	@printf "%s\n" \
@@ -19,8 +23,9 @@ help:
 		"  make fmt                  Format Rust code" \
 		"  make fmt-check            Check Rust formatting" \
 		"  make test                 Run Rust unit tests" \
-		"  make check                Type-check the Rust app" \
-		"  make validate             Run fmt-check, test, and check" \
+		"  make check                Type-check the Rust app and its test targets" \
+		"  make script-check         Syntax-check the deploy and smoke shell scripts" \
+		"  make validate             Run every check CI runs, with the same RUSTFLAGS" \
 		"  make run                  Run Axum/Dioxus on $(BIND_ADDR)" \
 		"  make scheduler            Run the Rust scheduler process" \
 		"  make deps-dry-run         Show available Cargo.lock updates without changing files" \
@@ -52,12 +57,19 @@ fmt-check:
 	CARGO_HOME=$(CARGO_HOME) $(CARGO) fmt --check
 
 test:
-	CARGO_HOME=$(CARGO_HOME) $(CARGO) test
+	CARGO_HOME=$(CARGO_HOME) RUSTFLAGS="$(VALIDATE_RUSTFLAGS)" $(CARGO) test
 
 check:
-	CARGO_HOME=$(CARGO_HOME) $(CARGO) check
+	CARGO_HOME=$(CARGO_HOME) RUSTFLAGS="$(VALIDATE_RUSTFLAGS)" $(CARGO) check --all-targets
 
-validate: fmt-check test check
+# CI type-checks tests and benches too, so a warning reachable only from a test
+# target must fail here as well.
+script-check:
+	bash -n scripts/deploy_k8s_docker_desktop.sh
+	bash -n scripts/post_deploy_guard.sh
+	bash -n scripts/post_deploy_smoke.sh
+
+validate: fmt-check script-check test check
 
 run:
 	BIND_ADDR=$(BIND_ADDR) CARGO_HOME=$(CARGO_HOME) $(CARGO) run --bin saxo-rust

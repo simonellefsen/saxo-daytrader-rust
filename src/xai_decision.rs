@@ -522,7 +522,7 @@ pub(crate) const CANDIDATE_RETRY_SUFFIX: &str = ":retry";
 /// more candidates puts them all in competition for the same cash and invites
 /// padding, where a retry costs a second provider call only on the cycles that
 /// would otherwise deploy nothing.
-pub(crate) async fn submit_candidate_retry_report(
+async fn submit_candidate_retry_report(
     state: &AppState,
     source_pulse: &DecisionPulse,
     refused_symbols: &[String],
