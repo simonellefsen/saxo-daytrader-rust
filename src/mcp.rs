@@ -156,7 +156,10 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            state.hermes_context_value(limit, &sections).await?
+            let detail = crate::state::ContextDetail::from_argument(
+                arguments.get("detail").and_then(JsonValue::as_str),
+            );
+            state.hermes_context_value(limit, &sections, detail).await?
         }
         "list_reflections" => {
             let limit = arguments
@@ -336,6 +339,11 @@ fn mcp_tools() -> Vec<JsonValue> {
                             "type": "string",
                             "enum": crate::state::HERMES_CONTEXT_SECTIONS,
                         }
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "compact removes repetition without removing facts: fields identical on every element of a list move to a sibling <key>_shared object, all-null keys are dropped, and the experiment inventory omits its two bulk narrative fields. The payload reports what it did under `compaction`.",
+                        "enum": ["full", "compact"]
                     }
                 },
                 "additionalProperties": false

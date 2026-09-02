@@ -5953,6 +5953,219 @@ fn normalize_hermes_context_sections(requested: &[String]) -> (Vec<String>, Vec<
 ///
 /// A no-op when `sections` is empty or names nothing recognised, so the
 /// default call is unchanged.
+/// How much of each record `get_context` returns.
+///
+/// `Full` is the shape every caller had before compaction existed and stays
+/// the default; only a caller that asks gets the smaller one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContextDetail {
+    Full,
+    Compact,
+}
+
+impl ContextDetail {
+    pub(crate) fn from_argument(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("compact") => Self::Compact,
+            _ => Self::Full,
+        }
+    }
+}
+
+/// Fields on `hermes.experiments` that carry the proposal's own supporting
+/// narrative. Half the block by weight, and nothing a reflection needs: it
+/// reads this inventory to avoid duplicating a `changed_variable_path`, not to
+/// re-derive the case for a proposal somebody already wrote.
+const HERMES_EXPERIMENT_BULK_FIELDS: &[&str] = &["evidence_json", "raw_payload_json"];
+
+/// Narrative fields inside a trade thesis or thesis review that render, in
+/// prose, structured evidence sitting beside them: `entry_rationale` and
+/// `catalyst_or_monitor` restate the `technical` and `markov` objects, and
+/// `approval_evidence` restates the gate that admitted the order. Dropping
+/// them costs phrasing, not facts, and they were 26% of the execution orders
+/// block on 2026-09-02.
+///
+/// `invalidation`, `operator_next_step` and the per-thesis `safety` line are
+/// deliberately absent: they are forward-looking rather than restatements, and
+/// being identical everywhere they already cost one copy after hoisting.
+const NARRATIVE_THESIS_FIELDS: &[&str] = &[
+    "approval_evidence",
+    "entry_rationale",
+    "catalyst_or_monitor",
+];
+
+/// Strip narrative fields from thesis records only.
+///
+/// Targeted by container rather than by key name: a blanket sweep for these
+/// names would also reach the block-level boundary statements that
+/// `protective_stop_coverage` and `holding_thesis_reviews` carry, which exist
+/// to say what the block may not be used for.
+fn strip_thesis_narrative(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(object) => {
+            if let Some(thesis) = object
+                .get_mut("trade_thesis")
+                .and_then(JsonValue::as_object_mut)
+            {
+                for field in NARRATIVE_THESIS_FIELDS {
+                    thesis.remove(*field);
+                }
+            }
+            if let Some(reviews) = object
+                .get_mut("holding_thesis_reviews")
+                .and_then(|block| block.get_mut("reviews"))
+                .and_then(JsonValue::as_array_mut)
+            {
+                for review in reviews.iter_mut() {
+                    if let Some(review) = review.as_object_mut() {
+                        for field in NARRATIVE_THESIS_FIELDS {
+                            review.remove(*field);
+                        }
+                    }
+                }
+            }
+            for field in object.values_mut() {
+                strip_thesis_narrative(field);
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items.iter_mut() {
+                strip_thesis_narrative(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Below this, hoisting a repeated field costs more in surprise than it saves.
+/// The values this targets are templated sentences, not status flags.
+const REPEATED_FIELD_MIN_BYTES: usize = 40;
+
+/// Lift fields that carry the same value on every element of a list out of the
+/// list, into a sibling `<key>_shared` object.
+///
+/// Measured on 2026-09-02: `holding_thesis_reviews` repeated one identical
+/// `invalidation` string across 11 reviews for 2,178 bytes and one identical
+/// `operator_next_step` for 1,936, and `trade_thesis` repeated one
+/// `invalidation` and one `safety` across every order. Roughly 6.3 KB carrying
+/// four sentences. Hoisting is lossless -- the value is still there, once --
+/// which is why it beats deleting the prose.
+fn hoist_repeated_fields(items: &mut [JsonValue]) -> serde_json::Map<String, JsonValue> {
+    let mut shared = serde_json::Map::new();
+    if items.len() < 2 {
+        return shared;
+    }
+    let Some(first) = items.first().and_then(JsonValue::as_object).cloned() else {
+        return shared;
+    };
+    for (key, candidate) in first {
+        let encoded = candidate.to_string();
+        if encoded.len() < REPEATED_FIELD_MIN_BYTES {
+            continue;
+        }
+        let identical_everywhere = items.iter().all(|item| {
+            item.as_object()
+                .and_then(|object| object.get(&key))
+                .is_some_and(|value| value.to_string() == encoded)
+        });
+        if identical_everywhere {
+            shared.insert(key, candidate);
+        }
+    }
+    for item in items.iter_mut() {
+        if let Some(object) = item.as_object_mut() {
+            for key in shared.keys() {
+                object.remove(key);
+            }
+        }
+    }
+    shared
+}
+
+/// True when a value carries no information: null, or a structure whose every
+/// leaf is null. Empty lists and objects are left alone -- "none today" is a
+/// fact, where a field that was never populated is not.
+fn is_all_null(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Null => true,
+        JsonValue::Object(object) => !object.is_empty() && object.values().all(is_all_null),
+        JsonValue::Array(items) => !items.is_empty() && items.iter().all(is_all_null),
+        _ => false,
+    }
+}
+
+/// Shrink a Hermes context in place, without dropping a fact.
+///
+/// Three passes: lift fields repeated identically across a list, drop keys
+/// whose value is null all the way down, and drop the two bulk narrative
+/// fields from the experiment inventory. Returns a descriptor for the payload,
+/// because a reader who cannot tell a compacted payload from a sparse one will
+/// misread the second as the first.
+fn compact_hermes_context(value: &mut JsonValue) -> JsonValue {
+    let before = value.to_string().len();
+    strip_experiment_bulk_fields(value);
+    strip_thesis_narrative(value);
+    compact_context_node(value);
+    let after = value.to_string().len();
+    json!({
+        "detail": "compact",
+        "bytes_before": before,
+        "bytes_after": after,
+        "applied": [
+            "Fields identical on every element of a list were lifted into a sibling <key>_shared object. Read them as belonging to every element of that list.",
+            "Keys whose value was null, or whose every nested leaf was null, were removed. An empty list or object is left as-is and does mean none.",
+            "The experiment inventory omits evidence_json and raw_payload_json.",
+            "Trade theses and thesis reviews omit approval_evidence, entry_rationale and catalyst_or_monitor, which restate in prose the technical and markov objects kept beside them.",
+        ],
+    })
+}
+
+fn strip_experiment_bulk_fields(value: &mut JsonValue) {
+    let Some(experiments) = value
+        .get_mut("hermes")
+        .and_then(|hermes| hermes.get_mut("experiments"))
+        .and_then(JsonValue::as_array_mut)
+    else {
+        return;
+    };
+    for experiment in experiments.iter_mut() {
+        if let Some(object) = experiment.as_object_mut() {
+            for field in HERMES_EXPERIMENT_BULK_FIELDS {
+                object.remove(*field);
+            }
+        }
+    }
+}
+
+fn compact_context_node(value: &mut JsonValue) {
+    match value {
+        JsonValue::Object(object) => {
+            object.retain(|_, field| !is_all_null(field));
+            let mut hoisted: Vec<(String, serde_json::Map<String, JsonValue>)> = Vec::new();
+            for (key, field) in object.iter_mut() {
+                if let Some(items) = field.as_array_mut() {
+                    let shared = hoist_repeated_fields(items);
+                    if !shared.is_empty() {
+                        hoisted.push((format!("{key}_shared"), shared));
+                    }
+                }
+            }
+            for (key, shared) in hoisted {
+                object.insert(key, JsonValue::Object(shared));
+            }
+            for field in object.values_mut() {
+                compact_context_node(field);
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items.iter_mut() {
+                compact_context_node(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn scope_hermes_context(value: &mut JsonValue, sections: &[String]) {
     if sections.is_empty() {
         return;
@@ -12360,9 +12573,20 @@ impl AppState {
     /// overview and capability blocks it never reads -- and pays again on
     /// every turn of the agent loop, not once. An empty list keeps every
     /// section, so callers that do not ask are unaffected.
-    pub async fn hermes_context_value(&self, limit: i64, sections: &[String]) -> Result<JsonValue> {
+    pub async fn hermes_context_value(
+        &self,
+        limit: i64,
+        sections: &[String],
+        detail: ContextDetail,
+    ) -> Result<JsonValue> {
         let mut value = serde_json::to_value(self.hermes_context(limit).await?)?;
         scope_hermes_context(&mut value, sections);
+        if detail == ContextDetail::Compact {
+            let descriptor = compact_hermes_context(&mut value);
+            if let Some(object) = value.as_object_mut() {
+                object.insert("compaction".to_string(), descriptor);
+            }
+        }
         Ok(value)
     }
 
@@ -26835,6 +27059,196 @@ analysis_windows:
         assert_eq!(
             value["sections"]["requested"],
             json!(["decisions", "end_of_day"])
+        );
+    }
+
+    /// Hoisting must move the value, not delete it. The 11 thesis reviews that
+    /// carried one identical `invalidation` string cost 2,178 bytes to say one
+    /// sentence; after hoisting the sentence is still readable, once.
+    #[test]
+    fn a_field_identical_on_every_item_moves_out_of_the_list_intact() {
+        let boilerplate = "Re-evaluate on a fresh decision pulse if verified technical evidence or the Markov regime no longer supports the position.";
+        let mut value = json!({
+            "execution": {
+                "reviews": [
+                    {"symbol": "ALMB:xcse", "invalidation": boilerplate, "age_days": 36},
+                    {"symbol": "AUTO:xosl", "invalidation": boilerplate, "age_days": 12},
+                ]
+            }
+        });
+
+        compact_hermes_context(&mut value);
+
+        assert_eq!(
+            value["execution"]["reviews_shared"]["invalidation"],
+            boilerplate
+        );
+        assert!(
+            value["execution"]["reviews"][0]
+                .get("invalidation")
+                .is_none()
+        );
+        assert_eq!(value["execution"]["reviews"][0]["symbol"], "ALMB:xcse");
+        assert_eq!(value["execution"]["reviews"][1]["age_days"], 12);
+    }
+
+    #[test]
+    fn a_field_that_differs_stays_on_its_item() {
+        let mut value = json!({
+            "block": {
+                "items": [
+                    {"note": "a distinct rationale long enough to clear the hoist threshold, one"},
+                    {"note": "a distinct rationale long enough to clear the hoist threshold, two"},
+                ]
+            }
+        });
+
+        compact_hermes_context(&mut value);
+
+        assert!(value["block"].get("items_shared").is_none());
+        assert!(value["block"]["items"][0]["note"].is_string());
+    }
+
+    /// Hoisting a short repeated flag changes the payload's shape for no
+    /// saving, and a reader then has to look in two places for a status.
+    #[test]
+    fn a_short_repeated_field_is_left_where_it_is() {
+        let mut value = json!({
+            "block": {"items": [{"status": "ok"}, {"status": "ok"}]}
+        });
+
+        compact_hermes_context(&mut value);
+
+        assert!(value["block"].get("items_shared").is_none());
+        assert_eq!(value["block"]["items"][1]["status"], "ok");
+    }
+
+    /// "None today" is a fact and must survive; a field that was never
+    /// populated is not.
+    #[test]
+    fn all_null_keys_go_but_empty_collections_stay() {
+        let mut value = json!({
+            "block": {
+                "ledger_id": null,
+                "report": {"id": null, "model": null},
+                "fills": [],
+                "summary": {},
+                "quantity": 32.0,
+            }
+        });
+
+        compact_hermes_context(&mut value);
+
+        assert!(value["block"].get("ledger_id").is_none());
+        assert!(
+            value["block"].get("report").is_none(),
+            "an all-null object carries nothing"
+        );
+        assert!(
+            value["block"]["fills"].is_array(),
+            "an empty list means none, and stays"
+        );
+        assert!(value["block"]["summary"].is_object());
+        assert_eq!(value["block"]["quantity"], 32.0);
+    }
+
+    /// The narrative sweep is targeted at thesis records. A blanket sweep by
+    /// key name would also strip the block-level statements that say what a
+    /// block may not be used for.
+    #[test]
+    fn narrative_prose_goes_but_block_boundary_statements_survive() {
+        let mut value = json!({
+            "status": "ok",
+            "safety": {"broker_mutations_excluded": true},
+            "execution": {
+                "orders": [{
+                    "symbol": "CMG:xnys",
+                    "attribution": {
+                        "trade_thesis": {
+                            "symbol": "CMG:xnys",
+                            "entry_rationale": "Bullish OVERWEIGHT technical structure with 4 of 3 confluences.",
+                            "approval_evidence": "BUY approved by bullish technical confluence, database-verified.",
+                            "catalyst_or_monitor": "Actionable consumer starter with fresh Bull-state Markov.",
+                            "technical": {"confluence_count": 4},
+                            "markov": {"signed_signal": 0.36},
+                        }
+                    }
+                }],
+                "protective_stop_coverage": {
+                    "safety": "read_only_local_broker_position_snapshot_and_execution_order_audit",
+                    "summary": {"covered": 3},
+                },
+            },
+            "hermes": {
+                "experiments": [{
+                    "id": "strategy-experiment-1",
+                    "changed_variable_path": "execution.min_trade_value_dkk",
+                    "status": "pending_review",
+                    "evidence_json": {"duplicate_check": "a long supporting narrative"},
+                    "raw_payload_json": {"one_variable_only": true},
+                }]
+            }
+        });
+
+        compact_hermes_context(&mut value);
+
+        let thesis = &value["execution"]["orders"][0]["attribution"]["trade_thesis"];
+        assert!(thesis.get("entry_rationale").is_none());
+        assert!(thesis.get("approval_evidence").is_none());
+        assert!(thesis.get("catalyst_or_monitor").is_none());
+        assert_eq!(
+            thesis["technical"]["confluence_count"], 4,
+            "the structured evidence stays"
+        );
+        assert_eq!(thesis["markov"]["signed_signal"], 0.36);
+
+        assert!(
+            value["safety"].is_object(),
+            "the context boundary statement is untouched"
+        );
+        assert!(
+            value["execution"]["protective_stop_coverage"]["safety"].is_string(),
+            "a block-level boundary statement is not narrative prose"
+        );
+
+        let experiment = &value["hermes"]["experiments"][0];
+        assert!(experiment.get("evidence_json").is_none());
+        assert!(experiment.get("raw_payload_json").is_none());
+        assert_eq!(
+            experiment["changed_variable_path"],
+            "execution.min_trade_value_dkk"
+        );
+        assert_eq!(experiment["status"], "pending_review");
+    }
+
+    /// A reader who cannot tell a compacted payload from a sparse one will
+    /// misread the second as the first.
+    #[test]
+    fn a_compacted_payload_says_so() {
+        let mut value = json!({"block": {"items": [{"x": null}, {"x": null}]}});
+        let descriptor = compact_hermes_context(&mut value);
+        assert_eq!(descriptor["detail"], "compact");
+        assert!(descriptor["bytes_before"].as_u64() > descriptor["bytes_after"].as_u64());
+        assert!(
+            descriptor["applied"]
+                .as_array()
+                .expect("applied list")
+                .len()
+                >= 3
+        );
+    }
+
+    #[test]
+    fn full_detail_is_the_default_and_changes_nothing() {
+        assert_eq!(ContextDetail::from_argument(None), ContextDetail::Full);
+        assert_eq!(ContextDetail::from_argument(Some("")), ContextDetail::Full);
+        assert_eq!(
+            ContextDetail::from_argument(Some("nonsense")),
+            ContextDetail::Full
+        );
+        assert_eq!(
+            ContextDetail::from_argument(Some(" COMPACT ")),
+            ContextDetail::Compact
         );
     }
 
