@@ -5230,7 +5230,17 @@ fn active_instrument_quarantines_from_rows(
         if symbol.is_empty() || action.is_empty() {
             continue;
         }
-        let Some(signature) = classify_execution_failure_signature(row) else {
+        // Taxonomy first, text second -- the same order the Hermes preflight
+        // already uses. Reading only the text meant the quarantine recognised
+        // five string patterns where the runtime persists sixteen structured
+        // codes, so a failure whose message happened not to match any pattern
+        // earned no strike at all: both `order_expired` rows since 2026-07-01
+        // were invisible to it. It also meant one failure had two names, with
+        // Hermes told `commission_setup` while the quarantine recorded
+        // `commission_not_configured`.
+        let Some(signature) = persisted_execution_failure_signature(row)
+            .or_else(|| classify_execution_failure_signature(row))
+        else {
             continue;
         };
         let Some(created_at) = parse_report_time(&text(row, "created_at")) else {
@@ -5254,7 +5264,7 @@ fn active_instrument_quarantines_from_rows(
         .into_iter()
         .filter_map(
             |((symbol, action, signature), (failure_count, latest, sample_error))| {
-                if failure_count < cfg.min_failures {
+                if failure_count < quarantine_min_failures(&signature, cfg) {
                     return None;
                 }
                 let expires_at = latest + Duration::days(cfg.active_days);
@@ -5341,6 +5351,60 @@ fn matching_instrument_quarantine<'a>(
     })
 }
 
+/// Failure taxonomy codes that count as a quarantine strike.
+///
+/// A list rather than a `matches!` so the strike codes and the subset that
+/// quarantines on first sight can be checked against each other by test.
+const QUARANTINE_FAILURE_SIGNATURES: &[&str] = &[
+    "broker_state_unknown",
+    "broker_cancelled",
+    "broker_rejected",
+    "commission_setup",
+    "done_for_day",
+    "insufficient_cash",
+    "instrument_not_tradable",
+    "market_closed",
+    "order_expired",
+    "position_quantity",
+    "price_invalid",
+    "quantity",
+    "rate_limited",
+    "session_expired",
+    "tick_size",
+    "unknown",
+];
+
+/// Signatures that describe the *instrument* rather than the order, the
+/// session, or the market clock: the account has no commission group for it,
+/// or Saxo will not trade it on this account at all.
+///
+/// One occurrence is fully diagnostic, because retrying produces the identical
+/// rejection -- what has to change is account setup outside the runtime. The
+/// taxonomy has always said so in `retry_policy` (`manual_after_setup`,
+/// `review_instrument`) and nothing outside the dashboard read it, so the
+/// runtime spent three candidate slots over up to 14 days rediscovering a fact
+/// the broker stated the first time. `ARKK:xmil` on 2026-09-02 is the case:
+/// the BUY was rejected at precheck for commission setup, and under the old
+/// rule the model could spend two more slots on it before the quarantine bit.
+/// Both vocabularies are listed on purpose: rows written before the taxonomy
+/// existed still classify through the text patterns, and a quarantine that
+/// recognised only the structured name would silently keep the three-strike
+/// rule for exactly the oldest evidence.
+const INSTRUMENT_SETUP_FAILURE_SIGNATURES: &[&str] = &[
+    "commission_setup",
+    "commission_not_configured",
+    "instrument_not_tradable",
+];
+
+/// Strikes required before this signature quarantines the instrument.
+fn quarantine_min_failures(signature: &str, cfg: InstrumentQuarantineConfig) -> usize {
+    if INSTRUMENT_SETUP_FAILURE_SIGNATURES.contains(&signature) {
+        1
+    } else {
+        cfg.min_failures
+    }
+}
+
 fn persisted_execution_failure_signature(row: &JsonValue) -> Option<String> {
     let payload = row.get("execution_result_json")?;
     let payload = match payload {
@@ -5351,26 +5415,9 @@ fn persisted_execution_failure_signature(row: &JsonValue) -> Option<String> {
         .get("error_taxonomy")
         .and_then(|taxonomy| taxonomy.get("code"))
         .and_then(JsonValue::as_str)?;
-    matches!(
-        code,
-        "broker_state_unknown"
-            | "broker_cancelled"
-            | "broker_rejected"
-            | "commission_setup"
-            | "done_for_day"
-            | "insufficient_cash"
-            | "instrument_not_tradable"
-            | "market_closed"
-            | "order_expired"
-            | "position_quantity"
-            | "price_invalid"
-            | "quantity"
-            | "rate_limited"
-            | "session_expired"
-            | "tick_size"
-            | "unknown"
-    )
-    .then(|| code.to_string())
+    QUARANTINE_FAILURE_SIGNATURES
+        .contains(&code)
+        .then(|| code.to_string())
 }
 
 fn classify_execution_failure_signature(row: &JsonValue) -> Option<String> {
@@ -6693,6 +6740,146 @@ mod tests {
         assert_eq!(quarantines[0].action, "BUY");
         assert_eq!(quarantines[0].signature, "commission_not_configured");
         assert_eq!(quarantines[0].failure_count, 3);
+    }
+
+    /// `ARKK:xmil` on 2026-09-02: the BUY was rejected at precheck because the
+    /// account has no commission group for the instrument. Nothing about that
+    /// changes by trying again, and the taxonomy says so -- `retry_policy` is
+    /// `manual_after_setup`. Under the flat three-strike rule the model could
+    /// spend two more candidate slots on it first.
+    #[test]
+    fn an_instrument_setup_failure_quarantines_on_first_sight() {
+        let cfg = InstrumentQuarantineConfig {
+            enabled: true,
+            lookback_days: 14,
+            min_failures: 3,
+            active_days: 14,
+        };
+        let rows = vec![json!({
+            "created_at": "2026-09-02T08:50:34Z",
+            "symbol": "ARKK:xmil",
+            "action": "BUY",
+            "status": "execution_failed",
+            "error_text": "Order precheck failed: OtherError: Your account does not have any commissions configured to trade this instrument.",
+            "execution_result_json": {"error_taxonomy": {"code": "commission_setup"}}
+        })];
+
+        let quarantines = active_instrument_quarantines_from_rows(
+            &rows,
+            DateTime::parse_from_rfc3339("2026-09-02T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            cfg,
+        );
+
+        assert_eq!(
+            quarantines.len(),
+            1,
+            "one rejection is fully diagnostic here"
+        );
+        assert_eq!(quarantines[0].symbol, "ARKK:xmil");
+        assert_eq!(
+            quarantines[0].signature, "commission_setup",
+            "the structured code wins over the text pattern, so one failure has one name"
+        );
+        assert_eq!(quarantines[0].failure_count, 1);
+    }
+
+    /// The opposite case, which is why this is per-signature rather than a
+    /// blanket loosening: a rate limit says nothing about the instrument.
+    #[test]
+    fn a_transient_failure_still_needs_the_configured_strike_count() {
+        let cfg = InstrumentQuarantineConfig {
+            enabled: true,
+            lookback_days: 14,
+            min_failures: 3,
+            active_days: 14,
+        };
+        let row = |day: u32| {
+            json!({
+                "created_at": format!("2026-09-0{day}T08:50:34Z"),
+                "symbol": "AMD:xnas",
+                "action": "BUY",
+                "status": "execution_failed",
+                "error_text": "HTTP 429",
+                "execution_result_json": {"error_taxonomy": {"code": "rate_limited"}}
+            })
+        };
+        let now = DateTime::parse_from_rfc3339("2026-09-04T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert!(
+            active_instrument_quarantines_from_rows(&[row(1)], now, cfg).is_empty(),
+            "one rate limit must not withdraw an instrument"
+        );
+        assert_eq!(
+            active_instrument_quarantines_from_rows(&[row(1), row(2), row(3)], now, cfg).len(),
+            1
+        );
+    }
+
+    /// A failure the quarantine cannot name earns no strike, so the set of
+    /// names it understands decides what it can ever act on. Reading only the
+    /// text patterns left both `order_expired` rows since 2026-07-01 invisible.
+    #[test]
+    fn a_taxonomy_only_failure_still_earns_a_strike() {
+        let cfg = InstrumentQuarantineConfig {
+            enabled: true,
+            lookback_days: 14,
+            min_failures: 2,
+            active_days: 14,
+        };
+        let row = |day: u32| {
+            json!({
+                "created_at": format!("2026-09-0{day}T08:50:34Z"),
+                "symbol": "GN:xcse",
+                "action": "BUY",
+                "status": "execution_failed",
+                // No phrase here matches any text pattern; only the code names it.
+                "error_text": "order reached the end of its day duration",
+                "execution_result_json": {"error_taxonomy": {"code": "order_expired"}}
+            })
+        };
+
+        let quarantines = active_instrument_quarantines_from_rows(
+            &[row(1), row(2)],
+            DateTime::parse_from_rfc3339("2026-09-03T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            cfg,
+        );
+
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(quarantines[0].signature, "order_expired");
+    }
+
+    /// An instrument-setup signature that is not also a strike signature would
+    /// quarantine nothing: the row is dropped before the threshold is read.
+    #[test]
+    fn every_first_sight_signature_is_also_one_that_earns_a_strike() {
+        // A message that only the text classifier can name, for each signature
+        // that has no structured code of its own.
+        let text_only_examples = [(
+            "commission_not_configured",
+            "Your account does not have any commissions configured to trade this instrument.",
+        )];
+        for signature in INSTRUMENT_SETUP_FAILURE_SIGNATURES {
+            let from_taxonomy = QUARANTINE_FAILURE_SIGNATURES.contains(signature);
+            let from_text = text_only_examples.iter().any(|(name, message)| {
+                name == signature
+                    && classify_execution_failure_signature(&json!({
+                        "error_text": message,
+                        "status": "execution_failed"
+                    }))
+                    .as_deref()
+                        == Some(*signature)
+            });
+            assert!(
+                from_taxonomy || from_text,
+                "{signature} is not producible by either classifier, so quarantining on it does nothing"
+            );
+        }
     }
 
     #[test]
