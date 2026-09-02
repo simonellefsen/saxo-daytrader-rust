@@ -9906,25 +9906,25 @@ impl AppState {
         );
         let realised_sell_rows = self
             .select_json(&format!(
-                "SELECT l.id, l.created_at, l.symbol, l.instrument_name, l.quantity, l.currency, \\
-                        l.realised_gain_dkk, l.commission_dkk, l.tax_dkk, l.cost_basis_sold_dkk, l.mode, l.status, \\
-                        fill_link.execution_order_id, fill_link.linked_order_count, \\
-                        eo.strategy_type AS exit_strategy_type, eo.strategy_role AS exit_strategy_role \\
-                 FROM trade_ledger l \\
-                 LEFT JOIN ( \\
-                    SELECT ledger_id, \\
-                           CASE WHEN COUNT(DISTINCT execution_order_id) = 1 \\
-                                THEN MIN(execution_order_id) END AS execution_order_id, \\
-                           COUNT(DISTINCT execution_order_id) AS linked_order_count \\
-                    FROM execution_fills \\
-                    WHERE ledger_id IS NOT NULL \\
-                    GROUP BY ledger_id \\
-                 ) fill_link ON fill_link.ledger_id = l.id \\
-                 LEFT JOIN execution_orders eo ON eo.id = fill_link.execution_order_id \\
-                 WHERE UPPER(l.side) = 'SELL' \\
-                   AND l.status IN ('executed', 'approved') \\
-                   AND COALESCE(l.cost_basis_sold_dkk, 0) > 0 \\
-                 ORDER BY l.created_at DESC, l.id DESC \\
+                "SELECT l.id, l.created_at, l.symbol, l.instrument_name, l.quantity, l.currency, \
+                        l.realised_gain_dkk, l.commission_dkk, l.tax_dkk, l.cost_basis_sold_dkk, l.mode, l.status, \
+                        fill_link.execution_order_id, fill_link.linked_order_count, \
+                        eo.strategy_type AS exit_strategy_type, eo.strategy_role AS exit_strategy_role \
+                 FROM trade_ledger l \
+                 LEFT JOIN ( \
+                    SELECT ledger_id, \
+                           CASE WHEN COUNT(DISTINCT execution_order_id) = 1 \
+                                THEN MIN(execution_order_id) END AS execution_order_id, \
+                           COUNT(DISTINCT execution_order_id) AS linked_order_count \
+                    FROM execution_fills \
+                    WHERE ledger_id IS NOT NULL \
+                    GROUP BY ledger_id \
+                 ) fill_link ON fill_link.ledger_id = l.id \
+                 LEFT JOIN execution_orders eo ON eo.id = fill_link.execution_order_id \
+                 WHERE UPPER(l.side) = 'SELL' \
+                   AND l.status IN ('executed', 'approved') \
+                   AND COALESCE(l.cost_basis_sold_dkk, 0) > 0 \
+                 ORDER BY l.created_at DESC, l.id DESC \
                  LIMIT {}",
                 PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT
             ))
@@ -27327,6 +27327,33 @@ analysis_windows:
             serialized.len() < 600,
             "compacted cycle should be small, got {} bytes",
             serialized.len()
+        );
+    }
+
+    /// The realised-sell query carried `\\` line breaks — an *escaped*
+    /// backslash in Rust, so PostgreSQL received a literal `\` and rejected the
+    /// statement with a syntax error. `select_json`'s error went into
+    /// `unwrap_or_default()`, so the panel reported "unavailable" and looked
+    /// exactly like an empty ledger; it had never rendered in production
+    /// despite 64 qualifying sales. Any SQL this module builds must be free of
+    /// stray backslashes, which SQLite tolerates in more places than Postgres.
+    #[test]
+    fn no_sql_literal_in_this_module_carries_a_stray_backslash() {
+        let source = include_str!("state.rs");
+        let offenders: Vec<usize> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let trimmed = line.trim_end();
+                // A Rust line continuation is a single trailing backslash; two
+                // means a literal backslash reached the string.
+                trimmed.ends_with("\\\\") && !trimmed.trim_start().starts_with("//")
+            })
+            .map(|(index, _)| index + 1)
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "these lines end in an escaped backslash that would reach the database: {offenders:?}"
         );
     }
 
