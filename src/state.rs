@@ -6086,6 +6086,9 @@ const FRESHNESS_SOURCES: &[FreshnessSource] = &[
         // would report the loop healthy on exactly the days it was dead. On
         // 2026-09-01 the newest real reflection was 2026-08-25 while the newest
         // row was the night before, and nothing on screen said so.
+        // Kept literal because `FreshnessSource.sql` is a `&'static str` in a
+        // const array; a test asserts it still contains the shared predicate,
+        // so the two cannot drift apart unnoticed.
         sql: "SELECT MAX(created_at) AS at FROM hermes_reflections \
               WHERE source_session_id LIKE 'daily-eod-reflection-%' \
                 AND (raw_payload_json IS NULL \
@@ -6148,6 +6151,18 @@ pub(crate) fn freshness_age_label(age_minutes: Option<i64>) -> String {
 }
 
 /// Hermes sub-sections, in the order the tab strip presents them.
+/// Restricts a `hermes_reflections` query to rows the daily loop actually
+/// produced.
+///
+/// The CronJob writes a watchdog placeholder when the model never answers, and
+/// that row lives in the same table. Every consumer that counts rows instead of
+/// reflections therefore reads the loop as healthy on exactly the days it was
+/// dead — the freshness chip did, and so did the missed-reflection alert, which
+/// stayed silent through the 2026-08-26 to 08-31 outage because a placeholder
+/// was written each of those nights. Shared rather than repeated, because the
+/// second copy is where these diverge.
+pub(crate) const REAL_DAILY_REFLECTION_SQL_PREDICATE: &str = "source_session_id LIKE 'daily-eod-reflection-%' AND (raw_payload_json IS NULL OR raw_payload_json NOT LIKE '%kubernetes-cronjob-watchdog%')";
+
 /// Top-level `get_context` keys a caller may ask for by name.
 ///
 /// Distinct from `HERMES_SECTIONS`, which names dashboard tabs. These are the
@@ -27268,6 +27283,25 @@ analysis_windows:
     /// the compaction keeps only short top-level scalars. Without a scalar
     /// summary every cycle -- retry fired, retry declined, retry errored --
     /// persists as the same `{"status":"ok"}` and the record answers nothing.
+    /// The freshness chip and the missed-reflection alert must agree on what a
+    /// reflection is. They did not: the chip was fixed on 2026-09-01 and the
+    /// alert kept counting watchdog placeholders, so the dashboard said six
+    /// days stale while the alert stayed quiet. The chip's SQL has to stay a
+    /// literal, so this is what stops the two drifting again.
+    #[test]
+    fn the_reflection_freshness_chip_uses_the_shared_predicate() {
+        let source = FRESHNESS_SOURCES
+            .iter()
+            .find(|source| source.key == "hermes_reflection")
+            .expect("the reflection freshness source ships");
+        assert!(
+            source.sql.contains(REAL_DAILY_REFLECTION_SQL_PREDICATE),
+            "freshness SQL has drifted from the shared predicate:\n  sql: {}\n  predicate: {}",
+            source.sql,
+            REAL_DAILY_REFLECTION_SQL_PREDICATE
+        );
+    }
+
     /// A scoped context must be honest about what it left out. The failure
     /// this guards is a reader concluding "no execution activity today" from a
     /// payload that was never asked for execution.

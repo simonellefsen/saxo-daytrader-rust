@@ -980,6 +980,11 @@ fn integrity_order_summary(order: &JsonValue) -> String {
     }
 }
 
+/// True on the days the reflection CronJob actually runs (`45 23 * * 1-5`).
+fn eod_reflection_is_due(day: chrono::NaiveDate) -> bool {
+    day.weekday().number_from_monday() <= 5
+}
+
 async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<SlackAlert>> {
     let due_hour_utc = yaml_i64(
         &state.config,
@@ -996,12 +1001,25 @@ async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<S
         return Ok(None);
     }
     let day = now.date_naive();
+    // The CronJob is `45 23 * * 1-5`, so no reflection is due at a weekend and
+    // its absence is not a fault. Without this the alert fired on every
+    // Saturday and Sunday from 2026-07-11 onward -- all sixteen of its
+    // deliveries were weekends, and not one was a real miss. An alert that
+    // cries wolf every weekend is why a genuine seven-day outage went unread.
+    if !eod_reflection_is_due(day) {
+        return Ok(None);
+    }
     let day_start = format!("{day}T00:00:00Z");
     let row = sqlx::query(&format!(
+        // Counting rows rather than reflections is what silenced this alert
+        // through 2026-08-26..08-31: the CronJob writes a watchdog placeholder
+        // into this same table when the model never answers, so every night the
+        // loop failed there was a row here saying it had not.
         "SELECT COUNT(*) AS reflection_count, MAX(created_at) AS latest_created_at
          FROM hermes_reflections
-         WHERE created_at >= '{}'",
-        sql_escape(&day_start)
+         WHERE created_at >= '{}' AND {}",
+        sql_escape(&day_start),
+        crate::state::REAL_DAILY_REFLECTION_SQL_PREDICATE
     ))
     .fetch_optional(&state.pool)
     .await
@@ -1019,7 +1037,7 @@ async fn hermes_eod_reflection_missed_alert(state: &AppState) -> Result<Option<S
         "medium",
         "Hermes EOD reflection missing".to_string(),
         vec![
-            "No Hermes reflection has been recorded for the current UTC day after the expected EOD deadline.".to_string(),
+            "No Hermes reflection has been recorded for the current UTC day after the expected EOD deadline. A CronJob watchdog placeholder does not count as one.".to_string(),
             String::new(),
             format!("Date: {day}"),
             format!("Due hour UTC: {due_hour_utc:02}:00"),
@@ -1719,6 +1737,90 @@ fn parse_utc_time(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every one of this alert's sixteen deliveries between 2026-07-11 and
+    /// 2026-08-30 landed on a Saturday or a Sunday, when the CronJob
+    /// (`45 23 * * 1-5`) never runs and no reflection is due. Not one was a
+    /// real miss, and an alert that cries wolf every weekend is why a genuine
+    /// seven-day outage went unread.
+    #[test]
+    fn the_eod_reflection_alert_is_silent_on_days_it_is_not_due() {
+        let day = |d: u32| chrono::NaiveDate::from_ymd_opt(2026, 8, d).expect("valid date");
+        // 2026-08-24 is a Monday.
+        for weekday in 24..=28 {
+            assert!(
+                eod_reflection_is_due(day(weekday)),
+                "{} is a weekday and a reflection is due",
+                day(weekday)
+            );
+        }
+        assert!(!eod_reflection_is_due(day(29)), "Saturday");
+        assert!(!eod_reflection_is_due(day(30)), "Sunday");
+    }
+
+    /// The watchdog placeholder lives in the same table as a real reflection,
+    /// so a query that counts rows reads the loop as healthy on exactly the
+    /// nights it failed. Asserted against a real database rather than by
+    /// inspection, because the failure was in the SQL and not in the intent.
+    #[tokio::test]
+    async fn the_shared_predicate_sees_a_reflection_but_not_a_watchdog() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        sqlx::query(
+            "CREATE TABLE hermes_reflections (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, \
+             source_session_id TEXT, summary TEXT, raw_payload_json TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create table");
+
+        // What the CronJob writes when the model never answered.
+        sqlx::query(
+            "INSERT INTO hermes_reflections VALUES ('w', '2026-08-31T21:46:30Z', \
+             'daily-eod-reflection-2026-08-31', 'Daily reflection watchdog: ...', \
+             '{\"source\": \"kubernetes-cronjob-watchdog\", \"job\": \"hermes-daily-reflection\"}')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert watchdog");
+        // What a real reflection looks like.
+        sqlx::query(
+            "INSERT INTO hermes_reflections VALUES ('r', '2026-08-25T21:45:48Z', \
+             'daily-eod-reflection-2026-08-25', '2026-08-25 EOD: ...', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert reflection");
+
+        let count = |predicate: &str| {
+            let sql = format!("SELECT COUNT(*) AS n FROM hermes_reflections WHERE {predicate}");
+            let pool = pool.clone();
+            async move {
+                sqlx::query(&sql)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("count")
+                    .try_get::<i64, _>("n")
+                    .expect("count column")
+            }
+        };
+
+        assert_eq!(
+            count("1=1").await,
+            2,
+            "both rows exist, which is why counting rows was wrong"
+        );
+        assert_eq!(
+            count(crate::state::REAL_DAILY_REFLECTION_SQL_PREDICATE).await,
+            1,
+            "the predicate must see the reflection and not the watchdog"
+        );
+    }
 
     #[test]
     fn formats_integer_and_fractional_quantities() {
