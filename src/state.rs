@@ -16357,6 +16357,19 @@ impl AppState {
                 .await
                 .context("migrating decision-report pulse authority")?;
         }
+        // The scaling a signal was actually computed under. Nullable on
+        // purpose: rows written before per-exchange scaling have no honest
+        // value, and defaulting them to today's numbers would invent evidence.
+        for column in [
+            "bars_per_session INTEGER",
+            "window_bars INTEGER",
+            "min_labeled_bars INTEGER",
+            "signal_horizon_bars INTEGER",
+        ] {
+            self.ensure_table_column("markov_asset_signals", column)
+                .await
+                .context("migrating Markov applied-scaling columns")?;
+        }
         // Reports created before the pulse-authority contract keep their
         // historical execution eligibility. Dry-run reports are explicitly
         // shadowed so a legacy status can never gain authority during the

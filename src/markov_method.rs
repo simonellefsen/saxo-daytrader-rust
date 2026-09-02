@@ -1267,6 +1267,7 @@ async fn insert_markov_signal(state: &AppState, row: &JsonValue) -> Result<()> {
             id, run_id, created_at, run_date, status, symbol, instrument_name,
             exchange, source, uic, asset_type, window_days, threshold,
             horizon_minutes, sample_count, min_labeled_days, signal_horizon_days,
+            bars_per_session, window_bars, min_labeled_bars, signal_horizon_bars,
             current_state, current_close, rolling_return, transition_counts_json,
             transition_matrix_json, forecasts_json, stationary_json, bull_prob,
             sideways_prob, bear_prob, signed_signal, direction, conviction,
@@ -1274,6 +1275,7 @@ async fn insert_markov_signal(state: &AppState, row: &JsonValue) -> Result<()> {
         ) VALUES (
             '{}', '{}', '{}', '{}', '{}', '{}', '{}',
             '{}', '{}', {}, {}, {}, {}, {}, {}, {}, {},
+            {}, {}, {}, {},
             {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {}, {}, {}, {}
         )",
@@ -1306,6 +1308,10 @@ async fn insert_markov_signal(state: &AppState, row: &JsonValue) -> Result<()> {
         row.get("signal_horizon_days")
             .and_then(JsonValue::as_u64)
             .unwrap_or(0),
+        optional_i64_sql(row.get("bars_per_session").and_then(JsonValue::as_i64)),
+        optional_i64_sql(row.get("window_bars").and_then(JsonValue::as_i64)),
+        optional_i64_sql(row.get("min_labeled_bars").and_then(JsonValue::as_i64)),
+        optional_i64_sql(row.get("signal_horizon_bars").and_then(JsonValue::as_i64)),
         optional_text_sql(row.get("current_state").and_then(JsonValue::as_str)),
         optional_f64_sql(row.get("current_close").and_then(JsonValue::as_f64)),
         optional_f64_sql(row.get("rolling_return").and_then(JsonValue::as_f64)),
@@ -2390,6 +2396,10 @@ pub fn create_schema_sql() -> Vec<&'static str> {
             sample_count INTEGER NOT NULL,
             min_labeled_days INTEGER NOT NULL,
             signal_horizon_days INTEGER NOT NULL,
+            bars_per_session INTEGER,
+            window_bars INTEGER,
+            min_labeled_bars INTEGER,
+            signal_horizon_bars INTEGER,
             current_state TEXT,
             current_close REAL,
             rolling_return REAL,
@@ -3026,6 +3036,80 @@ strategy:
             vec!["europe_open", "us_open"],
             "sorted, de-duplicated, typo and disabled entries dropped"
         );
+    }
+
+    /// Regression for 2026-09-01: per-exchange scaling was computed, placed in
+    /// the row map, and then dropped at insert time because the INSERT names
+    /// its columns explicitly and nobody added these four. The sweep ran, the
+    /// signals looked fine, and every persisted `bars_per_session` was NULL --
+    /// so the claim that a signal records the scaling applied to it was false
+    /// for a full day. A round trip is the only check that catches it.
+    #[tokio::test]
+    async fn a_persisted_signal_carries_the_scaling_it_was_computed_under() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory markov database");
+        for sql in create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("create markov tables");
+        }
+        let state = AppState {
+            config_path: std::path::PathBuf::from("markov-test.yaml"),
+            config: serde_yaml::from_str("{}").expect("parse test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+
+        let config = test_config();
+        let asset = MarkovAsset {
+            symbol: "PLTR:xnas".to_string(),
+            analysis_symbol: "PLTR:xnas".to_string(),
+            instrument_name: "Palantir".to_string(),
+            source: "watchlist".to_string(),
+        };
+        // Deliberately not the default: a US session is shorter, and the whole
+        // point is that the row records what this instrument actually used.
+        let scaling = MarkovScaling {
+            bars_per_session: 7,
+            window_bars: 140,
+            min_labeled_bars: 420,
+            signal_horizon_bars: 21,
+            forecast_step_bars: vec![7, 14, 21, 35],
+        };
+        let row = signal_row_json(
+            "markov-test-run",
+            "2026-09-01T21:35:51Z",
+            NaiveDate::from_ymd_opt(2026, 9, 1).expect("valid date"),
+            &config,
+            &asset,
+            None,
+            &scaling,
+            None,
+            None,
+            Some("no bars"),
+        );
+        insert_markov_signal(&state, &row)
+            .await
+            .expect("insert markov signal");
+
+        let stored = sqlx::query(
+            "SELECT bars_per_session, window_bars, min_labeled_bars, signal_horizon_bars
+             FROM markov_asset_signals WHERE symbol = 'PLTR:xnas'",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .expect("read back the signal");
+
+        assert_eq!(stored.get::<i32, _>("bars_per_session"), 7);
+        assert_eq!(stored.get::<i32, _>("window_bars"), 140);
+        assert_eq!(stored.get::<i32, _>("min_labeled_bars"), 420);
+        assert_eq!(stored.get::<i32, _>("signal_horizon_bars"), 21);
     }
 
     #[tokio::test]
