@@ -8,6 +8,7 @@ API_SERVICE="${API_SERVICE:-daytrader-frontend}"
 API_LOCAL_PORT="${API_LOCAL_PORT:-18080}"
 MCP_LOCAL_PORT="${MCP_LOCAL_PORT:-18610}"
 HERMES_LOCAL_PORT="${HERMES_LOCAL_PORT:-18642}"
+HERMES_REFLECTIONS_LOCAL_PORT="${HERMES_REFLECTIONS_LOCAL_PORT:-18643}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
 EXPECTED_DAYTRADER_IMAGE="${EXPECTED_DAYTRADER_IMAGE:-}"
 EXPECTED_API_IMAGE="${EXPECTED_API_IMAGE:-$EXPECTED_DAYTRADER_IMAGE}"
@@ -111,7 +112,7 @@ require_cmd base64
 require_cmd git
 
 info "checking Kubernetes rollouts in ${APP_NAMESPACE}"
-for deployment in daytrader-api daytrader-scheduler daytrader-mcp hermes-agent; do
+for deployment in daytrader-api daytrader-scheduler daytrader-mcp hermes-agent hermes-reflections; do
   kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" rollout status \
     "deployment/${deployment}" --timeout="$ROLLOUT_TIMEOUT"
 done
@@ -120,6 +121,7 @@ check_expected_image daytrader-api "$EXPECTED_API_IMAGE"
 check_expected_image daytrader-scheduler "$EXPECTED_SCHEDULER_IMAGE"
 check_expected_image daytrader-mcp "$EXPECTED_MCP_IMAGE"
 check_expected_image hermes-agent "$EXPECTED_HERMES_IMAGE"
+check_expected_image hermes-reflections "$EXPECTED_HERMES_IMAGE"
 
 endpoint_ready="$(
   kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" get agentendpoint saxo-daytrader-internal \
@@ -236,5 +238,28 @@ if [[ "$hermes_health" != *'"status": "ok"'* && "$hermes_health" != *'"status":"
   fail "Hermes gateway health endpoint returned unexpected payload: ${hermes_health}"
 fi
 info "Hermes gateway health ok"
+
+# The reflections gateway exists only to run the nightly learning loop on a
+# cheap model. If its HERMES_MODEL is ever dropped it silently inherits the
+# trading model from the shared hermes-env secret and the split is undone
+# with nothing to show for it, so assert the two differ rather than assuming.
+reflections_model="$(
+  kubectl --context "$KUBE_CONTEXT" -n "$APP_NAMESPACE" get deployment/hermes-reflections \
+    -o 'jsonpath={.spec.template.spec.containers[0].env[?(@.name=="HERMES_MODEL")].value}' 2>/dev/null || true
+)"
+if [[ -z "$reflections_model" ]]; then
+  fail "deployment/hermes-reflections has no HERMES_MODEL override; it would run the trading model"
+fi
+info "reflections gateway model ${reflections_model}"
+
+start_port_forward hermes-reflections "$HERMES_REFLECTIONS_LOCAL_PORT" 8642 "hermes-reflections-port-forward"
+wait_for_url "http://127.0.0.1:${HERMES_REFLECTIONS_LOCAL_PORT}/health" \
+  "$TMP_DIR/hermes-reflections-health.json" "hermes-reflections-port-forward" \
+  || fail "Hermes reflections gateway health endpoint did not become reachable"
+reflections_health="$(cat "$TMP_DIR/hermes-reflections-health.json")"
+if [[ "$reflections_health" != *'"status": "ok"'* && "$reflections_health" != *'"status":"ok"'* ]]; then
+  fail "Hermes reflections gateway health returned unexpected payload: ${reflections_health}"
+fi
+info "Hermes reflections gateway health ok"
 
 info "post-deploy smoke completed with ${WARNINGS} warning(s)"

@@ -122,9 +122,12 @@ flowchart TB
     subgraph NS["namespace: saxo"]
       API["daytrader-api\n/app/saxo-rust"]
       SCH["daytrader-scheduler\n/app/saxo-rust --scheduler"]
-      H["hermes-agent\ngateway run"]
+      H["hermes-agent\ngateway run\nHERMES_MODEL"]
+      HR["hermes-reflections\ngateway run\ngoogle/gemini-3.7-flash"]
       MCP["daytrader-mcp\nread-mostly tool surface"]
       HPVC[("hermes-data PVC\n/opt/data")]
+      HRPVC[("hermes-reflections-data PVC\n/opt/data")]
+      CRON["CronJob\ndaily + weekly reflection"]
     end
 
     subgraph DBNS["namespace: saxo"]
@@ -136,15 +139,30 @@ flowchart TB
   SCH --> PG
   H --> HPVC
   H --> MCP
+  HR --> HRPVC
+  HR --> MCP
+  CRON --> HR
+  SCH -->|decision advice| H
   MCP --> API
   MCP --> PG
 ```
 
+Two gateways, not one. `hermes-agent` answers the trading-manager and shadow
+advice calls that gate candidate orders; `hermes-reflections` runs only the
+nightly and weekly learning loops, on a deliberately cheaper model and a
+narrower MCP tool surface. They are separate Deployments because this Hermes
+build resolves the agent model globally from `model.default` -- the `model`
+field on `POST /v1/runs` is recorded in run status and then ignored -- so a
+per-run model choice is not available and process separation is the only way
+to price the two workloads differently. Each needs its own PVC: two gateway
+pods must never share one.
+
 Recommended first deployment:
 
 - `Deployment/hermes-agent`, one replica.
-- `PersistentVolumeClaim/hermes-data`, mounted at `/opt/data`.
-- `Service/hermes-gateway`, ClusterIP, port `8642`.
+- `Deployment/hermes-reflections`, one replica, pinning `HERMES_MODEL=google/gemini-3.7-flash` as an explicit `env` entry so it overrides the shared `hermes-env` secret.
+- `PersistentVolumeClaim/hermes-data` and `PersistentVolumeClaim/hermes-reflections-data`, each mounted at `/opt/data` in its own pod.
+- `Service/hermes-gateway` and `Service/hermes-reflections`, ClusterIP, port `8642`.
 - Optional dashboard port `9119`, ClusterIP only.
 - `Secret/hermes-env` for model provider keys, messaging tokens, and `API_SERVER_KEY`.
 - No public ngrok endpoint until authorization and threat model are reviewed.
@@ -153,7 +171,7 @@ Hermes state under `/opt/data` contains memories, skills, sessions, cron jobs, l
 
 Implemented initial Kubernetes support:
 
-- `deploy/k8s/base/hermes.yaml` defines `Deployment/hermes-agent`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `Service/hermes-gateway`, `Service/daytrader-mcp`, and `ConfigMap/hermes-daytrader-context`.
+- `deploy/k8s/base/hermes.yaml` defines `Deployment/hermes-agent`, `Deployment/hermes-reflections`, `Deployment/daytrader-mcp`, `PVC/hermes-data`, `PVC/hermes-reflections-data`, `Service/hermes-gateway`, `Service/hermes-reflections`, `Service/daytrader-mcp`, and `ConfigMap/hermes-daytrader-context`.
 - `deploy/k8s/base/kustomization.yaml` includes the Hermes resources in the base deployment.
 - `scripts/deploy_k8s_docker_desktop.sh` creates a separate `hermes-env` secret from a whitelist of Hermes/model/chat variables.
 - `hermes-daytrader-context` mounts read-only files at `/opt/daytrader-context` so the agent can inspect app capabilities and the self-improvement goal contract without receiving Saxo secrets.
@@ -574,7 +592,7 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-daily-reflecti
 rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflection -p '{"spec":{"suspend":false}}'
 ```
 
-`CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-gateway.saxo:8642/v1/runs` with a prompt that instructs Hermes to:
+`CronJob/hermes-daily-reflection` runs at `23:45` Europe/Copenhagen on weekdays. It calls `http://hermes-reflections.saxo:8642/v1/runs` with a prompt that instructs Hermes to:
 
 - Prefer the configured `daytrader` MCP tools for context, decision reports, EOD reports, Markov signals, recent experiment state, reflection writes, and proposal writes.
 - Analyze today's two decision-report pulses, the daily end-of-day report, Markov regime signals, scheduler cycle status, execution outcomes, failures, and current performance against the goal contract.
@@ -585,7 +603,7 @@ rtk kubectl --context docker-desktop -n saxo patch cronjob hermes-weekly-reflect
 
 After submitting the run, the CronJob waits for a reflection with the expected `source_session_id` (`daily-eod-reflection-YYYY-MM-DD`). If Hermes starts the run but does not persist a reflection inside the watchdog window, the CronJob writes a watchdog reflection through the protected daytrader adapter so the dashboard shows the missed reflection instead of silently staying stale.
 
-`CronJob/hermes-weekly-reflection` runs Friday at `22:15` Europe/Copenhagen. It calls the same Hermes API with a prompt that instructs Hermes to:
+`CronJob/hermes-weekly-reflection` runs Friday at `22:15` Europe/Copenhagen. It calls the same `hermes-reflections` gateway with a prompt that instructs Hermes to:
 
 - Prefer the configured `daytrader` MCP tools for context, recent experiment state, reflection writes, and experiment proposals.
 - Read `get_decision_reports`, `get_end_of_day_reports`, `get_markov_signals`, and `get_quiver_signals` before proposing strategy changes.

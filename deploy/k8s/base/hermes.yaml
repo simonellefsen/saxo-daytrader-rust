@@ -12,6 +12,19 @@ spec:
       storage: 2Gi
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-reflections-data
+  labels:
+    app: hermes-reflections
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: hermes-daytrader-context
@@ -393,6 +406,176 @@ spec:
           configMap:
             name: hermes-daytrader-context
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-reflections
+  labels:
+    app: hermes-reflections
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hermes-reflections
+  template:
+    metadata:
+      labels:
+        app: hermes-reflections
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsGroup: 10000
+        runAsNonRoot: true
+        runAsUser: 10000
+        fsGroup: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-daytrader-mcp
+          image: curlimages/curl:8.17.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              for attempt in $(seq 1 60); do
+                if curl -fsS http://daytrader-mcp.saxo:8610/health >/dev/null; then
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "daytrader-mcp did not become ready before Hermes startup" >&2
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 10000
+            runAsNonRoot: true
+            runAsUser: 10000
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      containers:
+        - name: hermes
+          image: docker.io/nousresearch/hermes-agent@sha256:b6e41c155d6bfce5ad83c5d0fec670086db8a43250e4511c9474134be5482d33
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              if [ -n "${HERMES_MODEL:-}" ]; then
+                /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
+              fi
+              if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
+                /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
+              fi
+              if [ -n "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                /opt/hermes/.venv/bin/python - <<'PY' || true
+              import os
+              from pathlib import Path
+
+              import yaml
+
+              path = Path("/opt/data/config.yaml")
+              data = {}
+              if path.exists():
+                  data = yaml.safe_load(path.read_text()) or {}
+              servers = data.setdefault("mcp_servers", {})
+              servers["daytrader"] = {
+                  "url": os.environ.get("DAYTRADER_MCP_URL", "http://daytrader-mcp.saxo:8610/mcp"),
+                  "headers": {
+                      "Authorization": f"Bearer {os.environ['HERMES_DAYTRADER_API_KEY']}"
+                  },
+                  "timeout": 30,
+                  "connect_timeout": 5,
+                  "supports_parallel_tool_calls": False,
+                  "tools": {
+                      "include": [
+                          "get_app_capabilities",
+                          "get_goal_contract",
+                          "get_context",
+                          "list_reflections",
+                          "create_reflection",
+                          "list_experiments",
+                          "create_experiment_proposal",
+                      ],
+                      "resources": False,
+                      "prompts": False,
+                  },
+              }
+              path.write_text(yaml.safe_dump(data, sort_keys=False))
+              PY
+              fi
+              exec /opt/hermes/.venv/bin/python /opt/hermes/hermes gateway run
+          envFrom:
+            - secretRef:
+                name: hermes-env
+                optional: true
+          # An explicit env entry wins over envFrom, so this gateway runs the
+          # cheap model while hermes-agent keeps whatever HERMES_MODEL names.
+          # The reflections are a nightly summarisation pass; the advice runs
+          # that gate candidate orders are not, and stay where they are.
+          env:
+            - name: HERMES_MODEL
+              value: google/gemini-3.7-flash
+          ports:
+            - name: gateway
+              containerPort: 8642
+            - name: dashboard
+              containerPort: 9119
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 10000
+            runAsNonRoot: true
+            runAsUser: 10000
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            - name: tmp
+              mountPath: /tmp
+            - name: dev-shm
+              mountPath: /dev/shm
+            - name: daytrader-context
+              mountPath: /opt/daytrader-context
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hermes-reflections-data
+        - name: tmp
+          emptyDir: {}
+        - name: dev-shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: daytrader-context
+          configMap:
+            name: hermes-daytrader-context
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -402,6 +585,23 @@ metadata:
 spec:
   selector:
     app: hermes-agent
+  ports:
+    - name: gateway
+      port: 8642
+      targetPort: gateway
+    - name: dashboard
+      port: 9119
+      targetPort: dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-reflections
+  labels:
+    app: hermes-reflections
+spec:
+  selector:
+    app: hermes-reflections
   ports:
     - name: gateway
       port: 8642
@@ -493,7 +693,7 @@ spec:
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-daily-eod-reflection",
-                    "input": "Run the saxo daytrader daily end-of-day learning loop for ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 8 and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries today's decision-report pulses, the end-of-day report, execution outcomes and failures, Markov regime signals, scheduler status, performance against the goal contract, the read-only gate_replay evidence, and the experiment inventory. Do NOT also call get_decision_reports, get_end_of_day_reports, get_markov_signals or list_experiments: they return the same rows a second time, and every tool result stays in context for the rest of the run. Make a second call only to fill a gap you can name. STEP 2 - write exactly one concise reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. If the day holds a concrete learning that can be tested safely, call create_experiment_proposal once with the same source_session_id, changing exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. Never duplicate an existing pending or active proposal for the same changed_variable_path. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. If the evidence is insufficient, record proposed_actions in the reflection instead and say what is missing. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. Each gate_replay scenario reports reachability: unreachable_in_retained_evidence means no candidate ever met that gate precondition, so the threshold bound nothing during the window and a proposal against it cannot produce a measurable effect at any value. Prefer a variable whose scenario is evaluated, and if you propose an unreachable one, say why the precondition is expected to start holding. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                    "input": "Run the saxo daytrader daily end-of-day learning loop for ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 8 and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries today's decision-report pulses, the end-of-day report, execution outcomes and failures, Markov regime signals, scheduler status, performance against the goal contract, the read-only gate_replay evidence, and the experiment inventory. The single-purpose readers get_decision_reports, get_end_of_day_reports, get_markov_signals and get_quiver_signals are deliberately absent from this gateway: they returned the same rows a second time, and every tool result stays in context for the rest of the run. If a block you need is genuinely missing, call get_context again with different sections rather than working around it. STEP 2 - write exactly one concise reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. If the day holds a concrete learning that can be tested safely, call create_experiment_proposal once with the same source_session_id, changing exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. Never duplicate an existing pending or active proposal for the same changed_variable_path. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. If the evidence is insufficient, record proposed_actions in the reflection instead and say what is missing. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. Each gate_replay scenario reports reachability: unreachable_in_retained_evidence means no candidate ever met that gate precondition, so the threshold bound nothing during the window and a proposal against it cannot produce a measurable effect at any value. Prefer a variable whose scenario is evaluated, and if you propose an unreachable one, say why the precondition is expected to start holding. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
                     "instructions": "You are Hermes Agent acting as a daily EOD learning agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create at most one pending-review experiment proposal. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
@@ -506,7 +706,7 @@ spec:
                     -H "Authorization: Bearer ${API_SERVER_KEY}" \
                     -H "Content-Type: application/json" \
                     --data @/tmp/hermes-run.json \
-                    http://hermes-gateway.saxo:8642/v1/runs
+                    http://hermes-reflections.saxo:8642/v1/runs
                   echo
                   sleep "${WAIT_SECONDS}"
                   if curl -fsS \
@@ -622,7 +822,7 @@ spec:
                   cat > /tmp/hermes-run.json <<EOF
                   {
                     "session_id": "saxo-daytrader-weekly-reflection",
-                    "input": "Run the saxo daytrader weekly self-improvement loop for the week ending ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 20 and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries the week of decision-report pulses, the daily end-of-day reports, execution outcomes and failures, Markov regime signals, scheduler cycles, one-month performance against the goal contract, the read-only gate_replay evidence, the active baseline, and the experiment inventory. Do NOT also call get_decision_reports, get_end_of_day_reports, get_markov_signals or list_experiments: they return the same rows a second time, and every tool result stays in context for the rest of the run. Make a second call only to fill a gap you can name. STEP 2 - write exactly one reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. Create one pending-review proposal when the week holds a concrete evidence-backed learning and no pending or active proposal already covers the same changed_variable_path; otherwise record the best candidate as proposed_actions and explain the blocker. Every proposal changes exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. Each gate_replay scenario reports reachability: unreachable_in_retained_evidence means no candidate ever met that gate precondition, so the threshold bound nothing during the window and a proposal against it cannot produce a measurable effect at any value. Prefer a variable whose scenario is evaluated, and if you propose an unreachable one, say why the precondition is expected to start holding. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Keep all outputs concise and auditable. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                    "input": "Run the saxo daytrader weekly self-improvement loop for the week ending ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 20 and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries the week of decision-report pulses, the daily end-of-day reports, execution outcomes and failures, Markov regime signals, scheduler cycles, one-month performance against the goal contract, the read-only gate_replay evidence, the active baseline, and the experiment inventory. The single-purpose readers get_decision_reports, get_end_of_day_reports, get_markov_signals and get_quiver_signals are deliberately absent from this gateway: they returned the same rows a second time, and every tool result stays in context for the rest of the run. If a block you need is genuinely missing, call get_context again with different sections rather than working around it. STEP 2 - write exactly one reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. Create one pending-review proposal when the week holds a concrete evidence-backed learning and no pending or active proposal already covers the same changed_variable_path; otherwise record the best candidate as proposed_actions and explain the blocker. Every proposal changes exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. Each gate_replay scenario reports reachability: unreachable_in_retained_evidence means no candidate ever met that gate precondition, so the threshold bound nothing during the window and a proposal against it cannot produce a measurable effect at any value. Prefer a variable whose scenario is evaluated, and if you propose an unreachable one, say why the precondition is expected to start holding. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Keep all outputs concise and auditable. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
                     "instructions": "You are Hermes Agent acting as a research and proposal agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create one pending-review experiment proposal when evidence supports it. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
                     "metadata": {
                       "source": "kubernetes-cronjob",
@@ -634,7 +834,7 @@ spec:
                     -H "Authorization: Bearer ${API_SERVER_KEY}" \
                     -H "Content-Type: application/json" \
                     --data @/tmp/hermes-run.json \
-                    http://hermes-gateway.saxo:8642/v1/runs
+                    http://hermes-reflections.saxo:8642/v1/runs
                   echo
                   sleep "${WAIT_SECONDS}"
                   if curl -fsS \

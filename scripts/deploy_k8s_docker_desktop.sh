@@ -281,6 +281,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrade
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/daytrader-mcp
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-mcp --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-agent
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout restart deployment/hermes-reflections
 
 printf "Shared ngrok public gateway is owned by ../shared-ngrok-gateway.\n"
 printf "This deploy only applies the app-owned saxo-daytrader.internal AgentEndpoint via kustomize.\n"
@@ -289,6 +290,7 @@ printf "Waiting for deployments...\n"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-api --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/daytrader-scheduler --timeout=180s
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-agent --timeout=180s
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status deployment/hermes-reflections --timeout=180s
 
 mkdir -p "$ROOT/.run"
 HERMES_IMAGE="$(
