@@ -9929,7 +9929,13 @@ impl AppState {
                 PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT
             ))
             .await
-            .unwrap_or_default();
+            // Swallowing this error made a broken query and an empty ledger
+            // render identically: the panel said "unavailable" either way, and
+            // nobody could tell which. Whatever the cause, it must be legible.
+            .unwrap_or_else(|err| {
+                warn!("realised SELL outcome query failed: {err:#}");
+                Vec::new()
+            });
         // Holding time needs the BUY side of the ledger and the acquisitions
         // that predate it, neither of which the sell-outcome query carries.
         let holding_ledger_rows = self
@@ -9940,7 +9946,10 @@ impl AppState {
                  ORDER BY created_at ASC, id ASC",
             )
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|err| {
+                warn!("holding-period ledger query failed: {err:#}");
+                Vec::new()
+            });
         // `buy_fill` lots duplicate a BUY ledger row and would double-count the
         // acquisition; only the import and bootstrap lots add anything.
         let holding_seed_lots = self
@@ -9952,7 +9961,10 @@ impl AppState {
                  ORDER BY COALESCE(acquired_at, created_at) ASC",
             )
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|err| {
+                warn!("holding-period seed-lot query failed: {err:#}");
+                Vec::new()
+            });
         let holding_period = crate::holding_period::holding_period_evidence_json(
             &crate::holding_period::fifo_holding_periods(&holding_ledger_rows, &holding_seed_lots),
         );
@@ -17776,7 +17788,10 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue], holding_period: JsonValue)
             "sample_requirement": PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE,
             "closed_sale_count": 0,
             "recent_rows": [],
-            "holding_time_status": "unavailable_no_lot_sale_linkage",
+            // Holding time is matched from the whole ledger, so it survives an
+            // empty outcome list rather than disappearing with it.
+            "holding_time_status": json_text(&holding_period, "status"),
+            "holding_period": holding_period,
             "slippage_status": "unavailable_no_quote_at_submission",
         });
     }
