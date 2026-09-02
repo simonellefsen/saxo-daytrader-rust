@@ -17461,14 +17461,52 @@ impl AppState {
     }
 
     async fn first_json(&self, sql: &str) -> Result<Option<JsonValue>> {
-        let row = sqlx::query(sql).fetch_optional(&self.pool).await?;
+        let row = sqlx::query(sql)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|err| report_query_failure(sql, err))?;
         Ok(row.map(|row| row_to_json(&row)))
     }
 
     pub(crate) async fn select_json(&self, sql: &str) -> Result<Vec<JsonValue>> {
-        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|err| report_query_failure(sql, err))?;
         Ok(rows.iter().map(row_to_json).collect())
     }
+}
+
+/// Log a failed query and return an error that names it.
+///
+/// Forty-two call sites end `select_json(...).await.unwrap_or_default()`, which
+/// is usually the right way to degrade a panel -- but it made a rejected
+/// statement and an empty table produce the same empty vector, so the panel
+/// reported "no data" for both. The realised-sell outcomes panel sat that way
+/// from the day it shipped: its SQL carried a literal backslash Postgres would
+/// not parse, and nothing anywhere said so. Reporting here fixes every one of
+/// those callers at once without taking away their fallback.
+fn report_query_failure(sql: &str, err: sqlx::Error) -> anyhow::Error {
+    let outline = query_outline(sql);
+    warn!("database query failed [{outline}]: {err}");
+    anyhow::Error::new(err).context(format!("query failed [{outline}]"))
+}
+
+/// A short, identifying fragment of a statement for logs and error context.
+///
+/// Bounded on purpose: these statements interpolate symbols, dates and ids, and
+/// a whole one in a log line is noise rather than evidence.
+fn query_outline(sql: &str) -> String {
+    let flattened = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let table = flattened
+        .split_whitespace()
+        .skip_while(|word| !word.eq_ignore_ascii_case("from"))
+        .nth(1)
+        .unwrap_or("?")
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+        .to_string();
+    let head: String = flattened.chars().take(60).collect();
+    format!("{table}: {head}")
 }
 
 /// Validates a model identifier without changing the active runtime setting.
@@ -27327,6 +27365,51 @@ analysis_windows:
             serialized.len() < 600,
             "compacted cycle should be small, got {} bytes",
             serialized.len()
+        );
+    }
+
+    /// A rejected statement and an empty table used to produce the same empty
+    /// vector at 42 call sites, so a panel said "no data" for both. The
+    /// fallback stays -- degrading a panel is usually right -- but the error
+    /// now names the statement that failed.
+    #[tokio::test]
+    async fn a_failed_query_returns_an_error_naming_the_statement() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        let state = AppState {
+            config_path: std::path::PathBuf::from("query-test.yaml"),
+            config: serde_yaml::from_str("{}").expect("parse test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+
+        let err = state
+            .select_json("SELECT id FROM a_table_that_does_not_exist")
+            .await
+            .expect_err("a missing table must not read as an empty result");
+        let rendered = format!("{err:#}");
+        assert!(
+            rendered.contains("a_table_that_does_not_exist"),
+            "the error must name the statement, got {rendered}"
+        );
+    }
+
+    /// The outline is what lands in the log line, so it has to identify the
+    /// query without dumping interpolated symbols and dates into it.
+    #[test]
+    fn a_query_outline_names_its_table_and_stays_short() {
+        let outline = query_outline(
+            "SELECT l.id, l.created_at, l.symbol \n FROM trade_ledger l \n WHERE l.symbol = 'NESTE:xhel'",
+        );
+        assert!(outline.starts_with("trade_ledger:"), "got {outline}");
+        assert!(
+            outline.len() < 100,
+            "outline stays log-sized, got {outline}"
         );
     }
 
