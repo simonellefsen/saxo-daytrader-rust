@@ -28,9 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # v4 runs on Node 20, which the runners now force onto Node 24 and
-      # annotate as deprecated. v5 is the first major on Node 24.
-      - uses: actions/checkout@v5
+      # v4 ran on Node 20, which the runners force onto Node 24 and annotate
+      # as deprecated. v5 was the first major on Node 24; v7 is current.
+      # The v6 and v7 majors hardened fork checkout under pull_request_target
+      # and workflow_run, neither of which this workflow triggers on.
+      - uses: actions/checkout@v7
 
       # Cargo.toml sets edition = "2024", so stable is the floor. Do not pin
       # an older toolchain here.
