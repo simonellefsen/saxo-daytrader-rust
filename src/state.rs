@@ -202,6 +202,11 @@ const GATE_REPLAY_DEFAULT_RUN_LIMIT: i64 = 40;
 const GATE_REPLAY_MAX_CHANGE_ROWS: usize = 30;
 const GATE_REPLAY_MARKOV_MIN_SIGNED_SIGNAL: f64 = 0.25;
 const GATE_REPLAY_MIN_CONFLUENCES: i64 = 4;
+/// One plausible tightening step from the shipped 0.02, chosen because it is
+/// reachable rather than round: on 2026-09-01 it would have cut the EU-open
+/// budget from 24,941 to 19,415 DKK, which is the difference between funding
+/// both candidates in that report and funding one.
+const GATE_REPLAY_MIN_CASH_BUFFER_PCT: f64 = 0.05;
 const SUPPORT_RISK_EVIDENCE_LOOKBACK_DAYS: i64 = 180;
 const SUPPORT_RISK_EVIDENCE_MIN_COMPLETE_OBSERVATIONS: usize = 30;
 const SUPPORT_RISK_LABELS: [&str; 3] = ["low", "moderate", "high"];
@@ -1159,12 +1164,214 @@ fn gate_replay_variable_coverage(scenarios: &[JsonValue]) -> Vec<JsonValue> {
         .collect()
 }
 
+/// What a different cash buffer would have funded.
+///
+/// `strategy.capital.min_cash_buffer_pct` is one of the four variables Hermes
+/// may propose and, until now, one of the two with no replay scenario at all --
+/// so a proposal against it was judged on nothing. It is also the more
+/// consequential of that pair: it shapes the BUY budget on every cycle, where
+/// `execution.min_trade_value_dkk` is dominated by the commission floor on
+/// every BUY.
+///
+/// The counterfactual is exact rather than modelled, because the buffer enters
+/// the runtime at exactly one place:
+///
+/// ```text
+/// required_cash_buffer     = total_market_value * min_cash_buffer_pct
+/// available_cash_above     = (cash - required_cash_buffer - reservations).max(0)
+/// available_buy_budget     = min(available_cash_above, remaining_deployment_capacity)
+/// ```
+///
+/// Every input is retained on the run, and `remaining_deployment_capacity` does
+/// not depend on the buffer, so it carries over unchanged. The soft multipliers
+/// that the drawdown guardrail and monthly-loss breaker apply afterwards are
+/// recovered as a ratio from the recorded pair and re-applied, so the replay
+/// compares like with like instead of quietly dropping a live reduction.
+///
+/// Candidates are walked in report order because that is how the manager
+/// reserves against the running budget: whether the third BUY fits depends on
+/// the two before it.
+fn gate_replay_cash_buffer_scenario(runs: &[JsonValue]) -> JsonValue {
+    let mut candidate_count = 0usize;
+    let mut evaluated_count = 0usize;
+    let mut would_block_count = 0usize;
+    let mut would_clear_target_gate_only_count = 0usize;
+    let mut unchanged_count = 0usize;
+    let mut not_reached_count = 0usize;
+    let mut insufficient_evidence_count = 0usize;
+    let mut changes = Vec::new();
+
+    for run in runs {
+        let budget = run
+            .get("manager_json")
+            .and_then(|manager| manager.get("hermes_preflight"))
+            .and_then(|preflight| preflight.get("capital_budget"))
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let waterfall = candidate_scoring_waterfall_from_manager_run(run);
+        let candidates = waterfall
+            .get("candidates")
+            .and_then(JsonValue::as_array)
+            .cloned()
+            .unwrap_or_default();
+        // The scoring projection carries the recorded outcome and gate code,
+        // which the change rows need, but not the order's DKK value. That is
+        // only on the raw preflight row, so pair the two by strategy key
+        // rather than widening a payload the dashboard also renders.
+        let values_by_key = gate_replay_candidate_values(run);
+
+        let Some((mut recorded_remaining, mut proposed_remaining)) =
+            gate_replay_cash_budgets(&budget)
+        else {
+            candidate_count += candidates.len();
+            insufficient_evidence_count += candidates.len();
+            continue;
+        };
+
+        for candidate in &candidates {
+            candidate_count += 1;
+            if json_text(candidate, "action").to_ascii_uppercase() != "BUY" {
+                // The buffer reserves cash against new exposure. A SELL frees
+                // it, and no SELL is ever tested against this budget.
+                not_reached_count += 1;
+                continue;
+            }
+            let Some(value_dkk) = values_by_key
+                .get(&json_text(candidate, "strategy_key"))
+                .copied()
+                .filter(|value: &f64| value.is_finite() && *value > 0.0)
+            else {
+                insufficient_evidence_count += 1;
+                continue;
+            };
+            evaluated_count += 1;
+            let fits_recorded = recorded_remaining >= value_dkk;
+            let fits_proposed = proposed_remaining >= value_dkk;
+            if fits_recorded {
+                recorded_remaining -= value_dkk;
+            }
+            if fits_proposed {
+                proposed_remaining -= value_dkk;
+            }
+            let effect = match (fits_recorded, fits_proposed) {
+                (true, false) => "would_block_target_gate",
+                (false, true) => "would_clear_target_gate_only",
+                _ => "unchanged_target_gate",
+            };
+            match effect {
+                "would_block_target_gate" => would_block_count += 1,
+                "would_clear_target_gate_only" => would_clear_target_gate_only_count += 1,
+                _ => unchanged_count += 1,
+            }
+            if effect != "unchanged_target_gate" && changes.len() < GATE_REPLAY_MAX_CHANGE_ROWS {
+                changes.push(gate_replay_change_row(
+                    run,
+                    candidate,
+                    effect,
+                    json!({
+                        "min_cash_buffer_pct": value_f64(&budget, "min_cash_buffer_pct"),
+                        "estimated_value_dkk": value_dkk,
+                        "budget_remaining_before_dkk": recorded_remaining + if fits_recorded { value_dkk } else { 0.0 },
+                    }),
+                    json!({
+                        "min_cash_buffer_pct": GATE_REPLAY_MIN_CASH_BUFFER_PCT,
+                        "estimated_value_dkk": value_dkk,
+                        "budget_remaining_before_dkk": proposed_remaining + if fits_proposed { value_dkk } else { 0.0 },
+                    }),
+                ));
+            }
+        }
+    }
+
+    json!({
+        "variable_path": "strategy.capital.min_cash_buffer_pct",
+        "proposed_value": GATE_REPLAY_MIN_CASH_BUFFER_PCT,
+        "comparison": "BUY budget capacity only, walked in report order; SELLs never consume this budget and downstream cost or advisory gates are not re-run",
+        "summary": {
+            "candidate_count": candidate_count,
+            "evaluated_count": evaluated_count,
+            "would_block_target_gate_count": would_block_count,
+            "would_clear_target_gate_only_count": would_clear_target_gate_only_count,
+            "unchanged_target_gate_count": unchanged_count,
+            "not_reached_count": not_reached_count,
+            "insufficient_evidence_count": insufficient_evidence_count,
+        },
+        "reachability": if candidate_count == 0 {
+            "no_candidates"
+        } else if evaluated_count == 0 {
+            "unreachable_in_retained_evidence"
+        } else {
+            "evaluated"
+        },
+        "changes": changes,
+    })
+}
+
+/// Order value in DKK per candidate, keyed by strategy key.
+///
+/// Read from the raw preflight rather than the scoring projection, which drops
+/// it.
+fn gate_replay_candidate_values(run: &JsonValue) -> HashMap<String, f64> {
+    run.get("manager_json")
+        .and_then(|manager| manager.get("hermes_preflight"))
+        .and_then(|preflight| preflight.get("candidate_waterfall"))
+        .and_then(JsonValue::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let key = json_text(row, "strategy_key");
+                    let value = row.get("estimated_value_dkk").and_then(JsonValue::as_f64)?;
+                    (!key.is_empty()).then_some((key, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The recorded and counterfactual BUY budgets for one manager run.
+///
+/// `None` when the run predates the retained capital-budget block or carries a
+/// total market value of zero, in which case the buffer is undefined rather
+/// than zero -- an unmeasured run must not read as one with no budget.
+fn gate_replay_cash_budgets(budget: &JsonValue) -> Option<(f64, f64)> {
+    if !budget.is_object() {
+        return None;
+    }
+    let total_market_value_dkk = value_f64(budget, "total_market_value_dkk");
+    if !total_market_value_dkk.is_finite() || total_market_value_dkk <= 0.0 {
+        return None;
+    }
+    let recorded_budget = value_f64(budget, "available_buy_budget_dkk");
+    let unreduced = value_f64(budget, "unreduced_available_buy_budget_dkk");
+    if !recorded_budget.is_finite() || !unreduced.is_finite() {
+        return None;
+    }
+    let cash_balance_dkk = value_f64(budget, "cash_balance_dkk");
+    let reservations = value_f64(budget, "persisted_buy_reservation_value_dkk").max(0.0);
+    let deployment_capacity = value_f64(budget, "remaining_deployment_capacity_dkk").max(0.0);
+    let proposed_cash_above_buffer = (cash_balance_dkk
+        - total_market_value_dkk * GATE_REPLAY_MIN_CASH_BUFFER_PCT
+        - reservations)
+        .max(0.0);
+    let proposed_unreduced = proposed_cash_above_buffer.min(deployment_capacity);
+    // Recover the soft multiplier the guardrails applied rather than assuming
+    // none was active. Dropping it would compare a reduced recorded budget
+    // against an unreduced counterfactual and read as a windfall.
+    let multiplier = if unreduced > 0.0 {
+        (recorded_budget / unreduced).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    Some((recorded_budget, proposed_unreduced * multiplier))
+}
+
 fn gate_replay_from_manager_runs(runs: &[JsonValue]) -> JsonValue {
     let generations = gate_replay_evidence_generations(runs);
     let mixed = generations.len() > 1;
     let scenarios = vec![
         gate_replay_markov_scenario(runs),
         gate_replay_technical_scenario(runs),
+        gate_replay_cash_buffer_scenario(runs),
     ];
     let coverage = gate_replay_variable_coverage(&scenarios);
     json!({
@@ -27633,6 +27840,129 @@ analysis_windows:
         assert_eq!(empty["reachability"], "no_candidates");
     }
 
+    /// The real EU-open cycle of 2026-09-01, with its recorded numbers. At the
+    /// shipped 2% buffer both candidates were affordable and NESTE executed; at
+    /// 5% the budget falls from 24,941 to 19,414 DKK and the second BUY no
+    /// longer fits behind the first. This is the whole point of the scenario:
+    /// before it existed, a Hermes proposal against the cash buffer was judged
+    /// on nothing at all.
+    #[test]
+    fn a_tighter_cash_buffer_reports_the_buy_it_would_not_have_funded() {
+        let run = json!({
+            "id": 223,
+            "report_id": 259,
+            "created_at": "2026-09-01T08:47:36Z",
+            "manager_json": {"hermes_preflight": {
+                "capital_budget": {
+                    "total_market_value_dkk": 245_625.47,
+                    "cash_balance_dkk": 38_167.25,
+                    "invested_market_value_dkk": 207_458.22,
+                    "min_cash_buffer_pct": 0.02,
+                    "remaining_deployment_capacity_dkk": 33_254.74,
+                    "persisted_buy_reservation_value_dkk": 0.0,
+                    "unreduced_available_buy_budget_dkk": 33_254.74,
+                    "available_buy_budget_dkk": 24_941.06,
+                },
+                "candidate_waterfall": [
+                    {"symbol": "ALV:xetr", "action": "BUY", "strategy_key": "a", "estimated_value_dkk": 16_848.11},
+                    {"symbol": "NESTE:xhel", "action": "BUY", "strategy_key": "b", "estimated_value_dkk": 7_625.0},
+                ]
+            }}
+        });
+
+        let scenario = gate_replay_cash_buffer_scenario(&[run]);
+
+        assert_eq!(
+            scenario["variable_path"],
+            "strategy.capital.min_cash_buffer_pct"
+        );
+        assert_eq!(scenario["reachability"], "evaluated");
+        assert_eq!(scenario["summary"]["evaluated_count"], 2);
+        assert_eq!(
+            scenario["summary"]["would_block_target_gate_count"], 1,
+            "the second BUY stops fitting behind the first"
+        );
+        assert_eq!(scenario["summary"]["unchanged_target_gate_count"], 1);
+        let change = &scenario["changes"][0];
+        assert_eq!(change["symbol"], "NESTE:xhel");
+        assert_eq!(change["effect"], "would_block_target_gate");
+    }
+
+    /// A guardrail was reducing the budget by 25% on that run. Comparing the
+    /// reduced recorded budget against an unreduced counterfactual would show a
+    /// tighter buffer funding *more*, which is nonsense -- so the multiplier is
+    /// recovered from the recorded pair and re-applied.
+    #[test]
+    fn the_cash_buffer_replay_keeps_a_live_soft_reduction() {
+        let budget = json!({
+            "total_market_value_dkk": 245_625.47,
+            "cash_balance_dkk": 38_167.25,
+            "remaining_deployment_capacity_dkk": 33_254.74,
+            "persisted_buy_reservation_value_dkk": 0.0,
+            "unreduced_available_buy_budget_dkk": 33_254.74,
+            "available_buy_budget_dkk": 24_941.06,
+        });
+
+        let (recorded, proposed) =
+            gate_replay_cash_budgets(&budget).expect("a full budget block replays");
+
+        assert!((recorded - 24_941.06).abs() < 1.0);
+        // (38,167.25 - 245,625.47 * 0.05) * 0.75
+        assert!(
+            (proposed - 19_414.0).abs() < 5.0,
+            "the 0.75 multiplier must survive the counterfactual, got {proposed}"
+        );
+        assert!(proposed < recorded, "a tighter buffer cannot fund more");
+    }
+
+    /// A run recorded before the capital-budget block existed has no buffer to
+    /// replay. Reading that as a zero budget would report every BUY as blocked
+    /// by a threshold that was never applied to it.
+    #[test]
+    fn a_run_without_a_capital_budget_is_insufficient_evidence_not_a_zero_budget() {
+        let run = json!({
+            "id": 1,
+            "manager_json": {"hermes_preflight": {"candidate_waterfall": [
+                {"symbol": "ALV:xetr", "action": "BUY", "strategy_key": "a", "estimated_value_dkk": 5_000.0}
+            ]}}
+        });
+
+        let scenario = gate_replay_cash_buffer_scenario(&[run]);
+
+        assert_eq!(scenario["summary"]["insufficient_evidence_count"], 1);
+        assert_eq!(scenario["summary"]["would_block_target_gate_count"], 0);
+        assert_eq!(scenario["summary"]["evaluated_count"], 0);
+        assert!(gate_replay_cash_budgets(&json!({})).is_none());
+    }
+
+    /// A SELL frees cash rather than consuming the buffer, so it was never
+    /// tested against this budget and must not be counted as unchanged.
+    #[test]
+    fn a_sell_is_not_reached_by_the_cash_buffer() {
+        let run = json!({
+            "id": 1,
+            "manager_json": {"hermes_preflight": {
+                "capital_budget": {
+                    "total_market_value_dkk": 100_000.0,
+                    "cash_balance_dkk": 50_000.0,
+                    "remaining_deployment_capacity_dkk": 50_000.0,
+                    "persisted_buy_reservation_value_dkk": 0.0,
+                    "unreduced_available_buy_budget_dkk": 48_000.0,
+                    "available_buy_budget_dkk": 48_000.0,
+                },
+                "candidate_waterfall": [
+                    {"symbol": "DIS:xnys", "action": "SELL", "strategy_key": "s", "estimated_value_dkk": 7_000.0}
+                ]
+            }}
+        });
+
+        let scenario = gate_replay_cash_buffer_scenario(&[run]);
+
+        assert_eq!(scenario["summary"]["not_reached_count"], 1);
+        assert_eq!(scenario["summary"]["evaluated_count"], 0);
+        assert_eq!(scenario["reachability"], "unreachable_in_retained_evidence");
+    }
+
     /// The reflection prompt turns `unreachable_in_retained_evidence` into "a
     /// proposal cannot produce a measurable effect no matter which value is
     /// chosen". That is a statement about the deterministic gate, and for a
@@ -27701,10 +28031,11 @@ analysis_windows:
     #[test]
     fn every_proposable_variable_reports_whether_the_replay_can_test_it() {
         // Hermes is told to check a scenario's reachability before proposing a
-        // threshold. That only helps where a scenario exists, and two of the
-        // four supported variables have none -- silence there reads as "no
-        // problem" rather than "no evidence", which is the confusion
-        // reachability was added to remove.
+        // threshold. That only helps where a scenario exists -- silence reads
+        // as "no problem" rather than "no evidence", the confusion reachability
+        // was added to remove. `min_cash_buffer_pct` gained a scenario on
+        // 2026-09-02; `execution.min_trade_value_dkk` still has none, and is
+        // dominated by the commission floor on every BUY anyway.
         let replay = gate_replay_from_manager_runs(&[]);
         let coverage = replay["supported_variable_coverage"]
             .as_array()
@@ -27728,16 +28059,22 @@ analysis_windows:
             .filter(|row| row["covered"] == false)
             .filter_map(|row| row["variable_path"].as_str())
             .collect();
-        assert!(
-            uncovered.contains(&"execution.min_trade_value_dkk")
-                && uncovered.contains(&"strategy.capital.min_cash_buffer_pct"),
-            "the two variables with no scenario must say so, not stay silent: {uncovered:?}"
+        assert_eq!(
+            uncovered,
+            vec!["execution.min_trade_value_dkk"],
+            "the one variable still without a scenario must say so, not stay silent"
         );
-        assert!(
-            coverage.iter().any(|row| row["variable_path"]
-                == "strategy.swing.markov_gate.min_signed_signal"
-                && row["covered"] == true),
-            "and the two with scenarios must be marked covered"
-        );
+        for path in [
+            "strategy.swing.markov_gate.min_signed_signal",
+            "strategy.swing.daily_indicators.min_confluences",
+            "strategy.capital.min_cash_buffer_pct",
+        ] {
+            assert!(
+                coverage
+                    .iter()
+                    .any(|row| row["variable_path"] == path && row["covered"] == true),
+                "{path} has a scenario and must be marked covered"
+            );
+        }
     }
 }
