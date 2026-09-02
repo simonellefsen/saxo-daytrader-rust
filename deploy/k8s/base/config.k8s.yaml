@@ -475,7 +475,18 @@ strategy:
     # Uses a database-verified close, ATR14, and DKK share value; missing
     # evidence fails the BUY closed rather than trusting model-provided data.
     risk_per_trade_pct: 0.01
-    never_trade_symbols: []
+    # ARKK:xmil is held on the operator's live account and stays in the analysis
+    # universe for that reason, but the SIM account has no commission rule for
+    # this listing: seven BUYs from 2026-05-05 to 2026-09-02 were all rejected
+    # at precheck with "your account does not have any commissions configured".
+    # Verified read-only against Saxo's cost endpoint on 2026-09-02 -- the other
+    # two ETFs (ARKI:xlon, QOMP:xetr) and Milan stocks (ENEL, ISP) all carry a
+    # commission rule, so it is this one listing rather than the asset type or
+    # the venue. Listing it here keeps the analysis and drops only the trading:
+    # the manager refuses it, and the decision prompt's do_not_propose block
+    # stops a candidate slot being spent on it at all.
+    never_trade_symbols:
+      - arkk:xmil
     daily_indicators:
       enabled: true
       # 0 = full portfolio+watchlist universe (matches the Markov run, ~199

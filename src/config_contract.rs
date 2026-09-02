@@ -1146,6 +1146,42 @@ mod tests {
         );
     }
 
+    /// `arkk:xmil` is deliberately excluded from trading while staying in the
+    /// analysis universe: the operator holds it on their live account, and the
+    /// SIM account has no commission rule for that listing -- seven BUYs from
+    /// 2026-05-05 to 2026-09-02 were rejected at precheck. Dropping it from the
+    /// universe instead would silently stop the analysis the operator wants, so
+    /// this pins both halves.
+    #[test]
+    fn shipped_configs_keep_arkk_analysed_but_never_traded() {
+        for relative in ["config.yaml", "deploy/k8s/base/config.k8s.yaml"] {
+            let raw = std::fs::read_to_string(format!("{}/{relative}", env!("CARGO_MANIFEST_DIR")))
+                .expect("shipped config is readable");
+            let config = parse(&raw);
+
+            let never_traded =
+                crate::config::yaml_at(&config, &["strategy", "swing", "never_trade_symbols"])
+                    .and_then(serde_yaml::Value::as_sequence)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str())
+                            .map(|item| item.to_ascii_lowercase())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+            assert!(
+                never_traded.iter().any(|symbol| symbol == "arkk:xmil"),
+                "{relative} must keep arkk:xmil unbuyable"
+            );
+
+            assert!(
+                raw.contains("arkk:xmil") && raw.matches("arkk:xmil").count() >= 2,
+                "{relative} must still carry arkk:xmil in the analysis universe as well"
+            );
+        }
+    }
+
     #[test]
     fn shipped_configs_share_daily_indicator_policy() {
         let local = parse(
