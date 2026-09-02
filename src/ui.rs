@@ -2674,6 +2674,14 @@ fn InstrumentQuarantinePanel(
                         div { span { class: "label", "Min failures" } strong { "{summary.min_failures}" } }
                         div { span { class: "label", "Active window" } strong { "{summary.active_days}d" } }
                     }
+                    // The configured count is not the whole rule. Commission
+                    // setup and non-tradable instrument rejections are account
+                    // facts that reproduce on every retry, so they withdraw the
+                    // instrument on first sight; stating only the number would
+                    // describe a policy the runtime does not apply.
+                    p { class: "muted",
+                        "Commission-setup and not-tradable rejections quarantine on the first failure rather than after {summary.min_failures}: they describe the account's setup for the instrument, so a retry reproduces them exactly."
+                    }
                     if !summary.active.is_empty() {
                         div { class: "table-wrap",
                             table {
@@ -13308,6 +13316,40 @@ mod tests {
             serde_json::to_value(&summary.active[0]).expect("typed quarantine row serializes");
         assert!(serialized.get("raw_broker_detail").is_none());
         assert!(summary.description.contains("blocked"));
+    }
+
+    /// The panel states "Min failures 3", which stopped being the whole rule on
+    /// 2026-09-02: commission-setup and not-tradable rejections withdraw the
+    /// instrument on the first failure. A number presented as the policy when
+    /// two policies are in force is the same defect this codebase keeps
+    /// finding elsewhere, so the panel has to say both.
+    #[test]
+    fn the_quarantine_panel_states_the_first_sight_rule_beside_the_strike_count() {
+        let trading_manager: TradingManagerPayload = serde_json::from_value(json!({
+            "status": "ok",
+            "latest_run": {
+                "manager_json": {
+                    "instrument_quarantine": {
+                        "enabled": true,
+                        "lookback_days": 14,
+                        "min_failures": 3,
+                        "active_days": 14,
+                        "active": []
+                    }
+                }
+            }
+        }))
+        .expect("trading manager fixture has the dashboard contract");
+
+        let html = dioxus_ssr::render_element(rsx! {
+            InstrumentQuarantinePanel { trading_manager, prefs: default_prefs() }
+        });
+
+        assert!(html.contains("Min failures"), "got {html}");
+        assert!(
+            html.contains("quarantine on the first failure"),
+            "the panel must not present the strike count as the only rule, got {html}"
+        );
     }
 
     #[test]
