@@ -2681,6 +2681,26 @@ async fn run_for_report(
     }))
 }
 
+/// The `markov` block of the Hermes decision preflight.
+///
+/// Extracted so the advisory-visibility invariant in `src/state.rs` can be
+/// tested against what this actually emits rather than against a list somebody
+/// remembered to update.
+fn hermes_preflight_markov_block(
+    markov_cfg: MarkovGateConfig,
+    model_fingerprint: JsonValue,
+    latest_run: JsonValue,
+) -> JsonValue {
+    json!({
+        "max_signal_age_days": markov_cfg.max_signal_age_days,
+        "min_signed_signal": markov_cfg.min_signed_signal,
+        // Retained so a later gate replay can tell whether the evidence it
+        // pooled was produced by one model or several.
+        "model": model_fingerprint,
+        "latest_run": latest_run,
+    })
+}
+
 async fn hermes_decision_preflight_bundle(
     state: &AppState,
     report: &DecisionReport,
@@ -2841,14 +2861,11 @@ async fn hermes_decision_preflight_bundle(
         "drawdown_guardrail": drawdown.to_json(),
         "open_exchange_codes": open_codes,
         "strategy_experiment_overlay": overlay_json,
-        "markov": {
-            "max_signal_age_days": markov_cfg.max_signal_age_days,
-            "min_signed_signal": markov_cfg.min_signed_signal,
-            // Retained so a later gate replay can tell whether the evidence it
-            // pooled was produced by one model or several.
-            "model": crate::markov_method::markov_model_fingerprint(state),
-            "latest_run": latest_markov_run,
-        },
+        "markov": hermes_preflight_markov_block(
+            markov_cfg,
+            crate::markov_method::markov_model_fingerprint(state),
+            latest_markov_run,
+        ),
         "candidate_waterfall": candidate_waterfall,
         "active_experiments": experiments,
         "experiment_policy": {
@@ -7469,6 +7486,71 @@ mod tests {
     fn experiment_overlay_can_adjust_min_confluences() {
         assert!(!technical_gate(&order("BUY", "BUY", "bullish", 2), None).approved);
         assert!(technical_gate(&order("BUY", "BUY", "bullish", 2), Some(2)).approved);
+    }
+
+    /// `ADVISORY_VISIBLE_EXPERIMENT_VARIABLES` claims Hermes is handed these
+    /// three numbers. If a builder stops emitting one, the replay keeps
+    /// reporting an advisory effect that no longer exists; if the preflight
+    /// starts carrying `execution.min_trade_value_dkk`, the replay keeps
+    /// reporting `no_observed_effect` for a variable Hermes can now act on.
+    /// Assert against what the builders emit, not against memory.
+    #[test]
+    fn the_advisory_visible_list_matches_what_the_preflight_emits() {
+        let markov = hermes_preflight_markov_block(
+            markov_test_config(),
+            json!({"window_days": 20}),
+            JsonValue::Null,
+        );
+        assert!(
+            markov.get("min_signed_signal").is_some(),
+            "the preflight markov block still publishes the Markov threshold"
+        );
+
+        let order = CandidateOrder::from_json(json!({
+            "symbol": "PLTR:xnas",
+            "action": "BUY",
+            "quantity": 8.0,
+            "order_type": "Market",
+            "strategy_key": "us_open_followup:2026-09-01:PLTR:xnas:BUY",
+            "strategy_metadata": {
+                "technical": {
+                    "status": "ok",
+                    "sentiment": "BUY",
+                    "trend_bias": "bullish",
+                    "confluence_count": 5,
+                    "min_confluences": 3
+                }
+            }
+        }))
+        .expect("valid candidate order");
+        let technical = compact_hermes_preflight_technical(
+            &order,
+            None,
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        );
+        assert!(
+            technical.get("min_confluences").is_some(),
+            "the preflight technical block still publishes the confluence threshold"
+        );
+
+        // The cost guard is the only place a trade-value floor could reach the
+        // preflight, and it publishes the slippage and multiple, not the floor.
+        let cost_guard = cost_guard_test_config().to_json();
+        assert!(
+            cost_guard.get("min_trade_value_dkk").is_none(),
+            "execution.min_trade_value_dkk is not advisory-visible, and the list says so"
+        );
+        assert!(
+            !crate::state::ADVISORY_VISIBLE_EXPERIMENT_VARIABLES
+                .contains(&"execution.min_trade_value_dkk"),
+        );
+
+        for path in crate::state::ADVISORY_VISIBLE_EXPERIMENT_VARIABLES {
+            assert!(
+                SUPPORTED_EXPERIMENT_VARIABLES.contains(path),
+                "{path} is advisory-visible but not proposable, which cannot be right"
+            );
+        }
     }
 
     fn markov_test_config() -> MarkovGateConfig {

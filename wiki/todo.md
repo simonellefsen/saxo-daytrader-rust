@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - todo
   - maintained-by-llm
-updated: 2026-08-31
+updated: 2026-09-02
 ---
 
 # Daytrader Todo
@@ -84,6 +84,41 @@ Two things genuinely point the right way and should not be lost in the negative 
 **One thing that does not need netting out.** The Hermes counterfactual and missed-trade shadow ledgers compute entirely in local currency (`estimated_return_pct`, `estimated_pnl_local`), so FX never enters them. The shadow evidence this item leans on in preference order 1 is therefore unaffected by the currency question — verified 2026-08-31 while tracing an unrelated currency-mapping gap.
 
 Whether to keep deploying capital while this is unresolved is the operator's call. The drawdown guardrail was widened to 25% on 2026-08-06 and currently sits at 19.24%, so the automatic floor is not the binding constraint on that decision.
+
+## T3 — Decide whether the Markov conviction threshold is a gate or a hint
+
+**Status:** open, raised 2026-09-02. The measurement is done and the visibility landed the same day; what is left is a risk decision, not code.
+
+`strategy.swing.markov_gate.min_signed_signal` is configured as a gate threshold and the gate replay reports it `unreachable_in_retained_evidence` — 17 of 17 candidates `not_reached`. That is true of the deterministic gate: `markov_buy_gate` has exactly one call site, inside the branch taken when the *technical* gate rejects a BUY, and the technical gate has rejected no BUY in the retained window.
+
+**The number is not inert, though. It is published to Hermes in the decision preflight, and Hermes applies it as an admission bar in so many words.** From advice recorded since 2026-08-01:
+
+| | |
+| --- | --- |
+| Order-advice items | 127 |
+| Mention Markov | **105 (83%)** |
+| Quote `signed_signal` numerically | **54 (43%)** |
+| Of 24 `review` holds, mention Markov | 22 |
+
+Verbatim, from three different candidates:
+
+- `GN:xcse`, **allow** — "signed_signal +0.2462 clears both current and pending 0.20 conservative Markov threshold"
+- `ALV:xetr`, **review** — "signed_signal +0.1664, below the pending conservative…"
+- `CARL-B:xcse`, **stand_down** — "signed_signal only +0.011, below…"
+
+**The clearest case is 2026-09-01.** The US-open report produced two candidates, `DE:xnys` and `PLTR:xnas`. Both passed the technical gate with 5 confluences against a minimum of 3, both fitted the 24,188 DKK budget, and both were skipped `hermes_advice` — Hermes citing signed_signal 0.1686 and 0.1289 as low conviction. Both sit under the configured 0.20. The deterministic gate never ran; the cycle bought nothing.
+
+So the threshold currently binds through an LLM's reading rather than through a gate. It is the most consequential number in the stack and the least deterministic.
+
+Three coherent answers, and they are not equivalent:
+
+- **Make it a real gate.** Apply `min_signed_signal` to every BUY, not just the starter fallback. The advisory and the runtime would then agree, and the replay's reachability verdict would become true. This *tightens* the envelope: at 0.20 it would have blocked the same two candidates deterministically, and it makes the threshold measurable and tunable — a proposal against it would mean something.
+- **Tell Hermes what it actually governs.** The preflight publishes `markov.min_signed_signal` with no statement of scope, so reading it as the admission bar for the candidates alongside it is a reasonable inference. Saying it governs only the starter fallback would *loosen* the envelope: yesterday's two candidates would likely have been allowed.
+- **Leave it, having named it.** The advisory hold may be doing useful work; the objection is that nothing decided it should.
+
+**Do not treat this as a bug fix.** Both of the first two options change what gets bought, in opposite directions, and neither is obviously right from the evidence — the loss record in T2 does not say whether holding weak-conviction candidates has helped or hurt.
+
+**Landed 2026-09-02 regardless of which is chosen:** the gate replay now reports `advisory_visible` and `effect_path` per proposable variable, so the self-improvement loop is no longer told that an advisory-visible variable "cannot produce a measurable effect at any value". That statement was in the reflection prompt and on the dashboard, and it was false for this variable.
 
 ## Related Pages
 

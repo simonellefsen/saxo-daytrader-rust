@@ -1140,18 +1140,21 @@ fn gate_replay_variable_coverage(scenarios: &[JsonValue]) -> Vec<JsonValue> {
             let scenario = scenarios.iter().find(|scenario| {
                 scenario.get("variable_path").and_then(JsonValue::as_str) == Some(*path)
             });
-            match scenario {
-                Some(scenario) => json!({
-                    "variable_path": path,
-                    "covered": true,
-                    "reachability": scenario.get("reachability").cloned().unwrap_or(JsonValue::Null),
-                }),
-                None => json!({
-                    "variable_path": path,
-                    "covered": false,
-                    "reachability": "no_replay_scenario",
-                }),
-            }
+            let advisory_visible = ADVISORY_VISIBLE_EXPERIMENT_VARIABLES.contains(path);
+            let reachability = scenario
+                .and_then(|scenario| scenario.get("reachability"))
+                .and_then(JsonValue::as_str)
+                .unwrap_or("no_replay_scenario");
+            json!({
+                "variable_path": path,
+                "covered": scenario.is_some(),
+                "reachability": reachability,
+                // Whether Hermes is handed this number in its decision
+                // preflight. A variable can bind nothing deterministically and
+                // still shape every candidate through the advisory.
+                "advisory_visible": advisory_visible,
+                "effect_path": experiment_variable_effect_path(Some(reachability), advisory_visible),
+            })
         })
         .collect()
 }
@@ -1735,6 +1738,48 @@ pub(crate) const SUPPORTED_EXPERIMENT_VARIABLES: &[&str] = &[
     "strategy.swing.daily_indicators.min_confluences",
     "strategy.swing.markov_gate.min_signed_signal",
 ];
+
+/// Supported variables whose value is published into the Hermes decision
+/// preflight, where an advisory reader can act on the number even when no
+/// deterministic gate does.
+///
+/// This distinction is not academic. Across advice recorded since 2026-08-01,
+/// Markov is mentioned in 105 of 127 order-advice items and `signed_signal` is
+/// quoted numerically in 54 of them, and Hermes treats
+/// `strategy.swing.markov_gate.min_signed_signal` as an admission bar in so
+/// many words -- "clears both current and pending 0.20 conservative Markov
+/// threshold" on one allow, "below the pending conservative" on a review. The
+/// replay meanwhile reports that variable `unreachable_in_retained_evidence`,
+/// which is true of the deterministic gate and false of the outcome: on
+/// 2026-09-01 both US-open candidates carried signals under 0.20 (0.1686 and
+/// 0.1289), Hermes held both citing exactly that, and the cycle bought nothing.
+///
+/// An explicit list rather than a derived one, because the preflight assembles
+/// its blocks from several policy structs and a variable can enter it without
+/// anyone noticing. Tests assert each entry against the builder that emits it.
+pub(crate) const ADVISORY_VISIBLE_EXPERIMENT_VARIABLES: &[&str] = &[
+    "strategy.capital.min_cash_buffer_pct",
+    "strategy.swing.daily_indicators.min_confluences",
+    "strategy.swing.markov_gate.min_signed_signal",
+];
+
+/// Where a proposable variable can actually change an outcome.
+///
+/// `reachability` alone answers this only for the deterministic gate, and the
+/// reflection prompt turned `unreachable_in_retained_evidence` into "a proposal
+/// cannot produce a measurable effect no matter which value is chosen". For a
+/// variable the advisory layer reads, that conclusion is wrong.
+fn experiment_variable_effect_path(
+    reachability: Option<&str>,
+    advisory_visible: bool,
+) -> &'static str {
+    match (reachability == Some("evaluated"), advisory_visible) {
+        (true, true) => "gate_and_advisory",
+        (true, false) => "gate_only",
+        (false, true) => "advisory_only",
+        (false, false) => "no_observed_effect",
+    }
+}
 
 const DEFAULT_STOP_LOSS_ATR_MULTIPLE: f64 = 2.0;
 
@@ -27586,6 +27631,71 @@ analysis_windows:
         // proposed, rather than proposed and not gated.
         let empty = gate_replay_markov_scenario(&[]);
         assert_eq!(empty["reachability"], "no_candidates");
+    }
+
+    /// The reflection prompt turns `unreachable_in_retained_evidence` into "a
+    /// proposal cannot produce a measurable effect no matter which value is
+    /// chosen". That is a statement about the deterministic gate, and for a
+    /// variable the advisory layer reads it is simply false -- on 2026-09-01
+    /// `min_signed_signal` bound nothing in the runtime and decided the whole
+    /// US-open cycle through Hermes.
+    #[test]
+    fn a_variable_the_advisory_reads_is_never_reported_as_having_no_effect() {
+        assert_eq!(
+            experiment_variable_effect_path(Some("unreachable_in_retained_evidence"), true),
+            "advisory_only"
+        );
+        assert_eq!(
+            experiment_variable_effect_path(Some("no_replay_scenario"), true),
+            "advisory_only"
+        );
+        assert_eq!(
+            experiment_variable_effect_path(Some("evaluated"), true),
+            "gate_and_advisory"
+        );
+        assert_eq!(
+            experiment_variable_effect_path(Some("evaluated"), false),
+            "gate_only"
+        );
+        // Only this combination earns the inert verdict.
+        assert_eq!(
+            experiment_variable_effect_path(Some("unreachable_in_retained_evidence"), false),
+            "no_observed_effect"
+        );
+        assert_eq!(
+            experiment_variable_effect_path(None, false),
+            "no_observed_effect"
+        );
+    }
+
+    /// The specific cell that motivated this: the replay calls the Markov
+    /// threshold unreachable, and it is the one Hermes quotes as an admission
+    /// bar. A reader must be able to see both facts about it at once.
+    #[test]
+    fn the_markov_threshold_reports_its_advisory_effect_despite_being_unreachable() {
+        let replay = gate_replay_from_manager_runs(&[]);
+        let coverage = replay["supported_variable_coverage"]
+            .as_array()
+            .expect("coverage is reported");
+        let markov = coverage
+            .iter()
+            .find(|row| row["variable_path"] == "strategy.swing.markov_gate.min_signed_signal")
+            .expect("markov threshold is covered");
+
+        assert_eq!(markov["advisory_visible"], true);
+        assert_ne!(
+            markov["effect_path"], "no_observed_effect",
+            "Hermes is handed this number and cites it; the replay must not call it inert"
+        );
+
+        let floor = coverage
+            .iter()
+            .find(|row| row["variable_path"] == "execution.min_trade_value_dkk")
+            .expect("trade-value floor is listed");
+        assert_eq!(
+            floor["advisory_visible"], false,
+            "the preflight publishes the cost guard, not the trade-value floor"
+        );
     }
 
     #[test]

@@ -4907,6 +4907,11 @@ fn GateReplayScenario(
     let evaluated_count = scenario.summary.evaluated_count;
     let comparison = scenario.comparison;
     let changes = scenario.changes;
+    // A gate the runtime never reached can still decide cycles, because the
+    // same number is published to Hermes and Hermes cites it as an admission
+    // bar. Read from the one list rather than plumbing a second copy down.
+    let advisory_visible =
+        crate::state::ADVISORY_VISIBLE_EXPERIMENT_VARIABLES.contains(&variable_path.as_str());
     rsx! {
         div { class: "event",
             strong { "{variable_path} -> {proposed_value}" }
@@ -4923,7 +4928,12 @@ fn GateReplayScenario(
                 // touched it.
                 if evaluated_count == 0 {
                     span { class: "status warn",
-                        "Not reachable in the retained evidence: no candidate ever met this gate's precondition, so the threshold could not have mattered either way."
+                        "Not reachable in the retained evidence: no candidate ever met this gate's precondition, so the deterministic gate did not act on this threshold."
+                    }
+                    if advisory_visible {
+                        span { class: "status warn",
+                            "This value is still published to Hermes in the decision preflight, and Hermes cites it when holding candidates. Unreachable here means the gate did not bind it, not that the number had no effect."
+                        }
                     }
                 } else {
                     span { class: "muted", "Evaluated against {evaluated_count} candidates with no target-gate flip." }
@@ -14088,6 +14098,49 @@ mod tests {
             html.contains("counts assets, not value"),
             "the panel states why the configured cap does not constrain this"
         );
+    }
+
+    /// The dashboard used to read an unreachable scenario as proof the
+    /// threshold "could not have mattered either way". For the Markov
+    /// threshold that was wrong: the same number is published to Hermes, and
+    /// on 2026-09-01 Hermes held both US-open candidates citing it while the
+    /// gate itself never ran.
+    #[test]
+    fn an_unreachable_scenario_says_whether_the_advisory_still_reads_it() {
+        let scenario = |variable_path: &str| DecisionGateReplayScenarioPayload {
+            variable_path: variable_path.to_string(),
+            proposed_value: json!(0.25),
+            comparison: "fresh long starter fallback only".to_string(),
+            reachability: "unreachable_in_retained_evidence".to_string(),
+            summary: Default::default(),
+            changes: Vec::new(),
+        };
+
+        let markov = dioxus_ssr::render_element(rsx! {
+            GateReplayScenario {
+                scenario: scenario("strategy.swing.markov_gate.min_signed_signal"),
+                prefs: default_prefs(),
+            }
+        });
+        assert!(
+            markov.contains("deterministic gate did not act"),
+            "the unreachable verdict is scoped to the gate, got {markov}"
+        );
+        assert!(
+            markov.contains("published to Hermes"),
+            "an advisory-visible threshold says so, got {markov}"
+        );
+
+        // A variable Hermes never sees keeps the plain verdict, with no
+        // advisory caveat to explain away a genuinely inert value.
+        let inert = dioxus_ssr::render_element(rsx! {
+            GateReplayScenario {
+                scenario: scenario("execution.min_trade_value_dkk"),
+                prefs: default_prefs(),
+            }
+        });
+        assert!(inert.contains("deterministic gate did not act"));
+        assert!(!inert.contains("published to Hermes"), "got {inert}");
     }
 
     /// Every manager run recorded before this measurement shipped has no

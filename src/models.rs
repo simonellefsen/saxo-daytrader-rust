@@ -3431,9 +3431,14 @@ pub struct DecisionGateReplayScenarioPayload {
     pub comparison: String,
     /// Whether the retained evidence could test this threshold at all.
     /// `unreachable_in_retained_evidence` means no candidate met the gate's
-    /// precondition, so the value did nothing during the window — a different
-    /// conclusion from "evaluated and nothing changed", and the one a proposal
-    /// must not mistake for support.
+    /// precondition — a different conclusion from "evaluated and nothing
+    /// changed", and the one a proposal must not mistake for support.
+    ///
+    /// It is a statement about the **deterministic gate only**. A value listed
+    /// in `ADVISORY_VISIBLE_EXPERIMENT_VARIABLES` is also handed to Hermes,
+    /// which can act on it whatever the gate did; `effect_path` on
+    /// `supported_variable_coverage` is the field that answers "could a
+    /// proposal against this change anything".
     #[serde(default)]
     pub reachability: String,
     pub summary: DecisionGateReplayScenarioSummaryPayload,
