@@ -17854,6 +17854,37 @@ fn realised_outcomes_for_hermes(overview: &JsonValue) -> JsonValue {
     JsonValue::Object(summary)
 }
 
+/// Group an exit by what it did rather than by how the model phrased it.
+///
+/// `strategy_role` is model-authored free text. Across the SELL orders it holds
+/// **22 distinct values** for about three concepts, including a 150-character
+/// sentence where a label belongs ("FLATTEN risk-reduction: close the full
+/// 6-share DSV position because ..."). Grouping on the raw string split one
+/// concept across four rows, so the panel showed four one-off flattens instead
+/// of the 7,073 DKK they lost together — on the table that exists to say which
+/// kind of exit is costing money.
+///
+/// The flatten test is deliberately the same substring the Trading Manager's
+/// own `is_flatten_role` uses, so the attribution and the gate cannot disagree
+/// about what counts as a flatten.
+pub(crate) fn exit_route_family(strategy_role: &str) -> &'static str {
+    let role = strategy_role.trim().to_ascii_lowercase();
+    if role.is_empty() {
+        return "unlabelled role";
+    }
+    if role.contains("protective_stop") {
+        "protective stop"
+    } else if role.contains("flatten") {
+        "flatten"
+    } else if role.contains("rotation") {
+        "rotation exit"
+    } else if role.contains("risk") {
+        "risk reduction"
+    } else {
+        "other role"
+    }
+}
+
 /// The import batch that defines the current book.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RealisedSellBaseline {
@@ -18005,14 +18036,9 @@ fn realised_sell_outcome_evidence(
             } else {
                 strategy_type
             };
-            let strategy_role = if strategy_role.is_empty() {
-                "unspecified role".to_string()
-            } else {
-                strategy_role
-            };
             (
                 "linked_execution_order".to_string(),
-                format!("{strategy_type} / {strategy_role}"),
+                format!("{strategy_type} / {}", exit_route_family(&strategy_role)),
             )
         } else {
             unlinked_ledger_count += 1;
@@ -27486,6 +27512,59 @@ analysis_windows:
             "compacted cycle should be small, got {} bytes",
             serialized.len()
         );
+    }
+
+    /// Every one of these is a real `strategy_role` from the SELL orders. The
+    /// panel grouped on the raw string, so the four flattens that together lost
+    /// 7,073 DKK appeared as four unrelated one-off rows.
+    #[test]
+    fn exits_group_by_what_they_did_not_by_how_the_model_spelled_it() {
+        for role in [
+            "flatten",
+            "FLATTEN",
+            "flatten_risk_reduction",
+            "FLATTEN_risk_reduction",
+            "risk_reduction_flatten",
+            "partial_flatten_risk_reduction",
+            "FLATTEN risk-reduction: close the full 6-share DSV position because the fresh bearish Markov regime materially conflicts with continued long exposure.",
+        ] {
+            assert_eq!(exit_route_family(role), "flatten", "{role}");
+        }
+
+        for role in [
+            "risk_reduction",
+            "risk-reduction",
+            "risk reduction",
+            "partial_risk_reduce",
+            "risk_reduction_trim",
+            "risk-reduction: reduce concentration from 19.5% allocation",
+        ] {
+            assert_eq!(exit_route_family(role), "risk reduction", "{role}");
+        }
+
+        assert_eq!(exit_route_family("protective_stop"), "protective stop");
+        assert_eq!(exit_route_family("rotation_exit"), "rotation exit");
+        assert_eq!(exit_route_family("reduce_to_target"), "other role");
+        assert_eq!(exit_route_family("   "), "unlabelled role");
+    }
+
+    /// A flatten is whatever the Trading Manager's gate says it is. If these
+    /// two ever disagree, the table would report a family the runtime does not
+    /// admit under that name.
+    #[test]
+    fn the_flatten_family_matches_the_gate_that_admits_flattens() {
+        for role in [
+            "flatten",
+            "FLATTEN_risk_reduction",
+            "partial_flatten_risk_reduction",
+        ] {
+            let gate_sees_flatten = role.to_ascii_lowercase().contains("flatten");
+            assert_eq!(
+                gate_sees_flatten,
+                exit_route_family(role) == "flatten",
+                "{role} is classified differently by the table and the gate"
+            );
+        }
     }
 
     /// The loop asked to propose strategy changes could not see whether the
