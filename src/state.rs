@@ -12827,6 +12827,9 @@ impl AppState {
                 json!({"status": "degraded", "detail": err.to_string()})
             });
 
+        // Computed before `overview` is moved into the payload, so the loop and
+        // the panel read one set of numbers rather than two that can disagree.
+        let realised_outcomes = realised_outcomes_for_hermes(&overview);
         Ok(HermesContextPayload {
             status: "ok".to_string(),
             generated_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -12866,6 +12869,7 @@ impl AppState {
             performance: HermesContextPerformancePayload {
                 range: "1M".to_string(),
                 history: performance,
+                realised_outcomes,
             },
             markov_method: markov,
             quiver_signals: quiver,
@@ -17806,6 +17810,50 @@ fn broker_exposure_pnl_attribution(
 /// one realised row, not a complete round-trip trade. The local ledger does
 /// not retain a durable lot-to-sale link or broker quote-at-submission record,
 /// so this deliberately excludes holding time and realised slippage.
+/// The realised-outcome summary Hermes reads: aggregates only.
+///
+/// The dashboard payload also carries twelve recent sale rows and three
+/// attribution tables, which is detail for someone reading a screen rather than
+/// evidence for a loop deciding whether a threshold should move. Lifted from
+/// the overview the context already builds, so there is one computation of
+/// these numbers rather than a second that can disagree with the panel.
+fn realised_outcomes_for_hermes(overview: &JsonValue) -> JsonValue {
+    let Some(outcomes) = overview
+        .get("integrity")
+        .and_then(|integrity| integrity.get("realised_sell_outcomes"))
+    else {
+        return json!({"status": "unavailable"});
+    };
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "status",
+        "sample_requirement",
+        "closed_sale_count",
+        "win_count",
+        "loss_count",
+        "breakeven_count",
+        "win_rate",
+        "average_win_dkk",
+        "average_loss_dkk",
+        "payoff_ratio",
+        "total_realised_gain_dkk",
+        "total_commission_dkk",
+        "baseline",
+        "holding_period",
+    ] {
+        if let Some(value) = outcomes.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    summary.insert(
+        "interpretation".to_string(),
+        json!(
+            "Reconciled local SELL-ledger accounting for the current book only; `baseline` names the import batch it starts at and what the superseded book held. It is not a backtest, a broker poll, or a trading gate, and a sale is counted when the ledger row is reconciled rather than when a position closes."
+        ),
+    );
+    JsonValue::Object(summary)
+}
+
 /// The import batch that defines the current book.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RealisedSellBaseline {
@@ -22652,6 +22700,7 @@ market_data:
             performance: HermesContextPerformancePayload {
                 range: "1M".to_string(),
                 history: Vec::new(),
+                realised_outcomes: JsonValue::Null,
             },
             markov_method: json!({"status": "ok"}),
             quiver_signals: json!({"status": "ok"}),
@@ -27436,6 +27485,57 @@ analysis_windows:
             serialized.len() < 600,
             "compacted cycle should be small, got {} bytes",
             serialized.len()
+        );
+    }
+
+    /// The loop asked to propose strategy changes could not see whether the
+    /// strategy makes money: its performance block carried unrealised value
+    /// history and nothing else. It gets aggregates, not the twelve recent
+    /// rows and three attribution tables the screen shows, and it gets the
+    /// baseline so it knows which book the numbers describe.
+    #[test]
+    fn the_hermes_performance_block_carries_book_scoped_realised_outcomes() {
+        let overview = json!({
+            "integrity": {
+                "realised_sell_outcomes": {
+                    "status": "preliminary",
+                    "closed_sale_count": 32,
+                    "win_count": 9,
+                    "loss_count": 23,
+                    "win_rate": 0.28125,
+                    "payoff_ratio": 0.43,
+                    "total_realised_gain_dkk": -21_298.0,
+                    "baseline": {"batch_id": "broker-bootstrap-20260716T190000Z"},
+                    "holding_period": {"winner_median_days_held": 31.0},
+                    "recent_rows": [{"symbol": "NOISE:xnas"}],
+                    "symbol_attribution": [{"symbol": "NOISE:xnas"}],
+                }
+            }
+        });
+
+        let summary = realised_outcomes_for_hermes(&overview);
+
+        assert_eq!(summary["win_rate"], 0.28125);
+        assert_eq!(summary["payoff_ratio"], 0.43);
+        assert_eq!(summary["total_realised_gain_dkk"], -21_298.0);
+        assert_eq!(
+            summary["baseline"]["batch_id"], "broker-bootstrap-20260716T190000Z",
+            "the loop must know which book these numbers describe"
+        );
+        assert_eq!(summary["holding_period"]["winner_median_days_held"], 31.0);
+        assert!(
+            summary.get("recent_rows").is_none() && summary.get("symbol_attribution").is_none(),
+            "screen detail is not evidence for a loop deciding a threshold"
+        );
+    }
+
+    #[test]
+    fn a_missing_outcome_block_reports_unavailable_rather_than_zeroes() {
+        let summary = realised_outcomes_for_hermes(&json!({}));
+        assert_eq!(summary["status"], "unavailable");
+        assert!(
+            summary.get("win_rate").is_none(),
+            "no number is better than a fabricated zero"
         );
     }
 

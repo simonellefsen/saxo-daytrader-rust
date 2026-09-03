@@ -861,6 +861,16 @@ pub struct HermesContextExecutionPayload {
 pub struct HermesContextPerformancePayload {
     pub range: String,
     pub history: Vec<JsonValue>,
+    /// Book-scoped realised outcomes: win rate, payoff ratio, realised total
+    /// and holding time.
+    ///
+    /// Until 2026-09-03 this payload carried only unrealised value history, so
+    /// the loop asked to propose strategy changes could not see whether the
+    /// strategy made money. It could not be added earlier without lying: the
+    /// same evidence blended two books and read +18,762 DKK where the live one
+    /// stood at -21,298.
+    #[serde(default)]
+    pub realised_outcomes: JsonValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
