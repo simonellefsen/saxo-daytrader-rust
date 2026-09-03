@@ -9968,8 +9968,27 @@ impl AppState {
         let holding_period = crate::holding_period::holding_period_evidence_json(
             &crate::holding_period::fifo_holding_periods(&holding_ledger_rows, &holding_seed_lots),
         );
-        let realised_sell_outcomes =
-            realised_sell_outcome_evidence(&realised_sell_rows, holding_period);
+        // The active import batch marks where the current book begins. Sales
+        // before it were booked against cost bases the bootstrap replaced.
+        let realised_sell_baseline = self
+            .first_json(
+                "SELECT batch_id, imported_at FROM import_batches                  ORDER BY imported_at DESC, batch_id DESC LIMIT 1",
+            )
+            .await
+            .unwrap_or_else(|err| {
+                warn!("realised SELL baseline lookup failed: {err:#}");
+                None
+            })
+            .map(|row| RealisedSellBaseline {
+                batch_id: text_value(&row, "batch_id"),
+                started_at: text_value(&row, "imported_at"),
+            })
+            .filter(|baseline| !baseline.started_at.is_empty());
+        let realised_sell_outcomes = realised_sell_outcome_evidence(
+            &realised_sell_rows,
+            holding_period,
+            realised_sell_baseline.as_ref(),
+        );
         if broker_exposure_snapshot.is_null() {
             checks.insert(
                 "broker_exposure_aggregate".to_string(),
@@ -17787,7 +17806,54 @@ fn broker_exposure_pnl_attribution(
 /// one realised row, not a complete round-trip trade. The local ledger does
 /// not retain a durable lot-to-sale link or broker quote-at-submission record,
 /// so this deliberately excludes holding time and realised slippage.
-fn realised_sell_outcome_evidence(rows: &[JsonValue], holding_period: JsonValue) -> JsonValue {
+/// The import batch that defines the current book.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RealisedSellBaseline {
+    pub(crate) batch_id: String,
+    pub(crate) started_at: String,
+}
+
+/// Realised-sale evidence for the **current** book.
+///
+/// `baseline` is the active import batch: sales booked before it belong to a
+/// superseded book whose cost bases the bootstrap explicitly replaced
+/// ("supersedes stale 2026-05-18 import rows that no longer match the broker
+/// book"). Blending the two produced a headline of +18,762 DKK on 2026-09-03
+/// while the live book stood at -21,298 -- a 40,000 DKK swing in the flattering
+/// direction, on the one panel that exists to answer whether this works. The
+/// superseded total is still reported, separately and labelled, because hiding
+/// it would be its own distortion.
+fn realised_sell_outcome_evidence(
+    rows: &[JsonValue],
+    holding_period: JsonValue,
+    baseline: Option<&RealisedSellBaseline>,
+) -> JsonValue {
+    let (rows, superseded): (Vec<JsonValue>, Vec<JsonValue>) = match baseline {
+        Some(baseline) => rows.iter().cloned().partition(|row| {
+            text_value(row, "created_at").as_str() >= baseline.started_at.as_str()
+        }),
+        None => (rows.to_vec(), Vec::new()),
+    };
+    let superseded_realised_gain_dkk: f64 = superseded
+        .iter()
+        .filter_map(|row| row.get("realised_gain_dkk").and_then(JsonValue::as_f64))
+        .filter(|value| value.is_finite())
+        .sum();
+    let baseline_json = match baseline {
+        Some(baseline) => json!({
+            "batch_id": baseline.batch_id,
+            "started_at": baseline.started_at,
+            "scope": "sales booked before this batch belong to a superseded book and are excluded from every figure above",
+            "superseded_sale_count": superseded.len(),
+            "superseded_realised_gain_dkk": superseded_realised_gain_dkk,
+        }),
+        None => json!({
+            "batch_id": JsonValue::Null,
+            "status": "no_import_batch_recorded",
+            "scope": "every retained sale is counted, because no baseline boundary is known",
+        }),
+    };
+    let rows = rows.as_slice();
     let mut realised_rows = rows
         .iter()
         .filter_map(|row| {
@@ -17826,6 +17892,7 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue], holding_period: JsonValue)
             "sample_requirement": PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE,
             "closed_sale_count": 0,
             "recent_rows": [],
+            "baseline": baseline_json,
             // Holding time is matched from the whole ledger, so it survives an
             // empty outcome list rather than disappearing with it.
             "holding_time_status": json_text(&holding_period, "status"),
@@ -18030,6 +18097,7 @@ fn realised_sell_outcome_evidence(rows: &[JsonValue], holding_period: JsonValue)
         "counting_unit": "closed sale ledger row",
         "sample_requirement": PERFORMANCE_REALISED_SELL_OUTCOME_MIN_SAMPLE_SIZE,
         "scan_limit": PERFORMANCE_REALISED_SELL_OUTCOME_LIMIT,
+        "baseline": baseline_json,
         "closed_sale_count": win_count + loss_count + breakeven_count,
         "decisive_sale_count": decisive_sale_count,
         "win_count": win_count,
@@ -20975,6 +21043,7 @@ mod tests {
                 }),
             ],
             crate::holding_period::holding_period_evidence_json(&Default::default()),
+            None,
         );
 
         assert_eq!(json_text(&outcomes, "status"), "collecting");
@@ -27194,6 +27263,7 @@ analysis_windows:
             dashboard_performance_realised_sell_outcomes_from_json(realised_sell_outcome_evidence(
                 &[],
                 crate::holding_period::holding_period_evidence_json(&Default::default()),
+                None,
             ))
             .expect("empty outcome evidence is typed")
             .expect("non-null outcome evidence is present");
@@ -27214,6 +27284,7 @@ analysis_windows:
                     "status": "executed",
                 })],
                 crate::holding_period::holding_period_evidence_json(&Default::default()),
+                None,
             ))
             .expect("collecting outcome evidence is typed")
             .expect("non-null outcome evidence is present");
@@ -27366,6 +27437,80 @@ analysis_windows:
             "compacted cycle should be small, got {} bytes",
             serialized.len()
         );
+    }
+
+    /// Blended across the 2026-07-16 bootstrap the panel reported +18,762 DKK
+    /// while the live book stood at -21,298 — a 40,000 DKK swing in the
+    /// flattering direction on the one panel that exists to answer whether the
+    /// strategy works. The bootstrap note is explicit that it "supersedes stale
+    /// 2026-05-18 import rows that no longer match the broker book", so those
+    /// sales were booked against cost bases that no longer exist.
+    #[test]
+    fn realised_outcomes_describe_the_current_book_not_the_superseded_one() {
+        let sale = |created_at: &str, gain: f64| {
+            json!({
+                "created_at": created_at,
+                "symbol": "AMD:xnas",
+                "quantity": 1.0,
+                "currency": "USD",
+                "realised_gain_dkk": gain,
+                "commission_dkk": 4.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 1_000.0,
+                "status": "executed",
+            })
+        };
+        let baseline = RealisedSellBaseline {
+            batch_id: "broker-bootstrap-20260716T190000Z".to_string(),
+            started_at: "2026-07-16T19:00:00Z".to_string(),
+        };
+
+        let outcomes = realised_sell_outcome_evidence(
+            &[
+                sale("2026-06-20T10:00:00Z", 40_000.0),
+                sale("2026-08-20T10:00:00Z", -21_000.0),
+            ],
+            crate::holding_period::holding_period_evidence_json(&Default::default()),
+            Some(&baseline),
+        );
+
+        assert_eq!(
+            outcomes["closed_sale_count"], 1,
+            "only the current book's sale is counted"
+        );
+        assert_eq!(outcomes["total_realised_gain_dkk"], -21_000.0);
+        assert_eq!(outcomes["baseline"]["superseded_sale_count"], 1);
+        assert_eq!(
+            outcomes["baseline"]["superseded_realised_gain_dkk"], 40_000.0,
+            "the excluded total stays visible rather than vanishing"
+        );
+        assert_eq!(
+            outcomes["baseline"]["batch_id"],
+            "broker-bootstrap-20260716T190000Z"
+        );
+    }
+
+    /// With no batch recorded there is no boundary to apply, and silently
+    /// dropping every row would be worse than counting them all.
+    #[test]
+    fn without_a_baseline_every_retained_sale_is_still_counted() {
+        let outcomes = realised_sell_outcome_evidence(
+            &[json!({
+                "created_at": "2026-06-20T10:00:00Z",
+                "symbol": "AMD:xnas",
+                "quantity": 1.0,
+                "currency": "USD",
+                "realised_gain_dkk": 500.0,
+                "commission_dkk": 4.0,
+                "tax_dkk": 0.0,
+                "cost_basis_sold_dkk": 1_000.0,
+                "status": "executed",
+            })],
+            crate::holding_period::holding_period_evidence_json(&Default::default()),
+            None,
+        );
+        assert_eq!(outcomes["closed_sale_count"], 1);
+        assert_eq!(outcomes["baseline"]["status"], "no_import_batch_recorded");
     }
 
     /// A rejected statement and an empty table used to produce the same empty

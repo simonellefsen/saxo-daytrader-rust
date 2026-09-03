@@ -3169,6 +3169,11 @@ pub struct PerformanceRealisedSellOutcomesPayload {
     pub exit_route_attribution: Vec<PerformanceRealisedSellExitRoutePayload>,
     #[serde(default)]
     pub recent_rows: Vec<PerformanceRealisedSellRowPayload>,
+    /// Which import batch the figures above belong to, and what was excluded
+    /// with the superseded book. Staged rather than typed: it is provenance the
+    /// panel renders, not a field anything computes on.
+    #[serde(default)]
+    pub baseline: JsonValue,
     pub holding_time_status: String,
     /// FIFO-matched holding-period evidence, staged rather than typed because
     /// it is diagnostic detail the panel renders as a block.

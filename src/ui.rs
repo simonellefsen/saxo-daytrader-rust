@@ -3344,6 +3344,7 @@ fn PerformanceRealisedSellOutcomesPanel(
                         }
                     }
                 }
+                RealisedSellBaselineRow { baseline: outcomes.baseline.clone(), prefs: prefs.clone() }
                 HoldingPeriodRow { holding_period: outcomes.holding_period.clone(), }
                 p { class: "muted benchmark-caveat", "{outcomes.closed_sale_count} closed sale row(s), including partial sales, are counted independently; {outcomes.breakeven_count} breakeven row(s) are excluded from the win-rate denominator. The evidence remains collecting until {outcomes.sample_requirement} rows. Realised slippage is unavailable because it does not retain a broker quote at submission. This is accounting evidence, not a backtest or a trading gate." }
             }
@@ -4899,6 +4900,41 @@ fn GateReplayPanel(replay: DecisionGateReplayPayload, prefs: LocalizationPrefs) 
                 for scenario in scenarios.iter() {
                     GateReplayScenario { scenario: scenario.clone(), prefs: prefs.clone() }
                 }
+            }
+        }
+    }
+}
+
+/// Which book the realised figures describe.
+///
+/// Without this the panel reads as an all-time record. Blended across the
+/// 2026-07-16 bootstrap it showed +18,762 DKK while the live book stood at
+/// -21,298, which is the wrong answer to the only question the panel exists
+/// to ask.
+#[component]
+fn RealisedSellBaselineRow(baseline: JsonValue, prefs: LocalizationPrefs) -> Element {
+    let batch_id = text(&baseline, "batch_id");
+    if batch_id.is_empty() {
+        return rsx! {
+            p { class: "muted",
+                "No import batch is recorded, so every retained sale is counted and the figures span any earlier book."
+            }
+        };
+    }
+    let started_at = text(&baseline, "started_at");
+    let superseded_count = baseline
+        .get("superseded_sale_count")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let superseded_gain = baseline
+        .get("superseded_realised_gain_dkk")
+        .and_then(JsonValue::as_f64)
+        .unwrap_or(0.0);
+    rsx! {
+        p { class: "muted",
+            "Figures cover the current book only, which begins at the {batch_id} batch of {format_timestamp(&started_at, &prefs)}. "
+            if superseded_count > 0 {
+                "{superseded_count} earlier sale(s) totalling {format_signed_dkk(superseded_gain, &prefs)} belong to the superseded book and are excluded: the bootstrap replaced those cost bases, so blending them would describe a book that no longer exists."
             }
         }
     }
