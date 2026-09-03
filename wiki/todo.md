@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - todo
   - maintained-by-llm
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # Daytrader Todo
@@ -45,15 +45,27 @@ The decision is not which queue to fix. It is what "reviewed" means:
 
 **Status:** open. This is an operator decision about capital, not an engineering task.
 
-Live record since the 2026-07-16 reset:
+Live record since the 2026-07-16 reset. **Restated 2026-09-03** from the realised-sell panel, which had never rendered in production until 2026-09-02 and was scoped to the wrong book until 2026-09-03; the counting unit is the reconciled sale ledger row, so it does not line up with the "closed round trip" count this table used before.
 
 | | |
 | --- | --- |
-| Closed round trips | 20 |
-| Wins / losses | **3 / 17** (15% win rate) |
-| Net realised | **−21,372 DKK** (−8.3%) |
-| Commission | 415 DKK |
-| Since 2026-08-01, stops fully live | 8 sells, 2 wins, −2,263 DKK |
+| Closed sales | 32 |
+| Wins / losses | **9 / 23** (28.1% win rate) |
+| Net realised | **−21,298 DKK** |
+| Commission | 673 DKK |
+| Average win / average loss | **481 / −1,114 DKK** |
+| **Payoff ratio** | **0.43** |
+| Median holding time | 24.0 days (winners 31.0, losers 19.6) |
+| Cost basis sold | 384,456 DKK |
+
+**The payoff ratio is the number that matters, and it now has a mechanical explanation.** Every one of those 32 exits was a risk-reduction exit — 28 protective stops (−14,225 DKK) and 4 flattens (−7,073) — and **not one was a profit-taking exit**. Nothing in the runtime closes a position because it reached a target, so a win can only happen when a stop that trailed up gets hit. The nine wins are exactly that, which is why the average win is 481 DKK against an average loss of 1,114.
+
+This reframes the question. The earlier reading was "15% win rate, no evidence of an edge, wait for n to grow". The current reading is that **the exit side has no mechanism for realising a gain**, and `strategy.ladder.take_profit_rung_multiple` and `strategy.ladder.max_take_profit_atr_multiple` sit in `config.yaml` marked by the contract audit as "Take-profit targets are not implemented". Waiting for n to grow tests entry quality against an exit policy that structurally caps wins.
+
+Two supporting facts have also moved:
+
+- **The loss tail is genuinely truncated.** Average loss −1,114 DKK against a book of roughly 7–8k DKK clips is stops doing their job, and the roadmap's earlier note that the worst single loss since stops went live is −1,390 still holds.
+- **Winners are held longer than losers** (31.0 vs 19.6 days median), so this is not the classic cut-winners-early failure. The book holds winners and still cannot make them large, which points at the exit mechanism rather than at conviction or patience.
 
 Decision Pulse Outcome Evidence, the system's own forward-movement measure:
 
