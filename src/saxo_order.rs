@@ -3740,7 +3740,7 @@ fn exchange_id_for_suffix(exchange: &str) -> &'static str {
         "xnas" => "XNAS",
         "xnys" => "XNYS",
         "xcse" => "XCSE",
-        "xsto" => "XSTO",
+        "xsto" | "xome" => "XSTO",
         "xosl" => "XOSL",
         "xhel" => "XHEL",
         "xlon" => "XLON",
@@ -3760,7 +3760,7 @@ fn exchange_aliases(exchange: &str) -> Vec<&'static str> {
         "xnas" => vec!["XNAS", "NASDAQ"],
         "xnys" => vec!["XNYS", "NYSE"],
         "xcse" => vec!["XCSE", "CSE", "COP"],
-        "xsto" => vec!["XSTO", "STO", "STK"],
+        "xsto" | "xome" => vec!["XSTO", "STO", "STK"],
         "xosl" => vec!["XOSL", "OSL", "OSE"],
         "xhel" => vec!["XHEL", "HEL", "HEX"],
         "xlon" => vec!["XLON", "LSE", "LON"],
@@ -4119,7 +4119,7 @@ fn default_tick(symbol: &str) -> f64 {
     match symbol_parts(symbol).exchange.as_str() {
         "xnas" | "xnys" | "xhel" | "xmil" | "xpar" | "xams" | "xbru" | "xlse" => 0.01,
         "xcse" | "xetr" | "xfra" => 0.05,
-        "xsto" | "xosl" => 0.10,
+        "xsto" | "xome" | "xosl" => 0.10,
         _ => 0.01,
     }
 }
@@ -4290,7 +4290,12 @@ pub(crate) fn min_commission_local_for_exchange(exchange: &str) -> (f64, &'stati
     match exchange.trim().to_lowercase().as_str() {
         "xnas" | "xnys" => (3.0, "USD"),
         "xlon" => (8.0, "GBP"),
-        "xsto" => (69.0, "SEK"),
+        // `xome` is Saxo's spelling for Stockholm and carries all 20 Swedish
+        // symbols since the 2026-08-02 instrument-resolution fix. Without it
+        // they fell to the 14 DKK default, gating BUYs at a 4,667 DKK floor
+        // instead of 15,410 -- commission up to 0.77% per side against a
+        // configured ceiling of 0.3%.
+        "xsto" | "xome" => (69.0, "SEK"),
         "xosl" => (39.0, "NOK"),
         "xhel" | "xetr" | "xfra" | "xmil" | "xpar" | "xams" | "xbru" | "xlse" => (3.0, "EUR"),
         _ => (14.0, "DKK"),
@@ -7011,6 +7016,42 @@ execution:
         );
 
         assert_eq!(first, duplicate);
+    }
+
+    /// `xome` and `xsto` are one exchange under two spellings. The 2026-08-02
+    /// instrument fix moved all 20 Swedish symbols to `:xome`, and each
+    /// consumer keyed on `:xsto` was left behind one at a time: the currency
+    /// map was caught on 2026-08-31, the commission minimum and the default
+    /// tick not until 2026-09-03. Enumerating the exchange-keyed functions here
+    /// is what makes the next one impossible to miss rather than merely
+    /// unlikely.
+    #[test]
+    fn stockholms_two_spellings_resolve_identically_everywhere() {
+        assert_eq!(
+            min_commission_local_for_exchange("xome"),
+            min_commission_local_for_exchange("xsto"),
+            "a Swedish BUY was gated at the 14 DKK default floor, not 69 SEK"
+        );
+        assert_eq!(currency_for_exchange("xome"), currency_for_exchange("xsto"));
+        assert_eq!(
+            exchange_id_for_suffix("xome"),
+            exchange_id_for_suffix("xsto")
+        );
+        assert_eq!(exchange_aliases("xome"), exchange_aliases("xsto"));
+        assert_eq!(
+            default_tick("ERIC-B:xome"),
+            default_tick("ERIC-B:xsto"),
+            "a wrong tick normalises a limit price the broker then rejects"
+        );
+
+        // And the values are Stockholm's, not the fallthrough default.
+        assert_eq!(min_commission_local_for_exchange("xome"), (69.0, "SEK"));
+        assert_ne!(
+            min_commission_local_for_exchange("xome"),
+            min_commission_local_for_exchange("an_exchange_we_do_not_trade"),
+            "matching the default is how this hid for a month"
+        );
+        assert_eq!(default_tick("ERIC-B:xome"), 0.10);
     }
 
     #[test]

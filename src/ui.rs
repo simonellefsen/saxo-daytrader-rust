@@ -11132,7 +11132,7 @@ fn currency_for_symbol(symbol: &str) -> &'static str {
         Some("xcse") => "DKK",
         Some("xmil") | Some("xetr") | Some("xams") | Some("xpar") => "EUR",
         Some("xlon") | Some("xlse") => "GBP",
-        Some("xsto") => "SEK",
+        Some("xsto") | Some("xome") => "SEK",
         Some("xosl") => "NOK",
         Some("xswx") => "CHF",
         _ => "DKK",
@@ -11332,13 +11332,13 @@ fn tradingview_symbol(symbol: &str) -> String {
         "xlon" => "LSE",
         "xetr" => "XETR",
         "xams" => "EURONEXT",
-        "xsto" => "OMXSTO",
+        "xsto" | "xome" => "OMXSTO",
         "xosl" => "OSL",
         "xhel" => "OMXHEX",
         "xmil" => "MIL",
         _ => "NASDAQ",
     };
-    let base = if matches!(exchange.as_str(), "xcse" | "xsto") {
+    let base = if matches!(exchange.as_str(), "xcse" | "xsto" | "xome") {
         base.replace('-', "_")
     } else {
         base.to_string()
@@ -11444,7 +11444,7 @@ fn yahoo_ticker(symbol: &str) -> String {
         "xlon" => ".L",
         "xetr" => ".DE",
         "xams" => ".AS",
-        "xsto" => ".ST",
+        "xsto" | "xome" => ".ST",
         "xosl" => ".OL",
         "xhel" => ".HE",
         "xmil" => ".MI",

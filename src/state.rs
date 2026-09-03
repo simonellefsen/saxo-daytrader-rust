@@ -19447,7 +19447,7 @@ fn execution_order_duration_type(order: &JsonValue) -> Option<String> {
 
 fn exchange_region(symbol: &str) -> String {
     match exchange_code(symbol).to_lowercase().as_str() {
-        "xcse" | "xsto" | "xosl" | "xhel" => "Nordics",
+        "xcse" | "xsto" | "xome" | "xosl" | "xhel" => "Nordics",
         "xlon" => "UK",
         "xnas" | "xnys" => "US",
         _ => "Europe",

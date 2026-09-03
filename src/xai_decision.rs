@@ -1976,7 +1976,9 @@ async fn capital_planning_context(state: &AppState, overview: &JsonValue) -> Jso
             "XCSE": floor("xcse"),
             "XETR_XMIL_XAMS_XHEL": floor("xetr"),
             "XLON": floor("xlon"),
-            "XSTO": floor("xsto"),
+            // Labelled for the suffix the universe actually uses; the model
+            // sees Swedish symbols as `:xome`, not `:xsto`.
+            "XSTO_XOME": floor("xome"),
             "XOSL": floor("xosl"),
         }),
         monthly_loss_halt_dkk,

@@ -2124,7 +2124,7 @@ fn exchange_aliases(exchange: &str) -> Vec<&'static str> {
         "xnys" => vec!["XNYS", "NYSE"],
         "arcx" => vec!["ARCX", "NYSE ARCA"],
         "xcse" => vec!["XCSE", "CSE", "COP"],
-        "xsto" => vec!["XSTO", "STO", "STK"],
+        "xsto" | "xome" => vec!["XSTO", "STO", "STK"],
         "xosl" => vec!["XOSL", "OSL", "OSE"],
         "xhel" => vec!["XHEL", "HEL", "HEX"],
         "xlon" => vec!["XLON", "LSE", "LON"],
