@@ -1652,13 +1652,84 @@ pub async fn compact_markov_context_for_symbols(
     Ok(context)
 }
 
+/// The Markov block the decision prompt receives.
+///
+/// Ordered by conviction, and never without a held position.
+///
+/// It used to reuse the dashboard's paged reader, whose `ORDER BY ... symbol
+/// ASC` is right for a browsable list and wrong here: every row in a run shares
+/// its `run_date` and `created_at`, so the effective order was alphabetical and
+/// truncating at 80 of ~200 cut the universe off at `GSK`. Everything from H to
+/// Z had no Markov evidence in the prompt at all — `TSLA:xnas` at +0.2471 was
+/// invisible while a 0.0043 signal beginning with "A" was shown. This is the
+/// 2026-08-31 `get_markov_signals` defect in a second place; that fix reached
+/// Hermes's retrieval path, and Hermes only reviews candidates where this
+/// decides which symbols can become one.
+///
+/// Held positions are pinned ahead of the conviction ranking because the two
+/// jobs differ: an unheld symbol with a weak signal needs no decision, while a
+/// held one always does. Conviction ordering alone would still have dropped
+/// `ORCL:xnys` at rank 136 — a position already down 7.7% with no regime read
+/// in front of the model.
 pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<JsonValue> {
-    let rows = latest_markov_signals(state, limit)
+    let rows = latest_markov_signals_by_conviction(state, limit)
         .await?
         .into_iter()
         .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
         .collect::<Vec<_>>();
     compact_markov_context_from_rows(state, rows).await
+}
+
+/// Newest signal per symbol, held positions first, then highest conviction.
+///
+/// `conviction` is the absolute signed signal, so this surfaces the strongest
+/// views in both directions — the prompt uses a negative regime for risk
+/// reduction just as it uses a positive one for entry.
+pub(crate) async fn latest_markov_signals_by_conviction(
+    state: &AppState,
+    limit: i64,
+) -> Result<Vec<JsonValue>> {
+    let sql = format!(
+        "SELECT s.id, s.run_id, s.created_at, s.run_date, s.status, s.symbol, s.instrument_name,
+                s.exchange, s.source, s.uic, s.asset_type, s.window_days, s.threshold,
+                s.horizon_minutes, s.sample_count, s.min_labeled_days, s.signal_horizon_days,
+                s.current_state, s.current_close, s.rolling_return, s.transition_counts_json,
+                s.transition_matrix_json, s.forecasts_json, s.stationary_json, s.bull_prob,
+                s.sideways_prob, s.bear_prob, s.signed_signal, s.direction, s.conviction,
+                s.error_text, s.raw_payload_json
+         FROM markov_asset_signals AS s
+         WHERE s.id = (
+            SELECT inner_signal.id
+            FROM markov_asset_signals AS inner_signal
+            WHERE inner_signal.symbol = s.symbol
+            ORDER BY inner_signal.run_date DESC, inner_signal.created_at DESC, inner_signal.id DESC
+            LIMIT 1
+         )
+         AND s.symbol IN (
+            SELECT universe.symbol
+            FROM markov_asset_signals AS universe
+            WHERE universe.run_id = (
+               SELECT id
+               FROM markov_signal_runs
+               WHERE status <> 'targeted_refresh'
+               ORDER BY run_date DESC, created_at DESC
+               LIMIT 1
+            )
+         )
+         ORDER BY
+            CASE WHEN s.symbol IN (
+               SELECT held.symbol FROM portfolio_position_snapshots AS held
+               WHERE held.recorded_at = (
+                  SELECT MAX(newest.recorded_at) FROM portfolio_position_snapshots AS newest
+               )
+            ) THEN 0 ELSE 1 END,
+            s.conviction DESC,
+            s.symbol ASC
+         LIMIT {}",
+        clamp_limit(limit, 1, 500),
+    );
+    let rows = sqlx::query(&sql).fetch_all(&state.pool).await?;
+    Ok(rows.iter().map(row_to_json).collect())
 }
 
 async fn compact_markov_context_from_rows(
@@ -3110,6 +3181,97 @@ strategy:
         assert_eq!(stored.get::<i32, _>("window_bars"), 140);
         assert_eq!(stored.get::<i32, _>("min_labeled_bars"), 420);
         assert_eq!(stored.get::<i32, _>("signal_horizon_bars"), 21);
+    }
+
+    /// The prompt's Markov block was ordered alphabetically and truncated at 80
+    /// of ~200, so the universe was cut off at `GSK` and everything from H to Z
+    /// had no regime evidence in front of the model. Two properties replace it:
+    /// a held position is never dropped, and the remainder ranks by conviction
+    /// rather than by ticker.
+    #[tokio::test]
+    async fn the_prompt_markov_block_pins_holdings_then_ranks_by_conviction() {
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        for sql in create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("create tables");
+        }
+        sqlx::query(
+            "CREATE TABLE portfolio_position_snapshots (recorded_at TEXT NOT NULL, symbol TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create positions");
+        sqlx::query(
+            "INSERT INTO markov_signal_runs (id, created_at, run_date, status, asset_count, \
+             success_count, error_count, config_json, summary_json) \
+             VALUES ('r1', '2026-09-03T21:35:00Z', '2026-09-03', 'completed', 4, 4, 0, '{}', '{}')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run");
+        // ORCL sorts late and has the weakest signal; it is the held one.
+        for (symbol, conviction) in [
+            ("AAPL:xnas", 0.05),
+            ("BMW:xetr", 0.60),
+            ("ORCL:xnys", 0.01),
+            ("TSLA:xnas", 0.40),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO markov_asset_signals (id, run_id, created_at, run_date, status, symbol, \
+                 window_days, threshold, horizon_minutes, sample_count, min_labeled_days, \
+                 signal_horizon_days, signed_signal, conviction, direction) \
+                 VALUES ('{symbol}', 'r1', '2026-09-03T21:35:00Z', '2026-09-03', 'ok', '{symbol}', \
+                 20, 0.05, 60, 900, 60, 5, {conviction}, {conviction}, 'long')"
+            ))
+            .execute(&pool)
+            .await
+            .expect("insert signal");
+        }
+        sqlx::query(
+            "INSERT INTO portfolio_position_snapshots (recorded_at, symbol) \
+             VALUES ('2026-09-03T20:00:00Z', 'ORCL:xnys')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert holding");
+        let state = AppState {
+            config_path: std::path::PathBuf::from("markov-test.yaml"),
+            config: serde_yaml::from_str("{}").expect("parse test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+
+        let rows = latest_markov_signals_by_conviction(&state, 3)
+            .await
+            .expect("read conviction-ordered signals");
+        let order: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                row.get("symbol")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+
+        assert_eq!(
+            order[0], "ORCL:xnys",
+            "a held position comes first however weak its signal: {order:?}"
+        );
+        assert_eq!(order[1], "BMW:xetr", "then the strongest conviction");
+        assert_eq!(order[2], "TSLA:xnas");
+        assert!(
+            !order.contains(&"AAPL:xnas".to_string()),
+            "the weakest unheld signal is the one that drops, not the alphabetically last"
+        );
     }
 
     #[tokio::test]
