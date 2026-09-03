@@ -21145,7 +21145,8 @@ mod tests {
         assert_eq!(value_i64(&outcomes, "ambiguous_exit_link_count"), 1);
         assert_eq!(
             outcomes["exit_route_attribution"][0]["exit_route"],
-            json!("swing / risk_reduction")
+            json!("swing / risk reduction"),
+            "exits group by family now, so the raw role spelling is not the key"
         );
         assert_eq!(
             outcomes["exit_route_attribution"][2]["link_status"],
