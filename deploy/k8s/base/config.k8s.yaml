@@ -583,8 +583,12 @@ execution:
   require_approval_live: false
   min_trade_value_dkk: 500
   # BUYs must be large enough that the exchange minimum commission stays
-  # under this share of the clip (0.003 = 0.3% per side). 0 disables.
-  max_commission_pct_per_side: 0.003
+  # under this share of the clip. Raised 0.003 -> 0.004 on 2026-09-03: at 0.003
+  # the floor and the 4% position cap sat closer together than one share for
+  # expensive names, so ALV:xetr (3,358 DKK/share) needed 2.22-2.94 shares and
+  # was refused eight times across seven sessions. Rounding down cost 2.23 DKK
+  # more commission than 0.3% allowed; refusing bought nothing. 0 disables.
+  max_commission_pct_per_side: 0.004
   max_daily_orders: 50
   # A report can be fresh when queued and stale by the next verified market
   # session. Expire these discretionary rows before any Saxo session/precheck

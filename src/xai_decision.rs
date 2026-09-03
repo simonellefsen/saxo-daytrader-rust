@@ -1933,7 +1933,7 @@ fn compact_report_array(report: &JsonValue, key: &str, limit: usize) -> Vec<Json
 async fn capital_planning_context(state: &AppState, overview: &JsonValue) -> JsonValue {
     let max_commission_pct_per_side =
         crate::config::yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
-            .unwrap_or(0.003)
+            .unwrap_or(crate::trading_manager::DEFAULT_MAX_COMMISSION_PCT_PER_SIDE)
             .max(0.0);
     // The manager's own rule, not a second copy of it: the prompt must quote a
     // floor the manager will actually enforce.

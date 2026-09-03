@@ -1593,6 +1593,25 @@ pub(crate) fn one_way_slippage_dkk(notional_dkk: f64, estimated_slippage_bps: f6
 /// values -- `max(500, 4667)` is `4667` either way -- but a model told a floor
 /// the manager will not honour proposes orders the manager then rejects, which
 /// is the failure the capital-plan budget had on 2026-08-31.
+/// Default ceiling on the exchange minimum commission as a share of one side
+/// of a BUY, used when `execution.max_commission_pct_per_side` is absent.
+///
+/// One constant rather than a literal in each reader: the Trading Manager gate
+/// and the decision prompt both fall back to this, and a prompt quoting a floor
+/// the manager will not enforce is the capital-plan divergence of 2026-08-31.
+///
+/// Raised from 0.003 to 0.004 on 2026-09-03. At 0.003 the floor and the
+/// position-weight cap could be closer together than one share: `ALV:xetr` at
+/// 3,358 DKK/share needed a clip between 7,460 and 9,879 DKK, which is 2.22 to
+/// 2.94 shares, so no whole number fitted and the candidate was refused eight
+/// times across seven sessions. Rounding down to two shares costs **2.23 DKK**
+/// more commission than 0.3% permits; refusing bought nothing instead. 0.004
+/// recovers seven symbols. It is a cost-drag heuristic, not a risk limit --
+/// 0.33% against 0.30% per side is immaterial next to a 6.4% average win --
+/// where widening the position-weight cap instead would have loosened one of
+/// the few deterministic risk gates that actually binds.
+pub(crate) const DEFAULT_MAX_COMMISSION_PCT_PER_SIDE: f64 = 0.004;
+
 pub(crate) fn buy_value_floor_dkk(
     exchange_code_lowercase: &str,
     min_trade_value_dkk: f64,
@@ -2009,7 +2028,7 @@ async fn run_for_report(
     // commission drag, which no swing edge survives round trip.
     let max_commission_pct_per_side =
         yaml_f64(&state.config, &["execution", "max_commission_pct_per_side"])
-            .unwrap_or(0.003)
+            .unwrap_or(DEFAULT_MAX_COMMISSION_PCT_PER_SIDE)
             .max(0.0);
     let buy_value_floor_dkk = |symbol: &str| -> f64 {
         buy_value_floor_dkk(
@@ -7738,6 +7757,53 @@ mod tests {
                 "{path} is advisory-visible but not proposable, which cannot be right"
             );
         }
+    }
+
+    /// The shipped configs and the fallback must agree. When they diverge the
+    /// prompt quotes a floor the manager will not enforce, which is exactly the
+    /// capital-plan failure of 2026-08-31 in a second place.
+    #[test]
+    fn the_shipped_commission_ceiling_matches_the_default_it_falls_back_to() {
+        for relative in ["config.yaml", "deploy/k8s/base/config.k8s.yaml"] {
+            let raw = std::fs::read_to_string(format!("{}/{relative}", env!("CARGO_MANIFEST_DIR")))
+                .expect("shipped config is readable");
+            let config: serde_yaml::Value =
+                serde_yaml::from_str(&raw).expect("shipped config parses");
+            let shipped = yaml_f64(&config, &["execution", "max_commission_pct_per_side"])
+                .unwrap_or_else(|| panic!("{relative} sets the commission ceiling"));
+            assert!(
+                (shipped - DEFAULT_MAX_COMMISSION_PCT_PER_SIDE).abs() < f64::EPSILON,
+                "{relative} ships {shipped} against a fallback of {DEFAULT_MAX_COMMISSION_PCT_PER_SIDE}"
+            );
+        }
+    }
+
+    /// `ALV:xetr` at 3,358 DKK/share was the case that motivated 0.004: under
+    /// 0.003 no whole share count fitted between the commission floor and the
+    /// 4% position cap, so a technically-qualified candidate was refused eight
+    /// times across seven sessions.
+    #[test]
+    fn a_two_share_alv_clip_clears_the_floor_at_the_raised_ceiling() {
+        let price = 10_073.323_365_783_692 / 3.0;
+        let cap = 246_973.099_389_484_68 * 0.04;
+        let two_shares = 2.0 * price;
+        let three_shares = 3.0 * price;
+
+        let floor_before = buy_value_floor_dkk("xetr", 500.0, 0.003);
+        let floor_now = buy_value_floor_dkk("xetr", 500.0, DEFAULT_MAX_COMMISSION_PCT_PER_SIDE);
+
+        assert!(two_shares < floor_before, "two shares failed the old floor");
+        assert!(
+            three_shares > cap,
+            "three shares still breaches the position cap"
+        );
+        assert!(
+            two_shares > floor_now,
+            "two shares must clear the raised floor: {two_shares:.0} vs {floor_now:.0}"
+        );
+        // Raising the ceiling lowers the floor; it must not have moved the cap.
+        assert!(floor_now < floor_before);
+        assert!(three_shares > cap, "the position-weight cap is untouched");
     }
 
     fn markov_test_config() -> MarkovGateConfig {
