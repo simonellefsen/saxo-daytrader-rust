@@ -113,7 +113,10 @@ fn request_usage_from_row(row: JsonValue) -> Option<LlmRequestUsagePayload> {
     })
 }
 
-fn cost_from_usage(usage: &JsonValue) -> (Option<f64>, &'static str) {
+/// Shared with the provider capability matrix so the two panels can never
+/// disagree about what a request cost -- the aggregate read only `usage.cost`
+/// and would have reported a free fleet under the BYOK key now in use.
+pub(crate) fn cost_from_usage(usage: &JsonValue) -> (Option<f64>, &'static str) {
     let billed = finite_non_negative(usage.get("cost"));
     if let Some(billed) = billed.filter(|cost| *cost > 0.0) {
         return (Some(billed), COST_SOURCE_BILLED);

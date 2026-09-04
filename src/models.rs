@@ -1711,6 +1711,12 @@ pub struct AiProviderCapabilityPayload {
     pub schema_failure_count: i64,
     pub timeout_failure_count: i64,
     pub parse_failure_count: i64,
+    /// Replies the provider stopped at the output token ceiling.
+    ///
+    /// Separate from `parse_failure_count` on purpose: a truncation is
+    /// half a reply, and counting it as a parse failure points at the
+    /// schema when the fix is the ceiling.
+    pub truncation_failure_count: i64,
     pub completion_rate: Option<f64>,
     pub fallback_retry_attempt_count: i64,
     pub fallback_retry_completed_count: i64,

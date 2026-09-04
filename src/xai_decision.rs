@@ -1222,6 +1222,63 @@ fn completed_report_json(
     )
 }
 
+/// Refuses a completion that stopped because it ran out of output budget.
+///
+/// A truncated reply is not a bad reply, it is half a reply, and the two must
+/// not be treated alike. Until this existed nothing in the codebase read
+/// `finish_reason`, so an overrun arrived as a JSON parse failure -- an error
+/// that names the symptom and hides the cause, sending the operator to look at
+/// the schema when the fix is the token ceiling.
+///
+/// Worse, the OpenRouter `response-healing` plugin exists to repair malformed
+/// JSON, and half a decision report is malformed JSON. A healed truncation can
+/// parse cleanly and reach the Trading Manager as a complete report whose
+/// missing half is simply the candidates the model had not written yet. That is
+/// a silent wrong answer in a path that proposes orders, so this rejects before
+/// parsing rather than after.
+///
+/// Providers disagree on spelling -- OpenAI-compatible `length`, Google's
+/// `MAX_TOKENS` -- and OpenRouter passes the upstream one through in
+/// `native_finish_reason` alongside its normalized field, so both are checked.
+fn reject_truncated_completion(response_json: &JsonValue) -> Result<()> {
+    let Some(choice) = response_json
+        .get("choices")
+        .and_then(JsonValue::as_array)
+        .and_then(|choices| choices.first())
+    else {
+        return Ok(());
+    };
+    for key in ["finish_reason", "native_finish_reason"] {
+        let Some(reason) = choice.get(key).and_then(JsonValue::as_str) else {
+            continue;
+        };
+        if !is_truncation_finish_reason(reason) {
+            continue;
+        }
+        let usage = response_json.get("usage");
+        let completion_tokens = usage
+            .and_then(|usage| usage.get("completion_tokens"))
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default();
+        anyhow::bail!(
+            "AI completion was truncated: the provider stopped at the output token ceiling \
+             (finish_reason {reason}) after {completion_tokens} completion tokens. The report \
+             is incomplete and was not parsed. Raise xai.max_output_tokens or shorten the prompt."
+        );
+    }
+    Ok(())
+}
+
+/// `length` is the OpenAI-compatible spelling and `MAX_TOKENS` is Google's.
+/// Matched case-insensitively because the normalized and native fields do not
+/// agree on case even for the same request.
+fn is_truncation_finish_reason(reason: &str) -> bool {
+    matches!(
+        reason.trim().to_ascii_lowercase().as_str(),
+        "length" | "max_tokens"
+    )
+}
+
 fn completed_report_json_from_parts(
     request_json: &JsonValue,
     report_json: &JsonValue,
@@ -1230,6 +1287,7 @@ fn completed_report_json_from_parts(
     provider_metadata: JsonValue,
     mode: DecisionReportSubmissionMode,
 ) -> Result<JsonValue> {
+    reject_truncated_completion(response_json)?;
     let content = response_json
         .get("choices")
         .and_then(JsonValue::as_array)
@@ -3864,6 +3922,72 @@ mod tests {
         assert_eq!(missed["status"], "missed_due_window");
         assert_eq!(due["terminal"], true);
         assert_eq!(due["pulse"]["key"], "us_open_followup:2026-08-19");
+    }
+
+    /// A truncated reply is half a reply, and the OpenRouter response-healing
+    /// plugin exists to repair malformed JSON -- half a decision report being
+    /// exactly that. A healed truncation can parse cleanly and reach the
+    /// Trading Manager as a complete report whose missing half is the
+    /// candidates the model had not written yet, so the refusal has to happen
+    /// before parsing rather than after.
+    #[test]
+    fn a_truncated_completion_is_refused_before_its_json_is_parsed() {
+        // Valid JSON on purpose: healing already repaired it, so parsing alone
+        // would accept this and the report would look complete.
+        let healed = json!({
+            "choices": [{
+                "finish_reason": "length",
+                "message": {"content": "{\"report_title\":\"Half\",\"suggested_trades\":[]}"}
+            }],
+            "usage": {"completion_tokens": 32768}
+        });
+
+        let err = completed_report_json_from_parts(
+            &json!({}),
+            &json!({}),
+            &healed,
+            "openrouter",
+            json!({}),
+            DecisionReportSubmissionMode::Live,
+        )
+        .expect_err("a truncated completion must not become a report");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("truncated") && message.contains("32768"),
+            "the error must name the cause and the budget it hit: {message}"
+        );
+        assert!(
+            message.contains("max_output_tokens"),
+            "and point at the lever that fixes it: {message}"
+        );
+    }
+
+    /// Providers disagree on spelling: OpenAI-compatible `length`, Google's
+    /// `MAX_TOKENS`, which OpenRouter passes through in `native_finish_reason`
+    /// beside its own normalized field. A guard that reads only one field or
+    /// one spelling would let the other provider's truncation through.
+    #[test]
+    fn truncation_is_recognised_in_either_field_and_either_spelling() {
+        for response in [
+            json!({"choices": [{"finish_reason": "length"}]}),
+            json!({"choices": [{"native_finish_reason": "MAX_TOKENS"}]}),
+            json!({"choices": [{"finish_reason": "stop", "native_finish_reason": "MAX_TOKENS"}]}),
+        ] {
+            assert!(
+                reject_truncated_completion(&response).is_err(),
+                "truncation missed in {response}"
+            );
+        }
+        for response in [
+            json!({"choices": [{"finish_reason": "stop"}]}),
+            json!({"choices": [{}]}),
+            json!({}),
+        ] {
+            assert!(
+                reject_truncated_completion(&response).is_ok(),
+                "a healthy completion must not be refused: {response}"
+            );
+        }
     }
 
     #[test]

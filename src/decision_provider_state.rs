@@ -21,6 +21,7 @@ struct CapabilityAccumulator {
     schema_failure_count: i64,
     timeout_failure_count: i64,
     parse_failure_count: i64,
+    truncation_failure_count: i64,
     fallback_retry_attempt_count: i64,
     fallback_retry_completed_count: i64,
     fallback_retry_failed_count: i64,
@@ -78,6 +79,7 @@ pub(crate) fn ai_provider_capabilities_from_rows(
                 "schema" => stats.schema_failure_count += 1,
                 "timeout" => stats.timeout_failure_count += 1,
                 "parse" => stats.parse_failure_count += 1,
+                "truncated" => stats.truncation_failure_count += 1,
                 _ => {}
             }
         }
@@ -97,11 +99,12 @@ pub(crate) fn ai_provider_capabilities_from_rows(
             non_negative_i64(usage, "prompt_tokens").max(non_negative_i64(usage, "input_tokens"));
         stats.observed_completion_token_count += non_negative_i64(usage, "completion_tokens")
             .max(non_negative_i64(usage, "output_tokens"));
-        if let Some(cost) = usage
-            .get("cost")
-            .and_then(JsonValue::as_f64)
-            .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        {
+        // Shares the ledger's reader rather than repeating `usage.cost`, which
+        // is 0 under a BYOK key because OpenRouter billed nothing and the
+        // charge landed on the operator's own upstream account. Two panels
+        // disagreeing about the same request's cost is worse than either
+        // number being missing.
+        if let (Some(cost), _) = crate::llm_usage::cost_from_usage(usage) {
             stats.observed_cost_report_count += 1;
             stats.observed_cost_usd += cost;
         }
@@ -126,6 +129,7 @@ pub(crate) fn ai_provider_capabilities_from_rows(
                 schema_failure_count: stats.schema_failure_count,
                 timeout_failure_count: stats.timeout_failure_count,
                 parse_failure_count: stats.parse_failure_count,
+                truncation_failure_count: stats.truncation_failure_count,
                 completion_rate: (terminal_count > 0)
                     .then_some(stats.completed_count as f64 / terminal_count as f64),
                 fallback_retry_attempt_count: stats.fallback_retry_attempt_count,
@@ -209,6 +213,11 @@ fn local_failure_category(error: &str) -> &'static str {
         "schema"
     } else if error.contains("timed out") || error.contains("timeout") {
         "timeout"
+    } else if error.contains("was truncated") {
+        // Checked before "parse": a truncation error text also contains the
+        // normalization wrapper, and counting it as a parse failure would send
+        // the reader to the schema when the fix is the token ceiling.
+        "truncated"
     } else if error.contains("could not be normalized") || error.contains("invalid json") {
         "parse"
     } else {
@@ -337,5 +346,52 @@ mod tests {
         let serialized = serde_json::to_string(row).expect("fallback metrics serialize");
         assert!(!serialized.contains("provider_fallback_dry_run:44"));
         assert!(!serialized.contains("must-not-reach-matrix"));
+    }
+    /// A BYOK request bills nothing through OpenRouter -- the charge lands on
+    /// the operator's own upstream account -- so reading `usage.cost` alone
+    /// reports a free fleet. The matrix and the per-request ledger share one
+    /// reader precisely so the two panels cannot disagree about the same call.
+    #[test]
+    fn a_byok_request_is_not_counted_as_a_free_one() {
+        let rows = vec![json!({
+            "model": "~google/gemini-flash-latest",
+            "status": "completed",
+            "request_json": json!({"model": "~google/gemini-flash-latest"}).to_string(),
+            "response_json": json!({
+                "usage": {
+                    "prompt_tokens": 184918,
+                    "completion_tokens": 5015,
+                    "cost": 0,
+                    "is_byok": true,
+                    "cost_details": {"upstream_inference_cost": 0.3149895}
+                }
+            })
+            .to_string(),
+        })];
+
+        let matrix = ai_provider_capabilities_from_rows(rows, 600);
+        assert_eq!(matrix[0].observed_cost_usd, Some(0.3149895));
+    }
+
+    /// A truncation and a parse failure need separate counters: the error text
+    /// for a truncated reply also carries the normalization wrapper, so an
+    /// ordering mistake would file it under "parse" and send the reader to the
+    /// schema when the fix is the output token ceiling.
+    #[test]
+    fn a_truncation_is_counted_apart_from_a_parse_failure() {
+        assert_eq!(
+            local_failure_category(
+                "openrouter decision report response could not be normalized into strict JSON: \
+                 AI completion was truncated: the provider stopped at the output token ceiling"
+            ),
+            "truncated"
+        );
+        assert_eq!(
+            local_failure_category(
+                "openrouter decision report response could not be normalized into strict JSON: \
+                 invalid json at line 1"
+            ),
+            "parse"
+        );
     }
 }

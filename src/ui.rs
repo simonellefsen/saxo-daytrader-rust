@@ -6304,6 +6304,9 @@ fn ProviderCapabilityRow(
         if row.parse_failure_count > 0 {
             values.push(format!("parse {}", row.parse_failure_count));
         }
+        if row.truncation_failure_count > 0 {
+            values.push(format!("truncated {}", row.truncation_failure_count));
+        }
         values.join(" · ")
     };
     let fallback_retries = if row.fallback_retry_attempt_count == 0 {
