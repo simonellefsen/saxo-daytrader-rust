@@ -2097,6 +2097,13 @@ struct CashDeploymentSummary {
     tone: &'static str,
     run_label: String,
     available_buy_budget_dkk: f64,
+    /// What the run had left when it finished.
+    ///
+    /// Shown beside the opening budget because the card sits next to a live
+    /// cash tile and the two describe different moments: the budget is what the
+    /// run started with, and reading it as present-tense headroom overstates
+    /// what is actually available by whatever the run just spent.
+    remaining_buy_budget_dkk: f64,
     excess_cash_pct: f64,
     approved_buy_count: i64,
     skipped_buy_count: i64,
@@ -2162,7 +2169,11 @@ fn CashDeploymentPanel(
                         span { class: "status {summary.tone}", "{summary.status}" }
                     }
                     div { class: "cash-diagnostic-grid",
-                        div { span { class: "label", "Buy budget" } strong { "{format_dkk(summary.available_buy_budget_dkk, &prefs)}" } }
+                        div {
+                            span { class: "label", "Buy budget at run" }
+                            strong { "{format_dkk(summary.available_buy_budget_dkk, &prefs)}" }
+                            span { class: "muted", "{format_dkk(summary.remaining_buy_budget_dkk, &prefs)} left after" }
+                        }
                         div { span { class: "label", "Excess cash" } strong { "{format_pct(summary.excess_cash_pct, &prefs)}" } }
                         div { span { class: "label", "BUY candidates" } strong { "{summary.candidate_buy_count}" } }
                         div { span { class: "label", "Approved / blocked" } strong { "{summary.approved_buy_count} / {summary.skipped_buy_count}" } }
@@ -2394,6 +2405,7 @@ fn cash_deployment_summary(
         tone,
         run_label,
         available_buy_budget_dkk: budget.available_buy_budget_dkk,
+        remaining_buy_budget_dkk: value_f64(&manager, "remaining_buy_budget_dkk"),
         excess_cash_pct: budget.excess_cash_pct,
         approved_buy_count: diagnostics.approved_buy_count,
         skipped_buy_count: diagnostics.skipped_buy_count,
@@ -13220,6 +13232,32 @@ mod tests {
         assert!(!serialized.contains("raw_policy_document"));
         assert_eq!(diagnostics.approved_buy_count, 2);
         assert_eq!(budget.available_buy_budget_dkk, 12_500.0);
+    }
+
+    /// The card sits beside a live cash tile, and the two describe different
+    /// moments: 21,458 was what report #271 started with, 1,393 was what it had
+    /// left after buying three positions, and the live tile then read 13,410.
+    /// Showing only the opening figure invites reading it as headroom that no
+    /// longer exists, so both travel together.
+    #[test]
+    fn the_cash_card_shows_what_the_run_had_left_not_only_what_it_started_with() {
+        let run = TradingManagerRunPayload {
+            manager_json: json!({
+                "capital_budget": {
+                    "available_buy_budget_dkk": 21_457.88,
+                    "excess_cash_pct": 0.116
+                },
+                "remaining_buy_budget_dkk": 1_393.47
+            }),
+            ..TradingManagerRunPayload::default()
+        };
+
+        let summary = cash_deployment_summary(&Some(run), &default_prefs());
+        assert_eq!(summary.available_buy_budget_dkk, 21_457.88);
+        assert_eq!(
+            summary.remaining_buy_budget_dkk, 1_393.47,
+            "the figure that answers what is left must survive to the card"
+        );
     }
 
     #[test]
