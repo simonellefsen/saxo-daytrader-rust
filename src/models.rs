@@ -32,6 +32,7 @@ pub struct DashboardView {
     pub sso_session: SsoSession,
     pub ai_settings: DashboardAiSettingsPayload,
     pub ai_provider_capabilities: Vec<AiProviderCapabilityPayload>,
+    pub llm_usage: LlmUsageLedgerPayload,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -1719,6 +1720,52 @@ pub struct AiProviderCapabilityPayload {
     pub observed_completion_token_count: i64,
     pub observed_cost_report_count: i64,
     pub observed_cost_usd: Option<f64>,
+}
+
+/// One LLM request's measured tokens and cost.
+///
+/// Measurement, not billing: every figure is what the provider reported in the
+/// stored response, so a field is absent when the provider did not supply it
+/// rather than defaulted to zero. Reading a missing cost as free is the
+/// specific mistake this shape refuses to make.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmRequestUsagePayload {
+    pub created_at: String,
+    pub model: String,
+    pub status: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub max_tokens_requested: Option<i64>,
+    pub completion_budget_used_pct: Option<f64>,
+    pub finish_reason: Option<String>,
+    pub cost_usd: Option<f64>,
+    /// `billed`, `upstream_byok`, or `not_reported` -- see `llm_usage.rs`.
+    pub cost_source: String,
+}
+
+/// One calendar day of LLM usage, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmUsageDayPayload {
+    pub day: String,
+    pub request_count: i64,
+    pub prompt_token_count: i64,
+    pub completion_token_count: i64,
+    pub reasoning_token_count: i64,
+    pub cost_usd: Option<f64>,
+    pub models: Vec<String>,
+}
+
+/// Per-request LLM token and cost ledger with its daily rollup.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmUsageLedgerPayload {
+    pub request_count: i64,
+    pub prompt_token_count: i64,
+    pub completion_token_count: i64,
+    pub reasoning_token_count: i64,
+    pub cost_usd: Option<f64>,
+    pub requests: Vec<LlmRequestUsagePayload>,
+    pub days: Vec<LlmUsageDayPayload>,
 }
 
 /// Typed read-only envelope for the observed Decision Report provider matrix.
@@ -3545,6 +3592,14 @@ pub struct SignalRunSummaryPayload {
 #[derive(Debug, Deserialize)]
 pub struct LimitParams {
     pub limit: Option<i64>,
+}
+
+/// `limit` bounds the LLM requests read; `days` bounds the daily rollup built
+/// from them, so a rollup can never describe a day the limit excluded.
+#[derive(Debug, Deserialize)]
+pub struct LlmUsageParams {
+    pub limit: Option<i64>,
+    pub days: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

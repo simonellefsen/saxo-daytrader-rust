@@ -45,6 +45,7 @@ use crate::{
         learning_memory_from_reflections, lessons_pending_review_from_reflections,
         normalize_hermes_experiment_variable_path,
     },
+    llm_usage::llm_usage_ledger_from_rows,
     localization::LocalizationPrefs,
     market_state::{dashboard_watchlists_from_json, dashboard_watchlists_not_loaded},
     markov_state::{
@@ -76,16 +77,16 @@ use crate::{
         HermesContextSelfCheckCapabilitiesPayload, HermesDecisionAdviceCapabilitiesPayload,
         HermesDecisionAdviceRequest, HermesDecisionReportOutcomePayload,
         HermesExperimentOverlayCapabilitiesPayload, HermesExperimentRequest,
-        HermesReflectionRequest, LatestDecisionStatusPayload, MarketCalendarRefreshPayload,
-        MarketStatusPayload, MarketStatusSummaryPayload, MarketWatchlistsPayload,
-        OverviewIntegrityIssuePayload, OverviewIntegrityPayload, QuiverConflictPayload,
-        TradingManagerPayload, TuningBenchmarkComparison, TuningBenchmarkReference,
-        TuningDirectionalOutcome, TuningExecutionCandidateFunnel, TuningExecutionLifecycleEvidence,
-        TuningExecutionPulseOutcome, TuningExperimentGovernance, TuningMonthlyGoalProgress,
-        TuningPayload, TuningPortfolioOutcome, TuningProtectiveStopCoverage, TuningPulseComparison,
-        TuningShadowChangeEvidence, TuningShadowGateEvidence, TuningShadowHermesEvidence,
-        TuningShadowMarkovEvidence, TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence,
-        TuningTradeThesisEvidence,
+        HermesReflectionRequest, LatestDecisionStatusPayload, LlmUsageLedgerPayload,
+        MarketCalendarRefreshPayload, MarketStatusPayload, MarketStatusSummaryPayload,
+        MarketWatchlistsPayload, OverviewIntegrityIssuePayload, OverviewIntegrityPayload,
+        QuiverConflictPayload, TradingManagerPayload, TuningBenchmarkComparison,
+        TuningBenchmarkReference, TuningDirectionalOutcome, TuningExecutionCandidateFunnel,
+        TuningExecutionLifecycleEvidence, TuningExecutionPulseOutcome, TuningExperimentGovernance,
+        TuningMonthlyGoalProgress, TuningPayload, TuningPortfolioOutcome,
+        TuningProtectiveStopCoverage, TuningPulseComparison, TuningShadowChangeEvidence,
+        TuningShadowGateEvidence, TuningShadowHermesEvidence, TuningShadowMarkovEvidence,
+        TuningShadowQuiverEvidence, TuningShadowSupportRiskEvidence, TuningTradeThesisEvidence,
     },
     overview_state::{
         dashboard_integrity_from_json, dashboard_market_status_from_json,
@@ -8340,6 +8341,14 @@ impl AppState {
             } else {
                 Vec::new()
             };
+        let llm_usage = if dashboard_loads_tab_exclusive_data(&active_view, "prompts") {
+            self.llm_usage_ledger(500, 30).await.unwrap_or_else(|err| {
+                warn!("dashboard LLM usage ledger degraded: {err:#}");
+                LlmUsageLedgerPayload::default()
+            })
+        } else {
+            LlmUsageLedgerPayload::default()
+        };
         let run_schedules = dashboard_run_schedules_from_json(json!({
             "markov": crate::markov_method::markov_config_json_for_state(self),
             "quiver": crate::quiver::quiver_config_json_for_state(self),
@@ -8401,6 +8410,7 @@ impl AppState {
             sso_session,
             ai_settings,
             ai_provider_capabilities,
+            llm_usage,
             localization,
             active_view,
             performance_range,
@@ -15751,6 +15761,32 @@ impl AppState {
         Ok(ai_provider_capabilities_from_rows(
             rows,
             configured_timeout_seconds,
+        ))
+    }
+
+    /// Per-request token and cost ledger for this runtime's LLM calls.
+    ///
+    /// The provider matrix beside it answers whether a model works; this
+    /// answers what each call cost and which way the trend runs. Both read the
+    /// same persisted responses, so they can never disagree about what ran.
+    pub async fn llm_usage_ledger(
+        &self,
+        limit: i64,
+        day_limit: i64,
+    ) -> Result<LlmUsageLedgerPayload> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT created_at, model, status, request_json, response_json
+                 FROM decision_reports
+                 WHERE response_json IS NOT NULL
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT {}",
+                clamp_limit(limit, 1, 2_000)
+            ))
+            .await?;
+        Ok(llm_usage_ledger_from_rows(
+            rows,
+            clamp_limit(day_limit, 1, 400) as usize,
         ))
     }
 

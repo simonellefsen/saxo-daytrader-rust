@@ -34,15 +34,16 @@ use crate::{
         HermesContextPayload, HermesExperimentRequest, HermesExperimentSummaryPayload,
         HermesExperimentTransitionRequest, HermesExperimentsPayload, HermesReflectionRequest,
         HermesReflectionSummaryPayload, HermesReflectionsPayload,
-        InstrumentQuarantineOverrideRequest, LimitParams, LocalizationSettingsRequest,
-        MarketStatusPayload, MarketWatchlistsPayload, MarkovSignalsPayload,
-        MonthlyLossBreakerOverrideRequest, OverviewIntegrityAcknowledgementRequest,
-        PerformanceParams, PerformancePayload, PortfolioPositionsPayload, PortfolioTradePayload,
-        PortfolioTradesPayload, ProtectiveStopLifecycleCancellationRequest,
-        ProtectiveStopLifecyclePlacementRequest, ProtectiveStopLifecycleReconcileRequest,
-        ProtectiveStopPrecheckRequest, QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams,
-        SchedulerPayload, SchedulerStatusSummaryPayload, StrategyJournalEntryPayload,
-        StrategyJournalPayload, ViewParams,
+        InstrumentQuarantineOverrideRequest, LimitParams, LlmUsageLedgerPayload, LlmUsageParams,
+        LocalizationSettingsRequest, MarketStatusPayload, MarketWatchlistsPayload,
+        MarkovSignalsPayload, MonthlyLossBreakerOverrideRequest,
+        OverviewIntegrityAcknowledgementRequest, PerformanceParams, PerformancePayload,
+        PortfolioPositionsPayload, PortfolioTradePayload, PortfolioTradesPayload,
+        ProtectiveStopLifecycleCancellationRequest, ProtectiveStopLifecyclePlacementRequest,
+        ProtectiveStopLifecycleReconcileRequest, ProtectiveStopPrecheckRequest,
+        QuiverSignalsPayload, RuntimeHealth, SaxoCallbackParams, SchedulerPayload,
+        SchedulerStatusSummaryPayload, StrategyJournalEntryPayload, StrategyJournalPayload,
+        ViewParams,
     },
     portfolio_state::{dashboard_positions_from_json, portfolio_trades_from_json},
     quiver_state::dashboard_quiver_signals_from_json,
@@ -153,6 +154,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             "/api/ai/provider-capabilities",
             get(ai_provider_capabilities),
         )
+        .route("/api/ai/llm-usage", get(llm_usage_ledger))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -1894,6 +1896,27 @@ async fn ai_provider_capabilities(
         Utc::now().to_rfc3339(),
         items,
     ))
+}
+
+/// Per-request LLM token and cost measurement.
+///
+/// `limit` bounds the requests returned; `days` bounds the daily rollup, which
+/// is computed from those requests and so cannot describe a day the limit
+/// excluded. A degraded read returns an empty ledger rather than a zeroed one:
+/// the payload's counts stay 0 and its cost stays absent, which reads as "no
+/// observation" rather than "nothing was spent".
+async fn llm_usage_ledger(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LlmUsageParams>,
+) -> Json<LlmUsageLedgerPayload> {
+    let ledger = state
+        .llm_usage_ledger(params.limit.unwrap_or(500), params.days.unwrap_or(60))
+        .await
+        .unwrap_or_else(|err| {
+            warn!("LLM usage ledger endpoint degraded: {err:#}");
+            LlmUsageLedgerPayload::default()
+        });
+    Json(ledger)
 }
 
 fn ai_provider_capabilities_payload(

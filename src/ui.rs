@@ -6046,6 +6046,53 @@ fn DecisionReportRow(
     }
 }
 
+/// One LLM request in the ledger.
+///
+/// The output-budget column is the reason the row exists: a completion count
+/// only means something against the ceiling it ran under, and a request that
+/// stopped because it hit that ceiling is truncated rather than finished. No
+/// other code path reads `finish_reason`, so this is where an overrun becomes
+/// visible instead of arriving later as an unexplained parse failure.
+#[component]
+fn LlmUsageRequestRow(
+    row: crate::models::LlmRequestUsagePayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    let truncated = row.finish_reason.as_deref() == Some("length");
+    let budget = match (row.completion_budget_used_pct, row.max_tokens_requested) {
+        (Some(share), Some(ceiling)) => format!(
+            "{} of {}",
+            format_percent(share, &prefs),
+            format_number(ceiling as f64, 0, &prefs)
+        ),
+        _ => "not recorded".to_string(),
+    };
+    let cost = match row.cost_usd {
+        Some(cost) => format!("USD {}", format_number(cost, 4, &prefs)),
+        None => "not reported".to_string(),
+    };
+    rsx! {
+        tr {
+            td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.model}" br {} span { class: "muted", "{row.status}" } }
+            td { "{format_number(row.prompt_tokens as f64, 0, &prefs)} / {format_number(row.completion_tokens as f64, 0, &prefs)}" }
+            td { "{format_number(row.reasoning_tokens as f64, 0, &prefs)}" }
+            td {
+                div { "{budget}" }
+                if truncated {
+                    div { class: "muted", "truncated at the ceiling" }
+                }
+            }
+            td {
+                div { "{cost}" }
+                if row.cost_source == "upstream_byok" {
+                    div { class: "muted", "billed upstream (BYOK)" }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let latest = data.latest_decision.clone();
@@ -6053,6 +6100,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let created_at = latest.created_at.as_deref().unwrap_or("");
     let status = latest.status.as_deref().unwrap_or("");
     let provider_capabilities = data.ai_provider_capabilities.clone();
+    let llm_usage = data.llm_usage.clone();
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -6087,6 +6135,73 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             tbody {
                                 for row in provider_capabilities {
                                     ProviderCapabilityRow { row, prefs: prefs.clone() }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "prompt-card",
+                h3 { "LLM Token & Cost Ledger" }
+                p { class: "muted", "Measured per request from the stored provider response: tokens in, tokens out, how much of the reply was reasoning, and what it cost. Covers the Decision Report path, which is the only place this runtime calls a model -- Hermes bills through its own gateway and is not counted here. A cost marked upstream was billed to your own provider account under a BYOK key rather than by OpenRouter." }
+                if llm_usage.request_count == 0 {
+                    div { class: "event muted", "No provider responses with usage data are stored yet." }
+                } else {
+                    div { class: "pill-row",
+                        span { class: "pill", "{llm_usage.request_count} requests" }
+                        span { class: "pill", "in {format_number(llm_usage.prompt_token_count as f64, 0, &prefs)}" }
+                        span { class: "pill", "out {format_number(llm_usage.completion_token_count as f64, 0, &prefs)}" }
+                        span { class: "pill", "reasoning {format_number(llm_usage.reasoning_token_count as f64, 0, &prefs)}" }
+                        if let Some(cost) = llm_usage.cost_usd {
+                            span { class: "pill", "USD {format_number(cost, 2, &prefs)}" }
+                        }
+                    }
+                    div { class: "table-wrap",
+                        table { class: "data-table compact-table",
+                            thead { tr {
+                                th { "Day" }
+                                th { "Requests" }
+                                th { "Tokens in / out" }
+                                th { "Reasoning" }
+                                th { "Cost" }
+                                th { "Models" }
+                            }}
+                            tbody {
+                                for day in llm_usage.days.iter() {
+                                    tr { key: "{day.day}",
+                                        td { "{day.day}" }
+                                        td { "{day.request_count}" }
+                                        td { "{format_number(day.prompt_token_count as f64, 0, &prefs)} / {format_number(day.completion_token_count as f64, 0, &prefs)}" }
+                                        td { "{format_number(day.reasoning_token_count as f64, 0, &prefs)}" }
+                                        td {
+                                            if let Some(cost) = day.cost_usd {
+                                                "USD {format_number(cost, 4, &prefs)}"
+                                            } else {
+                                                span { class: "muted", "not reported" }
+                                            }
+                                        }
+                                        td { class: "muted", "{day.models.join(\" · \")}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    details { class: "prompt-details",
+                        summary { "Per-request detail" }
+                        div { class: "table-wrap",
+                            table { class: "data-table compact-table",
+                                thead { tr {
+                                    th { "When" }
+                                    th { "Model" }
+                                    th { "In / out" }
+                                    th { "Reasoning" }
+                                    th { "Output budget" }
+                                    th { "Cost" }
+                                }}
+                                tbody {
+                                    for request in llm_usage.requests.iter() {
+                                        LlmUsageRequestRow { row: request.clone(), prefs: prefs.clone() }
+                                    }
                                 }
                             }
                         }

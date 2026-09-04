@@ -647,7 +647,14 @@ xai:
   base_url: https://openrouter.ai/api/v1
   model: openai/gpt-5.5
   reasoning_effort: medium
-  max_output_tokens: 8192
+  # Raised from 8192 on 2026-09-04. A reasoning model spends this budget
+  # on thinking before it writes any JSON, and the appetite is model-
+  # specific: a replayed production prompt cost gpt-5.6-terra 2,480-3,674
+  # completion tokens but gemini-flash-latest 5,015, leaving 3,177 of
+  # headroom. Overrun is not detected -- no code reads finish_reason --
+  # so it surfaces as a JSON parse failure rather than as truncation.
+  # Unused budget is free: OpenRouter bills tokens produced, not reserved.
+  max_output_tokens: 16384
   performance_goals:
     currency: DKK
     week_start_weekday: 0
