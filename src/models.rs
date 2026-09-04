@@ -2728,6 +2728,14 @@ pub struct DashboardAiSettingsPayload {
     pub source: String,
     pub updated_at: Option<String>,
     pub api_key: DashboardAiKeyStatusPayload,
+    /// Models that have actually produced a Decision Report, newest first.
+    ///
+    /// Evidence, not a menu of blessed choices: it is read from what ran, so a
+    /// model that was tried and abandoned still appears and the operator can
+    /// get back to it. `serde(default)` because settings payloads persisted
+    /// before this field existed must still decode.
+    #[serde(default)]
+    pub recent_models: Vec<String>,
 }
 
 /// One independently refreshed dashboard data source and its staleness state.

@@ -15623,8 +15623,48 @@ impl AppState {
             "model": config_model,
             "config_model": config_model,
             "source": "config",
-            "updated_at": null
+            "updated_at": null,
+            "recent_models": []
         })
+    }
+
+    /// Models that have actually produced a Decision Report, newest use first.
+    ///
+    /// The settings menu offered four hardcoded slugs that had drifted out of
+    /// date -- none of them was the model that had run the last 93 reports --
+    /// so the picker listed choices nobody had made while hiding the ones they
+    /// had. `decision_reports.model` already records what ran, which is a
+    /// better answer than a list of what someone typed: a model that was tried
+    /// and abandoned still appears, and getting back to it costs no retyping.
+    ///
+    /// Read-only, and deliberately not a validation surface: appearing here
+    /// means a report was submitted under that model, not that it still exists
+    /// upstream or is a good idea today.
+    pub(crate) async fn recently_used_ai_models(&self, limit: i64) -> Result<Vec<String>> {
+        let sql = format!(
+            "SELECT model
+             FROM decision_reports
+             WHERE model IS NOT NULL AND TRIM(model) <> ''
+             GROUP BY model
+             ORDER BY MAX(created_at) DESC
+             LIMIT {}",
+            clamp_limit(limit, 1, 50)
+        );
+        let rows = sqlx::query(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .context("reading recently used AI models")?;
+        Ok(rows
+            .iter()
+            .map(row_to_json)
+            .filter_map(|row| {
+                row.get("model")
+                    .and_then(JsonValue::as_str)
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_string)
+            })
+            .collect())
     }
 
     fn default_dashboard_ai_settings(&self) -> DashboardAiSettingsPayload {
@@ -15667,6 +15707,22 @@ impl AppState {
         }
         if let Some(obj) = value.as_object_mut() {
             obj.insert("api_key".to_string(), self.ai_api_key_status_value().await?);
+        }
+        // The configured default joins the list so reverting a runtime
+        // override never depends on the operator remembering the slug. A
+        // failed read leaves the picker empty rather than failing the menu:
+        // the text field is the real control and it still works.
+        let mut recent = self.recently_used_ai_models(12).await.unwrap_or_default();
+        let config_model = value
+            .get("config_model")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if !config_model.is_empty() && !recent.iter().any(|model| model == &config_model) {
+            recent.push(config_model);
+        }
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("recent_models".to_string(), JsonValue::from(recent));
         }
         Ok(value)
     }
@@ -23549,6 +23605,71 @@ market_data:
     fn masked_api_key_never_reveals_short_keys() {
         assert_eq!(mask_api_key("sk-or-v1-abcdefgh-9999"), "sk-or-…9999");
         assert_eq!(mask_api_key("short-key"), "•••");
+    }
+
+    /// The settings picker listed four hardcoded slugs, none of them the model
+    /// that had produced the last 93 reports, so it offered choices nobody had
+    /// made and hid the ones they had. Order is by most recent use, not by
+    /// volume: the model someone ran once yesterday is a likelier destination
+    /// than the one that ran fifty times last quarter.
+    #[tokio::test]
+    async fn the_model_picker_lists_what_actually_ran_newest_first() {
+        let state =
+            runtime_settings_test_state("xai:\n  provider: openrouter\n  model: openai/gpt-5.5\n")
+                .await;
+        sqlx::query(
+            "CREATE TABLE decision_reports (id TEXT PRIMARY KEY, model TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("create reports table");
+        // grok ran far more often, but longer ago; the blank row is a provider
+        // fallback that never named a model and must not become an option.
+        for (id, model, created_at) in [
+            ("1", "grok-4.3", "2026-06-16T14:45:14Z"),
+            ("2", "grok-4.3", "2026-06-17T14:45:14Z"),
+            ("3", "grok-4.3", "2026-06-18T14:45:14Z"),
+            ("4", "openai/gpt-5.6-terra", "2026-09-03T18:19:29Z"),
+            ("5", "~google/gemini-flash-latest", "2026-09-04T08:19:29Z"),
+            ("6", "   ", "2026-09-04T09:00:00Z"),
+        ] {
+            sqlx::query(&format!(
+                "INSERT INTO decision_reports (id, model, created_at) \
+                 VALUES ('{id}', '{model}', '{created_at}')"
+            ))
+            .execute(&state.pool)
+            .await
+            .expect("insert report");
+        }
+
+        let recent = state
+            .recently_used_ai_models(12)
+            .await
+            .expect("read recently used models");
+        assert_eq!(
+            recent,
+            vec![
+                "~google/gemini-flash-latest".to_string(),
+                "openai/gpt-5.6-terra".to_string(),
+                "grok-4.3".to_string(),
+            ],
+            "newest use first, one entry per model, and no blank option"
+        );
+
+        let settings = state
+            .ai_settings_value()
+            .await
+            .expect("build the settings payload");
+        let options: Vec<&str> = settings["recent_models"]
+            .as_array()
+            .expect("recent_models is a list")
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .collect();
+        assert!(
+            options.contains(&"openai/gpt-5.5"),
+            "the configured default is offered so reverting an override needs no retyping: {options:?}"
+        );
     }
 
     #[tokio::test]

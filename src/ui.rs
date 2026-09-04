@@ -521,6 +521,13 @@ fn UserMenu(
     } else {
         ai_settings.config_model.clone()
     };
+    // The active model is offered too: a datalist filters by what is typed, so
+    // without it the field's own value matches nothing and the arrow opens on
+    // an empty list -- which is what made the control look dead.
+    let mut ai_model_options = ai_settings.recent_models.clone();
+    if !ai_model_options.iter().any(|model| model == &ai_model) {
+        ai_model_options.insert(0, ai_model.clone());
+    }
     let key_hint = if ai_settings.api_key.configured {
         let masked = ai_settings.api_key.masked.as_deref().unwrap_or("•••");
         let key_source = if ai_settings.api_key.source.is_empty() {
@@ -559,14 +566,21 @@ fn UserMenu(
                     input { r#type: "hidden", name: "return_to", value: "{return_to}" }
                     label { "OpenRouter model"
                         input { name: "model", value: "{ai_model}", list: "ai-model-options" }
+                        // A datalist filters its options against what is
+                        // already typed, so with a slug in the field the list
+                        // looks broken rather than empty. The hint says how to
+                        // open it; the options themselves are models that
+                        // actually ran, not a stale hardcoded four.
                         datalist { id: "ai-model-options",
-                            option { value: "openrouter/fusion" }
-                            option { value: "openai/gpt-5.5" }
-                            option { value: "openai/gpt-5" }
-                            option { value: "anthropic/claude-sonnet-4.5" }
+                            for model in ai_model_options.iter() {
+                                option { key: "{model}", value: "{model}" }
+                            }
                         }
                     }
                     div { class: "settings-hint", "Active: {ai_model} · source: {ai_source} · config: {ai_config_model}" }
+                    if !ai_model_options.is_empty() {
+                        div { class: "settings-hint", "Clear the field to pick from {ai_model_options.len()} previously used models." }
+                    }
                     button { class: "button", r#type: "submit", "Save AI model" }
                 }
                 form { method: "post", action: "/api/settings/ai-key", class: "settings-form settings-form-wide",
