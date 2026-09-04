@@ -1685,6 +1685,14 @@ pub async fn compact_markov_context(state: &AppState, limit: i64) -> Result<Json
 /// `conviction` is the absolute signed signal, so this surfaces the strongest
 /// views in both directions — the prompt uses a negative regime for risk
 /// reduction just as it uses a positive one for entry.
+///
+/// `NULLS LAST` is load-bearing and the two dialects disagree without it: a
+/// failed signal stores no conviction, and PostgreSQL sorts NULLs *first*
+/// under `DESC` while SQLite sorts them last. In production that put the one
+/// errored symbol at position 21 — the head of the unheld block — where the
+/// caller's `status == "ok"` filter then discarded it, so a block asking for
+/// 80 symbols delivered 79. No SQLite test can catch that, hence the source
+/// assertion in `the_conviction_ordering_sorts_failed_signals_last`.
 pub(crate) async fn latest_markov_signals_by_conviction(
     state: &AppState,
     limit: i64,
@@ -1723,7 +1731,7 @@ pub(crate) async fn latest_markov_signals_by_conviction(
                   SELECT MAX(newest.recorded_at) FROM portfolio_position_snapshots AS newest
                )
             ) THEN 0 ELSE 1 END,
-            s.conviction DESC,
+            s.conviction DESC NULLS LAST,
             s.symbol ASC
          LIMIT {}",
         clamp_limit(limit, 1, 500),
@@ -3271,6 +3279,86 @@ strategy:
         assert!(
             !order.contains(&"AAPL:xnas".to_string()),
             "the weakest unheld signal is the one that drops, not the alphabetically last"
+        );
+    }
+
+    /// A failed signal stores no conviction, and PostgreSQL sorts NULLs first
+    /// under `DESC` while SQLite sorts them last. In production that seated the
+    /// one errored symbol at position 21 of the ordering — the head of the
+    /// unheld block — where `compact_markov_context`'s `status == "ok"` filter
+    /// then discarded it, so a block asking for 80 symbols delivered 79. The
+    /// behavioural half of this test passes on SQLite either way; the source
+    /// assertion is the half that holds for the database production runs on.
+    #[tokio::test]
+    async fn the_conviction_ordering_sorts_failed_signals_last() {
+        assert!(
+            include_str!("markov_method.rs").contains("s.conviction DESC NULLS LAST"),
+            "without NULLS LAST, PostgreSQL floats errored signals to the top of the block \
+             and they consume slots the status filter then empties"
+        );
+
+        static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+        INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        for sql in create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("create tables");
+        }
+        sqlx::query(
+            "CREATE TABLE portfolio_position_snapshots (recorded_at TEXT NOT NULL, symbol TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create positions");
+        sqlx::query(
+            "INSERT INTO markov_signal_runs (id, created_at, run_date, status, asset_count, \
+             success_count, error_count, config_json, summary_json) \
+             VALUES ('r1', '2026-09-03T21:35:00Z', '2026-09-03', 'completed', 2, 1, 1, '{}', '{}')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert run");
+        sqlx::query(
+            "INSERT INTO markov_asset_signals (id, run_id, created_at, run_date, status, symbol, \
+             window_days, threshold, horizon_minutes, sample_count, min_labeled_days, \
+             signal_horizon_days, signed_signal, conviction, direction) \
+             VALUES ('ok', 'r1', '2026-09-03T21:35:00Z', '2026-09-03', 'ok', 'AAPL:xnas', \
+             20, 0.05, 60, 900, 60, 5, 0.05, 0.05, 'long')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert healthy signal");
+        sqlx::query(
+            "INSERT INTO markov_asset_signals (id, run_id, created_at, run_date, status, symbol, \
+             window_days, threshold, horizon_minutes, sample_count, min_labeled_days, \
+             signal_horizon_days, signed_signal, conviction, direction, error_text) \
+             VALUES ('bad', 'r1', '2026-09-03T21:35:00Z', '2026-09-03', 'error', 'SPCX:xnas', \
+             20, 0.05, 60, 0, 60, 5, NULL, NULL, NULL, 'no price history')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert failed signal");
+        let state = AppState {
+            config_path: std::path::PathBuf::from("markov-test.yaml"),
+            config: serde_yaml::from_str("{}").expect("parse test config"),
+            db_url: "sqlite::memory:".to_string(),
+            pool,
+        };
+
+        let rows = latest_markov_signals_by_conviction(&state, 1)
+            .await
+            .expect("read conviction-ordered signals");
+
+        assert_eq!(
+            rows.first().and_then(|row| row.get("symbol")),
+            Some(&JsonValue::from("AAPL:xnas")),
+            "the single slot goes to the signal that carries a reading, not to the failure"
         );
     }
 

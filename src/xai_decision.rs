@@ -21,6 +21,21 @@ use crate::{
 const DEFAULT_DUE_WINDOW_MINUTES: i64 = 20;
 const DEFAULT_MINUTES_AFTER_OPEN: i64 = 75;
 
+/// How many symbols of Markov regime evidence the decision prompt carries.
+///
+/// The signal universe is 201 symbols, so this shows the model all of it. It
+/// was 80, which truncated the ranking: with holdings pinned first, everything
+/// below roughly the 60th-strongest unheld conviction reached the model with no
+/// regime read at all, and a symbol the model never sees cannot become a
+/// candidate. The block costs ~391 bytes per symbol, so the whole universe is
+/// about 10% of the prompt — cheap enough that ranking should decide what the
+/// model weighs, not what it is allowed to know about.
+///
+/// This is a visibility limit, not a gate. Widening it does not make a weak
+/// symbol tradable: BUY candidates still answer to the daily technical read,
+/// and `markov_gate` re-verifies any starter against the database.
+const MARKOV_CONTEXT_SYMBOL_LIMIT: i64 = 200;
+
 #[derive(Clone, Debug)]
 struct DecisionPulse {
     key: String,
@@ -1694,9 +1709,10 @@ async fn build_decision_prompt(
         .unwrap_or(JsonValue::Null);
     let execution_context = decision_prompt_execution_context(state).await;
     let earlier_same_scope_report = earlier_same_scope_report_context(state, pulse).await;
-    let markov_method = crate::markov_method::compact_markov_context(state, 80)
-        .await
-        .unwrap_or_else(|_| json!({"signals": []}));
+    let markov_method =
+        crate::markov_method::compact_markov_context(state, MARKOV_CONTEXT_SYMBOL_LIMIT)
+            .await
+            .unwrap_or_else(|_| json!({"signals": []}));
     let quiver_signals = crate::quiver::compact_quiver_context(state, 80)
         .await
         .unwrap_or_else(|_| json!({"signals": []}));
