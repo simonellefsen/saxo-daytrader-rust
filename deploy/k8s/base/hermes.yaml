@@ -526,9 +526,22 @@ spec:
           # cheap model while hermes-agent keeps whatever HERMES_MODEL names.
           # The reflections are a nightly summarisation pass; the advice runs
           # that gate candidate orders are not, and stay where they are.
+          #
+          # The leading "~" is OpenRouter's floating-alias marker, not a typo
+          # and not a home directory: the plain google/gemini-flash-latest slug
+          # does not exist. Quoted because a bare ~ is YAML null, and it reaches
+          # the shell only inside double quotes, where tildes do not expand.
+          #
+          # The alias moves the model under us without a deploy, which is the
+          # point for a nightly summariser and the trade being made: the
+          # reflections stop needing a version bump to stay current, and in
+          # exchange the model behind a given reflection is whatever the family
+          # head was that night. Nothing gates on it, so drift is cosmetic here.
+          # The trading path must not take this alias -- its model belongs in
+          # hermes-env where a change is a deliberate, reviewable act.
           env:
             - name: HERMES_MODEL
-              value: google/gemini-3.7-flash
+              value: "~google/gemini-flash-latest"
           ports:
             - name: gateway
               containerPort: 8642

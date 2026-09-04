@@ -123,7 +123,7 @@ flowchart TB
       API["daytrader-api\n/app/saxo-rust"]
       SCH["daytrader-scheduler\n/app/saxo-rust --scheduler"]
       H["hermes-agent\ngateway run\nHERMES_MODEL"]
-      HR["hermes-reflections\ngateway run\ngoogle/gemini-3.7-flash"]
+      HR["hermes-reflections\ngateway run\n~google/gemini-flash-latest"]
       MCP["daytrader-mcp\nread-mostly tool surface"]
       HPVC[("hermes-data PVC\n/opt/data")]
       HRPVC[("hermes-reflections-data PVC\n/opt/data")]
@@ -160,7 +160,7 @@ pods must never share one.
 Recommended first deployment:
 
 - `Deployment/hermes-agent`, one replica.
-- `Deployment/hermes-reflections`, one replica, pinning `HERMES_MODEL=google/gemini-3.7-flash` as an explicit `env` entry so it overrides the shared `hermes-env` secret.
+- `Deployment/hermes-reflections`, one replica, pinning `HERMES_MODEL=~google/gemini-flash-latest` as an explicit `env` entry so it overrides the shared `hermes-env` secret. The leading `~` is OpenRouter's floating-alias marker, not a typo — the plain `google/gemini-flash-latest` slug does not exist — so the gateway tracks the head of the Gemini Flash family without a deploy. The trading path deliberately does not take the alias: its model stays in `hermes-env`, where changing it is a reviewable act.
 - `PersistentVolumeClaim/hermes-data` and `PersistentVolumeClaim/hermes-reflections-data`, each mounted at `/opt/data` in its own pod.
 - `Service/hermes-gateway` and `Service/hermes-reflections`, ClusterIP, port `8642`.
 - Optional dashboard port `9119`, ClusterIP only.

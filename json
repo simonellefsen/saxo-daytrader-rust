@@ -1,0 +1,2036 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: saxo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: daytrader-backup-retention
+  namespace: saxo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: daytrader-backup-retention
+  namespace: saxo
+rules:
+- apiGroups:
+  - postgresql.cnpg.io
+  resources:
+  - backups
+  verbs:
+  - create
+  - get
+  - list
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: daytrader-backup-retention
+  namespace: saxo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: daytrader-backup-retention
+subjects:
+- kind: ServiceAccount
+  name: daytrader-backup-retention
+  namespace: saxo
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    app:
+      project_name: saxo-daytrader-xai
+      environment: kubernetes
+      dry_run: false
+      simulation_mode: true
+      public_base_path: /saxo-daytrader
+      public_base_url: ENV:DAYTRADER_PUBLIC_BASE_URL
+
+    localization:
+      locale: da-DK
+      time_zone: Europe/Copenhagen
+      hour_cycle: 24h
+      week_start: monday
+
+    portfolio:
+      base_currency: DKK
+      source_csv: ""
+      database_url: ENV:DATABASE_URL
+      database_path: ledger.db
+      initial_cash_dkk: 9770.17
+      virtual_cap_dkk: 250000.0
+      # Saxo SIM holds a separate EUR broker account. The DKK strategy ledger is
+      # intentionally bounded, so absolute broker-cash reconciliation is invalid.
+      # Set true only when both values represent the same capital book.
+      broker_cash_reconciliation_enabled: false
+
+    market_data:
+      refresh_interval_seconds: 300
+      request_timeout_seconds: 10
+      watchlists:
+        nordic_limit: 100
+        uk_limit: 25
+        us_limit: 100
+        eu_limit: 75
+        global_limit: 100
+        # Versioned candidate membership for Markov, daily indicators, and
+        # decision reports. Positions and extra_symbols remain additive. Do not
+        # infer membership from archived sentiment or old price rows.
+        universe_symbols:
+          - aapl:xnas
+          - abb:xome
+          - abi:xbru
+          - abnb:xnas
+          - adbe:xnas
+          - adi:xnas
+          - ads:xetr
+          - adyen:xams
+          - air:xpar
+          - ajg:xnys
+          - akerbp:xosl
+          - alfa:xome
+          - alk-b:xcse
+          - almb:xcse
+          - alv:xetr
+          - amat:xnas
+          - ambu-b:xcse
+          - amd:xnas
+          - amgn:xnas
+          - amzn:xnas
+          - arki:xlon
+          - arkk:xmil
+          - arm:xnas
+          - asml:xams
+          - asml:xnas
+          - assa-b:xome
+          - atco-a:xome
+          - auto:xosl
+          - avgo:xnas
+          - azn:xlon
+          - bac:xnys
+          - bakka:xosl
+          - barc:xlon
+          - bas:xetr
+          - bava:xcse
+          - bkng:xnas
+          - bmw:xetr
+          - bnp:xpar
+          - bol:xome
+          - brk-b:xnys
+          - cap:xpar
+          - carl-b:xcse
+          - cat:xnys
+          - ceg:xnas
+          - chemm:xcse
+          - cmg:xnys
+          - colo-b:xcse
+          - cop:xnys
+          - cost:xnys
+          - crm:xnys
+          - csco:xnas
+          - danske:xcse
+          - db1gn:xetr
+          - ddog:xnas
+          - de:xnys
+          - demant:xcse
+          - dfds:xcse
+          - dg:xpar
+          - dis:xnys
+          - dnb:xosl
+          - dsv:xcse
+          - dte:xetr
+          - elisa:xhel
+          - elux-b:xome
+          - enel:xmil
+          - engi:xpar
+          - eni:xmil
+          - eqnr:xosl
+          - eric-b:xome
+          - essity-b:xome
+          - figr:xnas
+          - fls:xcse
+          - fortum:xhel
+          - ge:xnys
+          - gild:xnas
+          - gjf:xosl
+          - gn:xcse
+          - googl:xnas
+          - gs:xnys
+          - gsk:xlon
+          - hd:xnys
+          - hexa-b:xome
+          - hm-b:xome
+          - hon:xnys
+          - hsba:xlon
+          - ibm:xnys
+          - ifx:xetr
+          - intc:xnas
+          - intu:xnas
+          - inve-b:xome
+          - isp:xmil
+          - isrg:xnas
+          - iss:xcse
+          - jnj:xnys
+          - jpm:xnys
+          - keskob:xhel
+          - knebv:xhel
+          - ko:xnys
+          - ldo:xmil
+          - lin:xnys
+          - lly:xnys
+          - lmnd:xnys
+          - lseg:xlon
+          - ma:xnys
+          - maersk-b:xcse
+          - matas:xcse
+          - mbg:xetr
+          - mc:xpar
+          - mcd:xnys
+          - mdb:xnas
+          - meli:xnas
+          - meta:xnas
+          - metso:xhel
+          - mowi:xosl
+          - msft:xnas
+          - mstr:xnas
+          - mu:xnas
+          - nda-se:xome
+          - neste:xhel
+          - netc:xcse
+          - neu:xwar
+          - nflx:xnas
+          - ng:xlon
+          - nhy:xosl
+          - nke:xnys
+          - nkt:xcse
+          - nnit:xcse
+          - novob:xcse
+          - nokia:xhel
+          - now:xnys
+          - nvda:xnas
+          - nsis-b:xcse
+          - or:xpar
+          - orcl:xnys
+          - ork:xosl
+          - orsted:xcse
+          - out1v:xhel
+          - panw:xnas
+          - pep:xnas
+          - pg:xnys
+          - pltr:xnas
+          - pndora:xcse
+          - pypl:xnas
+          - qcom:xnas
+          - qomp:xetr
+          - rel:xlon
+          - rilba:xcse
+          - rio:xlon
+          - rivn:xnas
+          - rms:xpar
+          - rock-b:xcse
+          - rr:xlon
+          - rtx:xnys
+          - saf:xpar
+          - salm:xosl
+          - sampo:xhel
+          - san:xpar
+          - sand:xome
+          - sapg:xetr
+          - sbux:xnas
+          - sca-b:xome
+          - scho:xcse
+          - seb-a:xome
+          - shb-a:xome
+          - shell:xlon
+          - shop_new:xnas
+          - sie:xetr
+          - skf-b:xome
+          - snow:xnys
+          - spot:xnys
+          - sterv:xhel
+          - stg:xcse
+          - stlam:xmil
+          - su:xpar
+          - swed-a:xome
+          - tel:xosl
+          - telia:xome
+          - tmo:xnys
+          - tom:xosl
+          - tryg:xcse
+          - tsm:xnys
+          - tsla:xnas
+          - tte:xpar
+          - txn:xnas
+          - uber:xnys
+          - ucg:xmil
+          - ulvr:xlon
+          - unh:xnys
+          - upm:xhel
+          - v:xnys
+          - volv-b:xome
+          - vow3:xetr
+          - vws:xcse
+          - wmt:xnas
+          - wrt1v:xhel
+          - xom:xnys
+          - yar:xosl
+          - zeal:xcse
+          - zts:xnys
+        extra_symbols:
+          # SpaceX IPO'd 2026-06-12 on Nasdaq (confirmed on the Live account).
+          # Saxo SIM reference data has not synced it yet; resolution retries
+          # every poll, ISIN-first, and activates automatically when SIM catches up.
+          - symbol: SPCX:xnas
+            isin: US84615Q1031
+          - RKLB:xnas
+      rss:
+        market_feeds:
+          - name: Yahoo Finance
+            url: https://finance.yahoo.com/news/rssindex
+          - name: CNBC Markets
+            url: https://www.cnbc.com/id/10001147/device/rss/rss.html
+          - name: Reuters Business
+            url: https://feeds.reuters.com/reuters/businessNews
+        macro_feeds:
+          - name: ECB Press
+            url: https://www.ecb.europa.eu/rss/press.html
+          - name: Federal Reserve Press
+            url: https://www.federalreserve.gov/feeds/press_all.xml
+        crypto_feeds:
+          - name: CoinDesk
+            url: https://www.coindesk.com/arc/outboundfeeds/rss/
+          - name: Cointelegraph
+            url: https://cointelegraph.com/rss
+      editorial_research:
+        enabled: true
+        refresh_interval_minutes: 240
+        request_timeout_seconds: 15
+        max_items_per_source: 12
+        max_summary_chars: 800
+        retention_days: 90
+        sources:
+          - name: App Economy Insights
+            url: https://www.appeconomyinsights.com/feed
+            access_level: public_feed_metadata
+            symbol_aliases:
+              TSLA:xnas: [Tesla]
+              GOOGL:xnas: [Google, Alphabet]
+              AMZN:xnas: [Amazon]
+              NFLX:xnas: [Netflix]
+              UBER:xnys: [Uber]
+              TSM:xnys: [TSMC, Taiwan Semiconductor]
+              ASML:xams: [ASML]
+
+    price_monitor:
+      enabled: true
+      poll_interval_minutes: 1
+      off_hours_poll_interval_minutes: 15
+      post_close_grace_minutes: 15
+      reset_hour_local: 6
+      timezone: Europe/Copenhagen
+      history_max_rows: 0
+      history_retention_days: 0
+
+    analysis_windows:
+      offset_minutes_after_open: 30
+      duration_minutes: 0
+      pre_sync_minutes_before_analysis: 5
+      end_buffer_minutes_before_close: 15
+      calendar_refresh_interval_minutes: 360
+      calendar_lookback_days: 7
+      calendar_lookahead_days: 45
+
+    scheduler:
+      enabled: true
+      poll_interval_minutes: 10
+      startup_run: true
+      history_max_rows: 250
+      history_retention_days: 30
+
+    strategy:
+      # Read-only comparison of the account value series with Saxo-resolved ETF
+      # proxies. These are price returns, not index total returns: no dividends,
+      # FX-normalization, or cash-flow adjustment is claimed. They are deliberately
+      # outside Decision Reports, Trading Manager, and broker execution. The daily
+      # end-of-day journal can expose them to Hermes as read-only context only.
+      performance_benchmarks:
+        enabled: true
+        timezone: Europe/Copenhagen
+        # Runs after the regular US close and before the 22:30 EOD journal, so the
+        # journal compares the completed day instead of yesterday's proxy close.
+        daily_time: "22:15"
+        run_weekdays_only: true
+        sample_count: 1260
+        references:
+          - key: us_large_cap
+            label: S&P 500 (SPY ETF proxy)
+            symbol: SPY:arcx
+          - key: us_technology
+            label: Nasdaq-100 (QQQ ETF proxy)
+            symbol: QQQ:xnas
+          - key: us_blue_chip
+            label: Dow Jones Industrial Average (DIA ETF proxy)
+            symbol: DIA:arcx
+          - key: global_equity
+            label: MSCI World (EUNL ETF proxy)
+            symbol: EUNL:xetr
+          - key: europe_broad
+            label: MSCI Europe (EUNK ETF proxy)
+            symbol: EUNK:xetr
+          - key: uk_large_cap
+            label: FTSE 100 (ISF ETF proxy)
+            symbol: ISF:xlon
+      enabled: true
+      mode: swing
+      selection_interval_minutes: 15
+      max_candidates: 20
+      max_selected_assets: 8
+      # Exchange/currency concentration gates are wired and audited, but start in
+      # explicit unlimited mode until an operator chooses live limits. Nonzero
+      # values cap distinct held/planned BUY symbols; negative values fail BUYs
+      # closed rather than weakening diversification evidence.
+      concentration:
+        max_assets_per_exchange: 0
+        max_assets_per_currency: 0
+      # BUYs require a verified indicator target to clear the exchange-minimum
+      # round-trip commission plus this one-way slippage estimate. This is a
+      # lower-bound cost model, not a realised-fill forecast.
+      estimated_slippage_bps: 8
+      # Multiplies the round-trip minimum commission in the same BUY cost guard.
+      # Zero disables only this commission multiplier; invalid negative values
+      # fail closed during queueing.
+      cost_guard_multiple: 1.5
+      capital:
+        max_deployment_pct: 0.98
+        min_cash_buffer_pct: 0.02
+        reinvestment_pressure_threshold_pct: 0.05
+        # Reduce the cycle-wide BUY budget while the monthly P/L is between this
+        # floor and the hard halt. It must be a less-severe negative number than
+        # monthly_loss_halt_dkk; invalid/disabled bands do not reduce deployment.
+        # Rescaled 2026-07-25 against the +15%/year goal on a ~300,000 DKK book.
+        # The previous -25,000/-50,000 pair was -8.2%/-16.4% of the portfolio in a
+        # single month, so one bad month could erase roughly a year of target gains
+        # before the hard halt fired. Now -3% soft and -6% hard, same 2:1 ratio.
+        monthly_loss_soft_reduce_dkk: -9000
+        monthly_loss_soft_buy_multiplier: 0.50
+        # Suspend new BUYs when month P/L (goal-tracking baseline) breaches this
+        # hard floor; SELLs are never blocked. Set >= 0 to disable both loss tiers.
+        monthly_loss_halt_dkk: -18000
+        # Portfolio drawdown guardrail. Unlike the monthly floors above, this does
+        # not reset on the 1st: it measures the current total portfolio value
+        # against its highest value in the trailing window, so a decline that
+        # straddles a month boundary stays visible. drawdown_halt_pct is the same
+        # number the Hermes goal contract publishes as max_drawdown; the contract
+        # reads this key, so the two cannot drift apart. Set <= 0 to disable both
+        # tiers. Too little history disables the guardrail rather than tripping it.
+        # Widened 0.20 -> 0.25 on 2026-08-04 by operator decision. The book sat at
+        # 19.37% against the 20% floor (peak 297,463 DKK on 2026-06-30, current
+        # ~240,300), so a ~1% day would have suspended BUYs with no re-entry rule
+        # defined -- the guardrail can stop a decline but has no notion of how a
+        # halted book resumes. The soft band stays at 0.10 deliberately: it is
+        # already active and halving the cycle BUY budget, so caution is retained
+        # rather than removed. Revisit the pair together, and note the halt only
+        # falls back below the peak's influence once 2026-06-30 leaves the
+        # 90-day lookback (around 2026-09-28).
+        drawdown_lookback_days: 90
+        drawdown_soft_reduce_pct: 0.10
+        # 0.75 from 2026-08-31. At 0.50 the halved budget funded exactly one
+        # order above the ~7,021 DKK commission-efficiency floor, so every second
+        # candidate was downsized into a stub the cost guard then rejected. The
+        # soft band stays armed at 10% and still cuts deployment by a quarter;
+        # only the severity moved, not the trigger or the 25% halt.
+        drawdown_soft_buy_multiplier: 0.75
+        drawdown_halt_pct: 0.25
+      markov:
+        enabled: true
+        timezone: Europe/Copenhagen
+        daily_time: "23:30"
+        run_weekdays_only: true
+        window_days: 20
+        threshold: 0.05
+        # Intraday bars. Every tuning here is expressed in calendar units and
+        # scaled into bar counts by session_minutes / horizon_minutes, so a
+        # 20-day window stays 20 days rather than becoming 20 hours.
+        horizon_minutes: 60
+        session_minutes: 510
+        # A trading session is not the same length everywhere, and every Markov
+        # tuning is scaled by it. With one global value, window_days: 20 meant 20
+        # trading days on a 9-bar exchange and about 26 on a 7-bar one, silently,
+        # for roughly 40% of the universe. Measured against live SIM hourly bars:
+        # NASDAQ/NYSE 7 bars a session, Copenhagen/Oslo 8, the rest 9.
+        session_minutes_by_exchange:
+          xnas: 390
+          xnys: 390
+          xcse: 480
+          xosl: 480
+        # 180 window + 540 min-labeled bars needs 722; 900 leaves real headroom
+        # for symbols with a shorter intraday history. Saxo caps a request at 1200.
+        sample_count: 900
+        min_labeled_days: 60
+        signal_horizon_days: 5
+        # Diagnostic look-aheads, in calendar days. 10 was dropped: by then the
+        # forecast is within 0.08 of the stationary distribution, which is already
+        # persisted exactly in stationary_json. Information peaks at 2-3 days.
+        forecast_steps: [1, 2, 3, 5]
+        # Refresh before each decision report rather than only overnight. The
+        # scheduler runs Markov after decision reports within one tick, and ticks
+        # are 10 minutes apart, so each slot sits well ahead of the report it
+        # feeds. us_open is anchored to the report's own zone so the two do not
+        # drift apart when US and EU daylight saving disagree.
+        intraday_runs:
+          - name: europe_open
+            local_time: "10:15"
+            time_zone: Europe/Copenhagen
+          - name: us_open
+            local_time: "10:30"
+            time_zone: America/New_York
+        max_symbols: 0
+        instrument_negative_cache_retry_days: 7
+        # Read-only analysis aliases for stale portfolio/watchlist symbols. These
+        # are used only for Markov/daily-indicator Saxo chart lookup; persisted
+        # signals remain keyed by the original symbol.
+        symbol_aliases:
+          "COST:xnys": "COST:xnas"
+          "HON:xnys": "HON:xnas"
+          "LIN:xnys": "LIN:xnas"
+          "SHELL:xlon": "SHEL:xlon"
+      quiver:
+        enabled: true
+        timezone: Europe/Copenhagen
+        # Follow the Saxo US exchange calendar so this completes before the
+        # US Open +1h15 Decision Report despite holidays and daylight saving.
+        us_open_followup:
+          minutes_after_open: 45
+          exchange_codes: [XNAS, XNYS]
+        run_weekdays_only: true
+        lookback_days: 120
+        max_symbols: 60
+      swing:
+        min_holdings: 10
+        max_holdings: 25
+        # Decision chips are advisory context, not evergreen instructions. Mark
+        # report-derived symbols stale after this many days in the dashboard.
+        position_decision_stale_after_days: 7
+        # Maximum estimated initial loss for a BUY at its automatic ATR stop.
+        # Uses a database-verified close, ATR14, and DKK share value; missing
+        # evidence fails the BUY closed rather than trusting model-provided data.
+        risk_per_trade_pct: 0.01
+        # ARKK:xmil is held on the operator's live account and stays in the analysis
+        # universe for that reason, but the SIM account has no commission rule for
+        # this listing: seven BUYs from 2026-05-05 to 2026-09-02 were all rejected
+        # at precheck with "your account does not have any commissions configured".
+        # Verified read-only against Saxo's cost endpoint on 2026-09-02 -- the other
+        # two ETFs (ARKI:xlon, QOMP:xetr) and Milan stocks (ENEL, ISP) all carry a
+        # commission rule, so it is this one listing rather than the asset type or
+        # the venue. Listing it here keeps the analysis and drops only the trading:
+        # the manager refuses it, and the decision prompt's do_not_propose block
+        # stops a candidate slot being spent on it at all.
+        never_trade_symbols:
+          - arkk:xmil
+        daily_indicators:
+          enabled: true
+          # 0 = full portfolio+watchlist universe (matches the Markov run, ~199
+          # symbols). A small cap starves BUY candidates of confluence evidence:
+          # the technical gate and Hermes then stand down every rotation into a
+          # name outside current holdings.
+          max_symbols: 0
+          horizon_minutes: 1440
+          # Five daily trading years. The support-risk projection reports how much
+          # of this target was actually returned, rather than assuming full history.
+          sample_count: 1260
+          min_confluences: 3
+          min_reward_risk: 2.0
+          daily_time: "23:45"
+          run_weekdays_only: true
+          timezone: Europe/Copenhagen
+        markov_gate:
+          enabled: true
+          # Recalibrated 2026-08-31 for hourly bars. At 0.15 the hourly model
+          # admitted 132 of 200 symbols where the daily model admitted 111; 0.20
+          # admits 113, holding the risk posture the threshold was chosen for.
+          min_signed_signal: 0.20
+          max_position_pct: 0.05
+          max_signal_age_days: 5
+        trading_manager:
+          enabled: true
+          use_ai: true
+          due_window_minutes: 20
+          # A scheduled report older than this is not eligible to create new
+          # execution orders. Keep this explicit so the queue freshness policy
+          # cannot silently drift from the Rust default.
+          max_report_age_hours: 6
+          # Maximum distinct report symbols evaluated per Decision Report in report
+          # order. Additional symbols remain visible as skipped audit rows. Set 0
+          # for explicit unlimited mode; a negative value fails closed.
+          max_symbols: 30
+        journal:
+          enabled: true
+          timezone: Europe/Copenhagen
+          daily_time: "22:30"
+          weekly_weekday: 6
+          weekly_time: "20:00"
+          monthly_time: "22:45"
+        analysis_pulses:
+          timezone: Europe/Copenhagen
+          due_window_minutes: 20
+          europe_open_followup:
+            enabled: true
+            # Stable pulse identity uses the local trading date in this zone.
+            time_zone: Europe/Copenhagen
+            # 105 minutes after the 09:00 open, so the report lands at 10:45 and
+            # reads the 10:15 intraday Markov refresh rather than last night's.
+            minutes_after_open: 105
+            exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
+          us_open_followup:
+            enabled: true
+            # Anchor US reports to the US session; Copenhagen display follows DST.
+            time_zone: America/New_York
+            minutes_after_open: 75
+            exchange_codes: [XNAS, XNYS]
+          europe_mid_session_shadow:
+            # Shadow-only: persisted reports cannot enter the manager queue.
+            enabled: true
+            time_zone: Europe/Copenhagen
+            local_time: "14:15"
+            exchange_codes: [XCSE, XSTO, XOSL, XHEL, XLON, XETR, XFRA, XMIL, XAMS]
+          us_mid_session_shadow:
+            # Anchored to the US trading session, not a Copenhagen clock time.
+            enabled: true
+            time_zone: America/New_York
+            local_time: "14:15"
+            exchange_codes: [XNAS, XNYS]
+      ladder:
+        rung_count: 5
+        min_rung_value_dkk: 5000
+        submit_stop_loss_after_fill: true
+        atr_spacing_min: 0.15
+        atr_spacing_factor: 0.25
+        atr_spacing_max: 0.4
+        stop_loss_atr_multiple: 2.0
+        take_profit_rung_multiple: 2.0
+        max_take_profit_atr_multiple: 8.0
+        # Hard cap for total exposure to one symbol after a BUY. The Trading
+        # Manager uses persisted position value plus BUYs already approved in the
+        # same scheduler cycle; missing or invalid exposure data blocks the BUY.
+        max_position_weight: 0.04
+        trail_stop_atr_multiple: 2.0
+        min_ratchet_atr_fraction: 0.25
+
+    execution:
+      mode: live
+      adapter: saxo
+      auto_execute_simulation: true
+      require_approval_live: false
+      min_trade_value_dkk: 500
+      # BUYs must be large enough that the exchange minimum commission stays
+      # under this share of the clip. Raised 0.003 -> 0.004 on 2026-09-03: at 0.003
+      # the floor and the 4% position cap sat closer together than one share for
+      # expensive names, so ALV:xetr (3,358 DKK/share) needed 2.22-2.94 shares and
+      # was refused eight times across seven sessions. Rounding down cost 2.23 DKK
+      # more commission than 0.3% allowed; refusing bought nothing. 0 disables.
+      max_commission_pct_per_side: 0.004
+      max_daily_orders: 50
+      # A report can be fresh when queued and stale by the next verified market
+      # session. Expire these discretionary rows before any Saxo session/precheck
+      # call; protective GoodTillCancel stops are intentionally excluded.
+      discretionary_queue_max_age_minutes: 360
+      delayed_price_limit_orders:
+        enabled: true
+        assumed_delay_minutes: 15
+        buy_limit_offset_bps: 20
+        sell_limit_offset_bps: 20
+        replace_threshold_bps: 10
+        max_replacements_per_cycle: 25
+
+    risk:
+      excluded_symbols: []
+      excluded_symbols_csv: ENV:RISK_EXCLUDED_SYMBOLS
+      instrument_quarantine:
+        enabled: true
+        lookback_days: 14
+        min_failures: 3
+        active_days: 14
+      allow_shorting: false
+
+    taxation:
+      share_income:
+        currency: DKK
+        brackets:
+          - up_to_dkk: 79000
+            rate: 0.27
+          - up_to_dkk:
+            rate: 0.42
+
+    commissions:
+      default_rate: 0.0008
+      fx_conversion_rate: 0.0025
+      minimums:
+        XCSE:
+          currency: DKK
+          amount: 14.0
+        XNAS:
+          currency: USD
+          amount: 3.0
+        XNYS:
+          currency: USD
+          amount: 3.0
+        XLON:
+          currency: GBP
+          amount: 3.0
+        XMIL:
+          currency: EUR
+          amount: 3.0
+
+    xai:
+      provider: openrouter
+      api_key: ENV:OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      model: openai/gpt-5.5
+      reasoning_effort: medium
+      max_output_tokens: 8192
+      performance_goals:
+        currency: DKK
+        week_start_weekday: 0
+        week_end_weekday: 4
+        # Sized to roughly +15% per year on a ~300,000 DKK book (2026-07-25).
+        # Revisit these DKK figures when the portfolio value changes materially,
+        # otherwise the implied percentage target drifts silently.
+        weekly_target_dkk: 880
+        monthly_target_dkk: 3800
+        stretch_weekly_target_dkk: 1200
+      goal: >
+        Target approximately +15% portfolio growth per year before tax, which is
+        about DKK 880 per Monday-Friday trading week and DKK 3,800 per calendar
+        month on the current book. Preserve capital first: a steady, disciplined
+        swing horizon beats chasing the target in any single week.
+      timeout_seconds: 600
+      retry_initial_backoff_seconds: 60
+      retry_max_backoff_seconds: 600
+      auto_run_interval_minutes: 240
+      include_encrypted_reasoning: false
+
+    saxo:
+      environment: SIM
+      client_id: ENV:SAXO_CLIENT_ID
+      client_secret: ENV:SAXO_CLIENT_SECRET
+      client_key: ENV:SAXO_CLIENT_KEY
+      account_key: ENV:SAXO_ACCOUNT_KEY
+      session_path: /tmp/daytrader/saxo_session.json
+      # Requests per minute per Saxo service group (the first path segment: chart,
+      # port, trade, ref). Saxo documents roughly 120 per session per group; this
+      # sits under it because the ceiling is where rejection starts, not where it
+      # is safe to sit. Clamped to 120 in code. The pacer also reads the
+      # X-RateLimit-* response headers and tightens on its own as quota depletes.
+      requests_per_minute: 100
+
+    tradingview:
+      username: ENV:TRADINGVIEW_USERNAME
+      encrypted_password: ENV:TRADINGVIEW_PASSWORD
+      totp_secret: ENV:TRADINGVIEW_TOTP_SECRET
+
+    openfigi:
+      enabled: true
+      api_key: ENV:OPENFIGI_API_KEY
+      base_url: https://api.openfigi.com/v3
+      timeout_seconds: 10
+
+    quiver:
+      api_key: ENV:QUIVERQUANT_API_KEY
+      base_url: https://api.quiverquant.com
+
+    hermes:
+      experiments:
+        # Alerts begin after 14 days; proposals not reviewed after 30 days are
+        # closed as expired_stale without changing a strategy baseline or runtime.
+        auto_expire_pending_review_enabled: true
+        auto_expire_pending_review_days: 30
+
+    notifications:
+      daily_summary_enabled: false
+      weekly_summary_enabled: false
+      monthly_summary_enabled: false
+      quarterly_summary_enabled: false
+      ytd_summary_enabled: false
+      timezone: Europe/Copenhagen
+      dispatch_hour_local: 18
+      dispatch_minute_local: 15
+      weekly_dispatch_weekday_local: 0
+      monthly_dispatch_day_local: 1
+      quarterly_dispatch_day_local: 1
+      ytd_dispatch_day_local: 1
+      retry_backoff_minutes: 30
+      max_attempts_per_day: 3
+      channel_cooldown_minutes: 240
+      summary_style: structured
+      slack:
+        enabled: true
+        webhook_url: ENV:SLACK_WEBHOOK_URL
+      email:
+        enabled: false
+        smtp_host: ENV:SMTP_HOST
+        smtp_port: ENV:SMTP_PORT
+        use_starttls: true
+        username: ENV:SMTP_USERNAME
+        password: ENV:SMTP_PASSWORD
+        from_address: ENV:SMTP_FROM_ADDRESS
+        to_addresses_csv: ENV:SMTP_TO_ADDRESSES
+      alerts:
+        execution_success_enabled: true
+        execution_warning_enabled: true
+        broker_fill_enabled: false
+        broker_reject_enabled: false
+        broker_cancel_enabled: false
+        execution_failure_enabled: true
+        broker_management_failure_enabled: true
+        saxo_session_failure_enabled: true
+        operational_alerts_enabled: true
+        decision_failure_enabled: true
+        decision_failure_threshold: 2
+        decision_failure_window_hours: 24
+        execution_failure_burst_enabled: true
+        execution_failure_burst_threshold: 3
+        execution_failure_burst_window_hours: 24
+        monthly_loss_circuit_breaker_alert_enabled: true
+        drawdown_guardrail_alert_enabled: true
+        instrument_quarantine_alert_enabled: true
+        scheduler_stale_enabled: true
+        scheduler_stale_minutes: 30
+        # One alert per pulse/local date when an eligible shadow window elapsed
+        # without a report. Observation-only; it never retries or trades.
+        shadow_pulse_missed_enabled: true
+        integrity_alert_enabled: true
+        hermes_eod_reflection_missed_enabled: true
+        hermes_eod_reflection_due_hour_utc: 22
+        hermes_pending_experiment_review_enabled: true
+        hermes_pending_experiment_review_stale_days: 14
+        hermes_pending_experiment_review_limit: 10
+        # One compact operator review list after the weekly reflection cycle.
+        # Weekdays use ISO numbering: Monday=1 through Sunday=7.
+        hermes_pending_experiment_review_digest_enabled: true
+        hermes_pending_experiment_review_digest_weekday_local: 1
+        hermes_pending_experiment_review_digest_hour_local: 9
+        hermes_pending_experiment_review_digest_limit: 10
+      alert_suppression:
+        enabled: true
+        low_cooldown_minutes: 240
+        medium_cooldown_minutes: 60
+        high_cooldown_minutes: 0
+      alert_grouping:
+        enabled: true
+        max_items_per_group: 5
+      route_profiles: {}
+      routes:
+        daily: {}
+        weekly: {}
+        monthly: {}
+        quarterly: {}
+        ytd: {}
+        alert_execution_success: {}
+        alert_execution_warning: {}
+        alert_broker_fill: {}
+        alert_broker_reject: {}
+        alert_broker_cancel: {}
+        alert_broker_grouped: {}
+        alert_execution_failed: {}
+        alert_broker_management_failed: {}
+        alert_saxo_session_failed: {}
+        alert_operational_issue: {}
+kind: ConfigMap
+metadata:
+  name: daytrader-config
+  namespace: saxo
+---
+apiVersion: v1
+data:
+  DAYTRADER_CAPABILITIES.md: |
+    # Daytrader Capabilities
+
+    Hermes is running beside the `saxo` day/swing trading app in the
+    `saxo` Kubernetes namespace.
+
+    Hermes may observe, reflect, summarize, and propose changes. It must not
+    directly place Saxo orders, approve live orders, read Saxo session tokens,
+    mutate Kubernetes secrets, or activate strategies without the app's approval
+    flow.
+
+    Current app capabilities:
+
+    - Rust Axum HTTP/API server and Dioxus SSR dashboard.
+    - Rust scheduler heartbeat and OpenRouter decision report submission.
+    - Two scheduled decision-report pulses when markets are open: Nordic/EU
+      open +1h15 and US open +1h15.
+    - Daily end-of-day strategy journal reports after the configured local
+      journal time.
+    - Daily Markov method regime signals for portfolio and watchlist assets.
+    - Trading Manager queue creation from completed decision reports.
+    - Trading Manager can request per-decision-report Hermes advice through
+      the MCP `create_decision_advice` tool before queueing orders. Default
+      mode is record-only; conservative mode can only block, reduce, or require
+      review.
+    - Saxo order precheck and placement for approved queued orders.
+    - Strategy journal entries, scheduler cycles, execution orders, events, and
+      fills persisted in the daytrader database.
+    - Durable Saxo OAuth session storage in `saxo_sessions`, which Hermes must
+      not read or expose.
+
+    Useful internal endpoints:
+
+    - `http://daytrader-api.saxo:8000/api/health`
+    - `http://daytrader-mcp.saxo:8610/mcp`
+    - `http://daytrader-api.saxo:8000/api/overview`
+    - `http://daytrader-api.saxo:8000/api/hermes/capabilities`
+    - `http://daytrader-api.saxo:8000/api/hermes/context`
+    - `http://daytrader-api.saxo:8000/api/hermes/reflections`
+    - `http://daytrader-api.saxo:8000/api/hermes/experiments`
+    - `http://daytrader-api.saxo:8000/api/decision/latest`
+    - `http://daytrader-api.saxo:8000/api/decision/reports`
+    - `http://daytrader-api.saxo:8000/api/markov/signals`
+    - `http://daytrader-api.saxo:8000/api/scheduler`
+    - `http://daytrader-api.saxo:8000/api/execution`
+    - `http://daytrader-api.saxo:8000/api/strategy-journal`
+
+    The `/api/hermes/*` endpoints require `x-hermes-api-key` or
+    `Authorization: Bearer ...` using `HERMES_DAYTRADER_API_KEY`.
+    The `daytrader-mcp` endpoint uses the same bearer key and exposes only
+    Hermes-safe tools.
+
+    Read the repository wiki for maintained project knowledge:
+
+    - `wiki/index.md`
+    - `wiki/schema.md`
+    - `docs/hermes-agent.md`
+    - `docs/project-wiki.md`
+  SELF_IMPROVEMENT_GOAL.yaml: |
+    hermes_self_improvement:
+      enabled: true
+      mode: recommend_only
+      goal_version: 2
+      objective:
+        target_return_30d: 0.0117
+        target_return_note: "Approximately +15% per year compounded monthly: 1.0117^12 ~= 1.15"
+        # Must equal strategy.capital.drawdown_halt_pct in config.k8s.yaml.
+        # This file is a static copy mounted into the Hermes pod, so unlike the
+        # Rust goal contract (which reads that key directly) it cannot follow a
+        # config change on its own. Widened with it 0.20 -> 0.25 on 2026-08-04.
+        max_drawdown: 0.25
+        min_sharpe: 1.0
+        failure_below_30d_return: -0.02
+        reflection_every: 7d
+        one_variable_only: true
+      constraints:
+        max_positions: 25
+        slippage_tolerance: 0.02
+        min_cash_buffer_pct: 0.02
+        allow_shorting: false
+        require_human_approval: true
+        require_backtest_before_activation: true
+        require_paper_or_sim_observation: true
+      experiment_policy:
+        proposal_requirement: "Turn concrete learnings into pending-review one-variable proposals instead of stopping at narrative reflection."
+        daily: "Create at most one proposal when same-day evidence is specific, safe to test, and not a duplicate."
+        weekly: "Create one proposal when weekly evidence is sufficient and no duplicate active/pending proposal exists."
+        supported_variables:
+          - execution.min_trade_value_dkk
+          - strategy.capital.min_cash_buffer_pct
+          - strategy.swing.daily_indicators.min_confluences
+          - strategy.swing.markov_gate.min_signed_signal
+      forbidden:
+        - read_saxo_sessions
+        - expose_tokens_or_account_keys
+        - place_or_approve_live_orders
+        - mutate_kubernetes_secrets
+        - activate_strategy_without_approval
+kind: ConfigMap
+metadata:
+  labels:
+    app: hermes-agent
+  name: hermes-daytrader-context
+  namespace: saxo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: daytrader-api
+  namespace: saxo
+spec:
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+  selector:
+    app: daytrader-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: daytrader-frontend
+  namespace: saxo
+spec:
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+  selector:
+    app: daytrader-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: daytrader-mcp
+  name: daytrader-mcp
+  namespace: saxo
+spec:
+  ports:
+  - name: mcp
+    port: 8610
+    targetPort: mcp
+  selector:
+    app: daytrader-mcp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: hermes-agent
+  name: hermes-gateway
+  namespace: saxo
+spec:
+  ports:
+  - name: gateway
+    port: 8642
+    targetPort: gateway
+  - name: dashboard
+    port: 9119
+    targetPort: dashboard
+  selector:
+    app: hermes-agent
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: hermes-reflections
+  name: hermes-reflections
+  namespace: saxo
+spec:
+  ports:
+  - name: gateway
+    port: 8642
+    targetPort: gateway
+  - name: dashboard
+    port: 9119
+    targetPort: dashboard
+  selector:
+    app: hermes-reflections
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: hermes-agent
+  name: hermes-data
+  namespace: saxo
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: hermes-reflections
+  name: hermes-reflections-data
+  namespace: saxo
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: daytrader-api
+  name: daytrader-api
+  namespace: saxo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: daytrader-api
+  template:
+    metadata:
+      labels:
+        app: daytrader-api
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /app/saxo-rust
+        env:
+        - name: DAYTRADER_CONFIG
+          value: /app/config/config.yaml
+        - name: BIND_ADDR
+          value: 0.0.0.0:8000
+        - name: SAXO_SESSION_PATH
+          value: /tmp/daytrader/saxo_session.json
+        - name: HERMES_TRADING_MANAGER_ADVISORY_ENABLED
+          value: "true"
+        - name: HERMES_TRADING_MANAGER_ADVISORY_MODE
+          value: conservative
+        - name: HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS
+          value: "90"
+        - name: HERMES_SHADOW_ADVISORY_ENABLED
+          value: "true"
+        - name: HERMES_SHADOW_ADVISORY_WAIT_SECONDS
+          value: "30"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: database-url
+              name: daytrader-postgres-app
+        envFrom:
+        - secretRef:
+            name: daytrader-env
+            optional: true
+        image: daytrader-api:local
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 20
+        name: api
+        ports:
+        - containerPort: 8000
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /app/config
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - configMap:
+          name: daytrader-config
+        name: config
+      - emptyDir:
+          medium: Memory
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: daytrader-mcp
+  name: daytrader-mcp
+  namespace: saxo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: daytrader-mcp
+  template:
+    metadata:
+      labels:
+        app: daytrader-mcp
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /app/saxo-rust
+        - --mcp-http
+        env:
+        - name: DAYTRADER_CONFIG
+          value: /app/config/config.yaml
+        - name: BIND_ADDR
+          value: 0.0.0.0:8610
+        - name: SAXO_SESSION_PATH
+          value: /tmp/daytrader/saxo_session.json
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: database-url
+              name: daytrader-postgres-app
+        envFrom:
+        - secretRef:
+            name: daytrader-env
+            optional: true
+        image: daytrader-api:local
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: mcp
+          initialDelaySeconds: 20
+          periodSeconds: 20
+        name: mcp
+        ports:
+        - containerPort: 8610
+          name: mcp
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: mcp
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /app/config
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - configMap:
+          name: daytrader-config
+        name: config
+      - emptyDir:
+          medium: Memory
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: daytrader-scheduler
+  name: daytrader-scheduler
+  namespace: saxo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: daytrader-scheduler
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: daytrader-scheduler
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /app/saxo-rust
+        - --scheduler
+        env:
+        - name: DAYTRADER_CONFIG
+          value: /app/config/config.yaml
+        - name: SAXO_SESSION_PATH
+          value: /tmp/daytrader/saxo_session.json
+        - name: SCHEDULER_INTERVAL_MINUTES
+          value: "10"
+        - name: SCHEDULER_MARKOV_TIMEOUT_SECONDS
+          value: "600"
+        - name: HERMES_TRADING_MANAGER_ADVISORY_ENABLED
+          value: "true"
+        - name: HERMES_TRADING_MANAGER_ADVISORY_MODE
+          value: conservative
+        - name: HERMES_TRADING_MANAGER_ADVISORY_WAIT_SECONDS
+          value: "90"
+        - name: HERMES_SHADOW_ADVISORY_ENABLED
+          value: "true"
+        - name: HERMES_SHADOW_ADVISORY_WAIT_SECONDS
+          value: "30"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              key: database-url
+              name: daytrader-postgres-app
+        envFrom:
+        - secretRef:
+            name: daytrader-env
+            optional: true
+        image: daytrader-api:local
+        imagePullPolicy: IfNotPresent
+        name: scheduler
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 65532
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /app/config
+          name: config
+          readOnly: true
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - configMap:
+          name: daytrader-config
+        name: config
+      - emptyDir:
+          medium: Memory
+        name: tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: hermes-agent
+  name: hermes-agent
+  namespace: saxo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-agent
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hermes-agent
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /bin/sh
+        - -lc
+        - |
+          if [ -n "${HERMES_MODEL:-}" ]; then
+            /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
+          fi
+          if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
+            /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
+          fi
+          if [ -n "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+            /opt/hermes/.venv/bin/python - <<'PY' || true
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          path = Path("/opt/data/config.yaml")
+          data = {}
+          if path.exists():
+              data = yaml.safe_load(path.read_text()) or {}
+          servers = data.setdefault("mcp_servers", {})
+          servers["daytrader"] = {
+              "url": os.environ.get("DAYTRADER_MCP_URL", "http://daytrader-mcp.saxo:8610/mcp"),
+              "headers": {
+                  "Authorization": f"Bearer {os.environ['HERMES_DAYTRADER_API_KEY']}"
+              },
+              "timeout": 30,
+              "connect_timeout": 5,
+              "supports_parallel_tool_calls": False,
+              "tools": {
+                  "include": [
+                      "get_app_capabilities",
+                      "get_goal_contract",
+                      "get_context",
+                      "get_decision_reports",
+                      "get_end_of_day_reports",
+                      "get_markov_signals",
+                      "get_quiver_signals",
+                      "list_reflections",
+                      "create_reflection",
+                      "list_experiments",
+                      "create_experiment_proposal",
+                      "create_decision_advice",
+                  ],
+                  "resources": False,
+                  "prompts": False,
+              },
+          }
+          path.write_text(yaml.safe_dump(data, sort_keys=False))
+          PY
+          fi
+          exec /opt/hermes/.venv/bin/python /opt/hermes/hermes gateway run
+        envFrom:
+        - secretRef:
+            name: hermes-env
+            optional: true
+        image: docker.io/nousresearch/hermes-agent@sha256:b6e41c155d6bfce5ad83c5d0fec670086db8a43250e4511c9474134be5482d33
+        imagePullPolicy: IfNotPresent
+        name: hermes
+        ports:
+        - containerPort: 8642
+          name: gateway
+        - containerPort: 9119
+          name: dashboard
+        resources:
+          limits:
+            cpu: "2"
+            memory: 4Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 10000
+          runAsNonRoot: true
+          runAsUser: 10000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /opt/data
+          name: data
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /dev/shm
+          name: dev-shm
+        - mountPath: /opt/daytrader-context
+          name: daytrader-context
+          readOnly: true
+      initContainers:
+      - command:
+        - /bin/sh
+        - -ec
+        - |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://daytrader-mcp.saxo:8610/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "daytrader-mcp did not become ready before Hermes startup" >&2
+          exit 1
+        image: curlimages/curl:8.17.0
+        imagePullPolicy: IfNotPresent
+        name: wait-for-daytrader-mcp
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 10000
+          runAsNonRoot: true
+          runAsUser: 10000
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        fsGroup: 10000
+        runAsGroup: 10000
+        runAsNonRoot: true
+        runAsUser: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: hermes-data
+      - emptyDir: {}
+        name: tmp
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: dev-shm
+      - configMap:
+          name: hermes-daytrader-context
+        name: daytrader-context
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: hermes-reflections
+  name: hermes-reflections
+  namespace: saxo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-reflections
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hermes-reflections
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - command:
+        - /bin/sh
+        - -lc
+        - |
+          if [ -n "${HERMES_MODEL:-}" ]; then
+            /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.default "$HERMES_MODEL" || true
+          fi
+          if [ -n "${HERMES_INFERENCE_PROVIDER:-}" ]; then
+            /opt/hermes/.venv/bin/python /opt/hermes/hermes config set model.provider "$HERMES_INFERENCE_PROVIDER" || true
+          fi
+          if [ -n "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+            /opt/hermes/.venv/bin/python - <<'PY' || true
+          import os
+          from pathlib import Path
+
+          import yaml
+
+          path = Path("/opt/data/config.yaml")
+          data = {}
+          if path.exists():
+              data = yaml.safe_load(path.read_text()) or {}
+          servers = data.setdefault("mcp_servers", {})
+          servers["daytrader"] = {
+              "url": os.environ.get("DAYTRADER_MCP_URL", "http://daytrader-mcp.saxo:8610/mcp"),
+              "headers": {
+                  "Authorization": f"Bearer {os.environ['HERMES_DAYTRADER_API_KEY']}"
+              },
+              "timeout": 30,
+              "connect_timeout": 5,
+              "supports_parallel_tool_calls": False,
+              "tools": {
+                  "include": [
+                      "get_app_capabilities",
+                      "get_goal_contract",
+                      "get_context",
+                      "list_reflections",
+                      "create_reflection",
+                      "list_experiments",
+                      "create_experiment_proposal",
+                  ],
+                  "resources": False,
+                  "prompts": False,
+              },
+          }
+          path.write_text(yaml.safe_dump(data, sort_keys=False))
+          PY
+          fi
+          exec /opt/hermes/.venv/bin/python /opt/hermes/hermes gateway run
+        env:
+        - name: HERMES_MODEL
+          value: ~google/gemini-flash-latest
+        envFrom:
+        - secretRef:
+            name: hermes-env
+            optional: true
+        image: docker.io/nousresearch/hermes-agent@sha256:b6e41c155d6bfce5ad83c5d0fec670086db8a43250e4511c9474134be5482d33
+        imagePullPolicy: IfNotPresent
+        name: hermes
+        ports:
+        - containerPort: 8642
+          name: gateway
+        - containerPort: 9119
+          name: dashboard
+        resources:
+          limits:
+            cpu: "2"
+            memory: 4Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 10000
+          runAsNonRoot: true
+          runAsUser: 10000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /opt/data
+          name: data
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /dev/shm
+          name: dev-shm
+        - mountPath: /opt/daytrader-context
+          name: daytrader-context
+          readOnly: true
+      initContainers:
+      - command:
+        - /bin/sh
+        - -ec
+        - |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://daytrader-mcp.saxo:8610/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "daytrader-mcp did not become ready before Hermes startup" >&2
+          exit 1
+        image: curlimages/curl:8.17.0
+        imagePullPolicy: IfNotPresent
+        name: wait-for-daytrader-mcp
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 10000
+          runAsNonRoot: true
+          runAsUser: 10000
+          seccompProfile:
+            type: RuntimeDefault
+      securityContext:
+        fsGroup: 10000
+        runAsGroup: 10000
+        runAsNonRoot: true
+        runAsUser: 10000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: hermes-reflections-data
+      - emptyDir: {}
+        name: tmp
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: dev-shm
+      - configMap:
+          name: hermes-daytrader-context
+        name: daytrader-context
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daytrader-postgres-backup-retention
+  namespace: saxo
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          containers:
+          - command:
+            - python
+            - /app/scripts/prune_postgres_backups.py
+            env:
+            - name: CLUSTER_NAME
+              value: daytrader-postgres
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  key: database-url
+                  name: daytrader-postgres-app
+            - name: BACKUP_BUCKET
+              value: daytrader-cnpg
+            - name: S3_ENDPOINT_URL
+              value: http://host.docker.internal:9000
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  key: ACCESS_KEY_ID
+                  name: daytrader-minio-backup
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: ACCESS_SECRET_KEY
+                  name: daytrader-minio-backup
+            image: daytrader-backup:local
+            imagePullPolicy: IfNotPresent
+            name: retention
+          restartPolicy: Never
+          serviceAccountName: daytrader-backup-retention
+  schedule: 5,35 * * * *
+  successfulJobsHistoryLimit: 3
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daytrader-postgres-backup-schedule
+  namespace: saxo
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          containers:
+          - command:
+            - python
+            - /app/scripts/create_postgres_backup.py
+            env:
+            - name: CLUSTER_NAME
+              value: daytrader-postgres
+            image: daytrader-backup:local
+            imagePullPolicy: IfNotPresent
+            name: backup
+          restartPolicy: Never
+          serviceAccountName: daytrader-backup-retention
+  schedule: 0,30 * * * *
+  successfulJobsHistoryLimit: 3
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: hermes-agent
+    cadence: daily
+    component: reflection
+  name: hermes-daily-reflection
+  namespace: saxo
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: hermes-agent
+            cadence: daily
+            component: reflection
+        spec:
+          automountServiceAccountToken: false
+          containers:
+          - command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ -z "${API_SERVER_KEY:-}" ]; then
+                echo "API_SERVER_KEY is required; set HERMES_API_SERVER_KEY in .env and redeploy." >&2
+                exit 1
+              fi
+              if [ -z "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
+                exit 1
+              fi
+              DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo:8000}"
+              RUN_DATE="$(date -u +%Y-%m-%d)"
+              RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              SOURCE_SESSION_ID="daily-eod-reflection-${RUN_DATE}"
+              WAIT_SECONDS="${HERMES_REFLECTION_WAIT_SECONDS:-90}"
+              cat > /tmp/hermes-run.json <<EOF
+              {
+                "session_id": "saxo-daytrader-daily-eod-reflection",
+                "input": "Run the saxo daytrader daily end-of-day learning loop for ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 8, detail compact, and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries today's decision-report pulses, the end-of-day report, execution outcomes and failures, Markov regime signals, scheduler status, performance against the goal contract, the read-only gate_replay evidence, and the experiment inventory. The single-purpose readers get_decision_reports, get_end_of_day_reports, get_markov_signals and get_quiver_signals are deliberately absent from this gateway: they returned the same rows a second time, and every tool result stays in context for the rest of the run. If a block you need is genuinely missing, call get_context again with different sections rather than working around it. STEP 2 - write exactly one concise reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID}, period_start to ${RUN_DATE}, and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. If the day holds a concrete learning that can be tested safely, call create_experiment_proposal once with the same source_session_id, changing exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. Never duplicate an existing pending or active proposal for the same changed_variable_path. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. If the evidence is insufficient, record proposed_actions in the reflection instead and say what is missing. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. reachability describes the deterministic gate alone: unreachable_in_retained_evidence means no candidate met that gate precondition during the window. Act on effect_path in supported_variable_coverage instead. gate_only and gate_and_advisory mean a change moves a deterministic gate. advisory_only means the gate bound nothing but the number is published to you in the decision preflight, so a change would move advice rather than a gate - propose it only if you say which of the two you intend to move. no_observed_effect is the only value that means a proposal cannot produce a measurable effect at any value. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Detail compact removes repetition, not facts: where a field held the same value on every element of a list it was lifted into a sibling key ending in _shared, so read each _shared field as belonging to every element of the list beside it, and read the compaction block for exactly what was applied. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                "instructions": "You are Hermes Agent acting as a daily EOD learning agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create at most one pending-review experiment proposal. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
+                "metadata": {
+                  "source": "kubernetes-cronjob",
+                  "job": "hermes-daily-reflection",
+                  "cadence": "daily"
+                }
+              }
+              EOF
+              curl -fsS \
+                -H "Authorization: Bearer ${API_SERVER_KEY}" \
+                -H "Content-Type: application/json" \
+                --data @/tmp/hermes-run.json \
+                http://hermes-reflections.saxo:8642/v1/runs
+              echo
+              sleep "${WAIT_SECONDS}"
+              if curl -fsS \
+                -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                "${DAYTRADER_API_BASE_URL}/api/hermes/reflections?limit=20" \
+                | grep -F "\"source_session_id\":\"${SOURCE_SESSION_ID}\"" >/dev/null; then
+                echo "Hermes daily reflection recorded with source_session_id=${SOURCE_SESSION_ID}."
+                exit 0
+              fi
+              echo "Hermes daily run did not record source_session_id=${SOURCE_SESSION_ID}; writing watchdog reflection." >&2
+              cat > /tmp/hermes-watchdog-reflection.json <<EOF
+              {
+                "period_start": "${RUN_DATE}",
+                "period_end": "${RUN_DATE}",
+                "goal_version": 2,
+                "summary": "Daily reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the daily reflection loop.",
+                "findings": [{"severity": "warning", "topic": "hermes_daily_reflection", "detail": "Scheduled Hermes run did not persist a daily reflection within the watchdog window."}],
+                "proposed_actions": [],
+                "source_session_id": "${SOURCE_SESSION_ID}",
+                "raw_payload": {"source": "kubernetes-cronjob-watchdog", "job": "hermes-daily-reflection", "submitted_at": "${RUN_STARTED_AT}"}
+              }
+              EOF
+              curl -fsS \
+                -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                -H "Content-Type: application/json" \
+                --data @/tmp/hermes-watchdog-reflection.json \
+                "${DAYTRADER_API_BASE_URL}/api/hermes/reflections"
+            envFrom:
+            - secretRef:
+                name: hermes-env
+                optional: true
+            image: curlimages/curl:8.17.0
+            imagePullPolicy: IfNotPresent
+            name: submit-reflection
+            resources:
+              limits:
+                cpu: 100m
+                memory: 128Mi
+              requests:
+                cpu: 10m
+                memory: 32Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+              runAsGroup: 65532
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+          restartPolicy: Never
+          securityContext:
+            fsGroup: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          volumes:
+          - emptyDir:
+              medium: Memory
+            name: tmp
+  schedule: 45 23 * * 1-5
+  successfulJobsHistoryLimit: 5
+  suspend: false
+  timeZone: Europe/Copenhagen
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app: hermes-agent
+    cadence: weekly
+    component: reflection
+  name: hermes-weekly-reflection
+  namespace: saxo
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: hermes-agent
+            cadence: weekly
+            component: reflection
+        spec:
+          automountServiceAccountToken: false
+          containers:
+          - command:
+            - /bin/sh
+            - -ec
+            - |
+              if [ -z "${API_SERVER_KEY:-}" ]; then
+                echo "API_SERVER_KEY is required; set HERMES_API_SERVER_KEY in .env and redeploy." >&2
+                exit 1
+              fi
+              if [ -z "${HERMES_DAYTRADER_API_KEY:-}" ]; then
+                echo "HERMES_DAYTRADER_API_KEY is required for the daytrader adapter." >&2
+                exit 1
+              fi
+              DAYTRADER_API_BASE_URL="${DAYTRADER_API_BASE_URL:-http://daytrader-api.saxo:8000}"
+              RUN_DATE="$(date -u +%Y-%m-%d)"
+              RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              SOURCE_SESSION_ID="weekly-reflection-${RUN_DATE}"
+              WAIT_SECONDS="${HERMES_REFLECTION_WAIT_SECONDS:-120}"
+              cat > /tmp/hermes-run.json <<EOF
+              {
+                "session_id": "saxo-daytrader-weekly-reflection",
+                "input": "Run the saxo daytrader weekly self-improvement loop for the week ending ${RUN_DATE}. STEP 1 - read the evidence in ONE call. Call get_context with limit 20, detail compact, and sections: decisions, end_of_day, execution, markov_method, performance, hermes, goal_contract, scheduler, strategy_journal. That single payload carries the week of decision-report pulses, the daily end-of-day reports, execution outcomes and failures, Markov regime signals, scheduler cycles, one-month performance against the goal contract, the read-only gate_replay evidence, the active baseline, and the experiment inventory. The single-purpose readers get_decision_reports, get_end_of_day_reports, get_markov_signals and get_quiver_signals are deliberately absent from this gateway: they returned the same rows a second time, and every tool result stays in context for the rest of the run. If a block you need is genuinely missing, call get_context again with different sections rather than working around it. STEP 2 - write exactly one reflection with create_reflection, setting source_session_id to ${SOURCE_SESSION_ID} and period_end to ${RUN_DATE}. STEP 3 - at most one experiment. Create one pending-review proposal when the week holds a concrete evidence-backed learning and no pending or active proposal already covers the same changed_variable_path; otherwise record the best candidate as proposed_actions and explain the blocker. Every proposal changes exactly one variable, preferring execution.min_trade_value_dkk, strategy.capital.min_cash_buffer_pct, strategy.swing.daily_indicators.min_confluences, or strategy.swing.markov_gate.min_signed_signal. If the call returns advisory related-family context, defer that relationship to operator review: do not merge, reject, or activate the other variable. READING RULES. The experiment inventory intentionally omits pending-review values; do not infer or request them. gate_replay is historical comparison only, and a target-gate clear is not an approval. reachability describes the deterministic gate alone: unreachable_in_retained_evidence means no candidate met that gate precondition during the window. Act on effect_path in supported_variable_coverage instead. gate_only and gate_and_advisory mean a change moves a deterministic gate. advisory_only means the gate bound nothing but the number is published to you in the decision preflight, so a change would move advice rather than a gate - propose it only if you say which of the two you intend to move. no_observed_effect is the only value that means a proposal cannot produce a measurable effect at any value. The sections.omitted list names blocks that were not requested: their absence is not evidence that the underlying data is empty. Detail compact removes repetition, not facts: where a field held the same value on every element of a list it was lifted into a sibling key ending in _shared, so read each _shared field as belonging to every element of the list beside it, and read the compaction block for exactly what was applied. Keep all outputs concise and auditable. Never request or expose Saxo tokens, AccountKey, ClientKey, OAuth payloads, database credentials, or broker mutation endpoints.",
+                "instructions": "You are Hermes Agent acting as a research and proposal agent for the saxo-rust day/swing trading system. You may observe, write one reflection, and create one pending-review experiment proposal when evidence supports it. You must not place, approve, replace, or cancel orders. You must not access /api/saxo/* or any Saxo session/token source. Use the configured daytrader MCP adapter or the protected /api/hermes/* adapter only.",
+                "metadata": {
+                  "source": "kubernetes-cronjob",
+                  "job": "hermes-weekly-reflection"
+                }
+              }
+              EOF
+              curl -fsS \
+                -H "Authorization: Bearer ${API_SERVER_KEY}" \
+                -H "Content-Type: application/json" \
+                --data @/tmp/hermes-run.json \
+                http://hermes-reflections.saxo:8642/v1/runs
+              echo
+              sleep "${WAIT_SECONDS}"
+              if curl -fsS \
+                -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                "${DAYTRADER_API_BASE_URL}/api/hermes/reflections?limit=20" \
+                | grep -F "\"source_session_id\":\"${SOURCE_SESSION_ID}\"" >/dev/null; then
+                echo "Hermes weekly reflection recorded with source_session_id=${SOURCE_SESSION_ID}."
+                exit 0
+              fi
+              echo "Hermes weekly run did not record source_session_id=${SOURCE_SESSION_ID}; writing watchdog reflection." >&2
+              cat > /tmp/hermes-watchdog-reflection.json <<EOF
+              {
+                "period_start": "",
+                "period_end": "${RUN_DATE}",
+                "goal_version": 2,
+                "summary": "Weekly reflection watchdog: Hermes run was submitted at ${RUN_STARTED_AT}, but no reflection with source_session_id ${SOURCE_SESSION_ID} was recorded within ${WAIT_SECONDS}s. Review Hermes gateway/model/MCP logs before trusting the weekly self-improvement loop.",
+                "findings": [{"severity": "warning", "topic": "hermes_weekly_reflection", "detail": "Scheduled Hermes run did not persist a weekly reflection within the watchdog window."}],
+                "proposed_actions": [],
+                "source_session_id": "${SOURCE_SESSION_ID}",
+                "raw_payload": {"source": "kubernetes-cronjob-watchdog", "job": "hermes-weekly-reflection", "submitted_at": "${RUN_STARTED_AT}"}
+              }
+              EOF
+              curl -fsS \
+                -H "Authorization: Bearer ${HERMES_DAYTRADER_API_KEY}" \
+                -H "Content-Type: application/json" \
+                --data @/tmp/hermes-watchdog-reflection.json \
+                "${DAYTRADER_API_BASE_URL}/api/hermes/reflections"
+            envFrom:
+            - secretRef:
+                name: hermes-env
+                optional: true
+            image: curlimages/curl:8.17.0
+            imagePullPolicy: IfNotPresent
+            name: submit-reflection
+            resources:
+              limits:
+                cpu: 100m
+                memory: 128Mi
+              requests:
+                cpu: 10m
+                memory: 32Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: true
+              runAsGroup: 65532
+              runAsNonRoot: true
+              runAsUser: 65532
+              seccompProfile:
+                type: RuntimeDefault
+            volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+          restartPolicy: Never
+          securityContext:
+            fsGroup: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          volumes:
+          - emptyDir:
+              medium: Memory
+            name: tmp
+  schedule: 15 22 * * 5
+  successfulJobsHistoryLimit: 3
+  suspend: false
+  timeZone: Europe/Copenhagen
+---
+apiVersion: ngrok.k8s.ngrok.com/v1alpha1
+kind: AgentEndpoint
+metadata:
+  labels:
+    app.kubernetes.io/name: saxo-daytrader
+    app.kubernetes.io/part-of: saxo-daytrader
+  name: saxo-daytrader-internal
+  namespace: saxo
+spec:
+  bindings:
+  - internal
+  upstream:
+    protocol: http1
+    url: http://daytrader-frontend.saxo:8000
+  url: http://saxo-daytrader.internal:80
