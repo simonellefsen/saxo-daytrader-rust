@@ -43,6 +43,7 @@ mod saxo_portfolio;
 mod saxo_rate_limit;
 mod scheduler;
 mod scheduler_state;
+mod shadow_assessment;
 mod state;
 mod strategy_journal;
 mod strategy_journal_state;

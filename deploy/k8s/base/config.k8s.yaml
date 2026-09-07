@@ -647,6 +647,20 @@ xai:
   base_url: https://openrouter.ai/api/v1
   model: openai/gpt-5.5
   reasoning_effort: medium
+  # How far one held symbol must move before a mid-session shadow report
+  # counts as a material change. The verdict used to be whatever the model
+  # said it was: over the first 15 shadow reports it said material_change 13
+  # times, and 36 of the 55 reasons it gave were the runtime's own trades
+  # and the cash arithmetic that followed them, restated as news.
+  #
+  # Price is the only thing that can differ. Markov and the daily indicators
+  # are computed once a day, so a shadow three hours after the opening reads
+  # byte-identical signal blocks -- 200 of 200 and 80 of 80 unchanged on
+  # 2026-09-04 -- and no signal delta is possible by construction.
+  #
+  # 1.5% would have fired once that session, on the one name of eleven that
+  # moved 1.94%. Lower this and the verdict drifts back toward always-yes.
+  shadow_min_price_move_pct: 0.015
   # Raised 8192 -> 16384 -> 32768 on 2026-09-04. A reasoning model spends this
   # budget on thinking before it writes any JSON, and the appetite is model-
   # specific: a replayed production prompt cost gpt-5.6-terra 2,480-3,674

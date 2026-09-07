@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use tracing::{info, warn};
 
 use crate::{
-    config::{yaml_i64, yaml_string},
+    config::{yaml_f64, yaml_i64, yaml_string},
     db::{row_to_json, sql_escape, value_f64, value_i64},
     decision_provider::{
         ChatCompletionRequest, DecisionProvider, decision_report_response_format,
@@ -1453,38 +1453,122 @@ fn normalize_shadow_change_assessment(
         })
         .unwrap_or_default();
 
-    match status {
-        "no_new_information" if material_changes.is_empty() => {
-            clear_no_new_information_candidates(report);
-            json!({
-                "status": "no_new_information",
-                "summary": summary,
-                "material_changes": [],
-                "earlier_report": comparison_context,
-                "candidate_action": "cleared_as_non_actionable",
-                "safety": "server_normalized_shadow_observation_no_queue_or_saxo_authority",
-            })
-        }
-        "material_change" if !material_changes.is_empty() => json!({
-            "status": "material_change",
-            "summary": summary,
-            "material_changes": material_changes,
-            "earlier_report": comparison_context,
-            "candidate_action": "provider_context_only_shadow_no_queue_or_saxo_authority",
-        }),
-        _ => {
-            clear_no_new_information_candidates(report);
-            json!({
-                "status": "comparison_invalid",
-                "summary": summary,
-                "material_changes": material_changes,
-                "earlier_report": comparison_context,
-                "reason": "The provider must describe at least one material change or explicitly report no_new_information with an empty material_changes array.",
-                "candidate_action": "cleared_as_non_actionable",
-                "safety": "server_normalized_shadow_observation_no_queue_or_saxo_authority",
-            })
-        }
+    // The verdict is measured, not asserted. What the provider called a
+    // material change is kept as commentary because it reads well and
+    // occasionally explains the move -- but it decided this status for 15
+    // reports and said yes to 13 of them, two thirds of its reasons being the
+    // runtime's own trades restated as news, so it no longer decides.
+    let prompt = decision_prompt_user_payload(request_json);
+    let reference = comparison_context
+        .get("reference")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let positions = prompt
+        .get("positions")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // The bar travels inside the request rather than being read from config
+    // here, so replaying a stored prompt reproduces the verdict it produced --
+    // a threshold changed next month cannot silently rewrite last month's.
+    let min_price_move_pct = reference
+        .get("min_price_move_pct")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(crate::shadow_assessment::DEFAULT_MIN_PRICE_MOVE_PCT);
+    let measured = crate::shadow_assessment::measured_price_changes(
+        reference
+            .get("position_price_local")
+            .unwrap_or(&JsonValue::Null),
+        &positions,
+        min_price_move_pct,
+    );
+    let signal_inputs = crate::shadow_assessment::signal_inputs_unchanged(&reference, &prompt);
+    let measurable = reference.get("status").and_then(JsonValue::as_str) == Some("available");
+
+    let evidence = json!({
+        "summary": summary,
+        "measured_changes": measured,
+        "measured_change_count": measured.len(),
+        "signal_inputs": signal_inputs,
+        "min_price_move_pct": min_price_move_pct,
+        "earlier_report": comparison_context,
+        // Retained verbatim so the prose stays auditable against the
+        // measurement that overruled it.
+        "provider_claimed_status": status,
+        "provider_material_changes": material_changes,
+        "verdict_source": "server_measured_position_price_deltas",
+    });
+    let mut assessment = evidence;
+    let object = assessment
+        .as_object_mut()
+        .expect("shadow assessment evidence is an object");
+
+    if !measurable {
+        clear_no_new_information_candidates(report);
+        object.insert("status".to_string(), JsonValue::from("not_measurable"));
+        object.insert(
+            "reason".to_string(),
+            JsonValue::from(
+                "No server-recorded opening prices were available to measure against, so no \
+                 material change could be verified.",
+            ),
+        );
+        object.insert(
+            "candidate_action".to_string(),
+            JsonValue::from("cleared_as_non_actionable"),
+        );
+        object.insert(
+            "safety".to_string(),
+            JsonValue::from("server_normalized_shadow_observation_no_queue_or_saxo_authority"),
+        );
+        return assessment;
     }
+
+    if measured.is_empty() {
+        clear_no_new_information_candidates(report);
+        object.insert("status".to_string(), JsonValue::from("no_new_information"));
+        object.insert(
+            "candidate_action".to_string(),
+            JsonValue::from("cleared_as_non_actionable"),
+        );
+        object.insert(
+            "safety".to_string(),
+            JsonValue::from("server_normalized_shadow_observation_no_queue_or_saxo_authority"),
+        );
+        return assessment;
+    }
+
+    object.insert("status".to_string(), JsonValue::from("material_change"));
+    object.insert(
+        "candidate_action".to_string(),
+        JsonValue::from("provider_context_only_shadow_no_queue_or_saxo_authority"),
+    );
+    assessment
+}
+
+/// The decision prompt's user payload, parsed back out of a stored request.
+///
+/// The prompt is a JSON document carried as the user message's string content,
+/// so reading anything out of a persisted request means parsing that string
+/// first. Shared by the shadow comparison and the opening-price reference so
+/// the two cannot disagree about where the prompt lives.
+fn decision_prompt_user_payload(request_json: &JsonValue) -> JsonValue {
+    request_json
+        .get("messages")
+        .and_then(JsonValue::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .filter_map(|message| {
+                    message
+                        .get("content")
+                        .and_then(JsonValue::as_str)
+                        .and_then(|content| serde_json::from_str::<JsonValue>(content).ok())
+                })
+                .find(|payload| payload.is_object())
+        })
+        .unwrap_or(JsonValue::Null)
 }
 
 fn shadow_comparison_context_from_request(request_json: &JsonValue) -> JsonValue {
@@ -1509,6 +1593,10 @@ fn shadow_comparison_context_from_request(request_json: &JsonValue) -> JsonValue
         "expected_opening_pulse_key": context.get("expected_opening_pulse_key").cloned().unwrap_or(JsonValue::Null),
         "source_report_id": context.get("source").and_then(|source| source.get("report_id")).cloned().unwrap_or(JsonValue::Null),
         "source_created_at": context.get("source").and_then(|source| source.get("created_at")).cloned().unwrap_or(JsonValue::Null),
+        // The opening prices and the bar they are measured against. Carried
+        // through because the verdict is computed from them; dropping them here
+        // is what made every shadow read as unmeasurable.
+        "reference": context.get("reference").cloned().unwrap_or(JsonValue::Null),
     })
 }
 
@@ -1941,7 +2029,7 @@ async fn earlier_same_scope_report_context(state: &AppState, pulse: &DecisionPul
         return json!({"status": "not_applicable"});
     };
     let row = sqlx::query(&format!(
-        "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, report_json
+        "SELECT id, created_at, status, analysis_pulse_key, analysis_pulse_label, pulse_mode, queue_eligible, report_json, request_json
          FROM decision_reports
          WHERE analysis_pulse_key = '{}'
            AND status IN ('completed', 'xai_fallback')
@@ -1953,7 +2041,16 @@ async fn earlier_same_scope_report_context(state: &AppState, pulse: &DecisionPul
     .fetch_optional(&state.pool)
     .await;
     match row {
-        Ok(Some(row)) => compact_earlier_same_scope_report(&row_to_json(&row), &opening_pulse_key),
+        Ok(Some(row)) => {
+            let row = row_to_json(&row);
+            // The prices the server itself recorded closest to the opening
+            // report are the yardstick the shadow verdict is measured against.
+            // Carrying them in the context rather than fetching them later
+            // keeps the comparison reproducible from the persisted request:
+            // the same prompt always yields the same verdict.
+            let reference = opening_report_reference(state, &row).await;
+            compact_earlier_same_scope_report(&row, &opening_pulse_key, reference)
+        }
         Ok(None) => json!({
             "status": "not_available",
             "expected_opening_pulse_key": opening_pulse_key,
@@ -1970,11 +2067,80 @@ async fn earlier_same_scope_report_context(state: &AppState, pulse: &DecisionPul
     }
 }
 
-fn compact_earlier_same_scope_report(row: &JsonValue, expected_pulse_key: &str) -> JsonValue {
+/// Prices and signal-run ids as they stood when the opening report ran.
+///
+/// The shadow verdict is measured against this, so it must come from the
+/// server's own snapshots rather than from anything the provider reported. The
+/// snapshot chosen is the newest at or before the opening report, which is the
+/// same book that report was looking at.
+async fn opening_report_reference(state: &AppState, row: &JsonValue) -> JsonValue {
+    let created_at = text(row, "created_at");
+    if created_at.is_empty() {
+        return json!({"status": "not_available"});
+    }
+    let sql = format!(
+        "SELECT symbol, price_local, currency
+         FROM portfolio_position_snapshots
+         WHERE recorded_at = (
+            SELECT MAX(recorded_at) FROM portfolio_position_snapshots WHERE recorded_at <= '{}'
+         )",
+        sql_escape(&created_at)
+    );
+    let rows = match sqlx::query(&sql).fetch_all(&state.pool).await {
+        Ok(rows) => rows,
+        Err(err) => {
+            warn!("shadow price reference degraded: {err:#}");
+            return json!({"status": "unavailable"});
+        }
+    };
+    let mut prices = serde_json::Map::new();
+    for row in rows.iter().map(row_to_json) {
+        let symbol = text(&row, "symbol");
+        let price = value_f64(&row, "price_local");
+        if !symbol.is_empty() && price.is_finite() && price > 0.0 {
+            prices.insert(symbol, JsonValue::from(price));
+        }
+    }
+    // The run ids live only in the opening report's own prompt -- the stored
+    // report document never carried them -- so they are read back from the
+    // request rather than re-derived from today's tables, which would compare
+    // the shadow against whatever is latest now instead of what the opening
+    // report actually saw.
+    let prompt = decision_prompt_user_payload(&decode_json_field(row.get("request_json")));
+    let run_id = |block: &str| {
+        prompt
+            .get(block)
+            .and_then(|value| value.get("latest_run"))
+            .and_then(|run| run.get("id"))
+            .cloned()
+            .unwrap_or(JsonValue::Null)
+    };
+    json!({
+        "status": if prices.is_empty() { "not_available" } else { "available" },
+        "position_price_local": JsonValue::Object(prices),
+        "markov_run_id": run_id("markov_method"),
+        "daily_indicator_run_id": run_id("daily_indicators"),
+        "min_price_move_pct": shadow_min_price_move_pct(state),
+    })
+}
+
+/// The move one symbol must make before a shadow report counts as material.
+fn shadow_min_price_move_pct(state: &AppState) -> f64 {
+    yaml_f64(&state.config, &["xai", "shadow_min_price_move_pct"])
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(crate::shadow_assessment::DEFAULT_MIN_PRICE_MOVE_PCT)
+}
+
+fn compact_earlier_same_scope_report(
+    row: &JsonValue,
+    expected_pulse_key: &str,
+    reference: JsonValue,
+) -> JsonValue {
     let report = decode_json_field(row.get("report_json"));
     json!({
         "status": "available",
         "expected_opening_pulse_key": expected_pulse_key,
+        "reference": reference,
         "source": {
             "report_id": value_i64(row, "id"),
             "created_at": text(row, "created_at"),
@@ -3822,7 +3988,8 @@ mod tests {
                 "provider_raw": {"token": "must not be copied"}
             })).unwrap()
         });
-        let context = compact_earlier_same_scope_report(&row, "europe_open_followup:2026-08-19");
+        let context =
+            compact_earlier_same_scope_report(&row, "europe_open_followup:2026-08-19", json!({}));
 
         assert_eq!(context["status"], "available");
         assert_eq!(context["source"]["report_id"], 42);
@@ -4256,12 +4423,19 @@ mod tests {
             "confidence": 0.8,
             "rationale": "duplicate"
         }]);
+        // The provider claims a material change and gives the reason it gave
+        // most often in production: its own morning trade, restated as news.
+        // Nothing moved, so the measurement overrules it.
         output["change_since_earlier"] = json!({
-            "status": "no_new_information",
-            "summary": "No material change since the opening report.",
-            "material_changes": []
+            "status": "material_change",
+            "summary": "The opening BUY executed and cash declined.",
+            "material_changes": [
+                "AAA:xcse opening BUY executed; the position is now protected by a stop.",
+                "Available buy budget declined from 19367.70 DKK to 10513.50 DKK."
+            ]
         });
-        let request = comparison_request("available");
+        let request =
+            comparison_request_with_prices("available", json!({"AAA:xcse": 100.0}), 100.4);
         let seed = json!({
             "created_at": "2026-08-19T12:15:00Z",
             "analysis_pulse": {
@@ -4286,8 +4460,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            normalized["shadow_change_assessment"]["status"],
-            "no_new_information"
+            normalized["shadow_change_assessment"]["status"], "no_new_information",
+            "a 0.4% move is under the bar however the provider described it"
+        );
+        assert_eq!(
+            normalized["shadow_change_assessment"]["provider_claimed_status"], "material_change",
+            "the overruled claim stays visible rather than being erased"
+        );
+        assert_eq!(
+            normalized["shadow_change_assessment"]["verdict_source"],
+            "server_measured_position_price_deltas"
         );
         assert_eq!(normalized["strategy_status"], "no_new_information");
         assert_eq!(normalized["selected_assets"], json!([]));
@@ -4297,15 +4479,18 @@ mod tests {
         assert_eq!(normalized["execution_safety"]["mode"], "shadow");
     }
 
+    /// A material change now has to be a measured one. The provider's prose is
+    /// kept because it sometimes explains the move, but the symbol and the
+    /// percentage come from prices the server recorded, so the verdict cannot
+    /// be talked into existence.
     #[test]
-    fn shadow_material_change_requires_concrete_change_evidence() {
+    fn shadow_material_change_requires_a_measured_price_move() {
         let mut output = regression_output_with_trades(vec![]);
         output["change_since_earlier"] = json!({
             "status": "material_change",
-            "summary": "A new indicator reversal changes the thesis.",
-            "material_changes": ["AAA:xcse daily trend changed from neutral to bullish."]
+            "summary": "AAA sold off hard into the afternoon.",
+            "material_changes": ["AAA:xcse is down sharply since the opening report."]
         });
-        let request = comparison_request("available");
         let seed = json!({
             "created_at": "2026-08-19T18:15:00Z",
             "analysis_pulse": {
@@ -4319,6 +4504,70 @@ mod tests {
             "choices": [{"message": {"content": serde_json::to_string(&output).unwrap()}}]
         });
 
+        // 100.00 -> 97.50 is -2.5%, past the 1.5% bar.
+        let moved = completed_report_json_from_parts(
+            &comparison_request_with_prices("available", json!({"AAA:xcse": 100.0}), 97.5),
+            &seed,
+            &response,
+            "test",
+            json!({}),
+            DecisionReportSubmissionMode::Live,
+        )
+        .unwrap();
+        let assessment = &moved["shadow_change_assessment"];
+        assert_eq!(assessment["status"], "material_change");
+        assert_eq!(assessment["measured_change_count"], 1);
+        assert_eq!(assessment["measured_changes"][0]["symbol"], "AAA:xcse");
+        assert!(
+            assessment["measured_changes"][0]["move_pct"]
+                .as_f64()
+                .is_some_and(|pct| (pct + 0.025).abs() < 1e-9),
+            "the percentage is measured, not quoted: {assessment}"
+        );
+        assert_eq!(moved["execution_safety"]["mode"], "shadow");
+
+        // The identical claim with the price barely moved is not a change.
+        let unmoved = completed_report_json_from_parts(
+            &comparison_request_with_prices("available", json!({"AAA:xcse": 100.0}), 100.9),
+            &seed,
+            &response,
+            "test",
+            json!({}),
+            DecisionReportSubmissionMode::Live,
+        )
+        .unwrap();
+        assert_eq!(
+            unmoved["shadow_change_assessment"]["status"], "no_new_information",
+            "the same words must not produce a different verdict"
+        );
+        assert_eq!(unmoved["suggested_trades"], json!([]));
+    }
+
+    /// Without server-recorded opening prices there is nothing to measure, and
+    /// that is its own answer rather than a silent pass: an unmeasurable shadow
+    /// clears its candidates like a quiet one.
+    #[test]
+    fn a_shadow_without_opening_prices_reports_that_it_could_not_measure() {
+        let mut output = regression_output_with_trades(vec![]);
+        output["change_since_earlier"] = json!({
+            "status": "material_change",
+            "summary": "Something changed.",
+            "material_changes": ["AAA:xcse moved."]
+        });
+        let request = comparison_request_with_prices("available", json!({}), 100.0);
+        let seed = json!({
+            "created_at": "2026-08-19T18:15:00Z",
+            "analysis_pulse": {
+                "kind": "us_mid_session_shadow",
+                "pulse_mode": "shadow",
+                "queue_eligible": false
+            }
+        });
+        let response = json!({
+            "id": "shadow-unmeasurable",
+            "choices": [{"message": {"content": serde_json::to_string(&output).unwrap()}}]
+        });
+
         let normalized = completed_report_json_from_parts(
             &request,
             &seed,
@@ -4328,39 +4577,21 @@ mod tests {
             DecisionReportSubmissionMode::Live,
         )
         .unwrap();
-
         assert_eq!(
             normalized["shadow_change_assessment"]["status"],
-            "material_change"
+            "not_measurable"
         );
-        assert_eq!(
-            normalized["shadow_change_assessment"]["material_changes"][0],
-            "AAA:xcse daily trend changed from neutral to bullish."
-        );
-        assert_eq!(normalized["execution_safety"]["mode"], "shadow");
-
-        output["change_since_earlier"]["material_changes"] = json!([]);
-        let invalid_response = json!({
-            "id": "shadow-invalid-comparison",
-            "choices": [{"message": {"content": serde_json::to_string(&output).unwrap()}}]
-        });
-        let invalid = completed_report_json_from_parts(
-            &request,
-            &seed,
-            &invalid_response,
-            "test",
-            json!({}),
-            DecisionReportSubmissionMode::Live,
-        )
-        .unwrap();
-        assert_eq!(
-            invalid["shadow_change_assessment"]["status"],
-            "comparison_invalid"
-        );
-        assert_eq!(invalid["suggested_trades"], json!([]));
+        assert_eq!(normalized["suggested_trades"], json!([]));
     }
 
-    fn comparison_request(status: &str) -> JsonValue {
+    /// The shadow verdict is measured against prices the server recorded at the
+    /// opening report, so a request fixture has to carry both sides: the
+    /// opening reference and the position prices as they stand now.
+    fn comparison_request_with_prices(
+        status: &str,
+        opening_prices: JsonValue,
+        current_price: f64,
+    ) -> JsonValue {
         let user = json!({
             "earlier_same_scope_report": {
                 "status": status,
@@ -4368,8 +4599,26 @@ mod tests {
                 "source": {
                     "report_id": 41,
                     "created_at": "2026-08-19T08:15:00Z"
+                },
+                "reference": {
+                    // Mirrors the server: no recorded prices means nothing to
+                    // measure against, so the reference is not available.
+                    "status": if opening_prices.as_object().is_some_and(|prices| prices.is_empty()) {
+                        "not_available"
+                    } else {
+                        "available"
+                    },
+                    "position_price_local": opening_prices,
+                    "min_price_move_pct": 0.015,
+                    "markov_run_id": "markov-1",
+                    "daily_indicator_run_id": "indicators-1"
                 }
-            }
+            },
+            "positions": [
+                {"symbol": "AAA:xcse", "current_price_local": current_price, "currency": "DKK"}
+            ],
+            "markov_method": {"latest_run": {"id": "markov-1"}},
+            "daily_indicators": {"latest_run": {"id": "indicators-1"}}
         });
         json!({"messages": [{"role": "user", "content": serde_json::to_string(&user).unwrap()}]})
     }
