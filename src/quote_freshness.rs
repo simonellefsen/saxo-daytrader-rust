@@ -166,6 +166,20 @@ pub(crate) fn quote_freshness_verdict(
         _ => None,
     };
 
+    // How far the *untrimmed* history reaches back from the newest sample.
+    // This is the "do we have enough history to judge" test, and it must be
+    // asked of the raw rows, not of the rows left after trimming. The first
+    // version asked it of the trimmed set: samples land every ten minutes with
+    // a few seconds of jitter, so the oldest one inside a 30-minute cutoff
+    // typically sits ~20 minutes back, the span never reached the threshold,
+    // and an hour of provably frozen prices returned "ok". The fix for one
+    // defect built another.
+    let history_minutes = rows
+        .iter()
+        .filter_map(|row| row.get("recorded_at").and_then(JsonValue::as_str))
+        .min()
+        .and_then(|oldest| minutes_between(oldest, &newest));
+
     // Too short a window is not evidence of anything: a fresh restart or a
     // pruned history would otherwise report a dead feed on its first cycle.
     let Some(window_minutes) = window_minutes else {
@@ -177,10 +191,11 @@ pub(crate) fn quote_freshness_verdict(
             None,
         );
     };
-    if window_minutes < stale_after_minutes {
+    if history_minutes.is_none_or(|minutes| minutes < stale_after_minutes) {
         return verdict(
             "ok",
-            "The observed window is shorter than the staleness threshold.",
+            "Snapshot history does not yet reach back a full threshold, so a freeze \
+             cannot be distinguished from a short history.",
             watched,
             moved,
             Some(window_minutes),
@@ -325,9 +340,13 @@ mod tests {
     /// is alive, not that every instrument is liquid.
     #[test]
     fn a_single_moving_price_clears_the_watchdog() {
+        // History reaches back well past the threshold, and one symbol prints
+        // inside the trailing window.
         let rows = vec![
-            row("2026-09-18T08:10:00Z", "CHEMM:xcse", 512.0),
-            row("2026-09-18T08:10:00Z", "DFDS:xcse", 163.6),
+            row("2026-09-18T11:40:00Z", "CHEMM:xcse", 512.0),
+            row("2026-09-18T11:40:00Z", "DFDS:xcse", 163.6),
+            row("2026-09-18T12:20:00Z", "CHEMM:xcse", 512.0),
+            row("2026-09-18T12:20:00Z", "DFDS:xcse", 163.6),
             row("2026-09-18T12:40:00Z", "CHEMM:xcse", 512.0),
             row("2026-09-18T12:40:00Z", "DFDS:xcse", 164.2),
         ];
@@ -343,8 +362,8 @@ mod tests {
     #[test]
     fn a_round_trip_back_to_the_opening_price_still_counts_as_movement() {
         let rows = vec![
-            row("2026-09-18T08:10:00Z", "CHEMM:xcse", 512.0),
-            row("2026-09-18T10:00:00Z", "CHEMM:xcse", 515.0),
+            row("2026-09-18T11:40:00Z", "CHEMM:xcse", 512.0),
+            row("2026-09-18T12:20:00Z", "CHEMM:xcse", 515.0),
             row("2026-09-18T12:40:00Z", "CHEMM:xcse", 512.0),
         ];
 
@@ -389,5 +408,57 @@ mod tests {
         let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
         assert_eq!(verdict["status"], "ok");
         assert_eq!(verdict["window_minutes"], 10);
+    }
+}
+
+#[cfg(test)]
+mod jitter_tests {
+    use super::*;
+
+    /// Regression for a defect found in review, and for the fix that caused it.
+    ///
+    /// Trimming to the trailing threshold was correct; then requiring the
+    /// *trimmed* rows to span that threshold was not. Samples arrive about
+    /// every ten minutes with a few seconds of drift, so the oldest row inside
+    /// a 30-minute cutoff sits around twenty minutes back and the span never
+    /// reaches thirty. An hour of provably frozen prices returned "ok".
+    #[test]
+    fn sampling_jitter_does_not_let_a_frozen_hour_pass() {
+        // 12:00:00 back to 11:00:30, every 10 minutes and 5 seconds, all frozen.
+        let stamps = [
+            "2026-09-18T11:00:30Z",
+            "2026-09-18T11:10:35Z",
+            "2026-09-18T11:20:40Z",
+            "2026-09-18T11:30:45Z",
+            "2026-09-18T11:40:50Z",
+            "2026-09-18T11:50:55Z",
+            "2026-09-18T12:00:00Z",
+        ];
+        let rows: Vec<JsonValue> = stamps
+            .iter()
+            .map(
+                |stamp| json!({"recorded_at": stamp, "symbol": "CHEMM:xcse", "price_local": 512.0}),
+            )
+            .collect();
+
+        let verdict = quote_freshness_verdict(&rows, &["xcse".to_string()].into(), 30);
+        assert_eq!(
+            verdict["status"], "error",
+            "an hour of frozen prices must not pass because the trimmed span is 20 minutes: {verdict}"
+        );
+    }
+
+    /// The history test is about how far back the raw rows reach, so a genuinely
+    /// young series still declines to accuse the feed.
+    #[test]
+    fn a_short_history_still_declines_to_accuse_the_feed() {
+        let rows = vec![
+            json!({"recorded_at": "2026-09-18T11:55:00Z", "symbol": "A:xcse", "price_local": 10.0}),
+            json!({"recorded_at": "2026-09-18T12:00:00Z", "symbol": "A:xcse", "price_local": 10.0}),
+        ];
+        assert_eq!(
+            quote_freshness_verdict(&rows, &["xcse".to_string()].into(), 30)["status"],
+            "ok"
+        );
     }
 }

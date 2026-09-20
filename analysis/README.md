@@ -32,7 +32,12 @@ These are the caveats that belong with any number they produce.
 - **The simulator does not reproduce its own baseline.** At 2 ATR it returns
   −21,425 DKK against an actual −15,617. Daily closes miss the intraday highs
   the real ladder ratchets on, and miss intraday stop triggers and gaps
-  entirely. Only the ordering across variants is usable; the levels are not.
+  entirely. An earlier version of this file claimed "only the ordering is
+  usable"; that was too generous. A model that misses the baseline by 37% can
+  misrank alternatives too, because the same missing intraday mechanics do not
+  bias every variant equally — a wider stop is triggered by intraday extremes
+  more often than a tight one, so the error grows with the parameter. Treat the
+  ordering as a hypothesis, not a result.
 - **Sale-ledger rows are not independent entry-to-exit experiments.** They lack
   partial-sale handling and explicit acquisition matching, and they exclude
   still-open positions, so the population is survivor-shaped.

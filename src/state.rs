@@ -15925,7 +15925,7 @@ impl AppState {
                     forward_closes: &closes,
                     benchmark_closes: &benchmark,
                     min_commission_local,
-                    pct_per_side: crate::trading_manager::DEFAULT_MAX_COMMISSION_PCT_PER_SIDE,
+                    rate_per_side: crate::entry_evaluation::COMMISSION_RATE_PER_SIDE,
                 },
                 sessions_elapsed,
             ));
@@ -15961,7 +15961,6 @@ impl AppState {
                 chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("static snapshot time")
             });
         let now = Utc::now();
-        let week_key = crate::entry_evaluation::iso_week_key(now);
         let existing = self
             .select_json("SELECT iso_week FROM entry_evaluation_snapshots")
             .await
@@ -15970,15 +15969,21 @@ impl AppState {
             .map(|row| json_text(row, "iso_week"))
             .collect::<Vec<_>>();
 
-        if !crate::entry_evaluation::snapshot_due(
+        // Bounded recovery: a missed week is still owed, but only for a few
+        // weeks. Backfilling an old week would compute it from today's prices
+        // and silently claim to be what that week knew.
+        let Some(week_key) = crate::entry_evaluation::due_week_key(
             now.with_timezone(&timezone).naive_local(),
             weekday,
             at_or_after,
             &existing,
-            &week_key,
-        ) {
-            return json!({"status": "not_due", "iso_week": week_key});
-        }
+            crate::entry_evaluation::SNAPSHOT_RECOVERY_WEEKS,
+        ) else {
+            return json!({
+                "status": "not_due",
+                "current_iso_week": crate::entry_evaluation::iso_week_key(now),
+            });
+        };
 
         let summary = match self.entry_evaluation(2_000).await {
             Ok(summary) => summary,
@@ -16023,10 +16028,10 @@ impl AppState {
         }
     }
 
-    /// Daily closes for `symbol` strictly after `from_day`, oldest first.
-    async fn forward_closes(&self, symbol: &str, from_day: &str, limit: i64) -> Vec<f64> {
+    /// Dated daily closes for `symbol` strictly after `from_day`, oldest first.
+    async fn forward_closes(&self, symbol: &str, from_day: &str, limit: i64) -> Vec<(String, f64)> {
         self.select_json(&format!(
-            "SELECT close FROM daily_indicator_signals
+            "SELECT run_date, close FROM daily_indicator_signals
              WHERE symbol = '{}' AND run_date > '{}' AND close IS NOT NULL
              ORDER BY run_date ASC LIMIT {}",
             sql_escape(symbol),
@@ -16036,26 +16041,38 @@ impl AppState {
         .await
         .unwrap_or_default()
         .iter()
-        .map(|row| value_f64(row, "close"))
+        .map(|row| (json_text(row, "run_date"), value_f64(row, "close")))
         .collect()
     }
 
-    /// Benchmark closes on and after `from_day`, oldest first. The first entry
-    /// is the base the horizon return is measured from, so the comparison
-    /// starts the same session the entry did.
-    async fn benchmark_closes(&self, reference_key: &str, from_day: &str, limit: i64) -> Vec<f64> {
+    /// Dated benchmark closes spanning the entry's whole horizon window.
+    ///
+    /// Starts a fortnight before the fill so the base can be resolved even when
+    /// the benchmark has no row on the fill date itself -- a venue holiday on
+    /// one side of the comparison must not delete the comparison.
+    async fn benchmark_closes(
+        &self,
+        reference_key: &str,
+        from_day: &str,
+        limit: i64,
+    ) -> Vec<(String, f64)> {
+        let lookback_start = chrono::NaiveDate::parse_from_str(from_day, "%Y-%m-%d")
+            .map(|day| (day - chrono::Duration::days(14)).to_string())
+            .unwrap_or_else(|_| from_day.to_string());
         self.select_json(&format!(
-            "SELECT close FROM performance_benchmark_prices
-             WHERE reference_key = '{}' AND substr(observed_at, 1, 10) >= '{}' AND close IS NOT NULL
+            "SELECT substr(observed_at, 1, 10) AS observed_day, close
+             FROM performance_benchmark_prices
+             WHERE reference_key = '{}' AND substr(observed_at, 1, 10) >= '{}'
+               AND close IS NOT NULL
              ORDER BY observed_at ASC LIMIT {}",
             sql_escape(reference_key),
-            sql_escape(from_day),
-            clamp_limit(limit + 1, 1, 400)
+            sql_escape(&lookback_start),
+            clamp_limit(limit + 20, 1, 400)
         ))
         .await
         .unwrap_or_default()
         .iter()
-        .map(|row| value_f64(row, "close"))
+        .map(|row| (json_text(row, "observed_day"), value_f64(row, "close")))
         .collect()
     }
 
