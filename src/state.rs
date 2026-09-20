@@ -17387,6 +17387,13 @@ impl AppState {
             self.ensure_table_column("jev_editorial_signals", column)
                 .await?;
         }
+        // Strictly after the columns above exist.
+        for sql in crate::jev_store::post_migration_index_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating Jev migration-dependent indexes")?;
+        }
         for sql in crate::entry_evaluation::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)

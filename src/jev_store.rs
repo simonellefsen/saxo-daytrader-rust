@@ -97,9 +97,19 @@ pub fn create_schema_sql() -> &'static [&'static str] {
          ON jev_requests(created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_symbol
          ON jev_editorial_signals(symbol, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_timing
-         ON jev_editorial_signals(evidence_timing, created_at DESC)",
     ]
+}
+
+/// Indexes that depend on columns added after the table first shipped.
+///
+/// These must run *after* `signal_columns_to_ensure`, never inside
+/// `create_schema_sql`. A fresh database gets the column from CREATE TABLE and
+/// an index over it succeeds immediately, which is exactly why putting it
+/// there passed every test and then failed on the only database that had
+/// existed before the column did.
+pub fn post_migration_index_sql() -> &'static [&'static str] {
+    &["CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_timing
+       ON jev_editorial_signals(evidence_timing, created_at DESC)"]
 }
 
 /// Columns added to `jev_editorial_signals` after it first shipped.
@@ -978,5 +988,109 @@ mod tests {
             .collect();
         assert!(models.contains(&"typesafe/jev-1.13-20260917"));
         assert!(models.contains(&"typesafe/jev-1.14-20261001"));
+    }
+
+    /// The upgrade path, which no fresh-database test can exercise.
+    ///
+    /// This reproduces the shape `jev_editorial_signals` had when it first
+    /// shipped, then applies the startup sequence in order. An index over a
+    /// migration-added column placed in `create_schema_sql` succeeds on a
+    /// fresh database and fails on every database that existed before the
+    /// column did -- which is exactly what happened: both the scheduler and
+    /// the MCP pod crash-looped on `column "evidence_timing" does not exist`
+    /// while every test passed.
+    #[tokio::test]
+    async fn the_startup_sequence_upgrades_a_table_that_predates_provenance() {
+        DRIVERS.call_once(sqlx::any::install_default_drivers);
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+
+        // The original shape, before any provenance column existed.
+        sqlx::query(
+            "CREATE TABLE jev_editorial_signals (
+                item_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                request_id TEXT,
+                about_symbol DOUBLE PRECISION,
+                direction TEXT,
+                direction_confidence DOUBLE PRECISION,
+                bullish_probability DOUBLE PRECISION,
+                bearish_probability DOUBLE PRECISION,
+                materiality DOUBLE PRECISION,
+                company_specific DOUBLE PRECISION,
+                instruction_shaped DOUBLE PRECISION,
+                restates_known DOUBLE PRECISION,
+                signed_score DOUBLE PRECISION,
+                marker_screened INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (item_id, symbol)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("the pre-provenance table");
+        sqlx::query(
+            "INSERT INTO jev_editorial_signals (item_id, symbol, created_at, marker_screened)
+             VALUES ('legacy', 'NOVO:xcse', '2026-09-19T08:00:00Z', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("a row written before the upgrade");
+
+        // The startup sequence, in the order state.rs applies it.
+        for sql in create_schema_sql() {
+            sqlx::query(sql).execute(&pool).await.unwrap_or_else(|err| {
+                panic!("create_schema_sql must be safe on an old table: {err}")
+            });
+        }
+        for column in signal_columns_to_ensure() {
+            sqlx::query(&format!(
+                "ALTER TABLE jev_editorial_signals ADD COLUMN {column}"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|err| panic!("adding {column}: {err}"));
+        }
+        for sql in post_migration_index_sql() {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|err| panic!("post-migration index: {err}"));
+        }
+
+        // The pre-existing row survives, with the new columns null rather than
+        // back-filled with values nobody measured.
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("the upgraded table is readable");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["item_id"], "legacy");
+        assert!(
+            rows[0]["evidence_timing"].is_null(),
+            "a judgement made before timing was recorded has unknown timing, not a guessed one"
+        );
+    }
+
+    /// Guards the ordering rule itself, so a future index over a
+    /// migration-added column cannot be put back where this one was.
+    #[test]
+    fn create_schema_sql_never_indexes_a_migration_added_column() {
+        let schema = create_schema_sql().join("\n");
+        let indexes: String = schema
+            .lines()
+            .filter(|line| line.contains("CREATE INDEX") || line.trim().starts_with("ON "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for column in signal_columns_to_ensure() {
+            let name = column.split_whitespace().next().expect("a column name");
+            assert!(
+                !indexes.contains(name),
+                "{name} is added by migration, so an index over it belongs in \
+                 post_migration_index_sql, not create_schema_sql"
+            );
+        }
     }
 }
