@@ -574,12 +574,12 @@ execution:
   # How long every held position on an open exchange may show no price
   # change before the overview reports a frozen quote feed.
   #
-  # On 2026-09-19 the scheduler crashed at 08:09 and restarted clean, but
-  # the price monitor never resumed polling: 548 price changes on 09-18,
-  # zero on 09-19. No decision reports, no Markov run, no stop
-  # re-evaluation -- a whole session lost with integrity.healthy true the
-  # entire time, because every other check asks whether something failed
-  # and a stopped feed never fails.
+  # CORRECTED 2026-09-20: this was first justified by a "lost session" on
+  # 2026-09-19. That was wrong -- 09-19 was a Saturday, and Friday 09-18 ran
+  # normally with four reports and 548 price changes. The check is kept
+  # because the failure class is real, not because that incident happened:
+  # every other integrity check asks whether an action failed, and a frozen
+  # feed never fails, it just stops.
   stale_quote_alert_minutes: 30
   #mode: simulation
   mode: live

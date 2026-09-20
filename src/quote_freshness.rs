@@ -1,24 +1,26 @@
 //! Watchdog for quotes that have stopped moving while a market is open.
 //!
-//! On 2026-09-19 the scheduler pod terminated with exit=1 at 08:09:09 and
-//! restarted 25 seconds later. It came back reporting a healthy Saxo session
-//! and refreshed the broker read model, but the price monitor acquired no
-//! polling lease for the rest of the session. Quotes froze: 548 price changes
-//! were recorded on 09-18 and zero on 09-19. Every downstream pulse went with
-//! them -- no decision reports, no Markov run, no stop re-evaluation -- and a
-//! full trading day was lost.
+//! CORRECTION (2026-09-20): this module originally cited a "lost trading day"
+//! on 2026-09-19. That was wrong. 2026-09-19 was a **Saturday**: the zero price
+//! changes and absent decision reports that day were correct weekend behaviour,
+//! and the persisted scheduler records say `market_closed` and Markov idle.
+//! Friday 2026-09-18 ran normally -- four reports, three Markov runs, 548
+//! recorded price changes -- as did every session from 09-14 to 09-18. The
+//! scheduler did terminate with exit=1 at 2026-09-19T08:09:09Z, and the pods
+//! carry 8 restarts, but no trading was missed and that restart is a separate
+//! question. The original commit message (a2b5d62) carries the same error.
 //!
-//! Nothing raised an error, because nothing had failed. `last_cycle_status`
-//! stayed `ok` and `integrity.healthy` stayed true throughout, since every
-//! check asks whether an action went wrong and none asks whether an action
-//! happened at all. This is the same shape as the end-of-day reflection that
-//! was dead for seven days and the realised-sell panel that never rendered:
-//! the failure is an absence, and absences pass every test written for errors.
+//! The check is kept because the failure class it guards is real even though
+//! the incident was not. Every other integrity check asks whether an action
+//! went wrong; none asks whether an action happened at all, which is how the
+//! end-of-day reflection stayed dead for seven days and the realised-sell panel
+//! never rendered. A frozen feed never errors -- it simply stops, and an
+//! absence passes every test written for errors.
 //!
-//! So this check inverts the question. It does not ask whether the last quote
-//! fetch failed; it asks whether prices have moved at all on an exchange the
-//! calendar says is open. A market that is open and completely static is not a
-//! calm market -- across 14 positions it is a dead feed.
+//! So this inverts the question: not "did the last quote fetch fail" but "have
+//! prices moved at all on an exchange the calendar says is open". It is a guard
+//! against a plausible failure, not a postmortem of an observed one, and it has
+//! never yet fired in production.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -60,7 +62,28 @@ pub(crate) fn quote_freshness_verdict(
         );
     }
 
+    // Staleness is measured over the trailing `stale_after_minutes` only. The
+    // caller fetches a wider span so the window is always fully covered, and
+    // evaluating that whole span instead would silently weaken the check: one
+    // print 85 minutes ago would clear a feed that has been dead for 30.
+    let newest = rows
+        .iter()
+        .filter_map(|row| row.get("recorded_at").and_then(JsonValue::as_str))
+        .max()
+        .map(str::to_string);
+    let Some(newest) = newest else {
+        return verdict(
+            "unknown",
+            "No position snapshots were available, so quote freshness could not be measured.",
+            0,
+            0,
+            None,
+        );
+    };
+    let cutoff = rfc3339_minus_minutes(&newest, stale_after_minutes);
+
     let mut observed: BTreeMap<String, Observed> = BTreeMap::new();
+    let mut rows_in_window = 0_usize;
     let mut earliest: Option<String> = None;
     let mut latest: Option<String> = None;
 
@@ -75,6 +98,10 @@ pub(crate) fn quote_freshness_verdict(
         if !price.is_finite() || price <= 0.0 {
             continue;
         }
+        if cutoff.as_deref().is_some_and(|cutoff| recorded_at < cutoff) {
+            continue;
+        }
+        rows_in_window += 1;
         let exchange = symbol.split_once(':').map(|(_, code)| code).unwrap_or("");
         if !open_exchange_codes.contains(&exchange.to_ascii_lowercase()) {
             continue;
@@ -102,13 +129,29 @@ pub(crate) fn quote_freshness_verdict(
 
     let watched = observed.len();
     if watched == 0 {
-        return verdict(
-            "not_applicable",
-            "No held position trades on an open exchange.",
-            0,
-            0,
-            None,
-        );
+        // Holding nothing on the open exchange is a real answer; having no
+        // snapshot rows at all is missing evidence. Collapsing the two would
+        // reproduce the exact defect this check exists to catch -- a degraded
+        // read that looks identical to a healthy one -- and the caller's
+        // `unwrap_or_default()` on a failed query lands in the second case.
+        return if rows_in_window == 0 {
+            verdict(
+                "unknown",
+                "No position snapshot was found in the window, so quote freshness could not \
+                 be measured.",
+                0,
+                0,
+                None,
+            )
+        } else {
+            verdict(
+                "not_applicable",
+                "No held position trades on an open exchange.",
+                0,
+                0,
+                None,
+            )
+        };
     }
 
     // `changed` catches a price that moved and came back within the window;
@@ -181,6 +224,16 @@ fn verdict(
     })
 }
 
+/// `timestamp` shifted back by `minutes`, kept as an RFC3339 string so the
+/// comparison stays lexical and matches how the rows are stored.
+fn rfc3339_minus_minutes(timestamp: &str, minutes: i64) -> Option<String> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+    Some(
+        (parsed - chrono::Duration::minutes(minutes.max(0)))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
+
 fn minutes_between(first: &str, last: &str) -> Option<i64> {
     let parse = |value: &str| chrono::DateTime::parse_from_rfc3339(value).ok();
     let (first, last) = (parse(first)?, parse(last)?);
@@ -199,24 +252,73 @@ mod tests {
         codes.iter().map(|code| code.to_string()).collect()
     }
 
-    /// The 2026-09-19 shape: an open market, positions held on it, and not one
-    /// price change for the whole session. Every existing check passed that day
-    /// because nothing errored -- the feed simply stopped, and a stopped feed
-    /// looks exactly like a calm one to anything that only watches for failures.
+    /// An open market where nothing printed for the whole trailing window.
+    /// Snapshots arrive about every ten minutes, so a frozen half hour is
+    /// several identical rows per symbol rather than two distant ones.
     #[test]
     fn an_open_market_with_no_price_change_at_all_is_an_error() {
-        let rows = vec![
-            row("2026-09-19T08:10:00Z", "CHEMM:xcse", 512.0),
-            row("2026-09-19T08:10:00Z", "DFDS:xcse", 163.6),
-            row("2026-09-19T12:40:00Z", "CHEMM:xcse", 512.0),
-            row("2026-09-19T12:40:00Z", "DFDS:xcse", 163.6),
-        ];
+        let mut rows = Vec::new();
+        for minute in ["00", "10", "20", "30", "40"] {
+            rows.push(row(
+                &format!("2026-09-18T12:{minute}:00Z"),
+                "CHEMM:xcse",
+                512.0,
+            ));
+            rows.push(row(
+                &format!("2026-09-18T12:{minute}:00Z"),
+                "DFDS:xcse",
+                163.6,
+            ));
+        }
 
         let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
         assert_eq!(verdict["status"], "error");
         assert_eq!(verdict["watched_positions"], 2);
         assert_eq!(verdict["positions_with_price_change"], 0);
-        assert_eq!(verdict["window_minutes"], 270);
+        assert_eq!(verdict["window_minutes"], 30);
+    }
+
+    /// Regression for a defect found in review: the caller fetches a wider span
+    /// than the threshold so the window is always covered, and the first
+    /// version measured that whole span. A single print 85 minutes ago then
+    /// cleared a feed that had been dead for 30 -- the advertised threshold and
+    /// the enforced one were different numbers.
+    #[test]
+    fn movement_older_than_the_threshold_does_not_clear_a_frozen_window() {
+        let mut rows = vec![
+            row("2026-09-18T11:00:00Z", "CHEMM:xcse", 505.0),
+            row("2026-09-18T11:10:00Z", "CHEMM:xcse", 512.0), // the last real print
+        ];
+        for minute in ["00", "10", "20", "30", "40"] {
+            rows.push(row(
+                &format!("2026-09-18T12:{minute}:00Z"),
+                "CHEMM:xcse",
+                512.0,
+            ));
+        }
+
+        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
+        assert_eq!(
+            verdict["status"], "error",
+            "a print 90 minutes ago says nothing about the last 30: {verdict}"
+        );
+    }
+
+    /// A degraded or failed snapshot read must not look like a healthy feed.
+    /// The caller falls back to an empty row set when the query errors, and
+    /// reporting that as `ok` would rebuild the silent-pass defect this check
+    /// exists to remove.
+    #[test]
+    fn missing_snapshot_evidence_is_unknown_rather_than_healthy() {
+        let verdict = quote_freshness_verdict(&[], &open(&["xcse"]), 30);
+        assert_eq!(verdict["status"], "unknown");
+
+        // Holding nothing on the open exchange is a real answer, not a gap.
+        let held_elsewhere = vec![row("2026-09-18T12:40:00Z", "CHEMM:xcse", 512.0)];
+        assert_eq!(
+            quote_freshness_verdict(&held_elsewhere, &open(&["xnys"]), 30)["status"],
+            "not_applicable"
+        );
     }
 
     /// One symbol printing is enough: the claim being tested is that the feed

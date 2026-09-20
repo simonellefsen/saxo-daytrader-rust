@@ -145,13 +145,20 @@ pub fn format_money(value: f64, currency: &str, prefs: &LocalizationPrefs) -> St
     )
 }
 
+/// Renders a **ratio** as a percentage. `0.0724` becomes `7,2%`.
+///
+/// This used to guess the unit from magnitude -- multiply by 100 when the
+/// input was within +/-1, pass it through otherwise -- so that it could accept
+/// ratios and already-scaled percentages interchangeably. The guess is wrong
+/// for every ratio beyond +/-100%, and silently so: the monthly goal progress
+/// of -11,520 against a 3,800 target is a ratio of -3.03, which rendered as
+/// "-3.0%" instead of "-303%" and made a 4x miss look like a rounding error.
+///
+/// Callers holding a value already in percentage points want
+/// `format_percentage_points`; there is no way for this function to tell the
+/// two apart, which is the reason it no longer tries.
 pub fn format_percent(value: f64, prefs: &LocalizationPrefs) -> String {
-    let pct = if value.abs() <= 1.0 {
-        value * 100.0
-    } else {
-        value
-    };
-    format!("{}%", format_number(pct, 1, prefs))
+    format!("{}%", format_number(value * 100.0, 1, prefs))
 }
 
 pub fn format_quantity(value: f64, prefs: &LocalizationPrefs) -> String {
@@ -284,6 +291,13 @@ mod tests {
 
         assert_eq!(format_money(351559.2, "DKK", &prefs), "351.559 DKK");
         assert_eq!(format_percent(0.0724, &prefs), "7,2%");
+
+        // A ratio beyond +/-100% is the case the old magnitude guess got
+        // wrong: -3.03 is -303%, not -3.0%. The monthly goal card showed the
+        // latter for a 4x miss.
+        assert_eq!(format_percent(-3.031654, &prefs), "-303,2%");
+        assert_eq!(format_percent(1.5, &prefs), "150,0%");
+        assert_eq!(format_percent(0.0, &prefs), "0,0%");
     }
 
     #[test]

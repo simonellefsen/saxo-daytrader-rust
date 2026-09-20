@@ -11914,8 +11914,14 @@ mod tests {
     fn formats_dashboard_numbers_for_display() {
         let prefs = default_prefs();
         assert_eq!(format_dkk(1234.4, &prefs), "1,234 DKK");
+        // Ratios in, percentages out. The second assertion used to read
+        // `format_pct(12.5, ..) == "12.5%"`, encoding a magnitude guess that
+        // silently divided every ratio beyond +/-100% by a hundred -- the
+        // monthly goal card showed a -303% miss as "-3.0%". Every caller here
+        // passes a ratio; a value already in percentage points belongs in
+        // `format_percentage_points`.
         assert_eq!(format_pct(0.125, &prefs), "12.5%");
-        assert_eq!(format_pct(12.5, &prefs), "12.5%");
+        assert_eq!(format_pct(12.5, &prefs), "1,250.0%");
         assert_eq!(format_signed_percentage_points(0.42, &prefs), "+0.4%");
     }
 

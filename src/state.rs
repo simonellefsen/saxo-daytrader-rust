@@ -10169,7 +10169,12 @@ impl AppState {
                     .map(|code| code.to_ascii_lowercase())
             })
             .collect::<std::collections::HashSet<_>>();
-        let quote_rows = self
+        // A failed read must not become an empty-and-therefore-fine result. The
+        // verdict distinguishes "no rows" from "nothing held here", so the
+        // error is carried rather than flattened into a default. The fetch is
+        // wider than the threshold so the trailing window is always covered;
+        // the verdict trims to the threshold itself.
+        let quote_read = self
             .select_json(&format!(
                 "SELECT recorded_at, symbol, price_local
                  FROM portfolio_position_snapshots
@@ -10180,10 +10185,13 @@ impl AppState {
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 )
             ))
-            .await
-            .unwrap_or_default();
+            .await;
+        let quote_read_failed = quote_read.is_err();
+        if let Err(err) = &quote_read {
+            warn!("quote freshness snapshot read degraded: {err:#}");
+        }
         let quote_freshness = crate::quote_freshness::quote_freshness_verdict(
-            &quote_rows,
+            &quote_read.unwrap_or_default(),
             &open_exchange_codes,
             stale_after_minutes,
         );
@@ -10191,24 +10199,30 @@ impl AppState {
             .get("status")
             .and_then(JsonValue::as_str)
             .unwrap_or("unknown");
-        checks.insert(
-            "quote_freshness".to_string(),
-            JsonValue::from(if quote_status == "error" {
-                "error"
-            } else {
-                "ok"
-            }),
-        );
-        if quote_status == "error" {
+        // `unknown` means the question could not be answered -- a failed read or
+        // no snapshot in the window. Reporting that as `ok` is exactly the
+        // silent pass this check was added to remove.
+        let quote_check = match quote_status {
+            "error" => "error",
+            "unknown" => "warning",
+            _ => "ok",
+        };
+        checks.insert("quote_freshness".to_string(), JsonValue::from(quote_check));
+        if quote_check != "ok" {
             warnings.push(json!({
-                "code": "quote_feed_frozen",
-                "severity": "error",
+                "code": if quote_status == "error" {
+                    "quote_feed_frozen"
+                } else {
+                    "quote_freshness_unmeasured"
+                },
+                "severity": quote_check,
                 "message": quote_freshness
                     .get("message")
                     .cloned()
                     .unwrap_or(JsonValue::Null),
                 "watched_positions": quote_freshness.get("watched_positions").cloned(),
                 "window_minutes": quote_freshness.get("window_minutes").cloned(),
+                "snapshot_read_failed": quote_read_failed,
             }));
         }
 
