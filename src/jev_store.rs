@@ -439,15 +439,22 @@ pub(crate) async fn screening_agreement(pool: &AnyPool, threshold: f64) -> Resul
 
 /// Subjects already judged for a given purpose, so a sidecar pass never
 /// re-spends on work it has done.
-pub(crate) async fn judged_subjects(
+pub(crate) async fn judged_subjects_at_version(
     pool: &AnyPool,
     purpose: &str,
+    version: &str,
 ) -> Result<std::collections::HashSet<String>> {
+    // A subject judged under an older question set has not been judged under
+    // this one. Matching on the stored version stops a re-worded question from
+    // silently inheriting answers given to the previous wording.
     Ok(sqlx::query(
         "SELECT subject FROM jev_requests
-         WHERE purpose = $1 AND status IN ('completed', 'partial') AND subject IS NOT NULL",
+         WHERE purpose = $1 AND status IN ('completed', 'partial') AND subject IS NOT NULL
+           AND result_json IS NOT NULL
+           AND result_json LIKE $2",
     )
     .bind(purpose)
+    .bind(format!("%\"version\":\"{version}\"%"))
     .fetch_all(pool)
     .await
     .context("reading judged Jev subjects")?
@@ -1090,6 +1097,76 @@ mod tests {
                 !indexes.contains(name),
                 "{name} is added by migration, so an index over it belongs in \
                  post_migration_index_sql, not create_schema_sql"
+            );
+        }
+    }
+
+    /// A version bump has to actually re-ask, or the new wording silently
+    /// inherits answers given to the old one and two different measurements
+    /// get pooled under one name.
+    #[tokio::test]
+    async fn a_subject_judged_at_an_older_version_is_not_treated_as_judged() {
+        let pool = pool().await;
+        record_success(
+            &pool,
+            RecordedRequest {
+                id: "req-v1",
+                created_at: "2026-09-20T08:00:00Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("302"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            &response(),
+            Some(&serde_json::json!({"version": "v1", "rationale_supported": 0.04})),
+        )
+        .await
+        .expect("a v1 grade");
+
+        assert!(
+            judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v1")
+                .await
+                .expect("v1 lookup")
+                .contains("302"),
+            "the subject is judged at the version that judged it"
+        );
+        assert!(
+            !judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v2")
+                .await
+                .expect("v2 lookup")
+                .contains("302"),
+            "and is unjudged at a version that has not seen it"
+        );
+    }
+
+    /// A failed call has no result and no version, so it must never satisfy a
+    /// version check -- otherwise one outage would permanently mark a subject
+    /// as judged.
+    #[tokio::test]
+    async fn a_failed_call_never_counts_as_judged_at_any_version() {
+        let pool = pool().await;
+        record_failure(
+            &pool,
+            RecordedRequest {
+                id: "req-fail",
+                created_at: "2026-09-20T08:00:00Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("302"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            "Jev returned 529: overloaded",
+        )
+        .await
+        .expect("a failure row");
+
+        for version in ["v1", "v2"] {
+            assert!(
+                !judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, version)
+                    .await
+                    .expect("lookup")
+                    .contains("302"),
+                "an outage must not mark {version} as done"
             );
         }
     }

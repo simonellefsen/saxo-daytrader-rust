@@ -45,7 +45,17 @@ const KNOWN_FAILURE_CODES: &[(&str, &str)] = &[
     ),
     (
         "rate_limit",
-        "The provider refused the request for exceeding a quota or rate limit",
+        "The provider throttled the request for sending too many too quickly",
+    ),
+    (
+        // Added after the first live run: ten failures the cascade filed as
+        // `other` were xAI 403s reading "used all available credits or reached
+        // its monthly spending limit". Jev filed them under `rate_limit`, the
+        // closest label on offer, because this one did not exist. The closed
+        // answer set worked -- it could not invent a category -- but a missing
+        // option makes every answer approximate.
+        "quota_exhausted",
+        "The account ran out of credits or hit a spending limit, so the provider refused to bill further work",
     ),
     (
         "auth",
@@ -58,6 +68,20 @@ const KNOWN_FAILURE_CODES: &[(&str, &str)] = &[
 ];
 
 const REVIEW_BATCH_LIMIT: usize = 10;
+
+/// Versions of the two review question sets.
+///
+/// A subject is skipped only when it has already been judged *at the current
+/// version*. Changing a question without bumping these would leave every
+/// existing subject answered under the old wording and silently pool two
+/// different measurements; bumping without the version-aware skip would leave
+/// them permanently unasked.
+///
+/// Unlike the editorial signals, a re-grade here carries no decision-time
+/// hazard: a grade is an opinion about a stored report, never a feature of a
+/// decision.
+const REPORT_GRADING_VERSION: &str = "v2";
+const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
 /// work is awaited by report creation, ingestion, or the execution cycle.
@@ -101,14 +125,19 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
     let Some(cfg) = availability(state) else {
         return json!({"status": "disabled"});
     };
-    let judged =
-        match jev_store::judged_subjects(&state.pool, jev_store::PURPOSE_REPORT_GRADING).await {
-            Ok(judged) => judged,
-            Err(err) => {
-                warn!(error = %err, "reading graded reports");
-                return json!({"status": "error", "stage": "select"});
-            }
-        };
+    let judged = match jev_store::judged_subjects_at_version(
+        &state.pool,
+        jev_store::PURPOSE_REPORT_GRADING,
+        REPORT_GRADING_VERSION,
+    )
+    .await
+    {
+        Ok(judged) => judged,
+        Err(err) => {
+            warn!(error = %err, "reading graded reports");
+            return json!({"status": "error", "stage": "select"});
+        }
+    };
 
     let rows = match sqlx::query(
         "SELECT id, report_json FROM decision_reports
@@ -219,6 +248,8 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue) {
         "market_view": report.get("market_view"),
         "reasoning_steps": report.get("reasoning_steps"),
         "symbol_sentiment": report.get("symbol_sentiment"),
+        // The claims the rescoped question judges.
+        "selected_assets": report.get("selected_assets"),
         "suggested_trades": report
             .get("suggested_trades")
             .and_then(JsonValue::as_array)
@@ -234,7 +265,6 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue) {
             }),
     });
     let evidence = json!({
-        "selected_assets": report.get("selected_assets"),
         "candidate_signals": report
             .get("suggested_trades")
             .and_then(JsonValue::as_array)
@@ -260,9 +290,15 @@ fn grade_payload(
         _ => None,
     };
     json!({
-        "version": "v1",
+        // v2 rescopes rationale_supported to the candidate claims, which are
+        // the ones whose supporting evidence fits in the window. v1 grades
+        // remain in the table under their own version and must not be pooled
+        // with these: they answered a different question over a fifth of the
+        // material that question referenced.
+        "version": REPORT_GRADING_VERSION,
         "evidence_scope": "report_self_consistency_not_independent_source_verification",
         "rationale_supported": noul("rationale_supported"),
+        "rationale_supported_scope": "candidate_claims_only",
         "view_consistent": noul("view_consistent"),
         "specificity": answers
             .get("specificity")
@@ -284,9 +320,10 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
     let Some(cfg) = availability(state) else {
         return json!({"status": "disabled"});
     };
-    let judged = match jev_store::judged_subjects(
+    let judged = match jev_store::judged_subjects_at_version(
         &state.pool,
         jev_store::PURPOSE_ERROR_CLASSIFICATION,
+        FAILURE_CLASSIFICATION_VERSION,
     )
     .await
     {
@@ -355,7 +392,7 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                     _ => (None, None),
                 };
                 let result = json!({
-                    "version": "v1",
+                    "version": FAILURE_CLASSIFICATION_VERSION,
                     "cascade_category": "other",
                     "jev_category": category,
                     "confidence": confidence,
@@ -479,6 +516,10 @@ mod tests {
         let rendered = serde_json::to_string(&state).expect("serializes");
         assert!(rendered.len() < 24_000, "{}", rendered.len());
         assert_eq!(state["report"]["market_view"]["summary"], "Cautious");
+        assert_eq!(
+            state["report"]["selected_assets"][0]["symbol"], "NOVO:xcse",
+            "the candidate claims are what rationale_supported judges"
+        );
         assert_eq!(
             state["evidence"]["candidate_signals"][0]["strategy_metadata"]["markov"]["signed_signal"],
             0.42
