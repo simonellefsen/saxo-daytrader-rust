@@ -577,6 +577,16 @@ strategy:
     min_ratchet_atr_fraction: 0.25
 
 execution:
+  # How long every held position on an open exchange may show no price
+  # change before the overview reports a frozen quote feed.
+  #
+  # On 2026-09-19 the scheduler crashed at 08:09 and restarted clean, but
+  # the price monitor never resumed polling: 548 price changes on 09-18,
+  # zero on 09-19. No decision reports, no Markov run, no stop
+  # re-evaluation -- a whole session lost with integrity.healthy true the
+  # entire time, because every other check asks whether something failed
+  # and a stopped feed never fails.
+  stale_quote_alert_minutes: 30
   mode: live
   adapter: saxo
   auto_execute_simulation: true

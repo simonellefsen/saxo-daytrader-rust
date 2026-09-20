@@ -35,6 +35,7 @@ mod price_monitor;
 mod protective_stops;
 mod quiver;
 mod quiver_state;
+mod quote_freshness;
 mod read_model;
 mod saxo_error;
 mod saxo_http;

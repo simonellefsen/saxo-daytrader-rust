@@ -10147,6 +10147,71 @@ impl AppState {
             }));
         }
 
+        // Quote freshness. Asks whether prices moved at all on an open
+        // exchange, because every other check here asks whether an action
+        // failed and a frozen feed never fails -- it simply stops, and the
+        // 2026-09-19 session was lost with `integrity.healthy` true throughout.
+        let stale_after_minutes =
+            yaml_i64(&self.config, &["execution", "stale_quote_alert_minutes"])
+                .filter(|value| *value > 0)
+                .unwrap_or(crate::quote_freshness::DEFAULT_STALE_QUOTE_MINUTES);
+        let open_exchange_codes = self
+            .market_exchange_rows()
+            .iter()
+            .filter(|row| {
+                row.get("is_open")
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false)
+            })
+            .filter_map(|row| {
+                row.get("code")
+                    .and_then(JsonValue::as_str)
+                    .map(|code| code.to_ascii_lowercase())
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let quote_rows = self
+            .select_json(&format!(
+                "SELECT recorded_at, symbol, price_local
+                 FROM portfolio_position_snapshots
+                 WHERE recorded_at >= '{}'
+                 ORDER BY recorded_at ASC",
+                sql_escape(
+                    &(Utc::now() - chrono::Duration::minutes(stale_after_minutes * 3))
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                )
+            ))
+            .await
+            .unwrap_or_default();
+        let quote_freshness = crate::quote_freshness::quote_freshness_verdict(
+            &quote_rows,
+            &open_exchange_codes,
+            stale_after_minutes,
+        );
+        let quote_status = quote_freshness
+            .get("status")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("unknown");
+        checks.insert(
+            "quote_freshness".to_string(),
+            JsonValue::from(if quote_status == "error" {
+                "error"
+            } else {
+                "ok"
+            }),
+        );
+        if quote_status == "error" {
+            warnings.push(json!({
+                "code": "quote_feed_frozen",
+                "severity": "error",
+                "message": quote_freshness
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(JsonValue::Null),
+                "watched_positions": quote_freshness.get("watched_positions").cloned(),
+                "window_minutes": quote_freshness.get("window_minutes").cloned(),
+            }));
+        }
+
         // Config contract. Known unwired keys are reported as visible context
         // rather than as a warning: they are already documented in
         // wiki/urgent-todo.md and would otherwise hold the whole overview
