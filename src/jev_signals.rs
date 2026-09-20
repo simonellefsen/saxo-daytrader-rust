@@ -450,6 +450,7 @@ mod tests {
     fn score(score: f64) -> Answer {
         Answer::Score {
             score,
+            probabilities: BTreeMap::new(),
             confidence: Some(0.8),
             legend: (1..=MATERIALITY_LEVELS.len())
                 .map(|level| (level.to_string(), MATERIALITY_LEVELS[level - 1].to_string()))

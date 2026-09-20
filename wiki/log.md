@@ -3052,3 +3052,8 @@ broker mutation was added.
 - The architecture concept page still described Markov as a *daily* model; it has been hourly with three weekday refreshes since 2026-08-31. The README diagram gained the bounded read-only refresh request Hermes can now make.
 - `STRATEGY.md` was left as-is: it carries a banner marking it a historical record of the retired ladder strategy, so its Python references are correct in context.
 
+## [2026-09-20] Jev review | Isolation, accounting and measurement readiness
+
+- Added [reviewed Jev adoption gates](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md) and linked the roadmap. Verified synthetic OpenRouter transport and the deployed disabled endpoint; activation is separate.
+- Corrected awaited sidecars on the scheduler critical path, weak answer validation, discarded provider billing, delete/insert persistence and silent ledger-read failures. Added regression coverage and retained question/answer measurement provenance.
+- Distinguished semantic calibration from return association, self-consistency from source verification, observation versioning from trading strategy epochs, and implemented API views from the unfinished operator panel. No trading settings changed.

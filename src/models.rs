@@ -1776,11 +1776,17 @@ pub struct LlmUsageDayPayload {
     /// all one kind of call.
     #[serde(default)]
     pub jev_request_count: i64,
+    #[serde(default)]
+    pub unpriced_request_count: i64,
 }
 
 /// Per-request LLM token and cost ledger with its daily rollup.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LlmUsageLedgerPayload {
+    #[serde(default)]
+    pub unavailable_sources: Vec<String>,
+    #[serde(default)]
+    pub unpriced_request_count: i64,
     pub request_count: i64,
     pub prompt_token_count: i64,
     pub completion_token_count: i64,

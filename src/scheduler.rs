@@ -43,6 +43,7 @@ pub async fn run_scheduler() -> Result<()> {
         fast_interval_minutes, "starting Rust scheduler"
     );
     tokio::spawn(crate::price_monitor::run_price_monitor_loop(state.clone()));
+    tokio::spawn(crate::jev_review::run_observation_loop(state.clone()));
     run_cycle(&state).await?;
     loop {
         let sleep_minutes =

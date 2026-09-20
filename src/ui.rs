@@ -6080,12 +6080,13 @@ fn LlmUsageRequestRow(
         _ => "not recorded".to_string(),
     };
     let cost = match row.cost_usd {
-        Some(cost) => format!("USD {}", format_number(cost, 4, &prefs)),
+        Some(cost) => format!("USD {}", format_number(cost, 8, &prefs)),
         None => "not reported".to_string(),
     };
     rsx! {
         tr {
             td { "{format_timestamp(&row.created_at, &prefs)}" }
+            td { "{row.surface}" br {} span { class: "muted", "{row.purpose}" } }
             td { "{row.model}" br {} span { class: "muted", "{row.status}" } }
             td { "{format_number(row.prompt_tokens as f64, 0, &prefs)} / {format_number(row.completion_tokens as f64, 0, &prefs)}" }
             td { "{format_number(row.reasoning_tokens as f64, 0, &prefs)}" }
@@ -6099,6 +6100,8 @@ fn LlmUsageRequestRow(
                 div { "{cost}" }
                 if row.cost_source == "upstream_byok" {
                     div { class: "muted", "billed upstream (BYOK)" }
+                } else if row.cost_source == "rate_card" {
+                    div { class: "muted", "rate-card estimate" }
                 }
             }
         }
@@ -6155,7 +6158,13 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
             }
             div { class: "prompt-card",
                 h3 { "LLM Token & Cost Ledger" }
-                p { class: "muted", "Measured per request from the stored provider response: tokens in, tokens out, how much of the reply was reasoning, and what it cost. Covers the Decision Report path, which is the only place this runtime calls a model -- Hermes bills through its own gateway and is not counted here. A cost marked upstream was billed to your own provider account under a BYOK key rather than by OpenRouter." }
+                p { class: "muted", "Decision Reports and Jev share this bounded request ledger; Hermes bills separately and is excluded. Costs are known subtotals, not complete invoices. Rate-card costs are estimates; upstream costs use the provider's BYOK figure. Daily rows cover only the retained request sample." }
+                if !llm_usage.unavailable_sources.is_empty() {
+                    div { class: "event", "Incomplete ledger: unable to read {llm_usage.unavailable_sources.join(\", \")}. Available rows remain visible; spend is understated." }
+                }
+                if llm_usage.unpriced_request_count > 0 {
+                    div { class: "event", "Cost unknown for {llm_usage.unpriced_request_count} recorded requests; these are not free calls." }
+                }
                 if llm_usage.request_count == 0 {
                     div { class: "event muted", "No provider responses with usage data are stored yet." }
                 } else {
@@ -6165,7 +6174,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                         span { class: "pill", "out {format_number(llm_usage.completion_token_count as f64, 0, &prefs)}" }
                         span { class: "pill", "reasoning {format_number(llm_usage.reasoning_token_count as f64, 0, &prefs)}" }
                         if let Some(cost) = llm_usage.cost_usd {
-                            span { class: "pill", "USD {format_number(cost, 2, &prefs)}" }
+                            span { class: "pill", "Known subtotal USD {format_number(cost, 6, &prefs)}" }
                         }
                     }
                     div { class: "table-wrap",
@@ -6187,9 +6196,12 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                                         td { "{format_number(day.reasoning_token_count as f64, 0, &prefs)}" }
                                         td {
                                             if let Some(cost) = day.cost_usd {
-                                                "USD {format_number(cost, 4, &prefs)}"
+                                                "USD {format_number(cost, 6, &prefs)}"
                                             } else {
                                                 span { class: "muted", "not reported" }
+                                            }
+                                            if day.unpriced_request_count > 0 {
+                                                span { class: "muted", " · {day.unpriced_request_count} unpriced" }
                                             }
                                         }
                                         td { class: "muted", "{day.models.join(\" · \")}" }
@@ -6204,6 +6216,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                             table { class: "data-table compact-table",
                                 thead { tr {
                                     th { "When" }
+                                    th { "Surface / purpose" }
                                     th { "Model" }
                                     th { "In / out" }
                                     th { "Reasoning" }
@@ -11734,6 +11747,23 @@ fn decision_health(latest_decision: &LatestDecisionStatusPayload) -> (&'static s
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn jev_cost_row_shows_surface_and_does_not_round_cheap_calls_to_zero() {
+        let prefs = default_prefs();
+        let rendered_cost = format_number(0.000019614, 8, &prefs);
+        let row = crate::models::LlmRequestUsagePayload {
+            surface: "jev".into(),
+            purpose: "editorial_item".into(),
+            cost_usd: Some(0.000019614),
+            cost_source: "rate_card".into(),
+            ..Default::default()
+        };
+        let html = dioxus_ssr::render_element(rsx! { LlmUsageRequestRow { row, prefs } });
+        assert!(html.contains("editorial_item"));
+        assert!(html.contains("rate-card estimate"));
+        assert!(html.contains(&rendered_cost), "{html}");
+    }
 
     fn scheduled_run_fixture(value: JsonValue) -> DashboardRunSchedulePayload {
         let mut schedule: DashboardRunSchedulePayload =

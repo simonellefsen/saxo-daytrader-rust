@@ -103,10 +103,12 @@ pub(crate) async fn record_success(
     pool: &AnyPool,
     meta: RecordedRequest<'_>,
     response: &JevResponse,
-    cost_usd: Option<f64>,
-    cost_source: &str,
     result_json: Option<&JsonValue>,
 ) -> Result<()> {
+    let mut result = result_json
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    result["measurement"] = response.measurement.clone();
     sqlx::query(
         "INSERT INTO jev_requests (
             id, created_at, purpose, subject, model_requested, model_resolved,
@@ -125,12 +127,12 @@ pub(crate) async fn record_success(
     .bind(response.issues.len() as i64)
     .bind(response.usage.input_tokens)
     .bind(response.usage.output_tokens)
-    .bind(cost_usd)
-    .bind(cost_source)
+    .bind(response.cost_usd)
+    .bind(response.cost_source)
     .bind(response.latency_ms)
     .bind(response.attempts as i64)
-    .bind(STATUS_COMPLETED)
-    .bind(result_json.map(|value| value.to_string()))
+    .bind(if response.issues.is_empty() { STATUS_COMPLETED } else { "partial" })
+    .bind(result.to_string())
     .execute(pool)
     .await
     .context("recording a completed Jev request")?;
@@ -182,19 +184,21 @@ pub(crate) async fn record_editorial_signal(
     signal: &NewsSignal,
     marker_screened: bool,
 ) -> Result<()> {
-    sqlx::query("DELETE FROM jev_editorial_signals WHERE item_id = $1 AND symbol = $2")
-        .bind(item_id)
-        .bind(symbol)
-        .execute(pool)
-        .await
-        .context("clearing a prior Jev editorial signal")?;
-
     sqlx::query(
         "INSERT INTO jev_editorial_signals (
             item_id, symbol, created_at, request_id, about_symbol, direction,
             direction_confidence, bullish_probability, bearish_probability, materiality,
             company_specific, instruction_shaped, restates_known, signed_score, marker_screened
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (item_id, symbol) DO UPDATE SET
+           created_at = excluded.created_at, request_id = excluded.request_id,
+           about_symbol = excluded.about_symbol, direction = excluded.direction,
+           direction_confidence = excluded.direction_confidence,
+           bullish_probability = excluded.bullish_probability,
+           bearish_probability = excluded.bearish_probability, materiality = excluded.materiality,
+           company_specific = excluded.company_specific, instruction_shaped = excluded.instruction_shaped,
+           restates_known = excluded.restates_known, signed_score = excluded.signed_score,
+           marker_screened = excluded.marker_screened",
     )
     .bind(item_id)
     .bind(symbol)
@@ -354,7 +358,7 @@ pub(crate) async fn judged_subjects(
 ) -> Result<std::collections::HashSet<String>> {
     Ok(sqlx::query(
         "SELECT subject FROM jev_requests
-         WHERE purpose = $1 AND status = 'completed' AND subject IS NOT NULL",
+         WHERE purpose = $1 AND status IN ('completed', 'partial') AND subject IS NOT NULL",
     )
     .bind(purpose)
     .fetch_all(pool)
@@ -375,7 +379,7 @@ pub(crate) async fn results_for(
     Ok(sqlx::query(&format!(
         "SELECT created_at, subject, model_resolved, result_json
          FROM jev_requests
-         WHERE purpose = $1 AND status = 'completed' AND result_json IS NOT NULL
+         WHERE purpose = $1 AND status IN ('completed', 'partial') AND result_json IS NOT NULL
          ORDER BY created_at DESC
          LIMIT {limit}"
     ))
@@ -402,6 +406,70 @@ mod tests {
     use std::{collections::BTreeMap, sync::Once};
 
     static DRIVERS: Once = Once::new();
+
+    #[tokio::test]
+    async fn missing_jev_table_does_not_erase_decision_usage() {
+        let pool = pool().await;
+        sqlx::query("CREATE TABLE decision_reports (id INTEGER, created_at TEXT, model TEXT, status TEXT, request_json TEXT, response_json TEXT)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO decision_reports VALUES (1, '2026-09-20T12:00:00Z', 'model', 'completed', '{}', $1)")
+            .bind(serde_json::json!({"usage":{"prompt_tokens":100,"cost":0.01}}).to_string())
+            .execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE jev_requests")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = crate::state::AppState {
+            config_path: std::path::PathBuf::from("test.yaml"),
+            config: serde_yaml::Value::Null,
+            db_url: "sqlite::memory:".into(),
+            pool,
+        };
+        let ledger = state.llm_usage_ledger(10, 30).await.unwrap();
+        assert_eq!(ledger.unavailable_sources, vec!["jev"]);
+        assert_eq!(ledger.request_count, 1);
+        assert_eq!(ledger.cost_usd, Some(0.01));
+        assert_eq!(ledger.requests[0].surface, "decision_report");
+    }
+
+    #[tokio::test]
+    async fn partial_answer_preserves_billing_and_measurement_evidence() {
+        let pool = pool().await;
+        let mut response = response();
+        response.cost_usd = Some(0.125);
+        response.cost_source = "billed";
+        response.issues.push(crate::jev::JevAnswerIssue {
+            id: "direction".into(),
+            reason: "missing".into(),
+        });
+        record_success(
+            &pool,
+            RecordedRequest {
+                id: "partial",
+                created_at: "2026-09-20T12:00:00Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("1"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 1,
+            },
+            &response,
+            None,
+        )
+        .await
+        .unwrap();
+        let rows = usage_rows(&pool, 10).await.unwrap();
+        assert_eq!(rows[0]["status"], "partial");
+        assert_eq!(rows[0]["cost_source"], "billed");
+        assert_eq!(rows[0]["cost_usd"], 0.125);
+        let stored = results_for(&pool, PURPOSE_REPORT_GRADING, 10)
+            .await
+            .unwrap();
+        // row_to_json already decodes *_json TEXT columns.
+        assert_eq!(
+            stored[0]["result_json"]["measurement"]["schema_version"],
+            "test"
+        );
+    }
 
     async fn pool() -> AnyPool {
         DRIVERS.call_once(sqlx::any::install_default_drivers);
@@ -437,6 +505,9 @@ mod tests {
                 input_tokens: 420,
                 output_tokens: 0,
             },
+            cost_usd: Some(0.0000176),
+            cost_source: crate::jev::COST_SOURCE_RATE_CARD,
+            measurement: serde_json::json!({"schema_version":"test"}),
             model_resolved: Some("typesafe/jev-1.13".to_string()),
             latency_ms: 118,
             attempts: 1,
@@ -559,8 +630,6 @@ mod tests {
                 question_count: 6,
             },
             &response(),
-            Some(0.0000176),
-            crate::jev::COST_SOURCE_RATE_CARD,
             None,
         )
         .await

@@ -42,6 +42,29 @@ const COST_SOURCE_NONE: &str = "not_reported";
 pub(crate) const SURFACE_DECISION_REPORT: &str = "decision_report";
 pub(crate) const SURFACE_JEV: &str = "jev";
 
+/// Retain readable surfaces and explicitly name failed reads. Neither a
+/// partial subtotal nor an unavailable source is a complete spend total.
+pub(crate) fn ledger_from_reads(
+    decision: anyhow::Result<Vec<JsonValue>>,
+    jev: anyhow::Result<Vec<JsonValue>>,
+    day_limit: usize,
+) -> LlmUsageLedgerPayload {
+    let mut unavailable = Vec::new();
+    if decision.is_err() {
+        unavailable.push(SURFACE_DECISION_REPORT.to_string());
+    }
+    if jev.is_err() {
+        unavailable.push(SURFACE_JEV.to_string());
+    }
+    let mut ledger = llm_usage_ledger_from_sources(
+        decision.unwrap_or_default(),
+        jev.unwrap_or_default(),
+        day_limit,
+    );
+    ledger.unavailable_sources = unavailable;
+    ledger
+}
+
 /// Decision Report rows alone.
 ///
 /// Test-only since Jev joined the ledger: production always reads both
@@ -73,6 +96,8 @@ pub(crate) fn llm_usage_ledger_from_sources(
     requests.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     let days = daily_rollup(&requests, day_limit);
     LlmUsageLedgerPayload {
+        unavailable_sources: Vec::new(),
+        unpriced_request_count: requests.iter().filter(|row| row.cost_usd.is_none()).count() as i64,
         request_count: requests.len() as i64,
         prompt_token_count: requests.iter().map(|row| row.prompt_tokens).sum(),
         completion_token_count: requests.iter().map(|row| row.completion_tokens).sum(),
@@ -242,6 +267,7 @@ fn daily_rollup(requests: &[LlmRequestUsagePayload], day_limit: usize) -> Vec<Ll
                 cost_usd: None,
                 models: Vec::new(),
                 jev_request_count: 0,
+                unpriced_request_count: 0,
             });
         entry.request_count += 1;
         if request.surface == SURFACE_JEV {
@@ -252,6 +278,8 @@ fn daily_rollup(requests: &[LlmRequestUsagePayload], day_limit: usize) -> Vec<Ll
         entry.reasoning_token_count += request.reasoning_tokens;
         if let Some(cost) = request.cost_usd {
             entry.cost_usd = Some(entry.cost_usd.unwrap_or(0.0) + cost);
+        } else {
+            entry.unpriced_request_count += 1;
         }
         if !request.model.is_empty() && !entry.models.contains(&request.model) {
             entry.models.push(request.model.clone());
@@ -309,6 +337,69 @@ fn parse_embedded_json(value: Option<&JsonValue>) -> Option<JsonValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ledger_nulls_do_not_blank_other_source_evidence() {
+        let fixture = serde_json::to_value(ledger_from_reads(
+            Err(anyhow::anyhow!("unavailable")),
+            Ok(vec![jev_row(
+                "2026-09-20T12:00:00Z",
+                "editorial_item",
+                0,
+                JsonValue::Null,
+            )]),
+            30,
+        ))
+        .unwrap();
+        crate::read_model::assert_null_is_never_worse_than_absent(&fixture, |value| {
+            crate::read_model::decode::<LlmUsageLedgerPayload>("test_llm_usage", value)
+        });
+    }
+
+    #[test]
+    fn failed_source_is_visible_without_erasing_the_other_surface() {
+        let source = jev_row(
+            "2026-09-20T12:00:00Z",
+            "editorial_item",
+            100,
+            serde_json::json!(0.001),
+        );
+        let ledger = ledger_from_reads(
+            Err(anyhow::anyhow!("database unavailable")),
+            Ok(vec![source]),
+            30,
+        );
+        assert_eq!(ledger.unavailable_sources, vec!["decision_report"]);
+        assert_eq!(ledger.request_count, 1);
+        assert_eq!(ledger.cost_usd, Some(0.001));
+        let empty = ledger_from_reads(
+            Err(anyhow::anyhow!("failed")),
+            Err(anyhow::anyhow!("failed")),
+            30,
+        );
+        assert_eq!(empty.unavailable_sources.len(), 2);
+        assert_eq!(empty.cost_usd, None);
+    }
+
+    #[test]
+    fn unpriced_requests_are_counted_beside_known_subtotals() {
+        let ledger = llm_usage_ledger_from_sources(
+            vec![],
+            vec![
+                jev_row(
+                    "2026-09-20T12:00:00Z",
+                    "editorial_item",
+                    100,
+                    serde_json::json!(0.001),
+                ),
+                jev_row("2026-09-20T12:01:00Z", "editorial_item", 0, JsonValue::Null),
+            ],
+            30,
+        );
+        assert_eq!(ledger.cost_usd, Some(0.001));
+        assert_eq!(ledger.unpriced_request_count, 1);
+        assert_eq!(ledger.days[0].unpriced_request_count, 1);
+    }
     use serde_json::json;
 
     fn row(created_at: &str, model: &str, usage: JsonValue, max_tokens: i64) -> JsonValue {

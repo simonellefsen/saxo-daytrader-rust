@@ -15,6 +15,11 @@ See [urgent-todo](urgent-todo.md) for the short ranked list of items where the s
 
 ## Guiding Principles
 
+Jev has a [reviewed staged adoption plan](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md):
+transport smoke verified, observation still disabled. Operator UI, durable
+measurement/accounting provenance and calibration gates precede any rank-only
+experiment. Model confidence is not automatically a probability of profit.
+
 - Preserve SIM/live separation and keep broker mutations auditable.
 - Fail closed on AI, schema, session, market-scope, and broker uncertainty.
 - Prefer small, testable changes with clear before/after evidence.

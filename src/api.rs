@@ -1943,9 +1943,8 @@ async fn entry_evaluation(
 ///
 /// `limit` bounds the requests returned; `days` bounds the daily rollup, which
 /// is computed from those requests and so cannot describe a day the limit
-/// excluded. A degraded read returns an empty ledger rather than a zeroed one:
-/// the payload's counts stay 0 and its cost stays absent, which reads as "no
-/// observation" rather than "nothing was spent".
+/// excluded. A failed source is named explicitly and readable sources remain
+/// visible; cost is a known subtotal, never an assertion of complete billing.
 async fn llm_usage_ledger(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LlmUsageParams>,

@@ -101,7 +101,7 @@ pub fn create_schema_sql() -> &'static [&'static str] {
 /// How many (item, symbol) pairs one cycle will judge.
 ///
 /// Bounded for pacing rather than cost: at roughly 400 input tokens a pair,
-/// sixty pairs is about 0.001 US cents. The limit exists so a first run
+/// sixty pairs is about USD 0.001 at the published input rate. The limit exists so a first run
 /// against a full backlog does not sit in a loop, and so a Jev outage costs at
 /// most sixty failed calls per cycle rather than one per stored item.
 const JEV_SCORING_PAIR_LIMIT: usize = 60;
@@ -162,8 +162,6 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
-                let (cost_usd, cost_source) =
-                    crate::jev::cost_for_request(&json!({}), &response.usage);
                 if let Err(err) = crate::jev_store::record_success(
                     &state.pool,
                     crate::jev_store::RecordedRequest {
@@ -175,16 +173,16 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                         question_count,
                     },
                     &response,
-                    cost_usd,
-                    cost_source,
-                    // The judgements live in jev_editorial_signals, where they
-                    // can be queried and ranked; duplicating them here would
-                    // give the same reading two homes that could disagree.
+                    // No extra purpose-specific result: record_success retains
+                    // the validated measurement audit, and the signal table
+                    // below is its operational projection.
                     None,
                 )
                 .await
                 {
                     warn!(error = %err, "recording a Jev editorial request");
+                    failed += 1;
+                    continue; // Never save a signal without its accounting record.
                 }
                 let signal = crate::jev_signals::NewsSignal::from_answers(&response.answers);
                 if let Err(err) = crate::jev_store::record_editorial_signal(
@@ -224,6 +222,7 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                 {
                     warn!(error = %err, "recording a failed Jev editorial request");
                 }
+                break; // Do not fan an outage out across the entire backlog.
             }
         }
     }
@@ -439,7 +438,6 @@ pub async fn run_editorial_research_cycle(state: &AppState) -> Result<JsonValue>
         "ok"
     };
     let pruned = prune_old_records(state, config.retention).await?;
-    let jev = score_items_with_jev(state).await;
     info!(
         attempted_sources,
         fetched_count, stored_count, pruned, status, "editorial research cycle completed"
@@ -451,7 +449,6 @@ pub async fn run_editorial_research_cycle(state: &AppState) -> Result<JsonValue>
         "stored_count": stored_count,
         "pruned": pruned,
         "sources": source_results,
-        "jev": jev,
         "safety": "public_rss_only_sanitized_editorial_context_no_broker_or_manager_mutation",
     }))
 }

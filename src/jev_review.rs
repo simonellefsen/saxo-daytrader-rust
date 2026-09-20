@@ -59,6 +59,27 @@ const KNOWN_FAILURE_CODES: &[(&str, &str)] = &[
 
 const REVIEW_BATCH_LIMIT: usize = 10;
 
+/// One sequential worker in the singleton scheduler process. No Jev network
+/// work is awaited by report creation, ingestion, or the execution cycle.
+/// Disabled deployments do not create a polling worker.
+pub(crate) async fn run_observation_loop(state: AppState) {
+    if availability(&state).is_none() {
+        return;
+    }
+    loop {
+        let grades = grade_reports(&state).await;
+        let failures = classify_unknown_failures(&state).await;
+        let editorial = crate::editorial_research::score_items_with_jev(&state).await;
+        info!(
+            ?grades,
+            ?failures,
+            ?editorial,
+            "Jev observation cycle finished"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+    }
+}
+
 fn availability(state: &AppState) -> Option<Box<JevConfig>> {
     match JevConfig::from_yaml(&state.config) {
         JevAvailability::Ready(cfg) => Some(cfg),
@@ -132,8 +153,6 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
-                let (cost_usd, cost_source) =
-                    crate::jev::cost_for_request(&json!({}), &response.usage);
                 let result = grade_payload(&response.answers, &response.issues);
                 if let Err(err) = jev_store::record_success(
                     &state.pool,
@@ -146,8 +165,6 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
                         question_count: questions.len() as i64,
                     },
                     &response,
-                    cost_usd,
-                    cost_source,
                     Some(&result),
                 )
                 .await
@@ -174,6 +191,7 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
                     &format!("{err:#}"),
                 )
                 .await;
+                break; // Stop this batch on provider failure; the next cycle can retry.
             }
         }
     }
@@ -243,6 +261,7 @@ fn grade_payload(
     };
     json!({
         "version": "v1",
+        "evidence_scope": "report_self_consistency_not_independent_source_verification",
         "rationale_supported": noul("rationale_supported"),
         "view_consistent": noul("view_consistent"),
         "specificity": answers
@@ -329,8 +348,6 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
-                let (cost_usd, cost_source) =
-                    crate::jev::cost_for_request(&json!({}), &response.usage);
                 let (category, confidence) = match response.answers.get("category") {
                     Some(crate::jev::Answer::Choice {
                         choice, confidence, ..
@@ -357,8 +374,6 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                         question_count: questions.len() as i64,
                     },
                     &response,
-                    cost_usd,
-                    cost_source,
                     Some(&result),
                 )
                 .await
@@ -385,6 +400,7 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                     &format!("{err:#}"),
                 )
                 .await;
+                break;
             }
         }
     }
@@ -416,6 +432,28 @@ mod tests {
     use super::*;
     use crate::jev::{Answer, JevAnswerIssue};
     use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn disabled_worker_exits_without_reading_tables_or_calling_a_provider() {
+        sqlx::any::install_default_drivers();
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let state = AppState {
+            config_path: std::path::PathBuf::from("test.yaml"),
+            config: serde_yaml::from_str("jev:\n  enabled: false\n").unwrap(),
+            db_url: "sqlite::memory:".into(),
+            pool,
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            run_observation_loop(state),
+        )
+        .await
+        .expect("disabled worker exits instead of polling");
+    }
 
     /// A stored prompt runs to six figures of tokens, well past Jev's window.
     /// The evidence is therefore the report's own signal metadata, and the

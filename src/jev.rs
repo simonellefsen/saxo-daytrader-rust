@@ -31,6 +31,7 @@ use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value as JsonValue, json};
 use serde_yaml::Value as YamlValue;
+use sha2::{Digest, Sha256};
 
 use crate::config::{yaml_bool, yaml_i64, yaml_string};
 
@@ -78,7 +79,7 @@ pub(crate) enum JevAvailability {
     MissingApiKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct JevConfig {
     pub api_key: String,
     pub base_url: String,
@@ -86,6 +87,15 @@ pub(crate) struct JevConfig {
     pub http_timeout_seconds: u64,
     pub max_state_chars: usize,
     pub max_questions_per_request: usize,
+}
+
+impl std::fmt::Debug for JevConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JevConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl JevConfig {
@@ -151,7 +161,6 @@ pub(crate) enum Question {
 impl Question {
     /// The wire discriminator, used by tests to assert a question set is
     /// shaped as intended. The runtime branches on the enum itself.
-    #[cfg(test)]
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::Noul { .. } => "noul",
@@ -196,7 +205,8 @@ impl Question {
 
 /// A verified answer. Every variant carries only values this module could
 /// check against the question that produced it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub(crate) enum Answer {
     Noul {
         noul: f64,
@@ -208,6 +218,7 @@ pub(crate) enum Answer {
     },
     Score {
         score: f64,
+        probabilities: BTreeMap<String, f64>,
         confidence: Option<f64>,
         legend: BTreeMap<String, String>,
     },
@@ -226,6 +237,9 @@ impl Answer {
             return None;
         };
         let mut levels: Vec<f64> = legend.keys().filter_map(|key| key.parse().ok()).collect();
+        if !score.is_finite() || levels.iter().any(|level| !level.is_finite()) {
+            return None;
+        }
         if levels.len() < 2 {
             return None;
         }
@@ -234,7 +248,10 @@ impl Answer {
         if (high - low).abs() < f64::EPSILON {
             return None;
         }
-        Some(((score - low) / (high - low)).clamp(0.0, 1.0))
+        if *score < low || *score > high {
+            return None;
+        }
+        Some((score - low) / (high - low))
     }
 }
 
@@ -252,6 +269,11 @@ pub(crate) struct JevResponse {
     /// short.
     pub issues: Vec<JevAnswerIssue>,
     pub usage: JevUsage,
+    pub cost_usd: Option<f64>,
+    pub cost_source: &'static str,
+    /// Questions and validated answers are retained, but input text is hashed
+    /// rather than copied from possibly sensitive provider failures.
+    pub measurement: JsonValue,
     /// The model that actually answered, read from the response body. With a
     /// floating alias configured this is the only record of which version
     /// produced a given probability, so a later recalibration is a dated,
@@ -320,6 +342,9 @@ pub(crate) fn parse_answers(
 }
 
 fn parse_one(raw: &JsonValue, question: &Question) -> std::result::Result<Answer, String> {
+    if raw.get("type").and_then(JsonValue::as_str) != Some(question.kind()) {
+        return Err("answer type does not match the question".to_string());
+    }
     match question {
         Question::Noul { .. } => {
             let noul = unit_interval(raw.get("noul")).ok_or_else(|| {
@@ -340,13 +365,22 @@ fn parse_one(raw: &JsonValue, question: &Question) -> std::result::Result<Answer
                     "choice {choice:?} is outside the supplied criteria"
                 ));
             }
+            let probabilities = validated_distribution(raw.get("probabilities"), criteria.keys())?;
+            if probabilities
+                .values()
+                .any(|p| *p > probabilities[choice] + 1e-6)
+            {
+                return Err("choice is not a highest-probability option".to_string());
+            }
+            let confidence = unit_interval(raw.get("confidence"))
+                .ok_or_else(|| "missing or invalid confidence".to_string())?;
             Ok(Answer::Choice {
                 choice: choice.to_string(),
-                probabilities: probability_map(raw.get("probabilities")),
-                confidence: unit_interval(raw.get("confidence")),
+                probabilities,
+                confidence: Some(confidence),
             })
         }
-        Question::Score { .. } => {
+        Question::Score { criteria, .. } => {
             let score = raw
                 .get("score")
                 .and_then(JsonValue::as_f64)
@@ -357,10 +391,39 @@ fn parse_one(raw: &JsonValue, question: &Question) -> std::result::Result<Answer
                         excerpt(raw.get("score"))
                     )
                 })?;
+            let expected: BTreeMap<String, String> = criteria
+                .iter()
+                .enumerate()
+                .map(|(i, label)| (i.to_string(), label.clone()))
+                .collect();
+            let legend = string_map(raw.get("legend"));
+            if criteria.len() < 2
+                || legend != expected
+                || raw
+                    .get("legend")
+                    .and_then(JsonValue::as_object)
+                    .map(|v| v.len())
+                    != Some(expected.len())
+                || !(0.0..=(criteria.len() - 1) as f64).contains(&score)
+            {
+                return Err("score or legend does not match the requested rubric".to_string());
+            }
+            let probabilities = validated_distribution(raw.get("probabilities"), expected.keys())?;
+            let weighted: f64 = criteria
+                .iter()
+                .enumerate()
+                .map(|(i, _)| i as f64 * probabilities[&i.to_string()])
+                .sum();
+            if (weighted - score).abs() > 0.02 {
+                return Err("score disagrees with its probability distribution".to_string());
+            }
+            let confidence = unit_interval(raw.get("confidence"))
+                .ok_or_else(|| "missing or invalid confidence".to_string())?;
             Ok(Answer::Score {
                 score,
-                confidence: unit_interval(raw.get("confidence")),
-                legend: string_map(raw.get("legend")),
+                probabilities,
+                confidence: Some(confidence),
+                legend,
             })
         }
     }
@@ -380,18 +443,26 @@ fn unit_interval(value: Option<&JsonValue>) -> Option<f64> {
     Some(value.clamp(0.0, 1.0))
 }
 
-fn probability_map(value: Option<&JsonValue>) -> BTreeMap<String, f64> {
-    value
+fn validated_distribution<'a>(
+    value: Option<&JsonValue>,
+    keys: impl Iterator<Item = &'a String>,
+) -> std::result::Result<BTreeMap<String, f64>, String> {
+    let raw = value
         .and_then(JsonValue::as_object)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|(key, value)| {
-                    unit_interval(Some(value)).map(|value| (key.clone(), value))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .ok_or_else(|| "missing probability distribution".to_string())?;
+    let mut result = BTreeMap::new();
+    for key in keys {
+        let probability = unit_interval(raw.get(key))
+            .ok_or_else(|| "missing or invalid option probability".to_string())?;
+        result.insert(key.clone(), probability);
+    }
+    if raw.len() != result.len()
+        || result.is_empty()
+        || (result.values().sum::<f64>() - 1.0).abs() > 0.01
+    {
+        return Err("probability distribution has wrong keys or does not sum to one".to_string());
+    }
+    Ok(result)
 }
 
 fn string_map(value: Option<&JsonValue>) -> BTreeMap<String, String> {
@@ -416,7 +487,7 @@ fn excerpt(value: Option<&JsonValue>) -> String {
             if rendered.len() <= 60 {
                 rendered
             } else {
-                format!("{}...", &rendered[..60])
+                format!("{}...", truncate(&rendered, 60))
             }
         }
     }
@@ -478,6 +549,29 @@ fn backoff_delay(attempt: u32) -> Duration {
     Duration::from_millis(BASE_BACKOFF_MS * 2_u64.pow(attempt.saturating_sub(1).min(6)))
 }
 
+fn retry_delay(
+    attempt: u32,
+    retry_after: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    let seconds = retry_after.and_then(|value| {
+        value.parse::<u64>().ok().or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(value)
+                .ok()
+                .map(|deadline| {
+                    (deadline.with_timezone(&chrono::Utc) - now)
+                        .num_seconds()
+                        .max(0) as u64
+                })
+        })
+    });
+    match seconds {
+        Some(seconds) if seconds > 60 => None, // defer to next worker cycle, never retry early
+        Some(seconds) => Some(backoff_delay(attempt).max(Duration::from_secs(seconds))),
+        None => Some(backoff_delay(attempt)),
+    }
+}
+
 /// Sends one state and its questions to Jev.
 ///
 /// Bounds the state rather than truncating it: a truncated JSON state is both
@@ -520,14 +614,22 @@ pub(crate) async fn ask(
             .send()
             .await;
 
-        let (status, body) = match outcome {
+        let (status, body, delay) = match outcome {
             Ok(response) => {
                 let status = response.status();
+                let delay = retry_delay(
+                    attempt,
+                    response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok()),
+                    chrono::Utc::now(),
+                );
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|err| format!("failed to read Jev response body: {err}"));
-                (status, body)
+                (status, body, delay)
             }
             Err(err) => {
                 last_error = format!("transport error: {err}");
@@ -546,29 +648,72 @@ pub(crate) async fn ask(
                 truncate(&body, 2_000)
             );
             if is_retryable_status(status.as_u16()) && attempt < MAX_ATTEMPTS {
-                tokio::time::sleep(backoff_delay(attempt)).await;
-                continue;
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
             }
             break;
         }
 
         let parsed: JsonValue =
             serde_json::from_str(&body).context("Jev returned a non-JSON body")?;
-        let (answers, issues) = parse_answers(&parsed, questions)?;
-        return Ok(JevResponse {
-            answers,
-            issues,
-            usage: usage_from_response(&parsed),
-            model_resolved: parsed
-                .get("model")
-                .and_then(JsonValue::as_str)
-                .map(str::to_string),
-            latency_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-            attempts: attempt,
-        });
+        return Ok(decode_response(
+            &parsed,
+            &request,
+            questions,
+            started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            attempt,
+        ));
     }
 
     bail!("{last_error}")
+}
+
+fn decode_response(
+    parsed: &JsonValue,
+    request: &JsonValue,
+    questions: &BTreeMap<String, Question>,
+    latency_ms: i64,
+    attempts: u32,
+) -> JevResponse {
+    // Even a malformed answer envelope can be billable. Preserve usage
+    // and cost while marking every answer absent.
+    let (answers, issues) = parse_answers(parsed, questions).unwrap_or_else(|_| {
+        (
+            BTreeMap::new(),
+            questions
+                .keys()
+                .map(|id| JevAnswerIssue {
+                    id: id.clone(),
+                    reason: "response has no answers object".to_string(),
+                })
+                .collect(),
+        )
+    });
+    let usage = usage_from_response(parsed);
+    let (cost_usd, cost_source) = cost_for_request(parsed, &usage);
+    JevResponse {
+        measurement: json!({
+            "schema_version": "jev-observation-v2-2026-09-20",
+            "request_sha256": format!("{:x}", Sha256::digest(request.to_string().as_bytes())),
+            "questions": request.get("questions"),
+            "answers": answers,
+            "issues": issues.iter().map(|issue| json!({"id":issue.id,"reason":issue.reason})).collect::<Vec<_>>(),
+            "input_retention": "hash_only_not_historical_replay",
+        }),
+        answers,
+        issues,
+        usage,
+        cost_usd,
+        cost_source,
+        model_resolved: parsed
+            .get("model")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        latency_ms,
+        attempts,
+    }
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -581,6 +726,100 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_is_honored_or_deferred_not_shortened() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(retry_delay(1, Some("3"), now), Some(Duration::from_secs(3)));
+        assert_eq!(
+            retry_delay(1, Some("Sun, 20 Sep 2026 12:00:05 GMT"), now),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(retry_delay(1, Some("120"), now), None);
+    }
+
+    #[test]
+    fn mismatched_types_and_invalid_distributions_are_absent() {
+        let questions = choice_question();
+        for answer in [
+            json!({"type":"noul", "choice":"bullish", "confidence":1.0,
+                "probabilities":{"bullish":1.0,"bearish":0.0,"neutral":0.0}}),
+            json!({"type":"choice", "choice":"bullish", "confidence":1.0}),
+            json!({"type":"choice", "choice":"bullish", "confidence":1.0,
+                "probabilities":{"bullish":0.9,"bearish":0.9,"neutral":0.0}}),
+            json!({"type":"choice", "choice":"bullish", "confidence":1.0,
+                "probabilities":{"bullish":0.1,"bearish":0.9,"neutral":0.0}}),
+            json!({"type":"choice", "choice":"bullish", "confidence":1.0,
+                "probabilities":{"bullish":1.0,"bearish":0.0,"neutral":0.0,"other":0.0}}),
+        ] {
+            let (answers, issues) =
+                parse_answers(&json!({"answers":{"direction":answer}}), &questions).unwrap();
+            assert!(answers.is_empty());
+            assert_eq!(issues.len(), 1);
+        }
+    }
+
+    #[test]
+    fn invalid_scores_are_not_clamped_into_strong_signals() {
+        let question = Question::Score {
+            instructions: json!("Size?"),
+            criteria: vec!["small".into(), "large".into()],
+        };
+        let good = json!({"type":"score", "score":0.75, "confidence":0.4,
+            "legend":{"0":"small","1":"large"},
+            "probabilities":{"0":0.25,"1":0.75}});
+        assert_eq!(
+            parse_one(&good, &question).unwrap().normalized_score(),
+            Some(0.75)
+        );
+        for (key, value) in [
+            ("score", json!(99.0)),
+            ("score", json!(-1.0)),
+            ("score", json!(0.1)),
+            ("legend", json!({"NaN":"small","1":"large"})),
+            ("legend", json!({"0":"large","1":"small"})),
+            ("confidence", JsonValue::Null),
+        ] {
+            let mut bad = good.clone();
+            bad[key] = value;
+            assert!(parse_one(&bad, &question).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn malformed_unicode_answer_does_not_panic() {
+        let response = json!({"answers":{"about_symbol":{"type":"noul","noul":"文".repeat(100)}}});
+        let (answers, issues) = parse_answers(&response, &noul_question()).unwrap();
+        assert!(answers.is_empty());
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn decoder_keeps_billed_cost_even_when_answers_are_malformed() {
+        let questions = noul_question();
+        let request = build_request(&json!({"headline":"synthetic"}), DEFAULT_MODEL, &questions);
+        let response = decode_response(
+            &json!({"usage":{"cost":0.125,"input_tokens":500},"model":"resolved"}),
+            &request,
+            &questions,
+            10,
+            1,
+        );
+        assert!(response.answers.is_empty());
+        assert_eq!(response.issues.len(), 1);
+        assert_eq!(response.cost_usd, Some(0.125));
+        assert_eq!(response.cost_source, "billed");
+        assert_eq!(
+            response.measurement["request_sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert!(response.measurement.get("state").is_none());
+    }
 
     fn noul_question() -> BTreeMap<String, Question> {
         BTreeMap::from([(
@@ -660,7 +899,8 @@ mod tests {
         let mut questions = choice_question();
         questions.extend(noul_question());
         let response = json!({"answers": {
-            "direction": {"type": "choice", "choice": "bullish", "confidence": 0.82},
+            "direction": {"type": "choice", "choice": "bullish", "confidence": 0.82,
+                "probabilities": {"bullish": 0.9, "bearish": 0.05, "neutral": 0.05}},
             "about_symbol": {"type": "noul", "noul": "not a number"},
         }});
 
@@ -807,6 +1047,7 @@ mod tests {
     fn a_score_is_normalized_against_the_legend_it_came_with() {
         let one_based = Answer::Score {
             score: 2.5,
+            probabilities: BTreeMap::new(),
             confidence: None,
             legend: BTreeMap::from([
                 ("1".to_string(), "negligible".to_string()),
@@ -819,6 +1060,7 @@ mod tests {
 
         let zero_based = Answer::Score {
             score: 1.5,
+            probabilities: BTreeMap::new(),
             confidence: None,
             legend: BTreeMap::from([
                 ("0".to_string(), "negligible".to_string()),
@@ -831,6 +1073,7 @@ mod tests {
 
         let no_legend = Answer::Score {
             score: 2.5,
+            probabilities: BTreeMap::new(),
             confidence: None,
             legend: BTreeMap::new(),
         };
@@ -960,6 +1203,7 @@ mod tests {
             max_questions_per_request: 12,
         };
         let request = build_request(&json!({"headline": "x"}), &cfg.model, &noul_question());
+        assert!(!format!("{cfg:?}").contains(&cfg.api_key));
         assert!(
             !serde_json::to_string(&request)
                 .expect("request serializes")
@@ -1051,6 +1295,10 @@ mod tests {
 
         println!("model_resolved = {:?}", response.model_resolved);
         println!("usage          = {:?}", response.usage);
+        println!(
+            "cost           = {:?} ({})",
+            response.cost_usd, response.cost_source
+        );
         println!("latency_ms     = {}", response.latency_ms);
         println!("attempts       = {}", response.attempts);
         println!("issues         = {:?}", response.issues);
