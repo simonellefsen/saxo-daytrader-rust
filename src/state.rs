@@ -15942,6 +15942,87 @@ impl AppState {
         Ok(summary)
     }
 
+    /// Records this ISO week's evaluation snapshot if it is due.
+    ///
+    /// Idempotent through the week primary key rather than a cursor, so a
+    /// scheduler restart cannot double-record and a crash cannot lose the week.
+    /// Returns what it decided so the cycle payload says why nothing happened
+    /// -- "not due" and "failed" must not look alike in the record.
+    pub(crate) async fn record_weekly_entry_evaluation(&self) -> JsonValue {
+        let timezone = yaml_string(&self.config, &["localization", "time_zone"])
+            .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+            .unwrap_or(chrono_tz::Europe::Copenhagen);
+        let weekday = yaml_string(&self.config, &["evaluation", "weekly_snapshot_weekday"])
+            .and_then(|value| value.parse::<chrono::Weekday>().ok())
+            .unwrap_or(chrono::Weekday::Sun);
+        let at_or_after = yaml_string(&self.config, &["evaluation", "weekly_snapshot_local_time"])
+            .and_then(|value| chrono::NaiveTime::parse_from_str(&value, "%H:%M").ok())
+            .unwrap_or_else(|| {
+                chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("static snapshot time")
+            });
+        let now = Utc::now();
+        let week_key = crate::entry_evaluation::iso_week_key(now);
+        let existing = self
+            .select_json("SELECT iso_week FROM entry_evaluation_snapshots")
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|row| json_text(row, "iso_week"))
+            .collect::<Vec<_>>();
+
+        if !crate::entry_evaluation::snapshot_due(
+            now.with_timezone(&timezone).naive_local(),
+            weekday,
+            at_or_after,
+            &existing,
+            &week_key,
+        ) {
+            return json!({"status": "not_due", "iso_week": week_key});
+        }
+
+        let summary = match self.entry_evaluation(2_000).await {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!("weekly entry evaluation failed: {err:#}");
+                return json!({"status": "error", "iso_week": week_key, "error": err.to_string()});
+            }
+        };
+        // The per-entry rows stay out of the stored snapshot: they are
+        // reproducible from the endpoint at any time, and a row per entry per
+        // week would grow without bound for evidence nobody reads in aggregate.
+        let mut stored = summary.clone();
+        if let Some(object) = stored.as_object_mut() {
+            object.remove("entries");
+        }
+        let entry_count = summary
+            .get("entry_count")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default();
+        let sql = format!(
+            "INSERT INTO entry_evaluation_snapshots (iso_week, created_at, entry_count, summary_json)
+             VALUES ('{}', '{}', {}, '{}')
+             ON CONFLICT(iso_week) DO UPDATE SET
+                created_at = excluded.created_at,
+                entry_count = excluded.entry_count,
+                summary_json = excluded.summary_json",
+            sql_escape(&week_key),
+            sql_escape(&now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            entry_count,
+            sql_escape(&serde_json::to_string(&stored).unwrap_or_else(|_| "{}".to_string()))
+        );
+        match sqlx::query(&sql).execute(&self.pool).await {
+            Ok(_) => json!({
+                "status": "recorded",
+                "iso_week": week_key,
+                "entry_count": entry_count,
+            }),
+            Err(err) => {
+                warn!("persisting weekly entry evaluation failed: {err:#}");
+                json!({"status": "error", "iso_week": week_key, "error": err.to_string()})
+            }
+        }
+    }
+
     /// Daily closes for `symbol` strictly after `from_day`, oldest first.
     async fn forward_closes(&self, symbol: &str, from_day: &str, limit: i64) -> Vec<f64> {
         self.select_json(&format!(
@@ -17162,6 +17243,12 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating performance benchmark runtime tables")?;
+        }
+        for sql in crate::entry_evaluation::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating entry evaluation snapshot table")?;
         }
         for column in [
             "nearest_support DOUBLE PRECISION",

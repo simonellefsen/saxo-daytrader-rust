@@ -576,6 +576,19 @@ strategy:
     trail_stop_atr_multiple: 2.0
     min_ratchet_atr_fraction: 0.25
 
+evaluation:
+  # Weekly forward evaluation of every BUY fill at the pre-registered horizons
+  # in src/entry_evaluation.rs. Weekly, not daily: the horizons run 1 to 20
+  # sessions, so a daily snapshot mostly re-reports resolved cells and buries
+  # the change worth seeing.
+  #
+  # Sunday evening puts the snapshot after the week's last session and before
+  # Monday's first, so no row ever mixes in a partial trading day. Recording is
+  # idempotent on the ISO week, so restarts cannot double-count and a missed
+  # Sunday still records the week later rather than leaving a silent gap.
+  weekly_snapshot_weekday: Sun
+  weekly_snapshot_local_time: "22:00"
+
 execution:
   # How long every held position on an open exchange may show no price
   # change before the overview reports a frozen quote feed.

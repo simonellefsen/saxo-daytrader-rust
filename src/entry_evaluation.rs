@@ -38,6 +38,7 @@
 
 use std::collections::BTreeMap;
 
+use chrono::Datelike;
 use serde_json::{Value as JsonValue, json};
 
 /// Forward horizons in trading sessions, fixed before the first result was read.
@@ -79,6 +80,61 @@ pub(crate) const EPOCHS: &[Epoch] = &[
                  commission ceiling 0.003 -> 0.004; decision model moved to gemini-flash-latest.",
     },
 ];
+
+/// Whether this week's snapshot is due at `now_local`.
+///
+/// Weekly rather than daily because the horizons are 1 to 20 sessions: a daily
+/// snapshot would mostly re-report the same resolved cells and bury the change
+/// that matters. Gated on weekday-and-time reaching the configured mark, with
+/// the ISO-week primary key doing the real idempotency -- a scheduler that
+/// restarts ten times on Sunday evening still records one snapshot.
+///
+/// Deliberately not "run if a week has passed since the last one": that drifts
+/// later every week and eventually lands mid-session, where a snapshot would
+/// mix a partial trading day into the series.
+pub(crate) fn snapshot_due(
+    now_local: chrono::NaiveDateTime,
+    weekday: chrono::Weekday,
+    at_or_after: chrono::NaiveTime,
+    existing_weeks: &[String],
+    week_key: &str,
+) -> bool {
+    if existing_weeks.iter().any(|week| week == week_key) {
+        return false;
+    }
+    // Later in the week is still due: a scheduler that was down on Sunday must
+    // not silently skip the week, because a gap in the series is invisible
+    // once the next snapshot lands beside it.
+    let day_reached = now_local.weekday().num_days_from_monday() >= weekday.num_days_from_monday();
+    let time_reached = now_local.weekday().num_days_from_monday() > weekday.num_days_from_monday()
+        || now_local.time() >= at_or_after;
+    day_reached && time_reached
+}
+
+pub fn create_schema_sql() -> &'static [&'static str] {
+    &[
+        // One row per ISO week. The week is the primary key because the value
+        // of this series is comparability across runs, and two snapshots of the
+        // same week -- taken hours apart, resolving different numbers of
+        // horizons -- would silently become two different answers to one
+        // question. Re-running a week updates it rather than appending.
+        "CREATE TABLE IF NOT EXISTS entry_evaluation_snapshots (
+            iso_week TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            entry_count INTEGER NOT NULL,
+            summary_json TEXT NOT NULL
+        )",
+    ]
+}
+
+/// The ISO year-week a timestamp falls in, e.g. `2026-W38`.
+///
+/// Weeks rather than dates because the run is weekly and a date key would make
+/// a Monday rerun look like a new observation.
+pub(crate) fn iso_week_key(now: chrono::DateTime<chrono::Utc>) -> String {
+    let week = now.iso_week();
+    format!("{}-W{:02}", week.year(), week.week())
+}
 
 /// The regional proxy an entry is compared against.
 ///
@@ -543,5 +599,68 @@ mod tests {
         assert_eq!(cell["resolved"], 1);
         assert_eq!(cell["benchmark_compared"], 0);
         assert!(cell["mean_excess_return"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    use chrono::{NaiveDate, Weekday};
+
+    fn at(day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 9, day)
+            .expect("date")
+            .and_hms_opt(hour, minute, 0)
+            .expect("time")
+    }
+
+    /// 2026-09-20 is a Sunday; 09-21 Monday. Written out because misreading a
+    /// weekday is how a quiet Saturday became a reported outage in this project
+    /// three days ago.
+    #[test]
+    fn the_snapshot_waits_for_its_weekday_and_time_then_runs_once() {
+        let mark = chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("time");
+        let week = "2026-W38";
+
+        assert!(
+            !snapshot_due(at(20, 21, 59), Weekday::Sun, mark, &[], week),
+            "before the configured time"
+        );
+        assert!(snapshot_due(at(20, 22, 0), Weekday::Sun, mark, &[], week));
+        assert!(
+            !snapshot_due(at(20, 23, 0), Weekday::Sun, mark, &[week.to_string()], week),
+            "the ISO-week key makes a restart idempotent"
+        );
+    }
+
+    /// A missed Sunday must still record the week. A silent gap in the series
+    /// is invisible once the next snapshot lands beside it, and this series
+    /// exists precisely to show change between runs.
+    #[test]
+    fn a_missed_day_still_records_the_week_rather_than_skipping_it() {
+        let mark = chrono::NaiveTime::from_hms_opt(22, 0, 0).expect("time");
+        // Configured for Wednesday; it is now Friday and nothing ran.
+        assert!(snapshot_due(
+            at(18, 9, 0),
+            Weekday::Wed,
+            mark,
+            &[],
+            "2026-W38"
+        ));
+    }
+
+    /// Weeks are the key, not dates: two runs on different days of the same
+    /// week are one observation, and the second must not append a row that
+    /// resolves a different number of horizons to the same question.
+    #[test]
+    fn the_week_key_is_iso_and_stable_across_the_week() {
+        let monday = chrono::DateTime::parse_from_rfc3339("2026-09-14T08:00:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        let friday = chrono::DateTime::parse_from_rfc3339("2026-09-18T20:00:00Z")
+            .expect("ts")
+            .with_timezone(&chrono::Utc);
+        assert_eq!(iso_week_key(monday), iso_week_key(friday));
+        assert_eq!(iso_week_key(monday), "2026-W38");
     }
 }

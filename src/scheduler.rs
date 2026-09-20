@@ -414,6 +414,9 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         }
     };
     record_step_duration(&mut step_durations, "journal", step_started);
+    let step_started = Instant::now();
+    let entry_evaluation = state.record_weekly_entry_evaluation().await;
+    record_step_duration(&mut step_durations, "entry_evaluation", step_started);
     let status = if trading_manager.get("status").and_then(JsonValue::as_str) == Some("error")
         || execution_queue.get("status").and_then(JsonValue::as_str) == Some("error")
         || broker_order_sync.get("status").and_then(JsonValue::as_str) == Some("error")
@@ -480,6 +483,7 @@ async fn run_cycle(state: &AppState) -> Result<()> {
         "notifications": notifications,
         "operational_notifications": operational_notifications,
         "journal": journal,
+        "entry_evaluation": entry_evaluation,
         "market": market
     });
     state
