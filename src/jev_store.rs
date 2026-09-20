@@ -76,12 +76,48 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             restates_known DOUBLE PRECISION,
             signed_score DOUBLE PRECISION,
             marker_screened INTEGER NOT NULL DEFAULT 0,
+            -- Evidence identity and timing, snapshotted when the judgement was
+            -- made. editorial_research_items is pruned on a retention schedule
+            -- and its last_seen_at is rewritten whenever a feed repeats a
+            -- story, so item_id alone becomes a dangling reference to evidence
+            -- that has changed or vanished.
+            evidence_published_at TEXT,
+            evidence_first_seen_at TEXT,
+            evidence_sha256 TEXT,
+            evidence_timing TEXT,
+            evidence_lag_seconds INTEGER,
+            -- Denormalised so provenance survives independently of jev_requests.
+            model_resolved TEXT,
+            measurement_version TEXT,
+            answered_question_count INTEGER NOT NULL DEFAULT 0,
+            expected_question_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (item_id, symbol)
         )",
         "CREATE INDEX IF NOT EXISTS idx_jev_requests_created
          ON jev_requests(created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_symbol
          ON jev_editorial_signals(symbol, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_timing
+         ON jev_editorial_signals(evidence_timing, created_at DESC)",
+    ]
+}
+
+/// Columns added to `jev_editorial_signals` after it first shipped.
+///
+/// `CREATE TABLE IF NOT EXISTS` does not add columns, and the table was
+/// created on the deploy before these existed, so a fresh database and a
+/// running one would otherwise disagree about the schema.
+pub fn signal_columns_to_ensure() -> &'static [&'static str] {
+    &[
+        "evidence_published_at TEXT",
+        "evidence_first_seen_at TEXT",
+        "evidence_sha256 TEXT",
+        "evidence_timing TEXT",
+        "evidence_lag_seconds INTEGER",
+        "model_resolved TEXT",
+        "measurement_version TEXT",
+        "answered_question_count INTEGER NOT NULL DEFAULT 0",
+        "expected_question_count INTEGER NOT NULL DEFAULT 0",
     ]
 }
 
@@ -175,21 +211,41 @@ pub(crate) async fn record_failure(
 /// `marker_screened` records whether the existing 31-marker substring screen
 /// had already excluded this item, so the two screens can be compared without
 /// either one having influenced the other.
+pub(crate) struct RecordedSignal<'a> {
+    pub item_id: &'a str,
+    pub symbol: &'a str,
+    /// When Jev answered.
+    pub created_at: &'a str,
+    pub request_id: Option<&'a str>,
+    pub marker_screened: bool,
+    pub provenance: &'a crate::jev_signals::EvidenceProvenance,
+    pub model_resolved: Option<&'a str>,
+    pub answered_question_count: i64,
+    pub expected_question_count: i64,
+}
+
 pub(crate) async fn record_editorial_signal(
     pool: &AnyPool,
-    item_id: &str,
-    symbol: &str,
-    created_at: &str,
-    request_id: Option<&str>,
+    meta: RecordedSignal<'_>,
     signal: &NewsSignal,
-    marker_screened: bool,
 ) -> Result<()> {
+    let (item_id, symbol, created_at, request_id, marker_screened) = (
+        meta.item_id,
+        meta.symbol,
+        meta.created_at,
+        meta.request_id,
+        meta.marker_screened,
+    );
     sqlx::query(
         "INSERT INTO jev_editorial_signals (
             item_id, symbol, created_at, request_id, about_symbol, direction,
             direction_confidence, bullish_probability, bearish_probability, materiality,
-            company_specific, instruction_shaped, restates_known, signed_score, marker_screened
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            company_specific, instruction_shaped, restates_known, signed_score, marker_screened,
+            evidence_published_at, evidence_first_seen_at, evidence_sha256, evidence_timing,
+            evidence_lag_seconds, model_resolved, measurement_version,
+            answered_question_count, expected_question_count
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                   $16, $17, $18, $19, $20, $21, $22, $23, $24)
          ON CONFLICT (item_id, symbol) DO UPDATE SET
            created_at = excluded.created_at, request_id = excluded.request_id,
            about_symbol = excluded.about_symbol, direction = excluded.direction,
@@ -198,7 +254,16 @@ pub(crate) async fn record_editorial_signal(
            bearish_probability = excluded.bearish_probability, materiality = excluded.materiality,
            company_specific = excluded.company_specific, instruction_shaped = excluded.instruction_shaped,
            restates_known = excluded.restates_known, signed_score = excluded.signed_score,
-           marker_screened = excluded.marker_screened",
+           marker_screened = excluded.marker_screened,
+           evidence_published_at = excluded.evidence_published_at,
+           evidence_first_seen_at = excluded.evidence_first_seen_at,
+           evidence_sha256 = excluded.evidence_sha256,
+           evidence_timing = excluded.evidence_timing,
+           evidence_lag_seconds = excluded.evidence_lag_seconds,
+           model_resolved = excluded.model_resolved,
+           measurement_version = excluded.measurement_version,
+           answered_question_count = excluded.answered_question_count,
+           expected_question_count = excluded.expected_question_count",
     )
     .bind(item_id)
     .bind(symbol)
@@ -215,6 +280,15 @@ pub(crate) async fn record_editorial_signal(
     .bind(signal.restates_known)
     .bind(signal.signed_score())
     .bind(i64::from(marker_screened))
+    .bind(meta.provenance.published_at.as_deref())
+    .bind(meta.provenance.first_seen_at.as_deref())
+    .bind(meta.provenance.content_sha256.as_str())
+    .bind(meta.provenance.timing)
+    .bind(meta.provenance.lag_seconds)
+    .bind(meta.model_resolved)
+    .bind(meta.provenance.measurement_version)
+    .bind(meta.answered_question_count)
+    .bind(meta.expected_question_count)
     .execute(pool)
     .await
     .context("recording a Jev editorial signal")?;
@@ -281,7 +355,10 @@ pub(crate) async fn recent_signals(
     Ok(sqlx::query(&format!(
         "SELECT item_id, symbol, created_at, about_symbol, direction, direction_confidence,
                 bullish_probability, bearish_probability, materiality, company_specific,
-                instruction_shaped, restates_known, signed_score, marker_screened
+                instruction_shaped, restates_known, signed_score, marker_screened,
+                evidence_published_at, evidence_first_seen_at, evidence_sha256, evidence_timing,
+                evidence_lag_seconds, model_resolved, measurement_version,
+                answered_question_count, expected_question_count
          FROM jev_editorial_signals
          WHERE created_at >= $1
          ORDER BY created_at DESC
@@ -497,6 +574,42 @@ mod tests {
         pool
     }
 
+    /// Records a signal with unremarkable provenance, so a test that is not
+    /// about provenance does not have to restate it.
+    async fn record_signal(
+        pool: &AnyPool,
+        item_id: &str,
+        symbol: &str,
+        created_at: &str,
+        signal: &NewsSignal,
+        marker_screened: bool,
+    ) -> Result<()> {
+        let provenance = crate::jev_signals::EvidenceProvenance::new(
+            &format!("https://example.test/{item_id}"),
+            item_id,
+            "",
+            Some(created_at),
+            Some(created_at),
+            created_at,
+        );
+        record_editorial_signal(
+            pool,
+            RecordedSignal {
+                item_id,
+                symbol,
+                created_at,
+                request_id: None,
+                marker_screened,
+                provenance: &provenance,
+                model_resolved: Some("typesafe/jev-1.13-20260917"),
+                answered_question_count: 6,
+                expected_question_count: 6,
+            },
+            signal,
+        )
+        .await
+    }
+
     fn response() -> JevResponse {
         JevResponse {
             answers: BTreeMap::new(),
@@ -526,12 +639,11 @@ mod tests {
             materiality: Some(0.75),
             ..NewsSignal::default()
         };
-        record_editorial_signal(
+        record_signal(
             &pool,
             "item-1",
             "NOVO:xcse",
             "2026-09-20T08:00:00Z",
-            None,
             &sparse,
             false,
         )
@@ -567,12 +679,11 @@ mod tests {
             ..NewsSignal::default()
         };
         for _ in 0..3 {
-            record_editorial_signal(
+            record_signal(
                 &pool,
                 "item-1",
                 "NOVO:xcse",
                 "2026-09-20T08:00:00Z",
-                None,
                 &signal,
                 false,
             )
@@ -656,12 +767,11 @@ mod tests {
             ("marker-over-fired", true, 0.03),
             ("marker-missed-it", false, 0.95),
         ] {
-            record_editorial_signal(
+            record_signal(
                 &pool,
                 id,
                 "NOVO:xcse",
                 "2026-09-20T08:00:00Z",
-                None,
                 &NewsSignal {
                     instruction_shaped: Some(instruction_shaped),
                     ..NewsSignal::default()
@@ -689,12 +799,11 @@ mod tests {
     #[tokio::test]
     async fn an_unjudged_item_is_not_counted_as_agreement() {
         let pool = pool().await;
-        record_editorial_signal(
+        record_signal(
             &pool,
             "unjudged",
             "NOVO:xcse",
             "2026-09-20T08:00:00Z",
-            None,
             &NewsSignal::default(),
             true,
         )
@@ -718,12 +827,11 @@ mod tests {
     #[tokio::test]
     async fn a_boundary_probability_reads_back_as_a_float_not_an_integer() {
         let pool = pool().await;
-        record_editorial_signal(
+        record_signal(
             &pool,
             "item-1",
             "NOVO:xcse",
             "2026-09-20T08:00:00Z",
-            None,
             &NewsSignal {
                 about_symbol: Some(1.0),
                 instruction_shaped: Some(0.0),
@@ -754,5 +862,121 @@ mod tests {
         );
         assert_eq!(json["about_symbol"].as_f64(), Some(1.0));
         assert_eq!(json["instruction_shaped"].as_f64(), Some(0.0));
+    }
+
+    /// The reason provenance is on the signal at all: editorial_research_items
+    /// is pruned on a retention schedule, so a judgement whose evidence lived
+    /// only behind item_id would become uninterpretable.
+    #[tokio::test]
+    async fn a_judgement_stays_interpretable_after_its_source_row_is_pruned() {
+        let pool = pool().await;
+        sqlx::query(
+            "INSERT INTO editorial_research_items (id, title, source_name)
+             VALUES ('item-1', 'Novo raises guidance', 'Borsen')",
+        )
+        .execute(&pool)
+        .await
+        .expect("source row");
+
+        let provenance = crate::jev_signals::EvidenceProvenance::new(
+            "https://example.test/a",
+            "Novo raises guidance",
+            "Outlook lifted.",
+            Some("2026-09-20T07:55:00Z"),
+            Some("2026-09-20T08:00:00Z"),
+            "2026-09-20T08:10:00Z",
+        );
+        record_editorial_signal(
+            &pool,
+            RecordedSignal {
+                item_id: "item-1",
+                symbol: "NOVO:xcse",
+                created_at: "2026-09-20T08:10:00Z",
+                request_id: None,
+                marker_screened: false,
+                provenance: &provenance,
+                model_resolved: Some("typesafe/jev-1.13-20260917"),
+                answered_question_count: 6,
+                expected_question_count: 6,
+            },
+            &NewsSignal {
+                about_symbol: Some(0.95),
+                ..NewsSignal::default()
+            },
+        )
+        .await
+        .expect("signal records");
+
+        sqlx::query("DELETE FROM editorial_research_items")
+            .execute(&pool)
+            .await
+            .expect("prune");
+
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals survive the prune");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["evidence_timing"], "decision_time");
+        assert_eq!(rows[0]["evidence_lag_seconds"], 600);
+        assert_eq!(rows[0]["evidence_published_at"], "2026-09-20T07:55:00Z");
+        assert_eq!(rows[0]["model_resolved"], "typesafe/jev-1.13-20260917");
+        assert_eq!(
+            rows[0]["measurement_version"],
+            crate::jev_signals::NEWS_QUESTION_SET_VERSION
+        );
+        assert_eq!(
+            rows[0]["evidence_sha256"].as_str().map(str::len),
+            Some(64),
+            "the evidence is still identifiable with the source row gone"
+        );
+    }
+
+    /// An alias rollover produces a different resolved model. Existing
+    /// judgements keep the version that made them rather than being restamped,
+    /// so a rollover is a visible boundary in the data instead of a silent
+    /// recalibration.
+    #[tokio::test]
+    async fn a_model_rollover_does_not_restamp_earlier_judgements() {
+        let pool = pool().await;
+        for (item, model, at) in [
+            ("old", "typesafe/jev-1.13-20260917", "2026-09-20T08:00:00Z"),
+            ("new", "typesafe/jev-1.14-20261001", "2026-10-02T08:00:00Z"),
+        ] {
+            let provenance = crate::jev_signals::EvidenceProvenance::new(
+                "https://example.test/a",
+                item,
+                "",
+                Some(at),
+                Some(at),
+                at,
+            );
+            record_editorial_signal(
+                &pool,
+                RecordedSignal {
+                    item_id: item,
+                    symbol: "NOVO:xcse",
+                    created_at: at,
+                    request_id: None,
+                    marker_screened: false,
+                    provenance: &provenance,
+                    model_resolved: Some(model),
+                    answered_question_count: 6,
+                    expected_question_count: 6,
+                },
+                &NewsSignal::default(),
+            )
+            .await
+            .expect("signal records");
+        }
+
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals");
+        let models: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row["model_resolved"].as_str())
+            .collect();
+        assert!(models.contains(&"typesafe/jev-1.13-20260917"));
+        assert!(models.contains(&"typesafe/jev-1.14-20261001"));
     }
 }

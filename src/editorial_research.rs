@@ -185,14 +185,28 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                     continue; // Never save a signal without its accounting record.
                 }
                 let signal = crate::jev_signals::NewsSignal::from_answers(&response.answers);
+                let provenance = crate::jev_signals::EvidenceProvenance::new(
+                    &pair.canonical_url,
+                    &pair.title,
+                    &pair.summary,
+                    pair.published_at.as_deref(),
+                    pair.first_seen_at.as_deref(),
+                    &now,
+                );
                 if let Err(err) = crate::jev_store::record_editorial_signal(
                     &state.pool,
-                    &pair.item_id,
-                    &pair.symbol,
-                    &now,
-                    Some(&request_id),
+                    crate::jev_store::RecordedSignal {
+                        item_id: &pair.item_id,
+                        symbol: &pair.symbol,
+                        created_at: &now,
+                        request_id: Some(&request_id),
+                        marker_screened: pair.marker_screened,
+                        provenance: &provenance,
+                        model_resolved: response.model_resolved.as_deref(),
+                        answered_question_count: response.answers.len() as i64,
+                        expected_question_count: question_count,
+                    },
                     &signal,
-                    pair.marker_screened,
                 )
                 .await
                 {
@@ -242,9 +256,11 @@ struct UnjudgedPair {
     item_id: String,
     symbol: String,
     source_name: String,
+    canonical_url: String,
     title: String,
     summary: String,
     published_at: Option<String>,
+    first_seen_at: Option<String>,
     marker_screened: bool,
 }
 
@@ -264,7 +280,8 @@ fn configured_company_names(state: &AppState) -> std::collections::HashMap<Strin
 
 async fn unjudged_pairs(state: &AppState) -> Result<Vec<UnjudgedPair>> {
     let rows = sqlx::query(&format!(
-        "SELECT id, source_name, title, summary, published_at, matched_symbols_json
+        "SELECT id, source_name, canonical_url, title, summary, published_at, first_seen_at,
+                matched_symbols_json
          FROM editorial_research_items
          ORDER BY COALESCE(published_at, last_seen_at) DESC, last_seen_at DESC
          LIMIT {}",
@@ -281,18 +298,33 @@ async fn unjudged_pairs(state: &AppState) -> Result<Vec<UnjudgedPair>> {
     // judged" is a property of the pair, not of the item. Excluding by item id
     // alone would permanently skip the second symbol of any item whose first
     // one had been scored.
-    let judged = sqlx::query("SELECT item_id, symbol FROM jev_editorial_signals")
-        .fetch_all(&state.pool)
-        .await
-        .context("reading existing Jev editorial signals")?
-        .iter()
-        .map(|row| {
+    // Carries the answer counts as well as the identity, because a partial
+    // answer may be re-asked while the result would still be decision time.
+    // See `jev_signals::may_regrade`.
+    let judged = sqlx::query(
+        "SELECT item_id, symbol, answered_question_count, expected_question_count
+         FROM jev_editorial_signals",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .context("reading existing Jev editorial signals")?
+    .iter()
+    .map(|row| {
+        (
             (
                 row.try_get::<String, _>("item_id").unwrap_or_default(),
                 row.try_get::<String, _>("symbol").unwrap_or_default(),
-            )
-        })
-        .collect::<std::collections::HashSet<_>>();
+            ),
+            (
+                row.try_get::<i64, _>("answered_question_count")
+                    .unwrap_or(0),
+                row.try_get::<i64, _>("expected_question_count")
+                    .unwrap_or(0),
+            ),
+        )
+    })
+    .collect::<std::collections::HashMap<_, _>>();
+    let now = Utc::now().to_rfc3339();
 
     let mut pairs = Vec::new();
     for row in rows {
@@ -300,11 +332,14 @@ async fn unjudged_pairs(state: &AppState) -> Result<Vec<UnjudgedPair>> {
         let title = value_text(&row, "title");
         let summary = value_text(&row, "summary");
         let marker_screened = !injection_markers_in(&format!("{title}\n{summary}")).is_empty();
-        let published_at = row
-            .get("published_at")
-            .and_then(JsonValue::as_str)
-            .map(str::to_string)
-            .filter(|value| !value.is_empty());
+        let optional_text = |key: &str| {
+            row.get(key)
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+                .filter(|value| !value.is_empty())
+        };
+        let published_at = optional_text("published_at");
+        let first_seen_at = optional_text("first_seen_at");
         let symbols = row
             .get("matched_symbols_json")
             .and_then(|value| {
@@ -320,16 +355,29 @@ async fn unjudged_pairs(state: &AppState) -> Result<Vec<UnjudgedPair>> {
             let Some(symbol) = symbol.as_str().map(str::to_string) else {
                 continue;
             };
-            if judged.contains(&(item_id.clone(), symbol.clone())) {
-                continue;
+            if let Some((answered, expected)) = judged.get(&(item_id.clone(), symbol.clone())) {
+                // Already judged. Re-ask only while a retry would still count
+                // as decision time and something was genuinely missing --
+                // otherwise a later answer would overwrite the earlier one and
+                // stamp it with a decision time that has already passed.
+                if !crate::jev_signals::may_regrade(
+                    *answered,
+                    *expected,
+                    first_seen_at.as_deref(),
+                    &now,
+                ) {
+                    continue;
+                }
             }
             pairs.push(UnjudgedPair {
                 item_id: item_id.clone(),
                 symbol,
                 source_name: value_text(&row, "source_name"),
+                canonical_url: value_text(&row, "canonical_url"),
                 title: title.clone(),
                 summary: summary.clone(),
                 published_at: published_at.clone(),
+                first_seen_at: first_seen_at.clone(),
                 marker_screened,
             });
             if pairs.len() >= JEV_SCORING_PAIR_LIMIT {
@@ -1164,6 +1212,44 @@ mod tests {
         );
     }
 
+    /// Records a signal with unremarkable provenance for tests that are not
+    /// about provenance.
+    async fn record_test_signal(
+        state: &AppState,
+        item_id: &str,
+        symbol: &str,
+        created_at: &str,
+        signal: &crate::jev_signals::NewsSignal,
+        marker_screened: bool,
+        answered: i64,
+    ) {
+        let provenance = crate::jev_signals::EvidenceProvenance::new(
+            &format!("https://example.test/{item_id}"),
+            item_id,
+            "",
+            Some(created_at),
+            Some(created_at),
+            created_at,
+        );
+        crate::jev_store::record_editorial_signal(
+            &state.pool,
+            crate::jev_store::RecordedSignal {
+                item_id,
+                symbol,
+                created_at,
+                request_id: None,
+                marker_screened,
+                provenance: &provenance,
+                model_resolved: Some("typesafe/jev-1.13-20260917"),
+                answered_question_count: answered,
+                expected_question_count: 6,
+            },
+            signal,
+        )
+        .await
+        .expect("signal recorded");
+    }
+
     async fn editorial_research_test_state() -> AppState {
         static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
         INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
@@ -1216,21 +1302,20 @@ mod tests {
         );
         store_item(&state, &flagged).await.expect("stored");
 
-        crate::jev_store::record_editorial_signal(
-            &state.pool,
+        record_test_signal(
+            &state,
             "flagged",
             "NOVO:xcse",
             "2026-09-20T08:05:00Z",
-            None,
             &crate::jev_signals::NewsSignal {
                 instruction_shaped: Some(0.01),
                 about_symbol: Some(0.99),
                 ..crate::jev_signals::NewsSignal::default()
             },
             true,
+            6,
         )
-        .await
-        .expect("signal recorded");
+        .await;
 
         let context = compact_editorial_research_context(&state, 50)
             .await
@@ -1277,17 +1362,16 @@ mod tests {
 
         assert_eq!(unjudged_pairs(&state).await.expect("pairs").len(), 2);
 
-        crate::jev_store::record_editorial_signal(
-            &state.pool,
+        record_test_signal(
+            &state,
             "two-symbols",
             "NOVO:xcse",
             "2026-09-20T08:05:00Z",
-            None,
             &crate::jev_signals::NewsSignal::default(),
             false,
+            6,
         )
-        .await
-        .expect("signal recorded");
+        .await;
 
         let remaining = unjudged_pairs(&state).await.expect("pairs");
         assert_eq!(remaining.len(), 1);
@@ -1354,5 +1438,126 @@ mod tests {
         let state = editorial_research_test_state().await;
         let result = score_items_with_jev(&state).await;
         assert_eq!(result["status"], "disabled");
+    }
+
+    /// A complete judgement is never re-asked, and a partial one only while
+    /// the retry would still land inside the decision-time window. Otherwise a
+    /// later answer would overwrite the earlier one and carry a decision time
+    /// that has already passed.
+    #[tokio::test]
+    async fn a_partial_judgement_is_retried_only_inside_the_decision_time_window() {
+        let state = editorial_research_test_state().await;
+        for sql in create_schema_sql() {
+            sqlx::query(sql).execute(&state.pool).await.expect("schema");
+        }
+        for sql in crate::jev_store::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&state.pool)
+                .await
+                .expect("jev schema");
+        }
+
+        // first_seen_at is set by store_item to now, so a retry decided on the
+        // current clock is inside the window.
+        store_item(
+            &state,
+            &EditorialResearchItem {
+                id: "fresh".to_string(),
+                source_name: "Test".to_string(),
+                source_url: "https://example.test/feed".to_string(),
+                canonical_url: "https://example.test/fresh".to_string(),
+                title: "Novo raises guidance".to_string(),
+                published_at: Some("2026-09-20T08:00:00Z".to_string()),
+                access_level: "public_feed".to_string(),
+                summary: String::new(),
+                matched_symbols: vec!["NOVO:xcse".to_string()],
+            },
+        )
+        .await
+        .expect("stored");
+
+        let now = Utc::now().to_rfc3339();
+        record_test_signal(
+            &state,
+            "fresh",
+            "NOVO:xcse",
+            &now,
+            &crate::jev_signals::NewsSignal::default(),
+            false,
+            4,
+        )
+        .await;
+        assert_eq!(
+            unjudged_pairs(&state).await.expect("pairs").len(),
+            1,
+            "a partial answer inside the window is queued again"
+        );
+
+        record_test_signal(
+            &state,
+            "fresh",
+            "NOVO:xcse",
+            &now,
+            &crate::jev_signals::NewsSignal::default(),
+            false,
+            6,
+        )
+        .await;
+        assert!(
+            unjudged_pairs(&state).await.expect("pairs").is_empty(),
+            "a complete answer is never re-asked"
+        );
+    }
+
+    /// Provenance has to come from the stored row, not be invented at scoring
+    /// time, or a backlog sweep would label itself decision time.
+    #[tokio::test]
+    async fn a_backlog_item_carries_the_first_seen_time_that_makes_it_backlog() {
+        let state = editorial_research_test_state().await;
+        for sql in create_schema_sql() {
+            sqlx::query(sql).execute(&state.pool).await.expect("schema");
+        }
+        for sql in crate::jev_store::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&state.pool)
+                .await
+                .expect("jev schema");
+        }
+        store_item(
+            &state,
+            &EditorialResearchItem {
+                id: "old".to_string(),
+                source_name: "Test".to_string(),
+                source_url: "https://example.test/feed".to_string(),
+                canonical_url: "https://example.test/old".to_string(),
+                title: "Novo raised guidance last week".to_string(),
+                published_at: Some("2026-09-10T08:00:00Z".to_string()),
+                access_level: "public_feed".to_string(),
+                summary: String::new(),
+                matched_symbols: vec!["NOVO:xcse".to_string()],
+            },
+        )
+        .await
+        .expect("stored");
+        sqlx::query("UPDATE editorial_research_items SET first_seen_at = $1 WHERE id = 'old'")
+            .bind("2026-09-10T08:05:00Z")
+            .execute(&state.pool)
+            .await
+            .expect("age the row");
+
+        let pairs = unjudged_pairs(&state).await.expect("pairs");
+        let provenance = crate::jev_signals::EvidenceProvenance::new(
+            &pairs[0].canonical_url,
+            &pairs[0].title,
+            &pairs[0].summary,
+            pairs[0].published_at.as_deref(),
+            pairs[0].first_seen_at.as_deref(),
+            "2026-09-20T08:00:00Z",
+        );
+        assert_eq!(
+            provenance.timing,
+            crate::jev_signals::TIMING_BACKLOG,
+            "a ten-day-old item scored today is a backlog sweep, not a decision-time feature"
+        );
     }
 }

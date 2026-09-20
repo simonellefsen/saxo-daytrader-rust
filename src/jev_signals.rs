@@ -27,7 +27,9 @@
 
 use std::collections::BTreeMap;
 
+use chrono::DateTime;
 use serde_json::{Value as JsonValue, json};
+use sha2::{Digest, Sha256};
 
 use crate::jev::{Answer, Question};
 
@@ -262,6 +264,232 @@ pub(crate) fn aggregate_symbol_score(signals: &[NewsSignal]) -> Option<f64> {
     Some((scores.iter().sum::<f64>() / 2.0).tanh())
 }
 
+// ---------------------------------------------------------------------------
+// Decision-time evidence retention
+// ---------------------------------------------------------------------------
+
+/// Version of the news question set.
+///
+/// Bumped whenever a question's wording, criteria, or the composition weights
+/// change, because answers produced by different versions are different
+/// measurements and must not be pooled. This is a *measurement* version, not a
+/// strategy epoch: collecting an observation changes nothing that is traded,
+/// so it must not fragment `entry_evaluation`'s epochs.
+pub(crate) const NEWS_QUESTION_SET_VERSION: &str = "news-v1-2026-09-20";
+
+/// How long after this system first saw an item a judgement still counts as
+/// having been made at decision time.
+///
+/// The ingest cycle runs well inside this, so a healthy pipeline scores at
+/// decision time and a backlog sweep does not.
+pub(crate) const DECISION_TIME_WINDOW_SECONDS: i64 = 2 * 3600;
+
+pub(crate) const TIMING_DECISION_TIME: &str = "decision_time";
+pub(crate) const TIMING_BACKLOG: &str = "backlog";
+pub(crate) const TIMING_UNKNOWN: &str = "unknown";
+
+/// Classifies when a judgement was made relative to when its evidence arrived.
+///
+/// Recorded rather than recomputed later: the window below is a policy choice,
+/// and a future change to it must not silently reclassify judgements that were
+/// already collected and possibly already used.
+///
+/// **This alone does not make a value a decision-time feature.** It says the
+/// judgement was made promptly after the evidence appeared. Whether it was
+/// available to a particular decision is a separate question about that
+/// decision's timestamp -- see `feature_available_at`. A backlog score can
+/// never be a decision-time feature; a decision-time score still is not one
+/// for an entry that happened before it.
+pub(crate) fn evidence_timing(
+    first_seen_at: Option<&str>,
+    scored_at: &str,
+) -> (&'static str, Option<i64>) {
+    let Some(lag) = elapsed_seconds(first_seen_at, scored_at) else {
+        return (TIMING_UNKNOWN, None);
+    };
+    // A negative lag means the clocks disagree or the row was rewritten. That
+    // is not evidence of promptness, so it is not treated as such.
+    if lag < 0 {
+        return (TIMING_UNKNOWN, Some(lag));
+    }
+    if lag <= DECISION_TIME_WINDOW_SECONDS {
+        (TIMING_DECISION_TIME, Some(lag))
+    } else {
+        (TIMING_BACKLOG, Some(lag))
+    }
+}
+
+/// Whether a judgement may be used as a feature of a decision taken at
+/// `decided_at`.
+///
+/// The ordering test is the one that matters and the one an "as of" column
+/// cannot answer by itself: a judgement recorded after a fill did not inform
+/// it, however promptly it followed the headline.
+pub(crate) fn feature_available_at(timing: &str, scored_at: &str, decided_at: &str) -> bool {
+    timing == TIMING_DECISION_TIME && scored_at <= decided_at
+}
+
+/// Whether a partially answered signal may be asked again.
+///
+/// Re-asking later would overwrite a judgement with one made from a different
+/// vantage point, and would stamp it with a fresh timestamp -- manufacturing a
+/// "decision time" that has already passed. So a regrade is allowed only while
+/// the result would still classify as decision time, and only when something
+/// was actually missing.
+///
+/// After that window a partial answer stays partial and is reported as such. A
+/// gap in the record is the honest outcome; a filled-in one is a fabrication.
+pub(crate) fn may_regrade(
+    answered_question_count: i64,
+    expected_question_count: i64,
+    first_seen_at: Option<&str>,
+    now: &str,
+) -> bool {
+    if answered_question_count >= expected_question_count {
+        return false;
+    }
+    matches!(evidence_timing(first_seen_at, now).0, TIMING_DECISION_TIME)
+}
+
+/// Identity of the evidence a judgement was made about, snapshotted at
+/// scoring time.
+///
+/// `editorial_research_items` rows are pruned on a retention schedule and
+/// their `last_seen_at` is rewritten whenever a feed repeats a story, so the
+/// row a signal points at can vanish or change underneath it. Carrying the
+/// identity on the signal keeps the judgement interpretable after the source
+/// row is gone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EvidenceProvenance {
+    pub published_at: Option<String>,
+    pub first_seen_at: Option<String>,
+    pub content_sha256: String,
+    pub timing: &'static str,
+    pub lag_seconds: Option<i64>,
+    pub measurement_version: &'static str,
+}
+
+impl EvidenceProvenance {
+    pub(crate) fn new(
+        canonical_url: &str,
+        title: &str,
+        summary: &str,
+        published_at: Option<&str>,
+        first_seen_at: Option<&str>,
+        scored_at: &str,
+    ) -> Self {
+        let (timing, lag_seconds) = evidence_timing(first_seen_at, scored_at);
+        Self {
+            published_at: published_at.map(str::to_string),
+            first_seen_at: first_seen_at.map(str::to_string),
+            content_sha256: content_fingerprint(canonical_url, title, summary),
+            timing,
+            lag_seconds,
+            measurement_version: NEWS_QUESTION_SET_VERSION,
+        }
+    }
+}
+
+/// Identifies an item by its content rather than its row.
+///
+/// Also the key for duplicate-story detection: two feeds carrying the same
+/// wire story produce the same fingerprint, and counting both would let a
+/// syndicated headline outvote an exclusive one.
+pub(crate) fn content_fingerprint(canonical_url: &str, title: &str, summary: &str) -> String {
+    // A unit separator, so a url ending in text cannot combine with a title
+    // beginning with text to produce the same bytes as a different pair.
+    let normalized = [
+        canonical_url.trim().to_lowercase(),
+        title.trim().to_lowercase(),
+        summary.trim().to_lowercase(),
+    ]
+    .join("\u{1f}");
+    format!("{:x}", Sha256::digest(normalized.as_bytes()))
+}
+
+fn elapsed_seconds(from: Option<&str>, to: &str) -> Option<i64> {
+    let from = DateTime::parse_from_rfc3339(from?.trim()).ok()?;
+    let to = DateTime::parse_from_rfc3339(to.trim()).ok()?;
+    Some((to.timestamp()) - (from.timestamp()))
+}
+
+/// How much of the collected sample is usable as decision-time features.
+///
+/// Reported so the distinction is visible rather than buried in a column.
+/// Backlog judgements are perfectly good for the marker-screen comparison,
+/// which is about text; they are not features of any decision, because they
+/// were not available when one was taken.
+pub(crate) fn retention_summary(signal_rows: &[JsonValue], as_of: &str) -> JsonValue {
+    let mut features_available = 0i64;
+    let mut decision_time = 0i64;
+    let mut backlog = 0i64;
+    let mut unknown = 0i64;
+    let mut unversioned = 0i64;
+    let mut versions: BTreeMap<String, i64> = BTreeMap::new();
+    let mut models: BTreeMap<String, i64> = BTreeMap::new();
+    let mut partial = 0i64;
+
+    for row in signal_rows {
+        let timing = row
+            .get("evidence_timing")
+            .and_then(JsonValue::as_str)
+            .unwrap_or(TIMING_UNKNOWN);
+        match timing {
+            TIMING_DECISION_TIME => decision_time += 1,
+            TIMING_BACKLOG => backlog += 1,
+            _ => unknown += 1,
+        }
+        // The same test Phase 4 will apply per entry, with a fill timestamp in
+        // place of `as_of`. Applying it here keeps the policy executable
+        // rather than documented, and catches a judgement stamped in the
+        // future by a clock disagreement.
+        if let Some(scored_at) = row.get("created_at").and_then(JsonValue::as_str) {
+            if feature_available_at(timing, scored_at, as_of) {
+                features_available += 1;
+            }
+        }
+        match row.get("measurement_version").and_then(JsonValue::as_str) {
+            Some(version) if !version.is_empty() => {
+                *versions.entry(version.to_string()).or_default() += 1;
+            }
+            _ => unversioned += 1,
+        }
+        if let Some(model) = row.get("model_resolved").and_then(JsonValue::as_str) {
+            *models.entry(model.to_string()).or_default() += 1;
+        }
+        let answered = row
+            .get("answered_question_count")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0);
+        let expected = row
+            .get("expected_question_count")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0);
+        if expected > 0 && answered < expected {
+            partial += 1;
+        }
+    }
+
+    json!({
+        "features_available_as_of": as_of,
+        "features_available": features_available,
+        "decision_time": decision_time,
+        "backlog": backlog,
+        "unknown_timing": unknown,
+        "partial_answers": partial,
+        "unversioned": unversioned,
+        "measurement_versions": versions,
+        "resolved_models": models,
+        "current_measurement_version": NEWS_QUESTION_SET_VERSION,
+        "decision_time_window_seconds": DECISION_TIME_WINDOW_SECONDS,
+        "interpretation": "Backlog judgements are usable for the marker-screen comparison, \
+                           which is about text. They are not features of any decision: they \
+                           were not available when one was taken. A decision-time judgement \
+                           is a feature only of decisions that came after it -- see \
+                           `feature_available_at`.",
+    })
+}
+
 /// One symbol's aggregated news standing.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SymbolRanking {
@@ -281,10 +509,20 @@ pub(crate) struct SymbolRanking {
 /// Observational. Nothing reads this to admit, size, or block a trade.
 pub(crate) fn symbol_rankings(signal_rows: &[JsonValue]) -> Vec<SymbolRanking> {
     let mut grouped: BTreeMap<String, (Vec<NewsSignal>, String)> = BTreeMap::new();
+    // One story counts once per symbol however many feeds carried it.
+    // `aggregate_symbol_score` sums before squashing, so a syndicated wire
+    // story repeated across four feeds would otherwise outvote an exclusive.
+    let mut seen_stories: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     for row in signal_rows {
         let Some(symbol) = row.get("symbol").and_then(JsonValue::as_str) else {
             continue;
         };
+        if let Some(fingerprint) = row.get("evidence_sha256").and_then(JsonValue::as_str) {
+            if !seen_stories.insert((symbol.to_string(), fingerprint.to_string())) {
+                continue;
+            }
+        }
         let created_at = row
             .get("created_at")
             .and_then(JsonValue::as_str)
@@ -715,5 +953,265 @@ mod tests {
         assert_eq!(rankings.len(), 1);
         assert_eq!(rankings[0].item_count, 2);
         assert_eq!(rankings[0].newest_at, "2026-09-20T11:00:00Z");
+    }
+
+    #[test]
+    fn a_prompt_judgement_is_decision_time_and_a_backlog_sweep_is_not() {
+        let (timing, lag) = evidence_timing(Some("2026-09-20T08:00:00Z"), "2026-09-20T08:12:00Z");
+        assert_eq!(timing, TIMING_DECISION_TIME);
+        assert_eq!(lag, Some(720));
+
+        let (timing, lag) = evidence_timing(Some("2026-09-10T08:00:00Z"), "2026-09-20T08:00:00Z");
+        assert_eq!(
+            timing, TIMING_BACKLOG,
+            "a ten-day-old headline scored today is not a decision-time feature"
+        );
+        assert_eq!(lag, Some(864_000));
+    }
+
+    /// Without a first-seen timestamp there is nothing to measure promptness
+    /// against, and a clock that runs backwards is not evidence of promptness
+    /// either. Both are unknown rather than optimistically decision-time.
+    #[test]
+    fn missing_or_impossible_timestamps_are_unknown_not_decision_time() {
+        assert_eq!(
+            evidence_timing(None, "2026-09-20T08:00:00Z").0,
+            TIMING_UNKNOWN
+        );
+        assert_eq!(
+            evidence_timing(Some("not a timestamp"), "2026-09-20T08:00:00Z").0,
+            TIMING_UNKNOWN
+        );
+        let (timing, lag) = evidence_timing(Some("2026-09-20T09:00:00Z"), "2026-09-20T08:00:00Z");
+        assert_eq!(timing, TIMING_UNKNOWN);
+        assert_eq!(
+            lag,
+            Some(-3_600),
+            "the disagreement is recorded, not hidden"
+        );
+    }
+
+    #[test]
+    fn the_window_boundary_is_inclusive_and_one_second_past_it_is_backlog() {
+        let at = |seconds: i64| {
+            let scored = DateTime::parse_from_rfc3339("2026-09-20T08:00:00Z").unwrap()
+                + chrono::Duration::seconds(seconds);
+            evidence_timing(Some("2026-09-20T08:00:00Z"), &scored.to_rfc3339()).0
+        };
+        assert_eq!(at(DECISION_TIME_WINDOW_SECONDS), TIMING_DECISION_TIME);
+        assert_eq!(at(DECISION_TIME_WINDOW_SECONDS + 1), TIMING_BACKLOG);
+    }
+
+    /// The ordering test an "as of" column cannot answer by itself. A
+    /// judgement recorded after a fill did not inform it, however promptly it
+    /// followed the headline.
+    #[test]
+    fn a_judgement_made_after_the_decision_is_not_a_feature_of_it() {
+        assert!(feature_available_at(
+            TIMING_DECISION_TIME,
+            "2026-09-20T08:12:00Z",
+            "2026-09-20T09:00:00Z"
+        ));
+        assert!(
+            !feature_available_at(
+                TIMING_DECISION_TIME,
+                "2026-09-20T09:30:00Z",
+                "2026-09-20T09:00:00Z"
+            ),
+            "prompt after the headline is still after the fill"
+        );
+        assert!(
+            !feature_available_at(
+                TIMING_BACKLOG,
+                "2026-09-20T08:00:00Z",
+                "2026-09-20T09:00:00Z"
+            ),
+            "a backlog score can never be a decision-time feature, whatever the ordering"
+        );
+        assert!(!feature_available_at(
+            TIMING_UNKNOWN,
+            "2026-09-20T08:00:00Z",
+            "2026-09-20T09:00:00Z"
+        ));
+    }
+
+    /// Re-asking later would overwrite a judgement with one made from a
+    /// different vantage point and stamp it with a decision time that has
+    /// already passed. A gap is honest; a filled-in gap is a fabrication.
+    #[test]
+    fn a_partial_answer_may_be_retried_only_while_it_would_still_be_decision_time() {
+        let first_seen = Some("2026-09-20T08:00:00Z");
+        assert!(
+            may_regrade(4, 6, first_seen, "2026-09-20T08:20:00Z"),
+            "still inside the window, and something really was missing"
+        );
+        assert!(
+            !may_regrade(6, 6, first_seen, "2026-09-20T08:20:00Z"),
+            "a complete answer is never re-asked"
+        );
+        assert!(
+            !may_regrade(4, 6, first_seen, "2026-09-21T08:00:00Z"),
+            "outside the window the partial answer stays partial"
+        );
+        assert!(
+            !may_regrade(4, 6, None, "2026-09-20T08:20:00Z"),
+            "unknown timing cannot be promoted to decision time by a retry"
+        );
+    }
+
+    /// The source row can be pruned or rewritten, so the judgement has to
+    /// carry enough to stay interpretable without it.
+    #[test]
+    fn provenance_survives_the_source_row_being_pruned() {
+        let provenance = EvidenceProvenance::new(
+            "https://example.test/a",
+            "Novo raises guidance",
+            "Full-year outlook lifted.",
+            Some("2026-09-20T07:55:00Z"),
+            Some("2026-09-20T08:00:00Z"),
+            "2026-09-20T08:10:00Z",
+        );
+        assert_eq!(provenance.timing, TIMING_DECISION_TIME);
+        assert_eq!(provenance.lag_seconds, Some(600));
+        assert_eq!(provenance.content_sha256.len(), 64);
+        assert_eq!(provenance.measurement_version, NEWS_QUESTION_SET_VERSION);
+        assert_eq!(
+            provenance.published_at.as_deref(),
+            Some("2026-09-20T07:55:00Z")
+        );
+    }
+
+    /// Two feeds carrying the same wire story must fingerprint identically, or
+    /// a syndicated headline outvotes an exclusive one in the aggregate.
+    #[test]
+    fn the_same_story_fingerprints_identically_and_a_different_one_does_not() {
+        let a = content_fingerprint(
+            "https://example.test/a",
+            "  Novo Raises Guidance ",
+            "Outlook lifted.",
+        );
+        let b = content_fingerprint(
+            "https://EXAMPLE.test/a",
+            "novo raises guidance",
+            "  outlook lifted. ",
+        );
+        assert_eq!(a, b);
+        assert_ne!(
+            a,
+            content_fingerprint(
+                "https://example.test/a",
+                "Novo cuts guidance",
+                "Outlook lifted."
+            )
+        );
+    }
+
+    /// Without a separator, a url ending in text and a title starting with it
+    /// could combine into the same bytes as a different pair.
+    #[test]
+    fn fingerprint_fields_cannot_run_together() {
+        assert_ne!(
+            content_fingerprint("https://x/ab", "c", "d"),
+            content_fingerprint("https://x/a", "bc", "d")
+        );
+    }
+
+    #[test]
+    fn one_story_counts_once_per_symbol_however_many_feeds_carried_it() {
+        let story = |feed: &str, fingerprint: &str| {
+            json!({
+                "symbol": "NOVO:xcse",
+                "created_at": format!("2026-09-20T0{feed}:00:00Z"),
+                "about_symbol": 0.95,
+                "direction": DIRECTION_BULLISH,
+                "direction_confidence": 0.9,
+                "materiality": 0.8,
+                "evidence_sha256": fingerprint,
+            })
+        };
+        let syndicated = symbol_rankings(&[
+            story("1", "aaa"),
+            story("2", "aaa"),
+            story("3", "aaa"),
+            story("4", "aaa"),
+        ]);
+        let single = symbol_rankings(&[story("1", "aaa")]);
+        assert_eq!(syndicated.len(), 1);
+        assert_eq!(syndicated[0].item_count, 1, "four feeds, one story");
+        assert_eq!(syndicated[0].score, single[0].score);
+
+        let distinct = symbol_rankings(&[story("1", "aaa"), story("2", "bbb")]);
+        assert_eq!(distinct[0].item_count, 2);
+        assert!(
+            distinct[0].score.abs() > single[0].score.abs(),
+            "two genuinely different stories still outrank one"
+        );
+    }
+
+    /// A row without a fingerprint predates provenance. It must still count,
+    /// because dropping it would silently shrink the sample.
+    #[test]
+    fn a_row_without_a_fingerprint_is_still_counted() {
+        let rankings = symbol_rankings(&[
+            signal_row("NOVO:xcse", "2026-09-20T08:00:00Z", DIRECTION_BULLISH, 0.9),
+            signal_row("NOVO:xcse", "2026-09-20T09:00:00Z", DIRECTION_BULLISH, 0.9),
+        ]);
+        assert_eq!(rankings[0].item_count, 2);
+    }
+
+    #[test]
+    fn the_retention_summary_separates_usable_features_from_the_rest() {
+        let row = |timing: &str, answered: i64| {
+            json!({
+                "created_at": "2026-09-20T08:00:00Z",
+                "evidence_timing": timing,
+                "measurement_version": NEWS_QUESTION_SET_VERSION,
+                "model_resolved": "typesafe/jev-1.13-20260917",
+                "answered_question_count": answered,
+                "expected_question_count": 6,
+            })
+        };
+        let summary = retention_summary(
+            &[
+                row(TIMING_DECISION_TIME, 6),
+                row(TIMING_DECISION_TIME, 4),
+                row(TIMING_BACKLOG, 6),
+                row(TIMING_UNKNOWN, 6),
+                json!({"symbol": "NOVO:xcse"}),
+            ],
+            "2026-09-20T12:00:00Z",
+        );
+
+        assert_eq!(summary["decision_time"], 2);
+        assert_eq!(
+            summary["features_available"], 2,
+            "only decision-time judgements that preceded the decision qualify"
+        );
+        assert_eq!(summary["backlog"], 1);
+        assert_eq!(
+            summary["unknown_timing"], 2,
+            "a row with no timing is unknown"
+        );
+        assert_eq!(summary["partial_answers"], 1);
+        assert_eq!(summary["unversioned"], 1);
+        assert_eq!(
+            summary["measurement_versions"][NEWS_QUESTION_SET_VERSION],
+            4
+        );
+        assert_eq!(summary["resolved_models"]["typesafe/jev-1.13-20260917"], 4);
+    }
+
+    /// A judgement stamped after the moment it is being asked about cannot
+    /// have informed it, and a clock disagreement is the likely cause. It must
+    /// not be counted as an available feature.
+    #[test]
+    fn a_judgement_stamped_after_the_decision_is_not_counted_as_available() {
+        let rows = vec![json!({
+            "created_at": "2026-09-20T14:00:00Z",
+            "evidence_timing": TIMING_DECISION_TIME,
+        })];
+        let summary = retention_summary(&rows, "2026-09-20T12:00:00Z");
+        assert_eq!(summary["decision_time"], 1);
+        assert_eq!(summary["features_available"], 0);
     }
 }

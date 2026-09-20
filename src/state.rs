@@ -15898,6 +15898,10 @@ impl AppState {
             },
             "since": since,
             "signal_count": signals.len(),
+            "retention": crate::jev_signals::retention_summary(
+                &signals,
+                &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
             "screening_agreement":
                 crate::jev_store::screening_agreement(&self.pool, threshold).await?,
             "screening_disagreements":
@@ -17376,6 +17380,12 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating Jev runtime tables")?;
+        }
+        // The signal table shipped before evidence provenance existed, and
+        // CREATE TABLE IF NOT EXISTS will not add columns to it.
+        for column in crate::jev_store::signal_columns_to_ensure() {
+            self.ensure_table_column("jev_editorial_signals", column)
+                .await?;
         }
         for sql in crate::entry_evaluation::create_schema_sql() {
             sqlx::query(sql)
