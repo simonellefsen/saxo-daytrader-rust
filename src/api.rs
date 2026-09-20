@@ -155,6 +155,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             get(ai_provider_capabilities),
         )
         .route("/api/ai/llm-usage", get(llm_usage_ledger))
+        .route("/api/evaluation/entries", get(entry_evaluation))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -1896,6 +1897,25 @@ async fn ai_provider_capabilities(
         Utc::now().to_rfc3339(),
         items,
     ))
+}
+
+/// Forward evaluation of every BUY fill at the pre-registered horizons.
+///
+/// Read-only measurement. It proposes nothing, gates nothing, and reaches no
+/// broker; it exists so a claim about entry quality can be re-run rather than
+/// recited. A degraded read returns the error rather than an empty summary,
+/// because an empty evaluation and a failed one are different answers.
+async fn entry_evaluation(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Json<JsonValue> {
+    match state.entry_evaluation(params.limit.unwrap_or(500)).await {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("entry evaluation endpoint degraded: {err:#}");
+            Json(json!({"status": "unavailable", "reason": format!("{err:#}")}))
+        }
+    }
 }
 
 /// Per-request LLM token and cost measurement.

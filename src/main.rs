@@ -13,6 +13,7 @@ mod decision_schema;
 mod decision_state;
 mod drawdown_guard;
 mod editorial_research;
+mod entry_evaluation;
 mod execution_state;
 mod fx;
 mod hermes_data_requests;

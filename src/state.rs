@@ -15869,6 +15869,129 @@ impl AppState {
         ))
     }
 
+    /// Forward evaluation of every BUY fill at the declared horizons.
+    ///
+    /// Reads fills rather than sales so entries still open are included, which
+    /// is the survivorship fix the ad-hoc analyses lacked. The price series is
+    /// the stored daily indicator close -- the same series the gates read, so
+    /// the evaluation cannot see a price the strategy could not.
+    pub async fn entry_evaluation(&self, limit: i64) -> Result<JsonValue> {
+        let fills = self
+            .select_json(&format!(
+                "SELECT f.created_at, f.symbol, f.delta_quantity, f.average_price_local,
+                        f.currency, d.model
+                 FROM execution_fills AS f
+                 LEFT JOIN execution_orders AS o ON o.id = f.execution_order_id
+                 LEFT JOIN decision_reports AS d ON d.id = o.report_id
+                 WHERE f.side = 'BUY' AND f.delta_quantity > 0 AND f.average_price_local > 0
+                 ORDER BY f.created_at DESC
+                 LIMIT {}",
+                clamp_limit(limit, 1, 2_000)
+            ))
+            .await?;
+
+        let horizon_span = crate::entry_evaluation::HORIZONS
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(20);
+        let mut evaluated = Vec::new();
+        for fill in &fills {
+            let symbol = json_text(fill, "symbol");
+            let filled_at = json_text(fill, "created_at");
+            if symbol.is_empty() || filled_at.is_empty() {
+                continue;
+            }
+            let fill_day = filled_at.get(..10).unwrap_or_default().to_string();
+            let closes = self.forward_closes(&symbol, &fill_day, horizon_span).await;
+            // Sessions elapsed is counted from the shared indicator calendar
+            // rather than from wall-clock days, so a weekend or holiday never
+            // makes a horizon look overdue.
+            let sessions_elapsed = self.sessions_since(&fill_day).await;
+            let exchange = exchange_code_for(&symbol);
+            let (min_commission_local, _) =
+                crate::saxo_order::min_commission_local_for_exchange(&exchange);
+            let benchmark_key = crate::entry_evaluation::benchmark_key_for_exchange(&exchange);
+            let benchmark = self
+                .benchmark_closes(benchmark_key, &fill_day, horizon_span)
+                .await;
+            evaluated.push(crate::entry_evaluation::evaluate_entry(
+                &crate::entry_evaluation::Entry {
+                    symbol: &symbol,
+                    filled_at: &filled_at,
+                    fill_price_local: value_f64(fill, "average_price_local"),
+                    quantity: value_f64(fill, "delta_quantity"),
+                    model: &json_text(fill, "model"),
+                    forward_closes: &closes,
+                    benchmark_closes: &benchmark,
+                    min_commission_local,
+                    pct_per_side: crate::trading_manager::DEFAULT_MAX_COMMISSION_PCT_PER_SIDE,
+                },
+                sessions_elapsed,
+            ));
+        }
+
+        let mut summary = crate::entry_evaluation::summarize(&evaluated);
+        if let Some(object) = summary.as_object_mut() {
+            object.insert(
+                "generated_at".to_string(),
+                JsonValue::from(Utc::now().to_rfc3339()),
+            );
+            object.insert("entries".to_string(), JsonValue::from(evaluated));
+        }
+        Ok(summary)
+    }
+
+    /// Daily closes for `symbol` strictly after `from_day`, oldest first.
+    async fn forward_closes(&self, symbol: &str, from_day: &str, limit: i64) -> Vec<f64> {
+        self.select_json(&format!(
+            "SELECT close FROM daily_indicator_signals
+             WHERE symbol = '{}' AND run_date > '{}' AND close IS NOT NULL
+             ORDER BY run_date ASC LIMIT {}",
+            sql_escape(symbol),
+            sql_escape(from_day),
+            clamp_limit(limit, 1, 400)
+        ))
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|row| value_f64(row, "close"))
+        .collect()
+    }
+
+    /// Benchmark closes on and after `from_day`, oldest first. The first entry
+    /// is the base the horizon return is measured from, so the comparison
+    /// starts the same session the entry did.
+    async fn benchmark_closes(&self, reference_key: &str, from_day: &str, limit: i64) -> Vec<f64> {
+        self.select_json(&format!(
+            "SELECT close FROM performance_benchmark_prices
+             WHERE reference_key = '{}' AND substr(observed_at, 1, 10) >= '{}' AND close IS NOT NULL
+             ORDER BY observed_at ASC LIMIT {}",
+            sql_escape(reference_key),
+            sql_escape(from_day),
+            clamp_limit(limit + 1, 1, 400)
+        ))
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|row| value_f64(row, "close"))
+        .collect()
+    }
+
+    /// Indicator sessions recorded strictly after `from_day`.
+    async fn sessions_since(&self, from_day: &str) -> i64 {
+        self.first_json(&format!(
+            "SELECT COUNT(DISTINCT run_date) AS sessions FROM daily_indicator_signals
+             WHERE run_date > '{}'",
+            sql_escape(from_day)
+        ))
+        .await
+        .ok()
+        .flatten()
+        .map(|row| value_i64(&row, "sessions"))
+        .unwrap_or_default()
+    }
+
     /// Masked status of the AI provider API key. Never contains the key
     /// itself — only whether one is configured, where it comes from, and a
     /// short masked preview so the operator can recognize which key is live.
