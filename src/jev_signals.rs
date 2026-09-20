@@ -262,6 +262,83 @@ pub(crate) fn aggregate_symbol_score(signals: &[NewsSignal]) -> Option<f64> {
     Some((scores.iter().sum::<f64>() / 2.0).tanh())
 }
 
+/// One symbol's aggregated news standing.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SymbolRanking {
+    pub symbol: String,
+    pub score: f64,
+    pub item_count: i64,
+    pub newest_at: String,
+}
+
+/// Ranks symbols by their aggregated news signal, strongest conviction first.
+///
+/// This is the candidate pre-screen, and it is deliberately pure composition
+/// over judgements already collected rather than a fresh Jev call: the Markov
+/// universe is numeric and computed by the runtime, so asking a model to
+/// re-judge it would be the documented anti-pattern.
+///
+/// Observational. Nothing reads this to admit, size, or block a trade.
+pub(crate) fn symbol_rankings(signal_rows: &[JsonValue]) -> Vec<SymbolRanking> {
+    let mut grouped: BTreeMap<String, (Vec<NewsSignal>, String)> = BTreeMap::new();
+    for row in signal_rows {
+        let Some(symbol) = row.get("symbol").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let created_at = row
+            .get("created_at")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let number = |key: &str| row.get(key).and_then(JsonValue::as_f64);
+        let signal = NewsSignal {
+            about_symbol: number("about_symbol"),
+            direction: row
+                .get("direction")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string),
+            direction_confidence: number("direction_confidence"),
+            bullish_probability: number("bullish_probability"),
+            bearish_probability: number("bearish_probability"),
+            materiality: number("materiality"),
+            company_specific: number("company_specific"),
+            instruction_shaped: number("instruction_shaped"),
+            restates_known: number("restates_known"),
+        };
+        let entry = grouped
+            .entry(symbol.to_string())
+            .or_insert_with(|| (Vec::new(), created_at.clone()));
+        entry.0.push(signal);
+        if created_at > entry.1 {
+            entry.1 = created_at;
+        }
+    }
+
+    let mut rankings: Vec<SymbolRanking> = grouped
+        .into_iter()
+        .filter_map(|(symbol, (signals, newest_at))| {
+            // A symbol whose every item was unscorable has no standing, which
+            // is not the same as a standing of zero.
+            let score = aggregate_symbol_score(&signals)?;
+            Some(SymbolRanking {
+                symbol,
+                score,
+                item_count: signals.len() as i64,
+                newest_at,
+            })
+        })
+        .collect();
+    rankings.sort_by(|left, right| {
+        right
+            .score
+            .abs()
+            .partial_cmp(&left.score.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    rankings
+}
+
 /// Grades a stored Decision Report on the judgements deterministic rules
 /// cannot make.
 ///
@@ -587,5 +664,55 @@ mod tests {
                 "item text must never be interpolated into an instruction"
             );
         }
+    }
+
+    fn signal_row(symbol: &str, created_at: &str, direction: &str, about: f64) -> JsonValue {
+        json!({
+            "symbol": symbol,
+            "created_at": created_at,
+            "about_symbol": about,
+            "direction": direction,
+            "direction_confidence": 0.9,
+            "materiality": 0.75,
+        })
+    }
+
+    #[test]
+    fn symbols_rank_by_conviction_regardless_of_sign() {
+        let rankings = symbol_rankings(&[
+            signal_row("WEAK:xcse", "2026-09-20T08:00:00Z", DIRECTION_BULLISH, 0.2),
+            signal_row("BEAR:xcse", "2026-09-20T09:00:00Z", DIRECTION_BEARISH, 0.95),
+            signal_row("BULL:xcse", "2026-09-20T10:00:00Z", DIRECTION_BULLISH, 0.9),
+        ]);
+        let order: Vec<&str> = rankings.iter().map(|row| row.symbol.as_str()).collect();
+        assert_eq!(order, vec!["BEAR:xcse", "BULL:xcse", "WEAK:xcse"]);
+        assert!(
+            rankings[0].score < 0.0,
+            "a strong bearish reading ranks high on conviction while staying negative"
+        );
+    }
+
+    /// A symbol whose every item was unscorable has no standing. Reporting it
+    /// as 0.0 would place it among the genuinely neutral names, which is a
+    /// claim the data does not support.
+    #[test]
+    fn a_symbol_with_no_scorable_item_is_absent_rather_than_neutral() {
+        let rankings = symbol_rankings(&[json!({
+            "symbol": "UNKNOWN:xcse",
+            "created_at": "2026-09-20T08:00:00Z",
+            "materiality": 0.9,
+        })]);
+        assert!(rankings.is_empty());
+    }
+
+    #[test]
+    fn a_symbol_carries_its_item_count_and_newest_timestamp() {
+        let rankings = symbol_rankings(&[
+            signal_row("NOVO:xcse", "2026-09-20T08:00:00Z", DIRECTION_BULLISH, 0.9),
+            signal_row("NOVO:xcse", "2026-09-20T11:00:00Z", DIRECTION_BULLISH, 0.9),
+        ]);
+        assert_eq!(rankings.len(), 1);
+        assert_eq!(rankings[0].item_count, 2);
+        assert_eq!(rankings[0].newest_at, "2026-09-20T11:00:00Z");
     }
 }

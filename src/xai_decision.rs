@@ -225,12 +225,19 @@ pub async fn run_xai_decision_cycle(state: &AppState) -> Result<JsonValue> {
         }));
     }
     let scheduled = submit_due_scheduled_reports(state).await?;
+    // Observational sidecars, run last and deliberately after submission.
+    // Neither returns Err, neither reads a gate, and neither can delay or
+    // alter a report -- they grade and classify what is already stored.
+    let jev_grading = crate::jev_review::grade_reports(state).await;
+    let jev_failure_classification = crate::jev_review::classify_unknown_failures(state).await;
     Ok(json!({
         "status": "ok",
         "polled": polled,
         "shadow_outcome_backfill": shadow_outcome_backfill,
         "submitted": scheduled.get("submitted").cloned().unwrap_or_else(|| json!([])),
         "scheduler_results": scheduled.get("results").cloned().unwrap_or_else(|| json!([])),
+        "jev_grading": jev_grading,
+        "jev_failure_classification": jev_failure_classification,
     }))
 }
 

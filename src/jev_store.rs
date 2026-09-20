@@ -16,13 +16,21 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
-use sqlx::AnyPool;
+use sqlx::{AnyPool, Row};
 
 use crate::{db::row_to_json, jev::JevResponse, jev_signals::NewsSignal};
 
 pub(crate) const PURPOSE_EDITORIAL_ITEM: &str = "editorial_item";
 pub(crate) const PURPOSE_REPORT_GRADING: &str = "report_grading";
 pub(crate) const PURPOSE_ERROR_CLASSIFICATION: &str = "error_classification";
+
+/// Where an `instruction_shaped` probability starts counting as a flag.
+///
+/// Shared by the agreement count and the disagreement list so the two panels
+/// can never describe the same item differently. It governs reporting only --
+/// no value of this can admit or exclude an item from a prompt, which stays
+/// the marker screen's decision alone.
+pub(crate) const INSTRUCTION_SHAPED_THRESHOLD: f64 = 0.5;
 
 pub(crate) const STATUS_COMPLETED: &str = "completed";
 pub(crate) const STATUS_ERROR: &str = "error";
@@ -49,7 +57,8 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             latency_ms INTEGER NOT NULL DEFAULT 0,
             attempts INTEGER NOT NULL DEFAULT 1,
             status TEXT NOT NULL,
-            error_text TEXT
+            error_text TEXT,
+            result_json TEXT
         )",
         "CREATE TABLE IF NOT EXISTS jev_editorial_signals (
             item_id TEXT NOT NULL,
@@ -88,13 +97,14 @@ pub(crate) async fn record_success(
     response: &JevResponse,
     cost_usd: Option<f64>,
     cost_source: &str,
+    result_json: Option<&JsonValue>,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO jev_requests (
             id, created_at, purpose, subject, model_requested, model_resolved,
             question_count, answer_count, issue_count, input_tokens, output_tokens,
-            cost_usd, cost_source, latency_ms, attempts, status, error_text
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL)",
+            cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, $17)",
     )
     .bind(id)
     .bind(created_at)
@@ -112,6 +122,7 @@ pub(crate) async fn record_success(
     .bind(response.latency_ms)
     .bind(response.attempts as i64)
     .bind(STATUS_COMPLETED)
+    .bind(result_json.map(|value| value.to_string()))
     .execute(pool)
     .await
     .context("recording a completed Jev request")?;
@@ -136,8 +147,8 @@ pub(crate) async fn record_failure(
         "INSERT INTO jev_requests (
             id, created_at, purpose, subject, model_requested, model_resolved,
             question_count, answer_count, issue_count, input_tokens, output_tokens,
-            cost_usd, cost_source, latency_ms, attempts, status, error_text
-         ) VALUES ($1, $2, $3, $4, $5, NULL, $6, 0, 0, 0, 0, NULL, $7, 0, 0, $8, $9)",
+            cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
+         ) VALUES ($1, $2, $3, $4, $5, NULL, $6, 0, 0, 0, 0, NULL, $7, 0, 0, $8, $9, NULL)",
     )
     .bind(id)
     .bind(created_at)
@@ -248,6 +259,127 @@ pub(crate) async fn screening_disagreements(
     .fetch_all(pool)
     .await
     .context("reading Jev screening disagreements")?
+    .iter()
+    .map(row_to_json)
+    .collect())
+}
+
+/// Signals recent enough to rank on, newest first.
+pub(crate) async fn recent_signals(
+    pool: &AnyPool,
+    since: &str,
+    limit: i64,
+) -> Result<Vec<JsonValue>> {
+    let limit = limit.clamp(1, 5_000);
+    Ok(sqlx::query(&format!(
+        "SELECT item_id, symbol, created_at, about_symbol, direction, direction_confidence,
+                bullish_probability, bearish_probability, materiality, company_specific,
+                instruction_shaped, restates_known, signed_score, marker_screened
+         FROM jev_editorial_signals
+         WHERE created_at >= $1
+         ORDER BY created_at DESC
+         LIMIT {limit}"
+    ))
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .context("reading recent Jev editorial signals")?
+    .iter()
+    .map(row_to_json)
+    .collect())
+}
+
+/// How often the marker screen and Jev agree, in both directions.
+///
+/// Counts only items Jev actually judged on this axis. An unjudged item is
+/// not evidence of agreement and must not inflate the denominator.
+pub(crate) async fn screening_agreement(pool: &AnyPool, threshold: f64) -> Result<JsonValue> {
+    let rows = sqlx::query(
+        "SELECT marker_screened, instruction_shaped
+         FROM jev_editorial_signals
+         WHERE instruction_shaped IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("reading Jev screening agreement")?
+    .iter()
+    .map(row_to_json)
+    .collect::<Vec<_>>();
+
+    let mut both_flagged = 0i64;
+    let mut both_clear = 0i64;
+    let mut marker_only = 0i64;
+    let mut jev_only = 0i64;
+    for row in &rows {
+        let marker = row
+            .get("marker_screened")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0)
+            != 0;
+        let jev = row
+            .get("instruction_shaped")
+            .and_then(JsonValue::as_f64)
+            .is_some_and(|value| value >= threshold);
+        match (marker, jev) {
+            (true, true) => both_flagged += 1,
+            (false, false) => both_clear += 1,
+            (true, false) => marker_only += 1,
+            (false, true) => jev_only += 1,
+        }
+    }
+    let judged = rows.len() as i64;
+    Ok(serde_json::json!({
+        "judged_count": judged,
+        "both_flagged": both_flagged,
+        "both_clear": both_clear,
+        "marker_only": marker_only,
+        "jev_only": jev_only,
+        "threshold": threshold,
+        "marker_only_meaning": "the marker list fired where Jev reads ordinary reporting; \
+                                if these are real news, the screen is dropping it silently",
+        "jev_only_meaning": "the marker list passed text Jev reads as instruction-shaped; \
+                             the direction that matters, and the reason this is measured",
+        "admission": "observational_only",
+    }))
+}
+
+/// Subjects already judged for a given purpose, so a sidecar pass never
+/// re-spends on work it has done.
+pub(crate) async fn judged_subjects(
+    pool: &AnyPool,
+    purpose: &str,
+) -> Result<std::collections::HashSet<String>> {
+    Ok(sqlx::query(
+        "SELECT subject FROM jev_requests
+         WHERE purpose = $1 AND status = 'completed' AND subject IS NOT NULL",
+    )
+    .bind(purpose)
+    .fetch_all(pool)
+    .await
+    .context("reading judged Jev subjects")?
+    .iter()
+    .filter_map(|row| row.try_get::<String, _>("subject").ok())
+    .collect())
+}
+
+/// Stored results for one purpose, newest first.
+pub(crate) async fn results_for(
+    pool: &AnyPool,
+    purpose: &str,
+    limit: i64,
+) -> Result<Vec<JsonValue>> {
+    let limit = limit.clamp(1, 500);
+    Ok(sqlx::query(&format!(
+        "SELECT created_at, subject, model_resolved, result_json
+         FROM jev_requests
+         WHERE purpose = $1 AND status = 'completed' AND result_json IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT {limit}"
+    ))
+    .bind(purpose)
+    .fetch_all(pool)
+    .await
+    .context("reading Jev results")?
     .iter()
     .map(row_to_json)
     .collect())
@@ -422,6 +554,7 @@ mod tests {
             &response(),
             Some(0.0000176),
             crate::jev::COST_SOURCE_RATE_CARD,
+            None,
         )
         .await
         .expect("success records");

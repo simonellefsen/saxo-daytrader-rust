@@ -175,6 +175,10 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                     &response,
                     cost_usd,
                     cost_source,
+                    // The judgements live in jev_editorial_signals, where they
+                    // can be queried and ranked; duplicating them here would
+                    // give the same reading two homes that could disagree.
+                    None,
                 )
                 .await
                 {

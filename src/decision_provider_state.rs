@@ -205,6 +205,12 @@ fn request_has_plugin(request: Option<&JsonValue>, expected_id: &str) -> bool {
         })
 }
 
+/// The deterministic cascade, exposed so the observational Jev pass can ask
+/// which failures it could not name. The cascade stays the authority.
+pub(crate) fn local_failure_category_for(error: &str) -> &'static str {
+    local_failure_category(error)
+}
+
 fn local_failure_category(error: &str) -> &'static str {
     let error = error.to_ascii_lowercase();
     if error.is_empty() {

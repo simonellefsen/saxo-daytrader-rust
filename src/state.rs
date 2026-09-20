@@ -15881,6 +15881,59 @@ impl AppState {
         ))
     }
 
+    /// What Jev has judged, and where it disagrees with the marker screen.
+    ///
+    /// Observational throughout. Nothing here is read by a path that can
+    /// admit, size, or block a trade -- the rankings in particular are a view
+    /// of news standing, not a candidate list.
+    pub async fn jev_observations(&self, limit: i64, days: i64) -> Result<JsonValue> {
+        let availability = crate::jev::JevConfig::from_yaml(&self.config);
+        let since = (Utc::now() - chrono::Duration::days(days.clamp(1, 365)))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let threshold = crate::jev_store::INSTRUCTION_SHAPED_THRESHOLD;
+
+        let signals = crate::jev_store::recent_signals(&self.pool, &since, limit).await?;
+        let rankings = crate::jev_signals::symbol_rankings(&signals);
+        Ok(json!({
+            "status": match availability {
+                crate::jev::JevAvailability::Ready(_) => "ok",
+                crate::jev::JevAvailability::Disabled => "disabled",
+                crate::jev::JevAvailability::MissingApiKey => "missing_api_key",
+            },
+            "since": since,
+            "signal_count": signals.len(),
+            "screening_agreement":
+                crate::jev_store::screening_agreement(&self.pool, threshold).await?,
+            "screening_disagreements":
+                crate::jev_store::screening_disagreements(&self.pool, threshold, 100).await?,
+            "symbol_rankings": rankings
+                .iter()
+                .map(|ranking| json!({
+                    "symbol": ranking.symbol,
+                    "score": ranking.score,
+                    "item_count": ranking.item_count,
+                    "newest_at": ranking.newest_at,
+                }))
+                .collect::<Vec<_>>(),
+            "report_grades": crate::jev_store::results_for(
+                &self.pool,
+                crate::jev_store::PURPOSE_REPORT_GRADING,
+                50,
+            )
+            .await?,
+            "failure_classifications": crate::jev_store::results_for(
+                &self.pool,
+                crate::jev_store::PURPOSE_ERROR_CLASSIFICATION,
+                50,
+            )
+            .await?,
+            "admission": "observational_only",
+            "safety": "Jev judgements are recorded and ranked for measurement only. They \
+                       cannot admit an item the marker screen excluded, create a candidate, \
+                       size or block a trade, or reach Saxo.",
+        }))
+    }
+
     /// Forward evaluation of every BUY fill at the declared horizons.
     ///
     /// Reads fills rather than sales so entries still open are included, which

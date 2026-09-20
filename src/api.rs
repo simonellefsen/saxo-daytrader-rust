@@ -155,6 +155,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             get(ai_provider_capabilities),
         )
         .route("/api/ai/llm-usage", get(llm_usage_ledger))
+        .route("/api/ai/jev", get(jev_observations))
         .route("/api/evaluation/entries", get(entry_evaluation))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
@@ -1905,6 +1906,26 @@ async fn ai_provider_capabilities(
 /// broker; it exists so a claim about entry quality can be re-run rather than
 /// recited. A degraded read returns the error rather than an empty summary,
 /// because an empty evaluation and a failed one are different answers.
+/// Jev judgements, and where they disagree with the marker screen.
+///
+/// `limit` bounds the signals ranked; `days` bounds how far back they are read
+/// from. Observational: nothing served here can change what is traded.
+async fn jev_observations(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LlmUsageParams>,
+) -> Json<JsonValue> {
+    match state
+        .jev_observations(params.limit.unwrap_or(1_000), params.days.unwrap_or(30))
+        .await
+    {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("Jev observations endpoint degraded: {err:#}");
+            Json(json!({"status": "unavailable", "reason": format!("{err:#}")}))
+        }
+    }
+}
+
 async fn entry_evaluation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LimitParams>,

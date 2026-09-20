@@ -20,6 +20,7 @@ mod hermes_data_requests;
 mod hermes_state;
 mod holding_period;
 mod jev;
+mod jev_review;
 mod jev_signals;
 mod jev_store;
 mod llm_usage;
