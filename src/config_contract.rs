@@ -1324,8 +1324,8 @@ mod tests {
         );
 
         for config in [&local, &kubernetes] {
-            let model = crate::config::yaml_at(config, &["jev", "model"])
-                .expect("jev.model is configured");
+            let model =
+                crate::config::yaml_at(config, &["jev", "model"]).expect("jev.model is configured");
             assert!(
                 model.is_string(),
                 "jev.model must survive YAML as a string, not resolve to null: {model:?}"

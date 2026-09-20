@@ -398,9 +398,7 @@ fn string_map(value: Option<&JsonValue>) -> BTreeMap<String, String> {
             entries
                 .iter()
                 .filter_map(|(key, value)| {
-                    value
-                        .as_str()
-                        .map(|value| (key.clone(), value.to_string()))
+                    value.as_str().map(|value| (key.clone(), value.to_string()))
                 })
                 .collect()
         })
@@ -714,7 +712,11 @@ mod tests {
                 },
             ),
         ]);
-        let request = build_request(&json!({"headline": "x"}), "~typesafe/jev-latest", &questions);
+        let request = build_request(
+            &json!({"headline": "x"}),
+            "~typesafe/jev-latest",
+            &questions,
+        );
 
         assert_eq!(request["model"], "~typesafe/jev-latest");
         assert_eq!(request["state"]["headline"], "x");
@@ -741,7 +743,8 @@ mod tests {
             input_tokens: 1_000_000,
             output_tokens: 500,
         };
-        let (cost, source) = cost_for_request(&json!({"usage": {"input_tokens": 1_000_000}}), &usage);
+        let (cost, source) =
+            cost_for_request(&json!({"usage": {"input_tokens": 1_000_000}}), &usage);
         assert_eq!(source, COST_SOURCE_RATE_CARD);
         assert!(
             (cost.expect("a rate card cost") - RATE_CARD_INPUT_USD_PER_MILLION).abs() < 1e-12,
@@ -787,7 +790,10 @@ mod tests {
             assert!(is_retryable_status(retryable), "{retryable} is transient");
         }
         for terminal in [400, 401, 403, 404, 422] {
-            assert!(!is_retryable_status(terminal), "{terminal} will not improve");
+            assert!(
+                !is_retryable_status(terminal),
+                "{terminal} will not improve"
+            );
         }
     }
 
@@ -1007,9 +1013,18 @@ mod tests {
                 Question::Choice {
                     instructions: json!("What direction does `headline` imply for `symbol`?"),
                     criteria: BTreeMap::from([
-                        ("bullish".to_string(), "Implies the price should rise".to_string()),
-                        ("bearish".to_string(), "Implies the price should fall".to_string()),
-                        ("neutral".to_string(), "No directional implication".to_string()),
+                        (
+                            "bullish".to_string(),
+                            "Implies the price should rise".to_string(),
+                        ),
+                        (
+                            "bearish".to_string(),
+                            "Implies the price should fall".to_string(),
+                        ),
+                        (
+                            "neutral".to_string(),
+                            "No directional implication".to_string(),
+                        ),
                     ]),
                 },
             ),

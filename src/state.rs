@@ -15864,8 +15864,19 @@ impl AppState {
                 clamp_limit(limit, 1, 2_000)
             ))
             .await?;
-        Ok(llm_usage_ledger_from_rows(
+        // Jev calls are LLM spend too, and the operator asked for one ledger
+        // covering every request.
+        //
+        // The read is propagated rather than defaulted to empty. An
+        // unreadable table would otherwise render as a day with no Jev calls
+        // and a correspondingly smaller cost -- understating spend is the
+        // precise failure `cost_from_usage` exists to prevent, and it is worse
+        // here than a panel that says it could not load.
+        let jev_rows =
+            crate::jev_store::usage_rows(&self.pool, clamp_limit(limit, 1, 5_000)).await?;
+        Ok(crate::llm_usage::llm_usage_ledger_from_sources(
             rows,
+            jev_rows,
             clamp_limit(day_limit, 1, 400) as usize,
         ))
     }
@@ -17310,6 +17321,12 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating performance benchmark runtime tables")?;
+        }
+        for sql in crate::jev_store::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating Jev runtime tables")?;
         }
         for sql in crate::entry_evaluation::create_schema_sql() {
             sqlx::query(sql)

@@ -252,7 +252,10 @@ impl NewsSignal {
 /// shape without a hard cap, matching how `quiver.rs` already condenses a
 /// stream of events into a bounded signal.
 pub(crate) fn aggregate_symbol_score(signals: &[NewsSignal]) -> Option<f64> {
-    let scores: Vec<f64> = signals.iter().filter_map(NewsSignal::signed_score).collect();
+    let scores: Vec<f64> = signals
+        .iter()
+        .filter_map(NewsSignal::signed_score)
+        .collect();
     if scores.is_empty() {
         return None;
     }

@@ -21,6 +21,7 @@ mod hermes_state;
 mod holding_period;
 mod jev;
 mod jev_signals;
+mod jev_store;
 mod llm_usage;
 mod localization;
 mod market_state;

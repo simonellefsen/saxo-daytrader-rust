@@ -36,14 +36,35 @@ const COST_SOURCE_BILLED: &str = "billed";
 const COST_SOURCE_UPSTREAM: &str = "upstream_byok";
 const COST_SOURCE_NONE: &str = "not_reported";
 
+/// Which model surface a request came from. The Decision Report model and Jev
+/// are both LLM spend and belong in one ledger, but they are different enough
+/// in kind and volume that a reader must be able to tell them apart.
+pub(crate) const SURFACE_DECISION_REPORT: &str = "decision_report";
+pub(crate) const SURFACE_JEV: &str = "jev";
+
 pub(crate) fn llm_usage_ledger_from_rows(
     rows: Vec<JsonValue>,
     day_limit: usize,
 ) -> LlmUsageLedgerPayload {
-    let requests: Vec<LlmRequestUsagePayload> = rows
+    llm_usage_ledger_from_sources(rows, Vec::new(), day_limit)
+}
+
+/// Builds the ledger from both model surfaces.
+///
+/// Requests are interleaved by timestamp rather than concatenated, so the
+/// newest-first ordering holds across the two sources instead of showing every
+/// Decision Report before every Jev call.
+pub(crate) fn llm_usage_ledger_from_sources(
+    decision_report_rows: Vec<JsonValue>,
+    jev_rows: Vec<JsonValue>,
+    day_limit: usize,
+) -> LlmUsageLedgerPayload {
+    let mut requests: Vec<LlmRequestUsagePayload> = decision_report_rows
         .into_iter()
         .filter_map(request_usage_from_row)
+        .chain(jev_rows.into_iter().filter_map(jev_usage_from_row))
         .collect();
+    requests.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     let days = daily_rollup(&requests, day_limit);
     LlmUsageLedgerPayload {
         request_count: requests.len() as i64,
@@ -54,6 +75,64 @@ pub(crate) fn llm_usage_ledger_from_rows(
         requests,
         days,
     }
+}
+
+/// Reads one `jev_requests` row.
+///
+/// Jev has no reasoning tokens, no completion budget, and no finish reason --
+/// it does not generate text, so those columns are structurally absent rather
+/// than merely unreported, and are left at their empty values.
+///
+/// A cost is carried through only when the row actually recorded one. A failed
+/// call has `cost_usd` NULL, and summing it as zero would report a cheaper
+/// fleet than ran.
+fn jev_usage_from_row(row: JsonValue) -> Option<LlmRequestUsagePayload> {
+    let created_at = row.get("created_at")?.as_str()?.to_string();
+    let model = row
+        .get("model_resolved")
+        .and_then(JsonValue::as_str)
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| row.get("model_requested").and_then(JsonValue::as_str))
+        .unwrap_or_default()
+        .to_string();
+    Some(LlmRequestUsagePayload {
+        created_at,
+        model,
+        status: row
+            .get("status")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        prompt_tokens: row
+            .get("input_tokens")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default()
+            .max(0),
+        completion_tokens: row
+            .get("output_tokens")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or_default()
+            .max(0),
+        reasoning_tokens: 0,
+        max_tokens_requested: None,
+        completion_budget_used_pct: None,
+        finish_reason: None,
+        cost_usd: row
+            .get("cost_usd")
+            .and_then(JsonValue::as_f64)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0),
+        cost_source: row
+            .get("cost_source")
+            .and_then(JsonValue::as_str)
+            .unwrap_or(COST_SOURCE_NONE)
+            .to_string(),
+        surface: SURFACE_JEV.to_string(),
+        purpose: row
+            .get("purpose")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
 }
 
 fn request_usage_from_row(row: JsonValue) -> Option<LlmRequestUsagePayload> {
@@ -110,6 +189,8 @@ fn request_usage_from_row(row: JsonValue) -> Option<LlmRequestUsagePayload> {
             .map(str::to_string),
         cost_usd,
         cost_source: cost_source.to_string(),
+        surface: SURFACE_DECISION_REPORT.to_string(),
+        purpose: String::new(),
     })
 }
 
@@ -154,8 +235,12 @@ fn daily_rollup(requests: &[LlmRequestUsagePayload], day_limit: usize) -> Vec<Ll
                 reasoning_token_count: 0,
                 cost_usd: None,
                 models: Vec::new(),
+                jev_request_count: 0,
             });
         entry.request_count += 1;
+        if request.surface == SURFACE_JEV {
+            entry.jev_request_count += 1;
+        }
         entry.prompt_token_count += request.prompt_tokens;
         entry.completion_token_count += request.completion_tokens;
         entry.reasoning_token_count += request.reasoning_tokens;
@@ -289,8 +374,13 @@ mod tests {
             30,
         );
 
-        assert_eq!(ledger.requests[0].cost_usd, None);
-        assert_eq!(ledger.requests[0].cost_source, "not_reported");
+        let unpriced = ledger
+            .requests
+            .iter()
+            .find(|request| request.model == "model-a")
+            .expect("the request that reported no cost");
+        assert_eq!(unpriced.cost_usd, None);
+        assert_eq!(unpriced.cost_source, "not_reported");
         assert_eq!(
             ledger.cost_usd,
             Some(0.25),
@@ -355,10 +445,11 @@ mod tests {
         assert_eq!(
             ledger.days[0].models,
             vec![
-                "~google/gemini-flash-latest".to_string(),
-                "openai/gpt-5.6-terra".to_string()
+                "openai/gpt-5.6-terra".to_string(),
+                "~google/gemini-flash-latest".to_string()
             ],
-            "a mid-day model swap stays visible in the rollup"
+            "a mid-day model swap stays visible in the rollup, newest first: \
+             the 14:00 request precedes the 09:00 one"
         );
         assert_eq!(ledger.days[1].day, "2026-09-03");
     }
@@ -386,5 +477,117 @@ mod tests {
 
         let ledger = llm_usage_ledger_from_rows(vec![truncated], 30);
         assert_eq!(ledger.requests[0].finish_reason.as_deref(), Some("length"));
+    }
+
+    fn jev_row(created_at: &str, purpose: &str, input: i64, cost: JsonValue) -> JsonValue {
+        json!({
+            "created_at": created_at,
+            "purpose": purpose,
+            "model_requested": "~typesafe/jev-latest",
+            "model_resolved": "typesafe/jev-1.13",
+            "status": "completed",
+            "input_tokens": input,
+            "output_tokens": 0,
+            "cost_usd": cost,
+            "cost_source": "rate_card",
+        })
+    }
+
+    /// Both surfaces land in one ledger because the operator asked for every
+    /// LLM request tracked, but a reader has to be able to tell a handful of
+    /// Decision Reports from hundreds of Jev calls -- otherwise the day looks
+    /// as though the fleet changed character.
+    #[test]
+    fn both_model_surfaces_share_one_ledger_and_stay_distinguishable() {
+        let ledger = llm_usage_ledger_from_sources(
+            vec![row(
+                "2026-09-20T09:00:00Z",
+                "~google/gemini-flash-latest",
+                json!({"prompt_tokens": 180_000, "completion_tokens": 5_000, "cost": 0.3}),
+                32_768,
+            )],
+            vec![
+                jev_row(
+                    "2026-09-20T09:30:00Z",
+                    "editorial_item",
+                    400,
+                    json!(0.0000168),
+                ),
+                jev_row(
+                    "2026-09-20T10:00:00Z",
+                    "editorial_item",
+                    380,
+                    json!(0.00001596),
+                ),
+            ],
+            30,
+        );
+
+        assert_eq!(ledger.request_count, 3);
+        assert_eq!(ledger.days[0].jev_request_count, 2);
+        assert_eq!(
+            ledger.requests[0].created_at, "2026-09-20T10:00:00Z",
+            "the two sources interleave by time rather than concatenating"
+        );
+        assert_eq!(ledger.requests[0].surface, SURFACE_JEV);
+        assert_eq!(ledger.requests[0].purpose, "editorial_item");
+        assert_eq!(
+            ledger.requests[2].surface, SURFACE_DECISION_REPORT,
+            "the oldest request is the Decision Report"
+        );
+        assert_eq!(
+            ledger.requests[0].model, "typesafe/jev-1.13",
+            "the ledger records the version that answered, not the alias"
+        );
+
+        let total = ledger.cost_usd.expect("a total");
+        assert!((total - 0.30003276).abs() < 1e-9, "{total}");
+        assert!(
+            total > 0.3,
+            "Jev is nearly free but not free, and must not vanish from the total"
+        );
+    }
+
+    /// A failed Jev call has no cost, which is not a cost of zero. Summing it
+    /// as free would report a cheaper fleet than actually ran.
+    #[test]
+    fn a_failed_jev_call_is_counted_as_a_request_but_not_as_a_free_one() {
+        let ledger = llm_usage_ledger_from_sources(
+            Vec::new(),
+            vec![
+                jev_row(
+                    "2026-09-20T09:30:00Z",
+                    "editorial_item",
+                    400,
+                    json!(0.0000168),
+                ),
+                json!({
+                    "created_at": "2026-09-20T09:31:00Z",
+                    "purpose": "editorial_item",
+                    "model_requested": "~typesafe/jev-latest",
+                    "model_resolved": null,
+                    "status": "error",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": null,
+                    "cost_source": "not_reported",
+                }),
+            ],
+            30,
+        );
+
+        assert_eq!(ledger.request_count, 2);
+        assert_eq!(ledger.days[0].jev_request_count, 2);
+        let failed = ledger
+            .requests
+            .iter()
+            .find(|request| request.status == "error")
+            .expect("the failed call");
+        assert_eq!(failed.cost_usd, None);
+        assert_eq!(
+            failed.model, "~typesafe/jev-latest",
+            "with nothing resolved, the alias we asked for is the only record"
+        );
+        assert_eq!(ledger.cost_usd, Some(0.0000168));
     }
 }

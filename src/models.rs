@@ -1746,8 +1746,19 @@ pub struct LlmRequestUsagePayload {
     pub completion_budget_used_pct: Option<f64>,
     pub finish_reason: Option<String>,
     pub cost_usd: Option<f64>,
-    /// `billed`, `upstream_byok`, or `not_reported` -- see `llm_usage.rs`.
+    /// `billed`, `upstream_byok`, `rate_card`, or `not_reported` -- see
+    /// `llm_usage.rs` and `jev.rs`.
     pub cost_source: String,
+    /// Which model surface produced this request: `decision_report` or `jev`.
+    ///
+    /// The two are different in kind and in volume -- a handful of Decision
+    /// Reports a day against potentially hundreds of Jev calls -- so a single
+    /// undifferentiated list would read as if the fleet had changed character.
+    #[serde(default)]
+    pub surface: String,
+    /// For Jev, what the call was for. Empty for Decision Reports.
+    #[serde(default)]
+    pub purpose: String,
 }
 
 /// One calendar day of LLM usage, newest first.
@@ -1760,6 +1771,11 @@ pub struct LlmUsageDayPayload {
     pub reasoning_token_count: i64,
     pub cost_usd: Option<f64>,
     pub models: Vec<String>,
+    /// Requests on this day that came from Jev rather than the Decision
+    /// Report model, so a day's totals can be read without assuming they are
+    /// all one kind of call.
+    #[serde(default)]
+    pub jev_request_count: i64,
 }
 
 /// Per-request LLM token and cost ledger with its daily rollup.
