@@ -10194,6 +10194,7 @@ impl AppState {
             &quote_read.unwrap_or_default(),
             &open_exchange_codes,
             stale_after_minutes,
+            &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
         let quote_status = quote_freshness
             .get("status")
@@ -15903,12 +15904,19 @@ impl AppState {
                 continue;
             }
             let fill_day = filled_at.get(..10).unwrap_or_default().to_string();
-            let closes = self.forward_closes(&symbol, &fill_day, horizon_span).await;
-            // Sessions elapsed is counted from the shared indicator calendar
-            // rather than from wall-clock days, so a weekend or holiday never
-            // makes a horizon look overdue.
-            let sessions_elapsed = self.sessions_since(&fill_day).await;
             let exchange = exchange_code_for(&symbol);
+            // The indicator series stores a row per calendar weekday, carrying
+            // the previous close through market holidays. Those rows are not
+            // sessions, and counting them put horizon 1 after a 2026-09-04 US
+            // fill on Labor Day.
+            let holidays = self.non_session_dates_for_exchange(&exchange).await;
+            let closes = crate::entry_evaluation::trading_sessions(
+                &self
+                    .forward_closes(&symbol, &fill_day, horizon_span * 2)
+                    .await,
+                &holidays,
+            );
+            let sessions_elapsed = self.sessions_since(&fill_day, &holidays).await;
             let (min_commission_local, _) =
                 crate::saxo_order::min_commission_local_for_exchange(&exchange);
             let benchmark_key = crate::entry_evaluation::benchmark_key_for_exchange(&exchange);
@@ -16076,18 +16084,60 @@ impl AppState {
         .collect()
     }
 
-    /// Indicator sessions recorded strictly after `from_day`.
-    async fn sessions_since(&self, from_day: &str) -> i64 {
-        self.first_json(&format!(
-            "SELECT COUNT(DISTINCT run_date) AS sessions FROM daily_indicator_signals
-             WHERE run_date > '{}'",
+    /// Trading sessions recorded strictly after `from_day`, holidays excluded.
+    async fn sessions_since(
+        &self,
+        from_day: &str,
+        holidays: &std::collections::HashSet<String>,
+    ) -> i64 {
+        self.select_json(&format!(
+            "SELECT DISTINCT run_date FROM daily_indicator_signals WHERE run_date > '{}'",
             sql_escape(from_day)
         ))
         .await
-        .ok()
-        .flatten()
-        .map(|row| value_i64(&row, "sessions"))
         .unwrap_or_default()
+        .iter()
+        .map(|row| json_text(row, "run_date"))
+        .filter(|date| !holidays.contains(date))
+        .count() as i64
+    }
+
+    /// Dates an exchange did not trade, inferred from whether its symbols moved.
+    ///
+    /// Derived from the stored series rather than from a calendar table,
+    /// because no historical exchange calendar is persisted. A real session
+    /// moves prices somewhere; a carried-forward holiday row moves nothing.
+    async fn non_session_dates_for_exchange(
+        &self,
+        exchange: &str,
+    ) -> std::collections::HashSet<String> {
+        let rows = self
+            .select_json(&format!(
+                "SELECT run_date,
+                        COUNT(*) AS symbols,
+                        COUNT(*) FILTER (WHERE previous_close IS NOT NULL
+                                           AND close <> previous_close) AS changed
+                 FROM (
+                    SELECT run_date, symbol, close,
+                           LAG(close) OVER (PARTITION BY symbol ORDER BY run_date) AS previous_close
+                    FROM daily_indicator_signals
+                    WHERE close IS NOT NULL AND symbol LIKE '%:{}'
+                 ) AS moves
+                 GROUP BY run_date",
+                sql_escape(exchange)
+            ))
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|row| {
+                (
+                    json_text(row, "run_date"),
+                    value_i64(row, "symbols"),
+                    value_i64(row, "changed"),
+                )
+            })
+            .collect::<Vec<_>>();
+        crate::entry_evaluation::non_session_dates(&rows, 5, 0.2)
     }
 
     /// Masked status of the AI provider API key. Never contains the key

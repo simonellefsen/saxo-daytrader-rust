@@ -37,7 +37,12 @@ These are the caveats that belong with any number they produce.
   misrank alternatives too, because the same missing intraday mechanics do not
   bias every variant equally — a wider stop is triggered by intraday extremes
   more often than a tight one, so the error grows with the parameter. Treat the
-  ordering as a hypothesis, not a result.
+  ordering as a hypothesis, not a result. (An earlier version of this note
+  justified that by claiming a wider stop is triggered by intraday extremes
+  more often than a tight one. That is backwards — on the same path a wider
+  stop is hit *less* often. The reason to distrust the ranking is simply that
+  a model missing its baseline by 37% has unmodelled mechanics whose effect on
+  each variant is unknown, not that the bias has a known direction.)
 - **Sale-ledger rows are not independent entry-to-exit experiments.** They lack
   partial-sale handling and explicit acquisition matching, and they exclude
   still-open positions, so the population is survivor-shaped.

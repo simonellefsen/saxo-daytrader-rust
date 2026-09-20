@@ -51,6 +51,7 @@ pub(crate) fn quote_freshness_verdict(
     rows: &[JsonValue],
     open_exchange_codes: &HashSet<String>,
     stale_after_minutes: i64,
+    now: &str,
 ) -> JsonValue {
     if open_exchange_codes.is_empty() {
         return verdict(
@@ -80,6 +81,30 @@ pub(crate) fn quote_freshness_verdict(
             None,
         );
     };
+    // Age of the newest snapshot against the wall clock, not against itself.
+    // Every window below is measured backwards from `newest`, so if the
+    // snapshot pipeline stops the whole window slides into the past and keeps
+    // reporting whatever movement it contained. At 13:00 with rows ending
+    // 12:20, a window of [11:50, 12:20] full of movement returned "ok" while
+    // nothing had arrived for forty minutes -- the exact failure this check
+    // exists to catch, passing because it was looking at history.
+    if let Some(age) = minutes_between(&newest, now)
+        && age >= stale_after_minutes
+    {
+        return json!({
+            "status": "error",
+            "message": format!(
+                "No position snapshot has been recorded for {age} minutes while a market is \
+                 open. The snapshot pipeline is not running, so quote freshness cannot be \
+                 judged and nothing downstream is seeing current prices."
+            ),
+            "watched_positions": 0,
+            "positions_with_price_change": 0,
+            "window_minutes": JsonValue::Null,
+            "newest_snapshot_age_minutes": age,
+        });
+    }
+
     let cutoff = rfc3339_minus_minutes(&newest, stale_after_minutes);
 
     let mut observed: BTreeMap<String, Observed> = BTreeMap::new();
@@ -286,7 +311,7 @@ mod tests {
             ));
         }
 
-        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
+        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30, "2026-09-18T12:40:00Z");
         assert_eq!(verdict["status"], "error");
         assert_eq!(verdict["watched_positions"], 2);
         assert_eq!(verdict["positions_with_price_change"], 0);
@@ -312,7 +337,7 @@ mod tests {
             ));
         }
 
-        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
+        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30, "2026-09-18T12:40:00Z");
         assert_eq!(
             verdict["status"], "error",
             "a print 90 minutes ago says nothing about the last 30: {verdict}"
@@ -325,13 +350,18 @@ mod tests {
     /// exists to remove.
     #[test]
     fn missing_snapshot_evidence_is_unknown_rather_than_healthy() {
-        let verdict = quote_freshness_verdict(&[], &open(&["xcse"]), 30);
+        let verdict = quote_freshness_verdict(&[], &open(&["xcse"]), 30, "2026-09-18T12:40:00Z");
         assert_eq!(verdict["status"], "unknown");
 
         // Holding nothing on the open exchange is a real answer, not a gap.
         let held_elsewhere = vec![row("2026-09-18T12:40:00Z", "CHEMM:xcse", 512.0)];
         assert_eq!(
-            quote_freshness_verdict(&held_elsewhere, &open(&["xnys"]), 30)["status"],
+            quote_freshness_verdict(
+                &held_elsewhere,
+                &open(&["xnys"]),
+                30,
+                "2026-09-18T12:40:00Z"
+            )["status"],
             "not_applicable"
         );
     }
@@ -352,7 +382,7 @@ mod tests {
         ];
 
         assert_eq!(
-            quote_freshness_verdict(&rows, &open(&["xcse"]), 30)["status"],
+            quote_freshness_verdict(&rows, &open(&["xcse"]), 30, "2026-09-18T12:40:00Z")["status"],
             "ok"
         );
     }
@@ -368,7 +398,7 @@ mod tests {
         ];
 
         assert_eq!(
-            quote_freshness_verdict(&rows, &open(&["xcse"]), 30)["status"],
+            quote_freshness_verdict(&rows, &open(&["xcse"]), 30, "2026-09-18T12:40:00Z")["status"],
             "ok"
         );
     }
@@ -385,11 +415,11 @@ mod tests {
         ];
 
         assert_eq!(
-            quote_freshness_verdict(&rows, &HashSet::new(), 30)["status"],
+            quote_freshness_verdict(&rows, &HashSet::new(), 30, "2026-09-18T12:40:00Z")["status"],
             "not_applicable"
         );
         assert_eq!(
-            quote_freshness_verdict(&rows, &open(&["xnys"]), 30)["status"],
+            quote_freshness_verdict(&rows, &open(&["xnys"]), 30, "2026-09-18T12:40:00Z")["status"],
             "not_applicable",
             "positions on a closed exchange are not evidence about an open one"
         );
@@ -405,7 +435,7 @@ mod tests {
             row("2026-09-18T08:20:00Z", "CHEMM:xcse", 512.0),
         ];
 
-        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30);
+        let verdict = quote_freshness_verdict(&rows, &open(&["xcse"]), 30, "2026-09-18T08:21:00Z");
         assert_eq!(verdict["status"], "ok");
         assert_eq!(verdict["window_minutes"], 10);
     }
@@ -441,7 +471,12 @@ mod jitter_tests {
             )
             .collect();
 
-        let verdict = quote_freshness_verdict(&rows, &["xcse".to_string()].into(), 30);
+        let verdict = quote_freshness_verdict(
+            &rows,
+            &["xcse".to_string()].into(),
+            30,
+            "2026-09-18T12:40:00Z",
+        );
         assert_eq!(
             verdict["status"], "error",
             "an hour of frozen prices must not pass because the trimmed span is 20 minutes: {verdict}"
@@ -457,8 +492,78 @@ mod jitter_tests {
             json!({"recorded_at": "2026-09-18T12:00:00Z", "symbol": "A:xcse", "price_local": 10.0}),
         ];
         assert_eq!(
-            quote_freshness_verdict(&rows, &["xcse".to_string()].into(), 30)["status"],
+            quote_freshness_verdict(
+                &rows,
+                &["xcse".to_string()].into(),
+                30,
+                "2026-09-18T12:01:00Z"
+            )["status"],
             "ok"
+        );
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    fn frozen_rows(stamps: &[&str], price: f64) -> Vec<JsonValue> {
+        stamps
+            .iter()
+            .map(|stamp| json!({"recorded_at": stamp, "symbol": "A:xcse", "price_local": price}))
+            .collect()
+    }
+
+    /// Regression for a defect found in review. Every window is measured
+    /// backwards from the newest row, so when the snapshot pipeline stops the
+    /// whole window slides into the past and keeps reporting the movement it
+    /// used to contain. At 13:00 with rows ending 12:20 and movement inside
+    /// them, the check said "ok" while nothing had arrived for forty minutes.
+    #[test]
+    fn a_stalled_snapshot_pipeline_is_an_error_even_when_old_rows_moved() {
+        let rows = vec![
+            json!({"recorded_at": "2026-09-18T11:50:00Z", "symbol": "A:xcse", "price_local": 10.0}),
+            json!({"recorded_at": "2026-09-18T12:10:00Z", "symbol": "A:xcse", "price_local": 10.5}),
+            json!({"recorded_at": "2026-09-18T12:20:00Z", "symbol": "A:xcse", "price_local": 10.9}),
+        ];
+
+        let verdict = quote_freshness_verdict(
+            &rows,
+            &["xcse".to_string()].into(),
+            30,
+            "2026-09-18T13:00:00Z",
+        );
+        assert_eq!(
+            verdict["status"], "error",
+            "movement in stale rows is not evidence the feed is alive: {verdict}"
+        );
+        assert_eq!(verdict["newest_snapshot_age_minutes"], 40);
+    }
+
+    /// A pipeline that is keeping up still has its prices judged on their own
+    /// merits -- the clock test must not swallow the freeze test.
+    #[test]
+    fn a_current_pipeline_with_frozen_prices_is_still_a_freeze() {
+        let rows = frozen_rows(
+            &[
+                "2026-09-18T12:00:00Z",
+                "2026-09-18T12:10:00Z",
+                "2026-09-18T12:20:00Z",
+                "2026-09-18T12:30:00Z",
+            ],
+            10.0,
+        );
+
+        let verdict = quote_freshness_verdict(
+            &rows,
+            &["xcse".to_string()].into(),
+            30,
+            "2026-09-18T12:31:00Z",
+        );
+        assert_eq!(verdict["status"], "error");
+        assert_eq!(
+            verdict["positions_with_price_change"], 0,
+            "reported as a freeze, not as a stall: {verdict}"
         );
     }
 }

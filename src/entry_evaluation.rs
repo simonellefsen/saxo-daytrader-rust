@@ -60,7 +60,7 @@ pub(crate) const HORIZONS: &[i64] = &[1, 5, 10, 20];
 /// position across two different calendars, and used the manager's acceptable-
 /// commission ceiling as if it were the broker's fee; none of its numbers are
 /// comparable with what follows.
-pub(crate) const METHODOLOGY_VERSION: &str = "v2-2026-09-20";
+pub(crate) const METHODOLOGY_VERSION: &str = "v3-2026-09-20";
 
 /// A declared strategy epoch: entries inside it ran under the same rules.
 ///
@@ -292,19 +292,59 @@ pub(crate) struct Entry<'a> {
     pub rate_per_side: f64,
 }
 
-/// The benchmark close on or before `date`.
+/// The benchmark close on or before `date`, with the date it came from.
 ///
-/// "On or before" rather than "exactly on" because the two series keep
-/// different calendars: a venue holiday, a missing observation, or a repeated
-/// close appears in one and not the other. Carrying the last known close
-/// forward compares the same interval on both sides; requiring an exact match
-/// would discard the comparison on precisely the days it differs.
-fn benchmark_close_at(series: &[(String, f64)], date: &str) -> Option<f64> {
+/// "On or before" because the two series keep different calendars: a venue
+/// holiday or a missing observation appears in one and not the other, and
+/// requiring an exact match would discard the comparison on precisely the days
+/// it differs. The observation date travels with the close so the caller can
+/// tell a legitimate carry-forward from a series that simply stopped.
+fn benchmark_close_at(series: &[(String, f64)], date: &str) -> Option<(String, f64)> {
     series
         .iter()
         .filter(|(observed, close)| observed.as_str() <= date && close.is_finite() && *close > 0.0)
         .next_back()
-        .map(|(_, close)| *close)
+        .cloned()
+}
+
+/// Sessions the exchange did not actually trade, for the symbol's own series.
+///
+/// The indicator series stores a row for every calendar weekday, carrying the
+/// previous close through market holidays: on 2026-09-07, Labor Day, 78 of 79
+/// US symbols repeat their 09-04 close with an unchanged sample_count. Counting
+/// stored rows as sessions therefore made horizon 1 after a 09-04 fill land on
+/// a day the market never opened, and pushed every later horizon a session
+/// early. Date-matching the benchmark fixed the alignment of the comparison
+/// but not the horizon it was measured over.
+pub(crate) fn trading_sessions(
+    series: &[(String, f64)],
+    non_session_dates: &std::collections::HashSet<String>,
+) -> Vec<(String, f64)> {
+    series
+        .iter()
+        .filter(|(date, _)| !non_session_dates.contains(date))
+        .cloned()
+        .collect()
+}
+
+/// Dates an exchange did not trade, inferred from whether its symbols moved.
+///
+/// A real session moves prices somewhere; a carried-forward holiday row moves
+/// nothing. `min_symbols` guards thin venues where a quiet day is ordinary
+/// rather than evidence, and those dates are kept as sessions -- treating an
+/// unknown calendar as a holiday would silently shorten horizons.
+pub(crate) fn non_session_dates(
+    per_date: &[(String, i64, i64)],
+    min_symbols: i64,
+    min_changed_fraction: f64,
+) -> std::collections::HashSet<String> {
+    per_date
+        .iter()
+        .filter(|(_, symbols, changed)| {
+            *symbols >= min_symbols && (*changed as f64) < min_changed_fraction * (*symbols as f64)
+        })
+        .map(|(date, _, _)| date.clone())
+        .collect()
 }
 
 fn horizon_outcome(
@@ -347,10 +387,23 @@ fn horizon_outcome(
     // the base by itself and reported every one-session comparison as exactly
     // zero, and at every other horizon compared h-1 benchmark sessions against
     // h stock sessions.
-    let benchmark = benchmark_close_at(entry.benchmark_closes, fill_day).and_then(|base| {
-        benchmark_close_at(entry.benchmark_closes, &horizon_date)
-            .map(|at_horizon| at_horizon / base - 1.0)
-    });
+    // A benchmark that simply stopped is not a benchmark that did not move.
+    // Carrying the base forward on both legs returns exactly 0% and a numeric
+    // excess, which reads as "the market was flat" when the truth is "we have
+    // no observation". The comparison is only made when the benchmark actually
+    // has an observation at or after the horizon date.
+    let base = benchmark_close_at(entry.benchmark_closes, fill_day);
+    let at_horizon = benchmark_close_at(entry.benchmark_closes, &horizon_date);
+    let benchmark_is_fresh = at_horizon.as_ref().zip(base.as_ref()).is_some_and(
+        |((horizon_observed, _), (base_observed, _))| horizon_observed > base_observed,
+    );
+    let benchmark = benchmark_is_fresh
+        .then(|| {
+            base.as_ref()
+                .zip(at_horizon.as_ref())
+                .map(|((_, base_close), (_, horizon_close))| horizon_close / base_close - 1.0)
+        })
+        .flatten();
 
     json!({
         "horizon_sessions": horizon,
@@ -360,6 +413,8 @@ fn horizon_outcome(
         "net_return": net,
         "round_trip_cost_fraction": cost,
         "benchmark_return": benchmark,
+        "benchmark_base_observed": base.as_ref().map(|(date, _)| date.clone()),
+        "benchmark_horizon_observed": at_horizon.as_ref().map(|(date, _)| date.clone()),
         "excess_return": benchmark.map(|value| net - value),
     })
 }
@@ -632,6 +687,77 @@ mod tests {
         );
     }
 
+    /// Regression for a defect found in review. The indicator series stores a
+    /// row for every calendar weekday, carrying the previous close through
+    /// market holidays -- 78 of 79 US symbols repeat their 09-04 close on
+    /// Labor Day 2026-09-07 with an unchanged sample_count. Counting stored
+    /// rows as sessions put horizon 1 on a day the market never opened.
+    #[test]
+    fn a_holiday_row_is_not_a_trading_session() {
+        let series = vec![
+            ("2026-09-07".to_string(), 319.97), // Labor Day, repeated close
+            ("2026-09-08".to_string(), 316.22),
+            ("2026-09-09".to_string(), 315.34),
+        ];
+        let holidays = ["2026-09-07".to_string()].into_iter().collect();
+        let sessions = trading_sessions(&series, &holidays);
+
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(
+            sessions[0].0, "2026-09-08",
+            "session 1 is the next open day"
+        );
+    }
+
+    /// The holiday detector reads whether the venue moved, because a carried
+    /// forward row moves nothing while a real session moves something. Thin
+    /// venues are left alone: treating an unknown calendar as a holiday would
+    /// silently shorten every horizon measured on it.
+    #[test]
+    fn a_date_where_nothing_moved_is_a_holiday_but_a_thin_venue_is_not_judged() {
+        let per_date = vec![
+            ("2026-09-04".to_string(), 79, 74), // ordinary session
+            ("2026-09-07".to_string(), 79, 1),  // Labor Day
+            ("2026-09-08".to_string(), 79, 77),
+            ("2026-09-07".to_string(), 3, 0), // a venue with 3 symbols
+        ];
+        let holidays = non_session_dates(&per_date, 5, 0.2);
+
+        assert!(holidays.contains("2026-09-07"));
+        assert!(!holidays.contains("2026-09-04"));
+        assert_eq!(
+            non_session_dates(&per_date[3..], 5, 0.2).len(),
+            0,
+            "a venue below the symbol floor is not judged at all"
+        );
+    }
+
+    /// Regression for a defect found in review. With an observation on the
+    /// entry date and none after it, carrying the base forward on both legs
+    /// returned exactly 0% and a numeric excess -- "the market was flat" where
+    /// the truth was "we have no observation".
+    #[test]
+    fn a_benchmark_that_stopped_updating_is_absent_not_flat() {
+        let forward = dated(11, &[110.0]);
+        // One observation, on the fill day, and nothing afterwards.
+        let bench = vec![("2026-09-10".to_string(), 100.0)];
+        let evaluated = evaluate_entry(
+            &entry("A:xcse", "2026-09-10T08:00:00Z", 100.0, &forward, &bench),
+            5,
+        );
+        let first = &evaluated["horizons"][0];
+
+        assert!(
+            first["benchmark_return"].is_null(),
+            "a stopped series must not report 0%: {first}"
+        );
+        assert!(first["excess_return"].is_null());
+        assert!(
+            first["gross_return"].as_f64().is_some(),
+            "the entry itself stays measurable"
+        );
+    }
+
     /// Regression for a defect found in review. The benchmark leg was indexed
     /// `closes[h-1] / closes[0]`, so a one-session comparison divided the base
     /// by itself and reported exactly zero, and every other horizon compared
@@ -652,17 +778,18 @@ mod tests {
         );
     }
 
-    /// The two series keep different calendars. US indicator rows carry a
-    /// 2026-09-07 entry (Labor Day, repeating the 09-04 close) that the
-    /// benchmark series does not, so matching by array position silently shifts
-    /// the comparison by a session from there on.
+    /// The two series keep different calendars. With the holiday row removed
+    /// from the symbol's sessions and the benchmark matched by date, horizon 1
+    /// after a 2026-09-04 fill is 09-08 on both legs -- the same interval,
+    /// measured over a day the market actually opened.
     #[test]
     fn a_calendar_gap_on_one_side_does_not_shift_the_comparison() {
-        let forward = vec![
+        let raw = vec![
             ("2026-09-07".to_string(), 100.0), // holiday row, repeated close
             ("2026-09-08".to_string(), 110.0),
         ];
-        // The benchmark has no 09-07 row at all.
+        let forward = trading_sessions(&raw, &["2026-09-07".to_string()].into_iter().collect());
+        // The benchmark has no 09-07 row at all, which is now consistent.
         let bench = vec![
             ("2026-09-04".to_string(), 100.0),
             ("2026-09-08".to_string(), 102.0),
@@ -671,21 +798,18 @@ mod tests {
             &entry("A:xnas", "2026-09-04T14:00:00Z", 100.0, &forward, &bench),
             5,
         );
-        let second = &evaluated["horizons"]
-            .as_array()
-            .expect("horizons")
-            .iter()
-            .find(|row| row["horizon_sessions"] == 1)
-            .cloned()
-            .expect("first horizon");
-        // Horizon 1 lands on the 09-07 holiday row; the benchmark has nothing
-        // that day, so the last close on or before it is the 09-04 base: 0%.
-        assert!(
-            second["benchmark_return"]
-                .as_f64()
-                .is_some_and(|value| value.abs() < 1e-9),
-            "a benchmark with no row that day carries the base forward: {second}"
+        let first = &evaluated["horizons"][0];
+
+        assert_eq!(
+            first["horizon_date"], "2026-09-08",
+            "the first real session"
         );
+        assert!((first["gross_return"].as_f64().expect("gross") - 0.10).abs() < 1e-9);
+        assert!(
+            (first["benchmark_return"].as_f64().expect("benchmark") - 0.02).abs() < 1e-9,
+            "09-04 to 09-08 on both legs: {first}"
+        );
+        assert_eq!(first["benchmark_horizon_observed"], "2026-09-08");
     }
 
     /// Pooling across a rule change describes no strategy that ever ran. The
