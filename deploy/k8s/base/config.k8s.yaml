@@ -664,6 +664,38 @@ commissions:
       currency: EUR
       amount: 3.0
 
+# Jev (TypeSafe System One), reached through OpenRouter's /systemone endpoint.
+#
+# Jev is an instrument, not an author. It takes one state plus typed questions
+# and answers all of them in parallel against that state, returning a
+# constrained value with a probability attached. It cannot write a Decision
+# Report, and nothing here may be wrapped to make it look as if it can.
+#
+# Priced at $0.042 per million input tokens with output free, so cost is not a
+# design constraint at this system's volume -- measurement is. Every Jev answer
+# is logged and back-tested against realised outcomes before it is allowed to
+# influence anything. See analysis/README.md and entry_evaluation.rs.
+#
+# `enabled` stays false until the Phase 0 smoke test has made one real call and
+# confirmed the response envelope, because the only two things the published
+# docs do not pin down are whether OpenRouter's /systemone returns a `usage`
+# block and what its error envelope looks like.
+jev:
+  enabled: false
+  api_key: ENV:JEV_OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  # A floating alias, matching the Decision Report model. The version that
+  # actually answers is read back out of each response and stored per request,
+  # so a rollover becomes a dated boundary in the ledger rather than an
+  # invisible recalibration of a probability we are back-testing.
+  model: ~typesafe/jev-latest
+  http_timeout_seconds: 15
+  # OpenRouter lists a 32k context for Jev. An oversized state is refused
+  # rather than truncated: truncated JSON is both invalid and a silent change
+  # to what the model was shown.
+  max_state_chars: 24000
+  max_questions_per_request: 12
+
 xai:
   provider: openrouter
   api_key: ENV:OPENROUTER_API_KEY

@@ -1293,4 +1293,44 @@ mod tests {
             "benchmark refresh must complete before the end-of-day journal"
         );
     }
+
+    /// The `jev:` block is duplicated across both shipped configs, so the two
+    /// can drift silently -- a local smoke test would then prove nothing about
+    /// what the cluster actually runs.
+    ///
+    /// The model assertion is not redundant with the equality check. `~` alone
+    /// is YAML's null, so `~typesafe/jev-latest` is only a string because the
+    /// tilde is followed by more characters. If that ever stopped holding, the
+    /// alias would silently become null and `JevConfig::from_yaml` would fall
+    /// back to its coded default without saying so.
+    #[test]
+    fn shipped_configs_share_jev_policy_and_keep_the_floating_alias_a_string() {
+        let local = parse(
+            &std::fs::read_to_string(format!("{}/config.yaml", env!("CARGO_MANIFEST_DIR")))
+                .expect("local config is readable"),
+        );
+        let kubernetes = parse(
+            &std::fs::read_to_string(format!(
+                "{}/deploy/k8s/base/config.k8s.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("Kubernetes config is readable"),
+        );
+
+        assert_eq!(
+            crate::config::yaml_at(&local, &["jev"]),
+            crate::config::yaml_at(&kubernetes, &["jev"]),
+            "local and Kubernetes Jev policy must stay aligned"
+        );
+
+        for config in [&local, &kubernetes] {
+            let model = crate::config::yaml_at(config, &["jev", "model"])
+                .expect("jev.model is configured");
+            assert!(
+                model.is_string(),
+                "jev.model must survive YAML as a string, not resolve to null: {model:?}"
+            );
+            assert_eq!(model.as_str(), Some("~typesafe/jev-latest"));
+        }
+    }
 }
