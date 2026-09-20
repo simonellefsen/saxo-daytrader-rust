@@ -675,12 +675,17 @@ commissions:
 # is logged and back-tested against realised outcomes before it is allowed to
 # influence anything. See analysis/README.md and entry_evaluation.rs.
 #
-# `enabled` stays false until the Phase 0 smoke test has made one real call and
-# confirmed the response envelope, because the only two things the published
-# docs do not pin down are whether OpenRouter's /systemone returns a `usage`
-# block and what its error envelope looks like.
+# Enabled 2026-09-20 after the smoke test made a real call: OpenRouter's
+# /systemone does return a `usage` block, and it reports a real billed cost
+# rather than leaving it to the rate card. One synthetic headline cost
+# $0.000019614 at 467 input tokens and answered in 640 ms.
+#
+# The rubric legend came back 0-indexed ("0".."3"), which is why
+# `Answer::normalized_score` derives its bounds from the legend instead of
+# assuming: a 1-indexed reading of the same score would have been 0.32 rather
+# than 0.66.
 jev:
-  enabled: false
+  enabled: true
   api_key: ENV:JEV_OPENROUTER_API_KEY
   base_url: https://openrouter.ai/api/v1
   # A floating alias, matching the Decision Report model. The version that
