@@ -80,7 +80,7 @@ const REVIEW_BATCH_LIMIT: usize = 10;
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v2";
+const REPORT_GRADING_VERSION: &str = "v3";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -175,14 +175,23 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
             break;
         }
 
-        let (compact, evidence) = grading_inputs(&report);
+        let (compact, evidence, matched_candidates) = grading_inputs(&report);
         let jev_state = jev_signals::report_grading_state(&compact, &evidence);
+        // A report that proposed nothing has no candidate claims to check. Ask
+        // anyway and the answer is vacuously true -- the first live run graded
+        // two empty reports at 0.92 and 0.94, which reads as high quality and
+        // means nothing. The question is withheld instead, and recorded as
+        // not applicable.
+        let mut questions = questions.clone();
+        if matched_candidates == 0 {
+            questions.remove("rationale_supported");
+        }
         let now = Utc::now().to_rfc3339();
         let request_id = stable_id("jevgrade", &format!("{subject}|{now}"));
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
-                let result = grade_payload(&response.answers, &response.issues);
+                let result = grade_payload(&response.answers, &response.issues, matched_candidates);
                 if let Err(err) = jev_store::record_success(
                     &state.pool,
                     jev_store::RecordedRequest {
@@ -242,14 +251,57 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 /// so the evidence is the report's own signal metadata -- the material each
 /// candidate cited. That makes `rationale_supported` a question about whether
 /// the prose matches the numbers next to it, which is the answerable version.
-fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue) {
+/// Returns the two halves of the state plus how many candidate claims have
+/// signals to be checked against.
+///
+/// `selected_assets` is the watchlist and `suggested_trades` is what was
+/// actually proposed, and they are routinely different sizes -- four selected
+/// against one proposed in both graded reports that had any. Only the proposed
+/// ones carry `strategy_metadata`, so asking about the whole watchlist asks
+/// about claims with nothing to check. The list is therefore filtered to the
+/// symbols that do have signals, so question and evidence are aligned by
+/// construction rather than by an instruction asking Jev to ignore the rest.
+fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
+    let signalled: std::collections::HashMap<&str, &JsonValue> = report
+        .get("suggested_trades")
+        .and_then(JsonValue::as_array)
+        .map(|trades| {
+            trades
+                .iter()
+                .filter_map(|trade| {
+                    Some((
+                        trade.get("symbol")?.as_str()?,
+                        trade.get("strategy_metadata")?,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let checkable: Vec<JsonValue> = report
+        .get("selected_assets")
+        .and_then(JsonValue::as_array)
+        .map(|assets| {
+            assets
+                .iter()
+                .filter(|asset| {
+                    asset
+                        .get("symbol")
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|symbol| signalled.contains_key(symbol))
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let matched = checkable.len();
+
     let compact = json!({
         "report_title": report.get("report_title"),
         "market_view": report.get("market_view"),
         "reasoning_steps": report.get("reasoning_steps"),
         "symbol_sentiment": report.get("symbol_sentiment"),
-        // The claims the rescoped question judges.
-        "selected_assets": report.get("selected_assets"),
+        // Only the claims that have signals to be checked against.
+        "selected_assets": checkable,
         "suggested_trades": report
             .get("suggested_trades")
             .and_then(JsonValue::as_array)
@@ -265,25 +317,21 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue) {
             }),
     });
     let evidence = json!({
-        "candidate_signals": report
-            .get("suggested_trades")
-            .and_then(JsonValue::as_array)
-            .map(|trades| {
-                trades
-                    .iter()
-                    .map(|trade| json!({
-                        "symbol": trade.get("symbol"),
-                        "strategy_metadata": trade.get("strategy_metadata"),
-                    }))
-                    .collect::<Vec<_>>()
-            }),
+        "candidate_signals": signalled
+            .iter()
+            .map(|(symbol, metadata)| json!({
+                "symbol": symbol,
+                "strategy_metadata": metadata,
+            }))
+            .collect::<Vec<_>>(),
     });
-    (compact, evidence)
+    (compact, evidence, matched)
 }
 
 fn grade_payload(
     answers: &std::collections::BTreeMap<String, crate::jev::Answer>,
     issues: &[crate::jev::JevAnswerIssue],
+    matched_candidates: usize,
 ) -> JsonValue {
     let noul = |id: &str| match answers.get(id) {
         Some(crate::jev::Answer::Noul { noul }) => Some(*noul),
@@ -298,7 +346,17 @@ fn grade_payload(
         "version": REPORT_GRADING_VERSION,
         "evidence_scope": "report_self_consistency_not_independent_source_verification",
         "rationale_supported": noul("rationale_supported"),
-        "rationale_supported_scope": "candidate_claims_only",
+        "rationale_supported_scope": "candidate_claims_with_signals_only",
+        // The denominator. Without it a null reads as a failure to answer
+        // rather than as nothing having been asked.
+        "checkable_candidate_count": matched_candidates,
+        "rationale_supported_status": if matched_candidates == 0 {
+            "not_applicable_no_candidate_claims_to_check"
+        } else if noul("rationale_supported").is_some() {
+            "answered"
+        } else {
+            "unanswered"
+        },
         "view_consistent": noul("view_consistent"),
         "specificity": answers
             .get("specificity")
@@ -511,7 +569,7 @@ mod tests {
                 "strategy_metadata": {"markov": {"signed_signal": 0.42}},
             }],
         });
-        let (compact, evidence) = grading_inputs(&report);
+        let (compact, evidence, _matched) = grading_inputs(&report);
         let state = jev_signals::report_grading_state(&compact, &evidence);
         let rendered = serde_json::to_string(&state).expect("serializes");
         assert!(rendered.len() < 24_000, "{}", rendered.len());
@@ -543,6 +601,7 @@ mod tests {
                 id: "rationale_supported".to_string(),
                 reason: "no answer returned for this question".to_string(),
             }],
+            2,
         );
         assert_eq!(payload["view_consistent"], 0.91);
         assert!(payload["rationale_supported"].is_null());
@@ -561,5 +620,73 @@ mod tests {
         }
         assert!(criteria.contains_key("other"));
         assert_eq!(criteria.len(), KNOWN_FAILURE_CODES.len() + 1);
+    }
+
+    /// selected_assets is the watchlist and suggested_trades is what was
+    /// proposed; only the latter carries signal metadata. Both graded reports
+    /// that had candidates listed four and proposed one, so three quarters of
+    /// the claims had nothing to check against -- which is what produced
+    /// rationale_supported of 0.05 and 0.07, a measurement of the gap rather
+    /// than of the report.
+    #[test]
+    fn only_candidates_with_signals_are_put_up_for_judgement() {
+        let report = json!({
+            "selected_assets": [
+                {"symbol": "EQNR:xosl", "notes": "5 confluences, +0.429 Bull"},
+                {"symbol": "NOVO:xcse", "notes": "leading Markov conviction"},
+                {"symbol": "FORTUM:xhel", "notes": "steady support hold"},
+                {"symbol": "ALV:xetr", "notes": "4 confluences"},
+            ],
+            "suggested_trades": [{
+                "symbol": "EQNR:xosl",
+                "strategy_metadata": {"markov": {"signed_signal": 0.429}},
+            }],
+        });
+        let (compact, evidence, matched) = grading_inputs(&report);
+
+        assert_eq!(matched, 1);
+        assert_eq!(compact["selected_assets"].as_array().map(Vec::len), Some(1));
+        assert_eq!(compact["selected_assets"][0]["symbol"], "EQNR:xosl");
+        assert_eq!(
+            evidence["candidate_signals"].as_array().map(Vec::len),
+            Some(1),
+            "question and evidence are aligned by construction, not by instruction"
+        );
+    }
+
+    /// A report that proposed nothing has no candidate claims. Asking anyway
+    /// returns a vacuous truth: the first live run graded two empty reports at
+    /// 0.92 and 0.94, which reads as high quality and means nothing.
+    #[test]
+    fn a_report_with_nothing_to_check_records_not_applicable_not_a_high_score() {
+        let empty = json!({"selected_assets": [], "suggested_trades": []});
+        let (_, _, matched) = grading_inputs(&empty);
+        assert_eq!(matched, 0);
+
+        let payload = grade_payload(
+            &BTreeMap::from([("view_consistent".to_string(), Answer::Noul { noul: 0.9 })]),
+            &[],
+            matched,
+        );
+        assert!(
+            payload["rationale_supported"].is_null(),
+            "nothing was asked, so nothing is recorded"
+        );
+        assert_eq!(
+            payload["rationale_supported_status"],
+            "not_applicable_no_candidate_claims_to_check"
+        );
+        assert_eq!(payload["checkable_candidate_count"], 0);
+
+        let answered = grade_payload(
+            &BTreeMap::from([(
+                "rationale_supported".to_string(),
+                Answer::Noul { noul: 0.88 },
+            )]),
+            &[],
+            3,
+        );
+        assert_eq!(answered["rationale_supported_status"], "answered");
+        assert_eq!(answered["checkable_candidate_count"], 3);
     }
 }
