@@ -10,7 +10,7 @@
 //! Neither pass can change a gate, a candidate, a queue entry, or a broker
 //! call. They write rows and nothing else reads those rows to make a decision.
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use chrono::Utc;
 use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
@@ -137,12 +137,14 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
                 let result = grade_payload(&response.answers, &response.issues);
                 if let Err(err) = jev_store::record_success(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    jev_store::PURPOSE_REPORT_GRADING,
-                    Some(&subject),
-                    &cfg.model,
-                    questions.len() as i64,
+                    jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: jev_store::PURPOSE_REPORT_GRADING,
+                        subject: Some(&subject),
+                        model_requested: &cfg.model,
+                        question_count: questions.len() as i64,
+                    },
                     &response,
                     cost_usd,
                     cost_source,
@@ -161,12 +163,14 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
                 warn!(report_id, "Jev report grading failed: {err:#}");
                 let _ = jev_store::record_failure(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    jev_store::PURPOSE_REPORT_GRADING,
-                    Some(&subject),
-                    &cfg.model,
-                    questions.len() as i64,
+                    jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: jev_store::PURPOSE_REPORT_GRADING,
+                        subject: Some(&subject),
+                        model_requested: &cfg.model,
+                        question_count: questions.len() as i64,
+                    },
                     &format!("{err:#}"),
                 )
                 .await;
@@ -344,12 +348,14 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                 });
                 if let Err(err) = jev_store::record_success(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    jev_store::PURPOSE_ERROR_CLASSIFICATION,
-                    Some(&subject),
-                    &cfg.model,
-                    questions.len() as i64,
+                    jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: jev_store::PURPOSE_ERROR_CLASSIFICATION,
+                        subject: Some(&subject),
+                        model_requested: &cfg.model,
+                        question_count: questions.len() as i64,
+                    },
                     &response,
                     cost_usd,
                     cost_source,
@@ -368,12 +374,14 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                 warn!(report_id = id, "Jev failure classification failed: {err:#}");
                 let _ = jev_store::record_failure(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    jev_store::PURPOSE_ERROR_CLASSIFICATION,
-                    Some(&subject),
-                    &cfg.model,
-                    questions.len() as i64,
+                    jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: jev_store::PURPOSE_ERROR_CLASSIFICATION,
+                        subject: Some(&subject),
+                        model_requested: &cfg.model,
+                        question_count: questions.len() as i64,
+                    },
                     &format!("{err:#}"),
                 )
                 .await;

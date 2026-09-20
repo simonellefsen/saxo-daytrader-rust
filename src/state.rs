@@ -45,7 +45,6 @@ use crate::{
         learning_memory_from_reflections, lessons_pending_review_from_reflections,
         normalize_hermes_experiment_variable_path,
     },
-    llm_usage::llm_usage_ledger_from_rows,
     localization::LocalizationPrefs,
     market_state::{dashboard_watchlists_from_json, dashboard_watchlists_not_loaded},
     markov_state::{

@@ -149,6 +149,9 @@ pub(crate) enum Question {
 }
 
 impl Question {
+    /// The wire discriminator, used by tests to assert a question set is
+    /// shaped as intended. The runtime branches on the enum itself.
+    #[cfg(test)]
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::Noul { .. } => "noul",

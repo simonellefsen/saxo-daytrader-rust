@@ -85,15 +85,23 @@ pub fn create_schema_sql() -> &'static [&'static str] {
     ]
 }
 
+/// What every recorded call carries, whatever its outcome.
+pub(crate) struct RecordedRequest<'a> {
+    pub id: &'a str,
+    pub created_at: &'a str,
+    pub purpose: &'a str,
+    /// What the call was about: an item id, a report id, an order id.
+    pub subject: Option<&'a str>,
+    /// The configured alias. The version that answered is read from the
+    /// response and stored beside it.
+    pub model_requested: &'a str,
+    pub question_count: i64,
+}
+
 /// Records one completed call.
 pub(crate) async fn record_success(
     pool: &AnyPool,
-    id: &str,
-    created_at: &str,
-    purpose: &str,
-    subject: Option<&str>,
-    model_requested: &str,
-    question_count: i64,
+    meta: RecordedRequest<'_>,
     response: &JevResponse,
     cost_usd: Option<f64>,
     cost_source: &str,
@@ -106,13 +114,13 @@ pub(crate) async fn record_success(
             cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, $17)",
     )
-    .bind(id)
-    .bind(created_at)
-    .bind(purpose)
-    .bind(subject)
-    .bind(model_requested)
+    .bind(meta.id)
+    .bind(meta.created_at)
+    .bind(meta.purpose)
+    .bind(meta.subject)
+    .bind(meta.model_requested)
     .bind(response.model_resolved.as_deref())
-    .bind(question_count)
+    .bind(meta.question_count)
     .bind(response.answers.len() as i64)
     .bind(response.issues.len() as i64)
     .bind(response.usage.input_tokens)
@@ -135,12 +143,7 @@ pub(crate) async fn record_success(
 /// ledger and indistinguishable from a quiet day with no items to judge.
 pub(crate) async fn record_failure(
     pool: &AnyPool,
-    id: &str,
-    created_at: &str,
-    purpose: &str,
-    subject: Option<&str>,
-    model_requested: &str,
-    question_count: i64,
+    meta: RecordedRequest<'_>,
     error_text: &str,
 ) -> Result<()> {
     sqlx::query(
@@ -150,12 +153,12 @@ pub(crate) async fn record_failure(
             cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
          ) VALUES ($1, $2, $3, $4, $5, NULL, $6, 0, 0, 0, 0, NULL, $7, 0, 0, $8, $9, NULL)",
     )
-    .bind(id)
-    .bind(created_at)
-    .bind(purpose)
-    .bind(subject)
-    .bind(model_requested)
-    .bind(question_count)
+    .bind(meta.id)
+    .bind(meta.created_at)
+    .bind(meta.purpose)
+    .bind(meta.subject)
+    .bind(meta.model_requested)
+    .bind(meta.question_count)
     .bind(crate::jev::COST_SOURCE_NONE)
     .bind(STATUS_ERROR)
     .bind(truncate(error_text, 2_000))
@@ -519,12 +522,14 @@ mod tests {
         let pool = pool().await;
         record_failure(
             &pool,
-            "req-1",
-            "2026-09-20T08:00:00Z",
-            PURPOSE_EDITORIAL_ITEM,
-            Some("item-1"),
-            "~typesafe/jev-latest",
-            6,
+            RecordedRequest {
+                id: "req-1",
+                created_at: "2026-09-20T08:00:00Z",
+                purpose: PURPOSE_EDITORIAL_ITEM,
+                subject: Some("item-1"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 6,
+            },
             "Jev returned 429: rate limited",
         )
         .await
@@ -545,12 +550,14 @@ mod tests {
         let pool = pool().await;
         record_success(
             &pool,
-            "req-1",
-            "2026-09-20T08:00:00Z",
-            PURPOSE_EDITORIAL_ITEM,
-            Some("item-1"),
-            "~typesafe/jev-latest",
-            6,
+            RecordedRequest {
+                id: "req-1",
+                created_at: "2026-09-20T08:00:00Z",
+                purpose: PURPOSE_EDITORIAL_ITEM,
+                subject: Some("item-1"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 6,
+            },
             &response(),
             Some(0.0000176),
             crate::jev::COST_SOURCE_RATE_CARD,

@@ -42,6 +42,12 @@ const COST_SOURCE_NONE: &str = "not_reported";
 pub(crate) const SURFACE_DECISION_REPORT: &str = "decision_report";
 pub(crate) const SURFACE_JEV: &str = "jev";
 
+/// Decision Report rows alone.
+///
+/// Test-only since Jev joined the ledger: production always reads both
+/// surfaces, and a helper that silently omits one would let a test pass
+/// against a ledger shape that never runs.
+#[cfg(test)]
 pub(crate) fn llm_usage_ledger_from_rows(
     rows: Vec<JsonValue>,
     day_limit: usize,

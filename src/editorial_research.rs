@@ -166,12 +166,14 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                     crate::jev::cost_for_request(&json!({}), &response.usage);
                 if let Err(err) = crate::jev_store::record_success(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    crate::jev_store::PURPOSE_EDITORIAL_ITEM,
-                    Some(&pair.item_id),
-                    &cfg.model,
-                    question_count,
+                    crate::jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
+                        subject: Some(&pair.item_id),
+                        model_requested: &cfg.model,
+                        question_count,
+                    },
                     &response,
                     cost_usd,
                     cost_source,
@@ -208,12 +210,14 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                 warn!(symbol = %pair.symbol, "Jev editorial scoring failed: {error_text}");
                 if let Err(err) = crate::jev_store::record_failure(
                     &state.pool,
-                    &request_id,
-                    &now,
-                    crate::jev_store::PURPOSE_EDITORIAL_ITEM,
-                    Some(&pair.item_id),
-                    &cfg.model,
-                    question_count,
+                    crate::jev_store::RecordedRequest {
+                        id: &request_id,
+                        created_at: &now,
+                        purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
+                        subject: Some(&pair.item_id),
+                        model_requested: &cfg.model,
+                        question_count,
+                    },
                     &error_text,
                 )
                 .await
