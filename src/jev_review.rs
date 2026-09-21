@@ -80,7 +80,7 @@ const REVIEW_BATCH_LIMIT: usize = 10;
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v3";
+const REPORT_GRADING_VERSION: &str = "v4";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -140,7 +140,7 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
     };
 
     let rows = match sqlx::query(
-        "SELECT id, report_json FROM decision_reports
+        "SELECT id, report_json, request_json FROM decision_reports
          WHERE status = 'completed' AND report_json IS NOT NULL
          ORDER BY created_at DESC, id DESC
          LIMIT 40",
@@ -171,11 +171,18 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         let Some(report) = parse_embedded(row.get("report_json")) else {
             continue;
         };
+        // The indicator snapshot the model actually saw, taken from the stored
+        // request rather than the live table. Today's indicators would be
+        // lookahead: grading a report against numbers that did not exist when
+        // it was written.
+        let prompt = parse_embedded(row.get("request_json"))
+            .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
+            .unwrap_or(JsonValue::Null);
         if graded + failed >= REVIEW_BATCH_LIMIT {
             break;
         }
 
-        let (compact, evidence, matched_candidates) = grading_inputs(&report);
+        let (compact, evidence, matched_candidates) = grading_inputs(&report, &prompt);
         let jev_state = jev_signals::report_grading_state(&compact, &evidence);
         // A report that proposed nothing has no candidate claims to check. Ask
         // anyway and the answer is vacuously true -- the first live run graded
@@ -261,8 +268,23 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 /// about claims with nothing to check. The list is therefore filtered to the
 /// symbols that do have signals, so question and evidence are aligned by
 /// construction rather than by an instruction asking Jev to ignore the rest.
-fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
-    let signalled: std::collections::HashMap<&str, &JsonValue> = report
+fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> (JsonValue, JsonValue, usize) {
+    // The indicator snapshot carried in the stored request, keyed by symbol.
+    // This is the evidence the report was written against, which is why it
+    // comes from the request rather than from daily_indicator_signals today.
+    let indicators: std::collections::HashMap<&str, &JsonValue> = prompt
+        .get("daily_indicators")
+        .and_then(|block| block.get("signals"))
+        .and_then(JsonValue::as_array)
+        .map(|signals| {
+            signals
+                .iter()
+                .filter_map(|signal| Some((signal.get("symbol")?.as_str()?, signal)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let markov: std::collections::HashMap<&str, &JsonValue> = report
         .get("suggested_trades")
         .and_then(JsonValue::as_array)
         .map(|trades| {
@@ -277,6 +299,11 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
                 .collect()
         })
         .unwrap_or_default();
+
+    // A candidate is checkable when its indicator snapshot is present. That is
+    // the evidence the notes actually cite -- confluence counts, support break
+    // risk, reward/risk, support levels -- none of which the report echoes
+    // back in strategy_metadata.
     let checkable: Vec<JsonValue> = report
         .get("selected_assets")
         .and_then(JsonValue::as_array)
@@ -287,7 +314,7 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
                     asset
                         .get("symbol")
                         .and_then(JsonValue::as_str)
-                        .is_some_and(|symbol| signalled.contains_key(symbol))
+                        .is_some_and(|symbol| indicators.contains_key(symbol))
                 })
                 .cloned()
                 .collect()
@@ -295,12 +322,26 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
         .unwrap_or_default();
     let matched = checkable.len();
 
+    let candidate_evidence: Vec<JsonValue> = checkable
+        .iter()
+        .filter_map(|asset| {
+            let symbol = asset.get("symbol")?.as_str()?;
+            Some(json!({
+                "symbol": symbol,
+                "daily_indicators": indicators.get(symbol),
+                "markov": markov
+                    .get(symbol)
+                    .and_then(|metadata| metadata.get("markov")),
+            }))
+        })
+        .collect();
+
     let compact = json!({
         "report_title": report.get("report_title"),
         "market_view": report.get("market_view"),
         "reasoning_steps": report.get("reasoning_steps"),
         "symbol_sentiment": report.get("symbol_sentiment"),
-        // Only the claims that have signals to be checked against.
+        // Only the claims that have evidence to be checked against.
         "selected_assets": checkable,
         "suggested_trades": report
             .get("suggested_trades")
@@ -316,15 +357,7 @@ fn grading_inputs(report: &JsonValue) -> (JsonValue, JsonValue, usize) {
                     .collect::<Vec<_>>()
             }),
     });
-    let evidence = json!({
-        "candidate_signals": signalled
-            .iter()
-            .map(|(symbol, metadata)| json!({
-                "symbol": symbol,
-                "strategy_metadata": metadata,
-            }))
-            .collect::<Vec<_>>(),
-    });
+    let evidence = json!({ "candidate_evidence": candidate_evidence });
     (compact, evidence, matched)
 }
 
@@ -550,43 +583,172 @@ mod tests {
         .expect("disabled worker exits instead of polling");
     }
 
-    /// A stored prompt runs to six figures of tokens, well past Jev's window.
-    /// The evidence is therefore the report's own signal metadata, and the
-    /// state has to stay small enough to send.
+    /// Builds a candidate's indicator snapshot in the shape the stored prompt
+    /// carries, taken from a real one.
+    fn indicator_signal(symbol: &str) -> JsonValue {
+        json!({
+            "uic": 9_751_025,
+            "symbol": symbol,
+            "close": 421.2,
+            "close_dkk": 291.1250121116638,
+            "currency": "NOK",
+            "asset_type": "Stock",
+            "sma20": 402.93,
+            "sma50": 384.954,
+            "sma200": 326.2625,
+            "rsi14": 66.6411359502835,
+            "atr14": 10.012015427677552,
+            "macd_histogram": 1.4962398451997796,
+            "reward_risk": 0.23971197580912282,
+            "sentiment": "BUY",
+            "trend_bias": "bullish",
+            "confluences": null,
+            "confluence_count": 5,
+            "min_confluences": 3,
+            "support": {
+                "break_risk": 0.06147651902511747,
+                "break_risk_label": "low",
+                "confidence": 0.7523809523809524,
+                "touch_count": 1,
+                "nearest_support": 391.0,
+                "next_support": 377.05,
+                "history_coverage": 0.9523809523809523,
+                "downside_to_support_pct": 7.169990503323834,
+                "downside_after_break_pct": 3.567774936061378,
+            },
+        })
+    }
+
+    /// The claim that motivated this: report 304's note cited "0.061 support
+    /// break risk", which is exactly `support.break_risk` in the snapshot the
+    /// model was given. Grading it against `strategy_metadata` -- which
+    /// carries no support figures at all -- scored it 0.09, a measurement of
+    /// the missing evidence rather than of the claim.
     #[test]
-    fn the_grading_state_stays_inside_the_context_budget() {
+    fn the_evidence_carries_the_figures_the_notes_actually_cite() {
         let report = json!({
-            "report_title": "Morning read",
-            "market_view": {"summary": "Cautious"},
-            "reasoning_steps": ["step one", "step two"],
-            "symbol_sentiment": [{"symbol": "NOVO:xcse", "sentiment": "BUY"}],
-            "selected_assets": [{"symbol": "NOVO:xcse"}],
+            "selected_assets": [{
+                "symbol": "EQNR:xosl",
+                "notes": "5 technical confluences, 0.061 support break risk, +0.429 Bull Markov",
+            }],
             "suggested_trades": [{
-                "symbol": "NOVO:xcse",
-                "action": "BUY",
-                "quantity": 10,
-                "strategy_role": "core",
-                "strategy_metadata": {"markov": {"signed_signal": 0.42}},
+                "symbol": "EQNR:xosl",
+                "strategy_metadata": {"markov": {"signed_signal": 0.429226, "state": "Bull"}},
             }],
         });
-        let (compact, evidence, _matched) = grading_inputs(&report);
-        let state = jev_signals::report_grading_state(&compact, &evidence);
-        let rendered = serde_json::to_string(&state).expect("serializes");
-        assert!(rendered.len() < 24_000, "{}", rendered.len());
-        assert_eq!(state["report"]["market_view"]["summary"], "Cautious");
-        assert_eq!(
-            state["report"]["selected_assets"][0]["symbol"], "NOVO:xcse",
-            "the candidate claims are what rationale_supported judges"
+        let prompt = json!({"daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]}});
+        let (_, evidence, matched) = grading_inputs(&report, &prompt);
+
+        assert_eq!(matched, 1);
+        let candidate = &evidence["candidate_evidence"][0];
+        assert_eq!(candidate["symbol"], "EQNR:xosl");
+        assert_eq!(candidate["daily_indicators"]["confluence_count"], 5);
+        assert_eq!(candidate["markov"]["signed_signal"], 0.429226);
+        let break_risk = candidate["daily_indicators"]["support"]["break_risk"]
+            .as_f64()
+            .expect("break risk is present");
+        assert!(
+            (break_risk - 0.061).abs() < 0.001,
+            "the cited 0.061 is checkable: {break_risk}"
         );
+    }
+
+    /// Checkability now follows the indicator snapshot rather than
+    /// suggested_trades. Both graded reports that had candidates listed four
+    /// and proposed one, so three quarters of the claims were unjudgeable
+    /// under v3 despite the evidence existing in the stored prompt.
+    #[test]
+    fn a_watchlist_candidate_that_was_not_proposed_is_still_checkable() {
+        let symbols = ["EQNR:xosl", "NOVO:xcse", "FORTUM:xhel", "ALV:xetr"];
+        let report = json!({
+            "selected_assets": symbols
+                .iter()
+                .map(|symbol| json!({"symbol": symbol, "notes": "5 confluences"}))
+                .collect::<Vec<_>>(),
+            // Only one of the four was actually proposed.
+            "suggested_trades": [{
+                "symbol": "EQNR:xosl",
+                "strategy_metadata": {"markov": {"signed_signal": 0.429}},
+            }],
+        });
+        let prompt = json!({
+            "daily_indicators": {
+                "signals": symbols.iter().map(|s| indicator_signal(s)).collect::<Vec<_>>(),
+            }
+        });
+        let (_, evidence, matched) = grading_inputs(&report, &prompt);
+
+        assert_eq!(matched, 4, "all four have indicator evidence");
         assert_eq!(
-            state["evidence"]["candidate_signals"][0]["strategy_metadata"]["markov"]["signed_signal"],
-            0.42
+            evidence["candidate_evidence"].as_array().map(Vec::len),
+            Some(4)
         );
         assert!(
-            state["report"]["suggested_trades"][0]
-                .get("quantity")
-                .is_none(),
-            "grading judges the reasoning, not the order arithmetic the gates already check"
+            evidence["candidate_evidence"][1]["markov"].is_null(),
+            "a watchlist name that was not proposed has no markov block, and that is \
+             recorded as absent rather than fabricated"
+        );
+    }
+
+    /// A candidate with no snapshot in the stored prompt cannot be judged.
+    /// Older reports predate the persisted snapshot entirely.
+    #[test]
+    fn a_candidate_without_a_stored_snapshot_is_not_put_up_for_judgement() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "5 confluences"}],
+            "suggested_trades": [],
+        });
+        let (_, _, matched) = grading_inputs(&report, &json!({}));
+        assert_eq!(matched, 0);
+        let (_, _, matched) = grading_inputs(&report, &JsonValue::Null);
+        assert_eq!(matched, 0);
+    }
+
+    /// One tiny fixture proves nothing about the byte budget. A full watchlist
+    /// with complete indicator snapshots is the realistic worst case, and it
+    /// has to fit `jev.max_state_chars`.
+    #[test]
+    fn a_full_watchlist_of_candidates_fits_the_configured_state_budget() {
+        let symbols: Vec<String> = (0..12).map(|i| format!("SYM{i}:xcse")).collect();
+        let report = json!({
+            "report_title": "Morning read",
+            "market_view": {"summary": "x".repeat(600)},
+            "reasoning_steps": (0..6).map(|_| "y".repeat(400)).collect::<Vec<_>>(),
+            "symbol_sentiment": symbols
+                .iter()
+                .map(|s| json!({"symbol": s, "sentiment": "BUY", "confidence": 70.0}))
+                .collect::<Vec<_>>(),
+            "selected_assets": symbols
+                .iter()
+                .map(|s| json!({"symbol": s, "notes": "z".repeat(220), "score": 0.8}))
+                .collect::<Vec<_>>(),
+            "suggested_trades": symbols
+                .iter()
+                .map(|s| json!({
+                    "symbol": s,
+                    "action": "BUY",
+                    "strategy_role": "w".repeat(120),
+                    "strategy_metadata": {"markov": {"signed_signal": 0.42, "state": "Bull"}},
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let prompt = json!({
+            "daily_indicators": {
+                "signals": symbols.iter().map(|s| indicator_signal(s)).collect::<Vec<_>>(),
+            }
+        });
+        let (compact, evidence, matched) = grading_inputs(&report, &prompt);
+        assert_eq!(matched, 12);
+
+        let rendered =
+            serde_json::to_string(&jev_signals::report_grading_state(&compact, &evidence))
+                .expect("serializes");
+        // The same ceiling `jev.max_state_chars` applies, which `ask` enforces
+        // by refusing rather than truncating.
+        assert!(
+            rendered.len() < 24_000,
+            "a full watchlist must fit, or every grade on a busy day is refused: {}",
+            rendered.len()
         );
     }
 
@@ -622,45 +784,13 @@ mod tests {
         assert_eq!(criteria.len(), KNOWN_FAILURE_CODES.len() + 1);
     }
 
-    /// selected_assets is the watchlist and suggested_trades is what was
-    /// proposed; only the latter carries signal metadata. Both graded reports
-    /// that had candidates listed four and proposed one, so three quarters of
-    /// the claims had nothing to check against -- which is what produced
-    /// rationale_supported of 0.05 and 0.07, a measurement of the gap rather
-    /// than of the report.
-    #[test]
-    fn only_candidates_with_signals_are_put_up_for_judgement() {
-        let report = json!({
-            "selected_assets": [
-                {"symbol": "EQNR:xosl", "notes": "5 confluences, +0.429 Bull"},
-                {"symbol": "NOVO:xcse", "notes": "leading Markov conviction"},
-                {"symbol": "FORTUM:xhel", "notes": "steady support hold"},
-                {"symbol": "ALV:xetr", "notes": "4 confluences"},
-            ],
-            "suggested_trades": [{
-                "symbol": "EQNR:xosl",
-                "strategy_metadata": {"markov": {"signed_signal": 0.429}},
-            }],
-        });
-        let (compact, evidence, matched) = grading_inputs(&report);
-
-        assert_eq!(matched, 1);
-        assert_eq!(compact["selected_assets"].as_array().map(Vec::len), Some(1));
-        assert_eq!(compact["selected_assets"][0]["symbol"], "EQNR:xosl");
-        assert_eq!(
-            evidence["candidate_signals"].as_array().map(Vec::len),
-            Some(1),
-            "question and evidence are aligned by construction, not by instruction"
-        );
-    }
-
     /// A report that proposed nothing has no candidate claims. Asking anyway
     /// returns a vacuous truth: the first live run graded two empty reports at
     /// 0.92 and 0.94, which reads as high quality and means nothing.
     #[test]
     fn a_report_with_nothing_to_check_records_not_applicable_not_a_high_score() {
         let empty = json!({"selected_assets": [], "suggested_trades": []});
-        let (_, _, matched) = grading_inputs(&empty);
+        let (_, _, matched) = grading_inputs(&empty, &json!({"daily_indicators": {"signals": []}}));
         assert_eq!(matched, 0);
 
         let payload = grade_payload(

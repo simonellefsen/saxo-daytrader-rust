@@ -603,15 +603,16 @@ pub(crate) fn report_grading_questions() -> BTreeMap<String, Question> {
                 // so the question now asks only what the evidence can settle.
                 instructions: json!(
                     "Does each entry of `report.selected_assets` make claims about its symbol \
-                     that are borne out by the matching entry in `evidence.candidate_signals`, \
+                     that are borne out by that symbol's entry in `evidence.candidate_evidence`, \
                      rather than citing figures or conditions that are absent from or \
-                     contradicted by it? Judge only the candidate claims; ignore statements \
-                     about portfolio capital, held positions, or costs, whose supporting \
-                     material is not provided here."
+                     contradicted by it? Numbers quoted to fewer decimal places than the \
+                     evidence carries are borne out when they round to it. Judge only the \
+                     candidate claims; ignore statements about portfolio capital, held \
+                     positions, or costs, whose supporting material is not provided here."
                 ),
                 criteria: Some(json!({
-                    "true": "Every candidate claim is borne out by that candidate's signals",
-                    "false": "At least one candidate claim is absent from or contradicted by its signals",
+                    "true": "Every candidate claim is borne out by that candidate's evidence",
+                    "false": "At least one candidate claim is absent from or contradicted by its evidence",
                 })),
             },
         ),

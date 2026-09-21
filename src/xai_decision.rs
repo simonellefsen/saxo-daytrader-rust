@@ -1553,7 +1553,11 @@ fn normalize_shadow_change_assessment(
 /// so reading anything out of a persisted request means parsing that string
 /// first. Shared by the shadow comparison and the opening-price reference so
 /// the two cannot disagree about where the prompt lives.
-fn decision_prompt_user_payload(request_json: &JsonValue) -> JsonValue {
+/// Re-parses the user half of a stored request.
+///
+/// Also used by the observational report grader, which needs the daily
+/// indicator snapshot the model actually saw rather than today's.
+pub(crate) fn decision_prompt_user_payload(request_json: &JsonValue) -> JsonValue {
     request_json
         .get("messages")
         .and_then(JsonValue::as_array)
