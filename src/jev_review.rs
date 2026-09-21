@@ -942,4 +942,84 @@ mod tests {
             rendered.len()
         );
     }
+
+    /// Zero contradictions across ten reports is uninterpretable until the
+    /// grader is known to be able to return one. A verdict that never fires
+    /// looks identical to a clean set of reports.
+    ///
+    /// Feeds a note whose figures disagree with the evidence and asserts the
+    /// verdict, and a matching note as the control. Ignored by default: real
+    /// network, real key, about $0.00004.
+    ///
+    ///   set -a && . ./.env && set +a && \
+    ///     cargo test contradiction_probe -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "makes a real, billable network call; run explicitly with --ignored"]
+    async fn contradiction_probe_shows_the_grader_can_return_each_verdict() {
+        let Ok(api_key) = std::env::var("JEV_OPENROUTER_API_KEY") else {
+            panic!("JEV_OPENROUTER_API_KEY is not exported");
+        };
+        let cfg = crate::jev::JevConfig {
+            api_key,
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            model: "~typesafe/jev-latest".to_string(),
+            http_timeout_seconds: 30,
+            max_state_chars: 24_000,
+            max_questions_per_request: 12,
+        };
+
+        // Same evidence throughout; only the note changes.
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
+        });
+
+        for (label, note, expected) in [
+            (
+                "agrees",
+                "5 technical confluences, 0.061 support break risk, +0.429 Bull Markov regime.",
+                jev_signals::CLAIM_SUPPORTED,
+            ),
+            (
+                "disagrees",
+                "12 technical confluences, 0.850 support break risk, -0.900 Bear Markov regime.",
+                jev_signals::CLAIM_CONTRADICTED,
+            ),
+            (
+                "unevidenced",
+                "Trading at a price-to-earnings ratio of 8.2 with a 5.1 percent dividend yield.",
+                jev_signals::CLAIM_INSUFFICIENT,
+            ),
+        ] {
+            let report = json!({
+                "selected_assets": [{"symbol": "EQNR:xosl", "notes": note}],
+                "suggested_trades": [],
+            });
+            let inputs = grading_inputs(&report, &prompt);
+            let questions = jev_signals::report_grading_questions(inputs.candidates.len());
+            let state = jev_signals::report_grading_state(
+                &inputs.report,
+                &inputs.candidates,
+                &inputs.evidence,
+            );
+            let response = crate::jev::ask(&cfg, &state, &questions)
+                .await
+                .expect("probe call succeeds");
+            let payload = grade_payload(
+                &response.answers,
+                &response.issues,
+                &inputs.candidates,
+                &inputs.coverage,
+            );
+
+            println!(
+                "{label:12} -> {} (confidence {:?})",
+                payload["claim_verdicts"][0]["verdict"], payload["claim_verdicts"][0]["confidence"]
+            );
+            assert_eq!(
+                payload["claim_verdicts"][0]["verdict"], expected,
+                "{label}: a verdict that never fires is indistinguishable from clean reports"
+            );
+        }
+    }
 }
