@@ -21,7 +21,10 @@
    "selected_probability": 0.58,
    "margin": 0.29999999999999993,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": "undetermined",
+   "postreveal_basis": "Post-reveal, I wrote that the grader was right and I was wrong. That was deference to a verdict I had just seen, not adjudication. 'Medium-term momentum candidate with Markov long bias' does not claim entry eligibility, and 2 confluences against a 3-confluence entry requirement does not by itself contradict it given a bullish trend and a positive signal. The frozen 'fair' stands in the totals; this needs independent adjudication.",
+   "postreveal_blind": false
   },
   {
    "case": 2,
@@ -44,7 +47,10 @@
      "quoted": 0.5828,
      "actual": 0.5828422904014587
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 3,
@@ -60,7 +66,10 @@
    "selected_probability": null,
    "margin": null,
    "judged": false,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 4,
@@ -95,7 +104,10 @@
      "quoted": 0.56,
      "actual": 0.5596979856491089
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 5,
@@ -111,7 +123,10 @@
    "selected_probability": 0.46,
    "margin": 0.010000000000000009,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": "undetermined",
+   "postreveal_basis": "My write-up quoted this note as also claiming 'high support-break risk'. It does not -- that phrase is from case 17 (#194 ALK-B). The note asserts only 'strongly negative Markov signal', and that report's prompt carries no Markov data. The finding survives in a narrower form: a qualitative assertion can lack evidence while containing no number at all, so the numeric checker cannot reach it.",
+   "postreveal_blind": false
   },
   {
    "case": 6,
@@ -146,7 +161,10 @@
      "quoted": 3.0,
      "actual": 3.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 7,
@@ -187,7 +205,10 @@
      "quoted": 4.0,
      "actual": 4.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 8,
@@ -203,7 +224,10 @@
    "selected_probability": 0.62,
    "margin": 0.27,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 9,
@@ -238,7 +262,10 @@
      "quoted": 4.0,
      "actual": 4.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 10,
@@ -267,7 +294,10 @@
      "quoted": -0.2776,
      "actual": null
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 11,
@@ -283,7 +313,10 @@
    "selected_probability": 0.57,
    "margin": 0.20999999999999996,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": "undetermined",
+   "postreveal_basis": "I called this a grader false positive on the basis that 0.1592 is just above a 0.15 gate. The gate is time-varying: 0.15 until it was recalibrated to 0.20 on 2026-08-31, and this report is from 2026-07-09, so 0.15 was correct for it -- but I recalled the value rather than checking it, and the stored prompt carries no threshold, so the grader had none either. Undetermined until decision-time policy is supplied to both sides.",
+   "postreveal_blind": false
   },
   {
    "case": 12,
@@ -306,7 +339,10 @@
      "quoted": 0.542,
      "actual": null
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 13,
@@ -335,7 +371,10 @@
      "quoted": 0.609,
      "actual": 0.60915607213974
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 14,
@@ -370,7 +409,10 @@
      "quoted": 3.0,
      "actual": 3.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 15,
@@ -393,7 +435,10 @@
      "quoted": 0.507,
      "actual": 0.5071293115615845
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 16,
@@ -422,7 +467,10 @@
      "quoted": 5.0,
      "actual": 0.6590335965156555
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 17,
@@ -438,7 +486,10 @@
    "selected_probability": 0.98,
    "margin": 0.96,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 18,
@@ -454,7 +505,10 @@
    "selected_probability": 0.93,
    "margin": 0.89,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 19,
@@ -477,7 +531,10 @@
      "quoted": 0.4846,
      "actual": 0.48459935188293457
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 20,
@@ -493,7 +550,10 @@
    "selected_probability": 0.99,
    "margin": 0.98,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 21,
@@ -522,7 +582,10 @@
      "quoted": 0.4922,
      "actual": 0.49215468764305115
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 22,
@@ -551,7 +614,10 @@
      "quoted": 3.0,
      "actual": 267.45000000000005
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 23,
@@ -592,7 +658,10 @@
      "quoted": 0.4583,
      "actual": 0.4582517445087433
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 24,
@@ -627,7 +696,10 @@
      "quoted": 4.0,
      "actual": 4.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 25,
@@ -662,7 +734,10 @@
      "quoted": 5.0,
      "actual": 5.0
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 26,
@@ -678,7 +753,10 @@
    "selected_probability": 0.98,
    "margin": 0.96,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 27,
@@ -719,7 +797,10 @@
      "quoted": 3.0,
      "actual": null
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 28,
@@ -742,7 +823,10 @@
      "quoted": 0.3763,
      "actual": 0.3763146996498108
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 29,
@@ -765,7 +849,10 @@
      "quoted": 13.0,
      "actual": null
     }
-   ]
+   ],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   },
   {
    "case": 30,
@@ -781,9 +868,14 @@
    "selected_probability": 0.52,
    "margin": 0.07,
    "judged": true,
-   "numeric_checks": []
+   "numeric_checks": [],
+   "postreveal_label": null,
+   "postreveal_basis": null,
+   "postreveal_blind": null
   }
  ],
  "grading_version": "v8",
- "numeric_method": "n3-2026-09-21"
+ "numeric_method": "n3-2026-09-21",
+ "totals_basis": "Totals use prereveal_label only. postreveal_* records later interpretation and is excluded: deferring to a verdict after seeing it is what the pre-registration existed to prevent.",
+ "sensitivity_caveat": "Every frozen label is `fair`, so this sample cannot measure sensitivity to genuinely faulty wording. It measures agreement on notes that appear sound, not accuracy."
 }
