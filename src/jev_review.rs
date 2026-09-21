@@ -80,7 +80,7 @@ const REVIEW_BATCH_LIMIT: usize = 10;
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v4";
+const REPORT_GRADING_VERSION: &str = "v5";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -284,18 +284,21 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> (JsonValue, JsonVal
         })
         .unwrap_or_default();
 
-    let markov: std::collections::HashMap<&str, &JsonValue> = report
-        .get("suggested_trades")
+    // Markov comes from the prompt, not from the report's own
+    // `strategy_metadata`. Two reasons. It covers every watchlist name rather
+    // than only the ones that were proposed -- three of the four candidates in
+    // each graded report were selected but not proposed, so their figures were
+    // missing entirely. And checking a claim against the report's echo of the
+    // same number is circular: a fabricated figure echoed consistently would
+    // pass. The prompt is what the model was given, so it is the authority.
+    let markov: std::collections::HashMap<&str, &JsonValue> = prompt
+        .get("markov_method")
+        .and_then(|block| block.get("signals"))
         .and_then(JsonValue::as_array)
-        .map(|trades| {
-            trades
+        .map(|signals| {
+            signals
                 .iter()
-                .filter_map(|trade| {
-                    Some((
-                        trade.get("symbol")?.as_str()?,
-                        trade.get("strategy_metadata")?,
-                    ))
-                })
+                .filter_map(|signal| Some((signal.get("symbol")?.as_str()?, signal)))
                 .collect()
         })
         .unwrap_or_default();
@@ -329,9 +332,7 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> (JsonValue, JsonVal
             Some(json!({
                 "symbol": symbol,
                 "daily_indicators": indicators.get(symbol),
-                "markov": markov
-                    .get(symbol)
-                    .and_then(|metadata| metadata.get("markov")),
+                "markov": markov.get(symbol),
             }))
         })
         .collect();
@@ -583,6 +584,24 @@ mod tests {
         .expect("disabled worker exits instead of polling");
     }
 
+    fn markov_signal(symbol: &str, signed_signal: f64, state: &str) -> JsonValue {
+        json!({
+            "symbol": symbol,
+            "state": state,
+            "run_date": "2026-09-17",
+            "direction": if signed_signal >= 0.0 { "long" } else { "short" },
+            "signed_signal": signed_signal,
+            "conviction": signed_signal.abs(),
+            "bull_prob": 0.53,
+            "bear_prob": 0.18,
+            "sideways_prob": 0.29,
+            "horizon_days": 5,
+            "close": 421.2,
+            "close_dkk": 291.12,
+            "currency": "NOK",
+        })
+    }
+
     /// Builds a candidate's indicator snapshot in the shape the stored prompt
     /// carries, taken from a real one.
     fn indicator_signal(symbol: &str) -> JsonValue {
@@ -636,7 +655,10 @@ mod tests {
                 "strategy_metadata": {"markov": {"signed_signal": 0.429226, "state": "Bull"}},
             }],
         });
-        let prompt = json!({"daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]}});
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
+        });
         let (_, evidence, matched) = grading_inputs(&report, &prompt);
 
         assert_eq!(matched, 1);
@@ -735,7 +757,13 @@ mod tests {
         let prompt = json!({
             "daily_indicators": {
                 "signals": symbols.iter().map(|s| indicator_signal(s)).collect::<Vec<_>>(),
-            }
+            },
+            "markov_method": {
+                "signals": symbols
+                    .iter()
+                    .map(|s| markov_signal(s, 0.42, "Bull"))
+                    .collect::<Vec<_>>(),
+            },
         });
         let (compact, evidence, matched) = grading_inputs(&report, &prompt);
         assert_eq!(matched, 12);
@@ -818,5 +846,44 @@ mod tests {
         );
         assert_eq!(answered["rationale_supported_status"], "answered");
         assert_eq!(answered["checkable_candidate_count"], 3);
+    }
+
+    /// Evidence must come from what the model was given, never from what it
+    /// wrote. A report echoing a figure back into `strategy_metadata` and then
+    /// being graded against that echo is circular: a fabricated number,
+    /// echoed consistently, would check out against itself.
+    #[test]
+    fn a_report_cannot_supply_the_evidence_it_is_graded_against() {
+        let report = json!({
+            "selected_assets": [{
+                "symbol": "EQNR:xosl",
+                "notes": "fresh +0.900 Bull Markov regime",
+            }],
+            "suggested_trades": [{
+                "symbol": "EQNR:xosl",
+                // The report asserts 0.9 in both its note and its echo.
+                "strategy_metadata": {"markov": {"signed_signal": 0.9, "state": "Bull"}},
+            }],
+        });
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            // What the model was actually given.
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
+        });
+        let (_, evidence, _) = grading_inputs(&report, &prompt);
+
+        assert_eq!(
+            evidence["candidate_evidence"][0]["markov"]["signed_signal"], 0.429226,
+            "the evidence is the prompt's figure, so the claim of 0.900 is checkable \
+             against it and the report's own echo cannot vouch for itself"
+        );
+        assert_eq!(
+            serde_json::to_string(&evidence)
+                .expect("serializes")
+                .matches("0.9,")
+                .count(),
+            0,
+            "the echoed figure must not appear in the evidence at all"
+        );
     }
 }
