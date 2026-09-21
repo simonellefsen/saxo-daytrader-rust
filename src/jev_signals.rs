@@ -643,6 +643,14 @@ pub(crate) fn symbol_rankings(signal_rows: &[JsonValue]) -> Vec<SymbolRanking> {
 pub(crate) const CLAIM_SUPPORTED: &str = "supported";
 pub(crate) const CLAIM_CONTRADICTED: &str = "contradicted";
 pub(crate) const CLAIM_INSUFFICIENT: &str = "insufficient_evidence";
+pub(crate) const CLAIM_NONE: &str = "no_checkable_claims";
+
+/// Below this, a verdict is barely better than picking at random.
+///
+/// Three options make the uninformative baseline 0.33, and production
+/// verdicts have come back at 0.17 and 0.32. Counting those beside a 0.96
+/// without saying so presents a coin flip as a finding.
+pub(crate) const LOW_CONFIDENCE_THRESHOLD: f64 = 0.6;
 
 /// The id under which candidate `index`'s verdict is returned.
 pub(crate) fn claim_question_id(index: usize) -> String {
@@ -651,14 +659,22 @@ pub(crate) fn claim_question_id(index: usize) -> String {
 
 /// One verdict per candidate, plus two questions about the report as a whole.
 ///
-/// The candidate checks are deliberately atomic and three-valued. A single
-/// Noul over "is every claim borne out" conflated two different findings: a
-/// figure that disagrees with the evidence, which is about the report, and a
-/// figure with no counterpart in the evidence, which is about the grader. It
-/// also invited a reading of the probability as a proportion of claims. A Noul
-/// is the probability that one proposition is true, not a score out of the
-/// claims it ranges over, so a mid-range value there meant uncertainty about
-/// the whole conjunction and nothing more.
+/// These are **candidate** verdicts, not per-claim ones. Each question still
+/// ranges over every assertion in one note, so four `supported` results mean
+/// four notes came back clean -- not four individually verified facts.
+/// Per-claim checking would need the assertions extracted first, and the
+/// numeric ones are better served by deterministic comparison than by a model.
+///
+/// Four-valued rather than three. A note with nothing checkable in it -- empty,
+/// or only portfolio commentary that is out of scope by design -- would
+/// otherwise come back `supported` vacuously, the same failure the empty-report
+/// case had at report level.
+///
+/// The earlier single Noul over "is every claim borne out" is gone. It
+/// conflated a figure that disagrees with the evidence with a figure that has
+/// no counterpart in it, and invited reading the probability as a proportion
+/// of claims. A Noul is the probability that one proposition is true, not a
+/// score over the claims it ranges over.
 pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<String, Question> {
     let mut questions = BTreeMap::from([
         (
@@ -728,6 +744,12 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                         CLAIM_INSUFFICIENT.to_string(),
                         "At least one in-scope assertion has no counterpart in the evidence, \
                          and none disagree"
+                            .to_string(),
+                    ),
+                    (
+                        CLAIM_NONE.to_string(),
+                        "The note makes no in-scope assertion at all: it is empty, or says \
+                         only things that are out of scope"
                             .to_string(),
                     ),
                 ]),

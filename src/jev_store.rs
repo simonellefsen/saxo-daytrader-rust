@@ -321,17 +321,47 @@ pub(crate) async fn record_editorial_signal(
     .bind(meta.expected_question_count)
     .bind(meta.provenance.requested_at.as_str())
     .bind(meta.provenance.answered_at.as_str())
-    // Taken immediately before the insert. The true moment of availability is
-    // this plus the write latency, so the figure is conservative in the right
-    // direction: it can only understate availability, never claim it early.
-    // `feature_available_at` compares strictly, so an equal instant does not
-    // count as available either.
-    .bind(crate::jev_signals::now_rfc3339())
+    // NULL here, deliberately. Availability is stamped after the write
+    // succeeds, by `mark_signal_available` below.
+    //
+    // I previously bound a timestamp taken immediately before the insert and
+    // wrote that it "can only understate availability, never claim it early".
+    // That is backwards. An earlier stamp makes the row look readable sooner:
+    // captured at .100, decision at .200, commit at .300 -- the comparison
+    // said available while the row was still being written. Strict ordering
+    // fixes equality, not that interval.
+    .bind(Option::<&str>::None)
     .bind(meta.provenance.title.as_str())
     .bind(meta.provenance.summary.as_str())
     .execute(pool)
     .await
     .context("recording a Jev editorial signal")?;
+
+    mark_signal_available(pool, item_id, symbol).await
+}
+
+/// Stamps a persisted signal as available, using an instant observed after the
+/// write that made it readable.
+///
+/// Kept separate so the timestamp cannot be taken before the row exists. If
+/// this fails the column stays NULL, and a NULL is not usable as a feature --
+/// the failure mode is a judgement that never counts, which is the safe
+/// direction.
+pub(crate) async fn mark_signal_available(
+    pool: &AnyPool,
+    item_id: &str,
+    symbol: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE jev_editorial_signals SET available_at = $1
+         WHERE item_id = $2 AND symbol = $3",
+    )
+    .bind(crate::jev_signals::now_rfc3339())
+    .bind(item_id)
+    .bind(symbol)
+    .execute(pool)
+    .await
+    .context("marking a Jev editorial signal available")?;
     Ok(())
 }
 
@@ -1203,5 +1233,122 @@ mod tests {
                 "an outage must not mark {version} as done"
             );
         }
+    }
+
+    /// The interval that strict ordering does not fix.
+    ///
+    /// A timestamp taken before the insert makes the row look readable while
+    /// it is still being written: captured .100, decision .200, commit .300 --
+    /// and the comparison said available. This pins that a persisted-but-not-
+    /// yet-marked row is unusable, which is the state that existed during that
+    /// interval.
+    #[tokio::test]
+    async fn a_row_is_not_available_until_the_write_that_made_it_readable_finished() {
+        let pool = pool().await;
+        let provenance = crate::jev_signals::EvidenceProvenance::new(
+            "https://example.test/a",
+            "Novo raises guidance",
+            "",
+            Some("2026-09-21T08:00:00Z"),
+            Some("2026-09-21T08:00:00Z"),
+            "2026-09-21T08:00:01Z",
+            "2026-09-21T08:00:02Z",
+        );
+
+        // The row as it exists between the insert and the availability stamp.
+        sqlx::query(
+            "INSERT INTO jev_editorial_signals
+                (item_id, symbol, created_at, evidence_timing, marker_screened)
+             VALUES ('mid-write', 'NOVO:xcse', '2026-09-21T08:00:02Z', 'decision_time', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert");
+
+        let mid = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals");
+        assert!(
+            mid[0]["available_at"].is_null(),
+            "a row still being written has no availability instant"
+        );
+        assert_eq!(
+            crate::jev_signals::retention_summary(&mid, "2026-09-21T08:00:03Z")["features_available"],
+            0,
+            "and is therefore not usable as a feature by any decision"
+        );
+
+        // A fully recorded signal does get one, and it falls inside the window
+        // in which the write actually happened. Compared against the real
+        // clock rather than the synthetic fixture times above.
+        let before = crate::jev_signals::now_rfc3339();
+        record_editorial_signal(
+            &pool,
+            RecordedSignal {
+                item_id: "complete",
+                symbol: "NOVO:xcse",
+                created_at: "2026-09-21T08:00:02Z",
+                request_id: None,
+                marker_screened: false,
+                provenance: &provenance,
+                model_resolved: Some("typesafe/jev-1.13-20260917"),
+                answered_question_count: 6,
+                expected_question_count: 6,
+            },
+            &NewsSignal::default(),
+        )
+        .await
+        .expect("signal records");
+
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals");
+        let complete = rows
+            .iter()
+            .find(|row| row["item_id"] == "complete")
+            .expect("the completed row");
+        let available_at = complete["available_at"].as_str().expect("an instant");
+        let after = crate::jev_signals::now_rfc3339();
+        assert!(
+            available_at >= before.as_str() && available_at <= after.as_str(),
+            "availability is observed during the write, not before it began: \
+             {before} <= {available_at} <= {after}"
+        );
+    }
+
+    /// If the availability stamp fails the column stays NULL, and a NULL is
+    /// never usable. The failure mode is a judgement that does not count,
+    /// which is the safe direction.
+    #[tokio::test]
+    async fn a_missing_availability_stamp_fails_closed() {
+        let pool = pool().await;
+        sqlx::query(
+            "INSERT INTO jev_editorial_signals
+                (item_id, symbol, created_at, evidence_timing, marker_screened)
+             VALUES ('unstamped', 'NOVO:xcse', '2026-09-21T08:00:02Z', 'decision_time', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert");
+
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals");
+        assert_eq!(
+            crate::jev_signals::retention_summary(&rows, "2999-01-01T00:00:00Z")["features_available"],
+            0
+        );
+
+        mark_signal_available(&pool, "unstamped", "NOVO:xcse")
+            .await
+            .expect("stamp");
+        let rows = recent_signals(&pool, "2026-01-01T00:00:00Z", 10)
+            .await
+            .expect("signals");
+        assert_eq!(
+            crate::jev_signals::retention_summary(&rows, "2999-01-01T00:00:00Z")["features_available"],
+            1,
+            "and becomes usable only once the stamp exists"
+        );
     }
 }
