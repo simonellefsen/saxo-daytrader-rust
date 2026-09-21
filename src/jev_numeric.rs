@@ -36,7 +36,7 @@ use serde_json::Value as JsonValue;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n3-2026-09-21";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n4-2026-09-21";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -52,6 +52,13 @@ pub(crate) enum NumericVerdict {
     /// away, which means the phrase was matched to the wrong figure far more
     /// often than it means the report is wrong.
     ImplausibleAttribution,
+    /// The figure measures something other than a field value -- a horizon in
+    /// days, a share count. "5-day Markov continuation signal of 0.6590" had
+    /// its 5 compared against the signal.
+    NotAFieldValue,
+    /// Two fields name the figure nearly equally well. Comparing against
+    /// either would be a guess reported as arithmetic.
+    UncertainAttribution,
 }
 
 impl NumericVerdict {
@@ -62,6 +69,8 @@ impl NumericVerdict {
             Self::NotInEvidence => "not_in_evidence",
             Self::Unattributed => "unattributed",
             Self::ImplausibleAttribution => "implausible_attribution",
+            Self::NotAFieldValue => "not_a_field_value",
+            Self::UncertainAttribution => "uncertain_attribution",
         }
     }
 }
@@ -71,6 +80,9 @@ pub(crate) struct NumericCheck {
     pub quoted: f64,
     pub field: Option<&'static str>,
     pub actual: Option<f64>,
+    /// How the note related the figure to the field: equality unless it wrote
+    /// "above" or "below" with the field named first.
+    pub relation: &'static str,
     pub verdict: NumericVerdict,
     /// The fragment the figure was read from, for adjudication.
     pub excerpt: String,
@@ -121,7 +133,10 @@ struct FieldSpec {
     unit: Unit,
 }
 
-const FIELDS: &[FieldSpec] = &[
+/// `static`, not `const`. A `const` may be materialised separately at each use
+/// site, so identity comparisons between its elements are not dependable --
+/// and both the tie check and the abstention check below compare fields.
+static FIELDS: &[FieldSpec] = &[
     FieldSpec {
         path: "daily_indicators.min_confluences",
         discrete: true,
@@ -230,15 +245,87 @@ const FIELDS: &[FieldSpec] = &[
 /// How far from a figure a naming phrase may sit and still be its own.
 const CONTEXT_CHARS: usize = 40;
 
+/// How much closer the winning phrase must be than the nearest phrase naming a
+/// different field.
+///
+/// Below this the two name the figure nearly equally well, and picking the
+/// closer one is a guess presented as arithmetic. "steady near support with 6
+/// technical confluences" put "support" six characters from the 6 and
+/// "confluences" eleven -- close enough that the wrong one won.
+const ATTRIBUTION_MARGIN_CHARS: usize = 6;
+
+/// Words that make a preceding figure a quantity of something rather than the
+/// value of a field.
+const NON_FIELD_UNITS: &[&str] = &[
+    "day", "days", "session", "sessions", "week", "weeks", "month", "months", "hour", "hours",
+    "bar", "bars", "year", "years", "share", "shares",
+];
+
+/// Words that make a claim relational rather than an equality.
+const RELATIONAL_ABOVE: &[&str] = &["above", "over", "exceeds", "exceeding"];
+const RELATIONAL_BELOW: &[&str] = &["below", "under", "beneath"];
+
+pub(crate) const RELATION_EQUALS: &str = "equals";
+pub(crate) const RELATION_ABOVE: &str = "above";
+pub(crate) const RELATION_BELOW: &str = "below";
+
+/// Whether the figure is a quantity of something rather than a field value.
+///
+/// Looks at what immediately follows: "5-day", "6 shares", "20 sessions".
+fn measures_something_else(text: &str, end: usize) -> bool {
+    let tail = text[end..].trim_start_matches(['-', ' ', '\u{2011}']);
+    NON_FIELD_UNITS.iter().any(|unit| {
+        tail.starts_with(unit)
+            && tail[unit.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })
+}
+
+/// Reads a relational claim, but only where the field is named *before* the
+/// comparison word.
+///
+/// "RSI is above 70" names the field, then compares: the claim is that rsi14
+/// exceeds 70, and 71.049 satisfies it. "above 446 EUR support" is the other
+/// order -- there 446 *is* the support level, and equality is the right
+/// reading. Getting this backwards turns every true "above" into a
+/// disagreement.
+fn relation_for(text: &str, field_end: Option<usize>, number_start: usize) -> &'static str {
+    let Some(field_end) = field_end else {
+        return RELATION_EQUALS;
+    };
+    if field_end >= number_start {
+        return RELATION_EQUALS;
+    }
+    let between = &text[field_end..number_start];
+    if RELATIONAL_ABOVE.iter().any(|word| between.contains(word)) {
+        RELATION_ABOVE
+    } else if RELATIONAL_BELOW.iter().any(|word| between.contains(word)) {
+        RELATION_BELOW
+    } else {
+        RELATION_EQUALS
+    }
+}
+
 /// Checks every numeric assertion in `note` against `evidence`.
 pub(crate) fn numeric_checks(note: &str, evidence: &JsonValue) -> Vec<NumericCheck> {
     let lowered = note.to_lowercase();
     let numbers = scan_numbers(&lowered);
-    let attributions = attribute_all(&lowered, &numbers);
+    let (fields, uncertain, phrase_end) = attribute_all(&lowered, &numbers);
     numbers
         .iter()
-        .zip(attributions)
-        .map(|(found, field)| check_one(&lowered, found, field, evidence))
+        .enumerate()
+        .map(|(index, found)| {
+            check_one(
+                &lowered,
+                found,
+                fields[index],
+                uncertain[index],
+                phrase_end[index],
+                evidence,
+            )
+        })
         .collect()
 }
 
@@ -356,7 +443,13 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
 /// its figure. "break risk" is two characters from 0.061 and takes it, so when
 /// "Markov signal" is considered three characters away the figure is spoken
 /// for, and the phrase falls to +0.429 instead.
-fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static FieldSpec>> {
+type Attribution = (
+    Vec<Option<&'static FieldSpec>>,
+    Vec<bool>,
+    Vec<Option<usize>>,
+);
+
+fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
     struct Pair {
         number: usize,
         /// Where the phrase starts in the text.
@@ -376,6 +469,15 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
         field: &'static FieldSpec,
     }
 
+    // A quantity of something is not a field value, and must not take part in
+    // attribution at all. In "5-day Markov continuation signal of 0.6590" the
+    // 5 sits five characters from "markov" and the signal twenty-eight, so the
+    // horizon claimed the phrase and the figure it named went unattributed.
+    let eligible: Vec<bool> = numbers
+        .iter()
+        .map(|number| !measures_something_else(text, number.end))
+        .collect();
+
     let mut pairs: Vec<Pair> = Vec::new();
     for field in FIELDS {
         for keyword in field.keywords {
@@ -385,6 +487,9 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
                 let end = start + keyword.len();
                 from = start + 1;
                 for (index, number) in numbers.iter().enumerate() {
+                    if !eligible[index] {
+                        continue;
+                    }
                     let distance = if number.end <= start {
                         start - number.end
                     } else if end <= number.start {
@@ -422,6 +527,9 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
     });
 
     let mut assigned: Vec<Option<&'static FieldSpec>> = vec![None; numbers.len()];
+    let mut uncertain = vec![false; numbers.len()];
+    let mut phrase_end: Vec<Option<usize>> = vec![None; numbers.len()];
+    let mut winner: Vec<Option<((usize, usize), usize, &'static str)>> = vec![None; numbers.len()];
     let mut settled = vec![false; numbers.len()];
     let mut consumed: Vec<(usize, usize)> = Vec::new();
     let overlaps = |spans: &[(usize, usize)], span: (usize, usize)| {
@@ -440,12 +548,40 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
             other.number == pair.number
                 && other.distance == pair.distance
                 && other.length == pair.length
-                && !std::ptr::eq(other.field, pair.field)
+                && other.field.path != pair.field.path
         });
+        // Abstain when another field names the figure nearly as well. Picking
+        // the marginally closer one is a guess reported as arithmetic.
         settled[pair.number] = true;
         consumed.push(pair.span);
+        winner[pair.number] = Some((pair.span, pair.distance, pair.field.path));
+        phrase_end[pair.number] = Some(pair.span.1);
         assigned[pair.number] = if ambiguous { None } else { Some(pair.field) };
     }
+    // Uncertainty is judged only once every figure has been assigned.
+    //
+    // A phrase that another figure ended up using is not available to name
+    // this one and cannot make the reading doubtful -- "confluences," sits two
+    // characters from the 0.061 in "5 technical confluences, 0.061 support
+    // break risk" and would otherwise contest it, although the 5 is what it
+    // names. Evaluating this during assignment cannot work: at that moment the
+    // phrase has not been claimed yet.
+    for (index, win) in winner.iter().enumerate() {
+        let Some((win_span, win_distance, win_path)) = *win else {
+            continue;
+        };
+        uncertain[index] = pairs.iter().any(|other| {
+            other.number == index
+                && other.field.path != win_path
+                // The same region read at a different specificity is not a
+                // rival: "support" inside "support break risk" at the same
+                // distance, where the longer phrase simply wins.
+                && !(other.span.0 < win_span.1 && win_span.0 < other.span.1)
+                && !overlaps(&consumed, other.span)
+                && other.distance.saturating_sub(win_distance) < ATTRIBUTION_MARGIN_CHARS
+        });
+    }
+
     // "6/3 technical confluences" is the count over the minimum. Without this
     // the 6 went unattributed and the 3 was compared against the count of 6,
     // reporting a disagreement that is purely notation -- and #279 MU carried
@@ -466,20 +602,27 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
         if !names_confluences {
             continue;
         }
+        // The pattern is unambiguous, so it settles both figures. Leaving an
+        // earlier doubt in place would abstain on a reading this rule has
+        // just determined.
         assigned[index] = FIELDS
             .iter()
             .find(|field| field.path == "daily_indicators.confluence_count");
         assigned[index + 1] = FIELDS
             .iter()
             .find(|field| field.path == "daily_indicators.min_confluences");
+        uncertain[index] = false;
+        uncertain[index + 1] = false;
     }
-    assigned
+    (assigned, uncertain, phrase_end)
 }
 
 fn check_one(
     text: &str,
     found: &FoundNumber,
     field: Option<&'static FieldSpec>,
+    uncertain: bool,
+    phrase_end: Option<usize>,
     evidence: &JsonValue,
 ) -> NumericCheck {
     let window_start = text[..found.start]
@@ -494,15 +637,38 @@ fn check_one(
     let window = &text[window_start..window_end];
     let excerpt = window.trim().to_string();
 
+    // A quantity of something is not the value of a field.
+    if measures_something_else(text, found.end) {
+        return NumericCheck {
+            quoted: found.value,
+            field: None,
+            actual: None,
+            relation: RELATION_EQUALS,
+            verdict: NumericVerdict::NotAFieldValue,
+            excerpt,
+        };
+    }
     let Some(field) = field else {
         return NumericCheck {
             quoted: found.value,
             field: None,
             actual: None,
+            relation: RELATION_EQUALS,
             verdict: NumericVerdict::Unattributed,
             excerpt,
         };
     };
+    if uncertain {
+        return NumericCheck {
+            quoted: found.value,
+            field: Some(field.path),
+            actual: None,
+            relation: RELATION_EQUALS,
+            verdict: NumericVerdict::UncertainAttribution,
+            excerpt,
+        };
+    }
+    let relation = relation_for(text, phrase_end, found.start);
 
     // A `%` quote of a value stored as a fraction of one is divided; otherwise
     // the figure is compared in the units it was written in.
@@ -522,6 +688,7 @@ fn check_one(
             quoted,
             field: Some(field.path),
             actual: None,
+            relation,
             verdict: NumericVerdict::NotInEvidence,
             excerpt,
         };
@@ -544,17 +711,24 @@ fn check_one(
         (found.value, actual)
     };
 
-    let verdict = if quoted_from(written, found.decimals, stored, field.discrete) {
-        NumericVerdict::Matches
-    } else if plausible_magnitude(comparable, actual) {
-        NumericVerdict::Differs
-    } else {
-        NumericVerdict::ImplausibleAttribution
+    // A relational claim is satisfied by any value on the right side of the
+    // threshold, so "RSI is above 70" is true of 71.049 and testing it for
+    // equality turns every such note into a disagreement.
+    let verdict = match relation {
+        RELATION_ABOVE if stored > written => NumericVerdict::Matches,
+        RELATION_BELOW if stored < written => NumericVerdict::Matches,
+        RELATION_ABOVE | RELATION_BELOW => NumericVerdict::Differs,
+        _ if quoted_from(written, found.decimals, stored, field.discrete) => {
+            NumericVerdict::Matches
+        }
+        _ if plausible_magnitude(comparable, actual) => NumericVerdict::Differs,
+        _ => NumericVerdict::ImplausibleAttribution,
     };
     NumericCheck {
         quoted,
         field: Some(field.path),
         actual: Some(actual),
+        relation,
         verdict,
         excerpt,
     }
@@ -652,6 +826,8 @@ pub(crate) fn summarize(checks: &[NumericCheck]) -> serde_json::Value {
         "not_in_evidence": count(NumericVerdict::NotInEvidence),
         "unattributed": count(NumericVerdict::Unattributed),
         "implausible_attribution": count(NumericVerdict::ImplausibleAttribution),
+        "not_a_field_value": count(NumericVerdict::NotAFieldValue),
+        "uncertain_attribution": count(NumericVerdict::UncertainAttribution),
     })
 }
 
@@ -814,13 +990,20 @@ mod tests {
     #[test]
     fn an_unidentifiable_figure_is_recorded_rather_than_guessed_at() {
         let checks = numeric_checks(
-            "initiates as a conservative starter position sized at 6 shares",
+            "initiates as a conservative starter rated 7 overall",
             &evidence(),
         );
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].verdict, NumericVerdict::Unattributed);
         assert_eq!(checks[0].field, None);
         assert_eq!(checks[0].actual, None);
+
+        // "6 shares" is a quantity of something, which is a stronger statement
+        // than "no field matched" and is reported as its own outcome.
+        assert_eq!(
+            numeric_checks("sized at 6 shares", &evidence())[0].verdict,
+            NumericVerdict::NotAFieldValue
+        );
     }
 
     /// Two different fields matched by equally specific phrases is an
@@ -1031,7 +1214,7 @@ mod tests {
         let evidence = json!({
             "daily_indicators": {"support": {"nearest_support": 428.11}}
         });
-        let checks = numeric_checks("steady near support with 6 shares", &evidence);
+        let checks = numeric_checks("nearest support 6", &evidence);
         assert_eq!(checks[0].verdict, NumericVerdict::ImplausibleAttribution);
         assert_eq!(summarize(&checks)["differs"], 0);
         assert_eq!(summarize(&checks)["implausible_attribution"], 1);
@@ -1332,5 +1515,124 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].quoted, 5.0);
         assert_eq!(listed[1].quoted, 20.0);
+    }
+}
+
+#[cfg(test)]
+mod heldout_regressions {
+    use super::*;
+    use serde_json::json;
+
+    /// The two disagreements the held-out pass produced, both of which were
+    /// this module's own, plus the readings that must not change.
+    #[test]
+    fn the_held_out_failures_are_fixed_without_breaking_equality_claims() {
+        // #117 BAC: "RSI is above 70" against 71.049. A relational claim
+        // tested for equality turns every true "above" into a disagreement.
+        let bac = json!({"daily_indicators": {"rsi14": 71.04899226674894}});
+        let above = &numeric_checks("Keep size modest because RSI is above 70.", &bac)[0];
+        assert_eq!(above.field, Some("daily_indicators.rsi14"));
+        assert_eq!(above.relation, RELATION_ABOVE);
+        assert_eq!(above.verdict, NumericVerdict::Matches);
+        // And a relational claim that is actually false still fails.
+        let low = json!({"daily_indicators": {"rsi14": 44.8}});
+        assert_eq!(
+            numeric_checks("RSI is above 70", &low)[0].verdict,
+            NumericVerdict::Differs
+        );
+        assert_eq!(
+            numeric_checks("RSI is below 70", &low)[0].verdict,
+            NumericVerdict::Matches
+        );
+
+        // #185 DSV: the 5 in "5-day" is a horizon, not the signal.
+        let dsv = json!({"markov": {"signed_signal": 0.6590335965156555}});
+        let checks = numeric_checks(
+            "exceptionally strong 5-day Markov continuation signal of 0.6590",
+            &dsv,
+        );
+        let horizon = checks
+            .iter()
+            .find(|check| check.quoted == 5.0)
+            .expect("the horizon");
+        assert_eq!(horizon.verdict, NumericVerdict::NotAFieldValue);
+        assert!(horizon.field.is_none());
+        let signal = checks
+            .iter()
+            .find(|check| (check.quoted - 0.659).abs() < 1e-9)
+            .expect("the signal");
+        assert_eq!(signal.verdict, NumericVerdict::Matches);
+    }
+
+    /// The field named *after* the figure means the figure is that field's
+    /// value, not a threshold on it. Reading "above 446 EUR support"
+    /// relationally would ask whether 446 > 446 and call a correct note wrong.
+    #[test]
+    fn a_figure_the_field_name_follows_is_still_an_equality_claim() {
+        let evidence = json!({
+            "daily_indicators": {"support": {"nearest_support": 446.0}}
+        });
+        let check =
+            &numeric_checks("consolidating comfortably above 446 EUR support", &evidence)[0];
+        assert_eq!(check.relation, RELATION_EQUALS);
+        assert_eq!(check.verdict, NumericVerdict::Matches);
+    }
+
+    /// Where two fields name a figure nearly equally well, comparing against
+    /// either is a guess. "steady near support with 6 technical confluences"
+    /// put "support" six characters away and "confluences" eleven.
+    #[test]
+    fn a_contested_attribution_abstains_instead_of_picking_the_closer_field() {
+        let evidence = json!({
+            "daily_indicators": {
+                "confluence_count": 6,
+                "support": {"nearest_support": 428.11},
+            }
+        });
+        let checks = numeric_checks(
+            "steady near support with 6 technical confluences",
+            &evidence,
+        );
+        let six = checks
+            .iter()
+            .find(|check| check.quoted == 6.0)
+            .expect("the six");
+        assert_eq!(
+            six.verdict,
+            NumericVerdict::UncertainAttribution,
+            "neither field is confidently the right one"
+        );
+        assert!(
+            six.actual.is_none(),
+            "an abstention compares nothing, so it reports no stored value"
+        );
+    }
+
+    /// Abstention must not swallow an unambiguous reading.
+    #[test]
+    fn an_uncontested_attribution_is_still_compared() {
+        let evidence = json!({"daily_indicators": {"confluence_count": 6}});
+        assert_eq!(
+            numeric_checks("6 technical confluences", &evidence)[0].verdict,
+            NumericVerdict::Matches
+        );
+        let support = json!({"daily_indicators": {"support": {"nearest_support": 446.0}}});
+        assert_eq!(
+            numeric_checks("nearest support 446.0", &support)[0].verdict,
+            NumericVerdict::Matches
+        );
+    }
+
+    /// Other quantities of things, not just horizons.
+    #[test]
+    fn share_and_session_counts_are_not_field_values() {
+        let evidence = json!({"daily_indicators": {"confluence_count": 5}});
+        for note in ["sized at 6 shares", "held for 20 sessions", "over 3 weeks"] {
+            assert_eq!(
+                numeric_checks(note, &evidence)[0].verdict,
+                NumericVerdict::NotAFieldValue,
+                "{note}"
+            );
+        }
     }
 }
