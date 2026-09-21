@@ -69,6 +69,25 @@ const KNOWN_FAILURE_CODES: &[(&str, &str)] = &[
 
 const REVIEW_BATCH_LIMIT: usize = 10;
 
+/// How far back the grader looks for ungraded reports, and how many it judges
+/// per cycle.
+///
+/// The defaults keep the worker on recent reports. Raising them lets a
+/// held-out or historical set be graded without editing code -- grading the
+/// backlog is the only way to measure against reports that were never used to
+/// tune the checker.
+fn grading_window(state: &AppState) -> i64 {
+    crate::config::yaml_i64(&state.config, &["jev", "grading_candidate_window"])
+        .unwrap_or(40)
+        .clamp(1, 5_000)
+}
+
+fn grading_batch_limit(state: &AppState) -> usize {
+    crate::config::yaml_i64(&state.config, &["jev", "grading_batch_limit"])
+        .unwrap_or(REVIEW_BATCH_LIMIT as i64)
+        .clamp(1, 500) as usize
+}
+
 /// Versions of the two review question sets.
 ///
 /// A subject is skipped only when it has already been judged *at the current
@@ -141,12 +160,13 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         }
     };
 
-    let rows = match sqlx::query(
+    let rows = match sqlx::query(&format!(
         "SELECT id, report_json, request_json FROM decision_reports
          WHERE status = 'completed' AND report_json IS NOT NULL
          ORDER BY created_at DESC, id DESC
-         LIMIT 40",
-    )
+         LIMIT {}",
+        grading_window(state)
+    ))
     .fetch_all(&state.pool)
     .await
     .context("reading completed reports for Jev grading")
@@ -179,7 +199,7 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         let prompt = parse_embedded(row.get("request_json"))
             .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
             .unwrap_or(JsonValue::Null);
-        if graded + failed >= REVIEW_BATCH_LIMIT {
+        if graded + failed >= grading_batch_limit(state) {
             break;
         }
 

@@ -700,6 +700,13 @@ jev:
   # to what the model was shown.
   max_state_chars: 24000
   max_questions_per_request: 12
+  # How far back the grader looks for ungraded reports, and how many it judges
+  # per cycle. Raised on 2026-09-21 to grade the held-out set (reports 83-271),
+  # which was never used to tune the numeric checker and so is the only
+  # material that can measure it. Grading is observational and costs about two
+  # thousandths of a cent per report.
+  grading_candidate_window: 400
+  grading_batch_limit: 120
 
 xai:
   provider: openrouter
