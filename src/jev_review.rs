@@ -80,7 +80,7 @@ const REVIEW_BATCH_LIMIT: usize = 10;
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v7";
+const REPORT_GRADING_VERSION: &str = "v8";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -195,12 +195,7 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
-                let result = grade_payload(
-                    &response.answers,
-                    &response.issues,
-                    &inputs.candidates,
-                    &inputs.coverage,
-                );
+                let result = grade_payload(&response.answers, &response.issues, &inputs);
                 if let Err(err) = jev_store::record_success(
                     &state.pool,
                     jev_store::RecordedRequest {
@@ -281,6 +276,8 @@ struct GradingInputs {
     candidates: Vec<JsonValue>,
     evidence: Vec<JsonValue>,
     coverage: JsonValue,
+    /// Deterministic numeric findings, settled before any model call.
+    numeric: Vec<JsonValue>,
 }
 
 /// Builds the grading state, aligned by index, with explicit coverage.
@@ -319,6 +316,7 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
     let mut candidates = Vec::new();
     let mut evidence = Vec::new();
     let mut excluded = Vec::new();
+    let mut numeric_summaries = Vec::new();
     for asset in &selected {
         let Some(symbol) = asset.get("symbol").and_then(JsonValue::as_str) else {
             continue;
@@ -334,9 +332,52 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
             excluded.push(json!({"symbol": symbol, "reason": "beyond_question_budget"}));
             continue;
         }
+        let note = asset
+            .get("notes")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        let candidate_evidence = json!({
+            "symbol": symbol,
+            "daily_indicators": indicator,
+            "markov": markov.get(symbol),
+            "quiver": quiver.get(symbol).map(|signal| json!({
+                "signal": signal.get("signal"),
+                "direction": signal.get("direction"),
+                "confidence": signal.get("confidence"),
+                "run_date": signal.get("run_date"),
+            })),
+        });
+        // Settled by comparison before the model is asked anything, and handed
+        // to it so it judges wording against verified figures rather than
+        // re-deriving them.
+        let checks = crate::jev_numeric::numeric_checks(note, &candidate_evidence);
+        numeric_summaries.push(json!({
+            "symbol": symbol,
+            "summary": crate::jev_numeric::summarize(&checks),
+            "checks": checks
+                .iter()
+                .map(|check| json!({
+                    "quoted": check.quoted,
+                    "field": check.field,
+                    "actual": check.actual,
+                    "tolerance": check.tolerance,
+                    "verdict": check.verdict.as_str(),
+                    "excerpt": check.excerpt,
+                }))
+                .collect::<Vec<_>>(),
+        }));
         candidates.push(json!({
             "symbol": symbol,
             "note": asset.get("notes"),
+            "numeric_checks": checks
+                .iter()
+                .map(|check| json!({
+                    "quoted": check.quoted,
+                    "field": check.field,
+                    "actual": check.actual,
+                    "verdict": check.verdict.as_str(),
+                }))
+                .collect::<Vec<_>>(),
         }));
         evidence.push(json!({
             "symbol": symbol,
@@ -385,102 +426,137 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
         candidates,
         evidence,
         coverage,
+        numeric: numeric_summaries,
     }
 }
 
-/// Composes the candidate verdicts in code, as counts with their uncertainty
-/// beside them.
+/// Composes the deterministic numeric findings and the model's wording
+/// verdicts, keeping them apart.
 fn grade_payload(
     answers: &std::collections::BTreeMap<String, crate::jev::Answer>,
     issues: &[crate::jev::JevAnswerIssue],
-    candidates: &[JsonValue],
-    coverage: &JsonValue,
+    inputs: &GradingInputs,
 ) -> JsonValue {
     let noul = |id: &str| match answers.get(id) {
         Some(crate::jev::Answer::Noul { noul }) => Some(*noul),
         _ => None,
     };
 
-    let mut supported = 0i64;
-    let mut contradicted = 0i64;
-    let mut insufficient = 0i64;
-    let mut no_claims = 0i64;
+    let mut fair = 0i64;
+    let mut overstated = 0i64;
+    let mut misdescribes = 0i64;
+    let mut no_claim = 0i64;
     let mut unanswered = 0i64;
     let mut low_confidence = 0i64;
-    let mut confidences: Vec<f64> = Vec::new();
     let mut verdicts = Vec::new();
 
-    for (index, candidate) in candidates.iter().enumerate() {
+    for (index, candidate) in inputs.candidates.iter().enumerate() {
         let id = jev_signals::claim_question_id(index);
-        let (verdict, confidence) = match answers.get(&id) {
+        let (verdict, confidence, probabilities) = match answers.get(&id) {
             Some(crate::jev::Answer::Choice {
-                choice, confidence, ..
-            }) => (Some(choice.as_str()), *confidence),
-            _ => (None, None),
+                choice,
+                confidence,
+                probabilities,
+            }) => (Some(choice.as_str()), *confidence, Some(probabilities)),
+            _ => (None, None, None),
         };
         match verdict {
-            Some(jev_signals::CLAIM_SUPPORTED) => supported += 1,
-            Some(jev_signals::CLAIM_CONTRADICTED) => contradicted += 1,
-            Some(jev_signals::CLAIM_INSUFFICIENT) => insufficient += 1,
-            Some(jev_signals::CLAIM_NONE) => no_claims += 1,
+            Some(jev_signals::WORDING_FAIR) => fair += 1,
+            Some(jev_signals::WORDING_OVERSTATED) => overstated += 1,
+            Some(jev_signals::WORDING_MISDESCRIBES) => misdescribes += 1,
+            Some(jev_signals::WORDING_NONE) => no_claim += 1,
             _ => unanswered += 1,
         }
-        if let Some(confidence) = confidence {
-            confidences.push(confidence);
-            if confidence < jev_signals::LOW_CONFIDENCE_THRESHOLD {
-                low_confidence += 1;
-            }
+        if confidence.is_some_and(|value| value < jev_signals::LOW_CONFIDENCE_THRESHOLD) {
+            low_confidence += 1;
         }
+
+        // The probability of the option returned, and of the nearest
+        // alternative. `confidence` describes how peaked the distribution is,
+        // not how likely the selected option is, so these are the numbers to
+        // reason about when asking how firmly a verdict was held.
+        let selected_probability =
+            verdict.and_then(|choice| probabilities.and_then(|values| values.get(choice)).copied());
+        let runner_up = probabilities.and_then(|values| {
+            values
+                .iter()
+                .filter(|(option, _)| Some(option.as_str()) != verdict)
+                .max_by(|left, right| {
+                    left.1
+                        .partial_cmp(right.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(option, value)| (option.clone(), *value))
+        });
+
         verdicts.push(json!({
             "symbol": candidate.get("symbol"),
             "verdict": verdict,
             "confidence": confidence,
+            "selected_probability": selected_probability,
+            "runner_up": runner_up.as_ref().map(|(option, _)| option.clone()),
+            "runner_up_probability": runner_up.as_ref().map(|(_, value)| *value),
+            "margin": selected_probability
+                .zip(runner_up.as_ref().map(|(_, value)| *value))
+                .map(|(selected, runner_up)| selected - runner_up),
             "low_confidence": confidence
                 .is_some_and(|value| value < jev_signals::LOW_CONFIDENCE_THRESHOLD),
         }));
     }
 
-    confidences.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    // Deterministic totals across candidates.
+    let numeric_total = |key: &str| {
+        inputs
+            .numeric
+            .iter()
+            .filter_map(|entry| entry["summary"][key].as_i64())
+            .sum::<i64>()
+    };
 
     json!({
         "version": REPORT_GRADING_VERSION,
         "evidence_scope": "decision_time_prompt_snapshot_not_independent_source_verification",
-        // Candidate-level, not claim-level. Each verdict ranges over every
-        // assertion in one note, so four `supported` means four clean notes
-        // rather than four individually verified facts.
         "granularity": "one_verdict_per_candidate_note",
-        "candidate_verdict_counts": {
-            "supported": supported,
-            "contradicted": contradicted,
-            "insufficient_evidence": insufficient,
-            "no_checkable_claims": no_claims,
+        // Settled by comparison, not by a model. These do not vary between
+        // runs and carry no confidence because none is needed.
+        "numeric_checks": {
+            "matches": numeric_total("matches"),
+            "differs": numeric_total("differs"),
+            "not_in_evidence": numeric_total("not_in_evidence"),
+            "unattributed": numeric_total("unattributed"),
+            "per_candidate": inputs.numeric,
+            "method": "arithmetic_comparison_at_the_precision_quoted",
+        },
+        // Model judgements about wording only.
+        "wording_verdict_counts": {
+            "fair": fair,
+            "overstated": overstated,
+            "misdescribes_category": misdescribes,
+            "no_qualitative_claim": no_claim,
             "unanswered": unanswered,
         },
-        // Counts without uncertainty read as findings. Three options make the
-        // uninformative baseline 0.33, and production verdicts have come back
-        // at 0.17.
-        "confidence": {
+        "wording_verdicts": verdicts,
+        "confidence_flag": {
             "low_confidence_count": low_confidence,
             "threshold": jev_signals::LOW_CONFIDENCE_THRESHOLD,
-            "min": confidences.first(),
-            "median": confidences.get(confidences.len() / 2),
-            "max": confidences.last(),
+            "meaning": "`confidence` is how peaked the answer distribution is, not the \
+                        probability of the option returned. This threshold is a hand-picked \
+                        review flag, not a calibrated accuracy boundary. Read \
+                        `selected_probability` and `margin` for how firmly a verdict was held.",
         },
-        "candidate_verdicts": verdicts,
-        "coverage": coverage,
+        "coverage": &inputs.coverage,
         "view_consistent": noul("view_consistent"),
         "specificity": answers
             .get("specificity")
             .and_then(crate::jev::Answer::normalized_score),
         "unanswered_questions": issues.iter().map(|issue| issue.id.clone()).collect::<Vec<_>>(),
         "admission": "observational_only",
-        "interpretation": "Model classifications of candidate notes, not confirmed findings, \
-                           and not validated against independently adjudicated examples. \
-                           `insufficient_evidence` means the assertion could not be verified \
-                           from the evidence supplied here -- which may be a gap in that \
-                           evidence or an unverifiable assertion in the note, and this does \
-                           not distinguish them. Read the counts with `confidence` and \
-                           `coverage` beside them.",
+        "interpretation": "Numeric findings are comparisons and stand on their own. Wording \
+                           verdicts are model classifications, not confirmed findings, and are \
+                           not validated against adjudicated examples. `overstated` and \
+                           `misdescribes_category` mark wording worth a human reading against \
+                           docs/jev-adjudication-rubric.md; neither settles an interpretation \
+                           on its own.",
         "safety": "A grade records an opinion about a stored report. It cannot approve a \
                    report, override a Trading Manager gate, create a queue entry, or reach Saxo.",
     })
@@ -856,145 +932,136 @@ mod tests {
         assert!(!questions.contains_key(&jev_signals::claim_question_id(0)));
         assert_eq!(questions.len(), 2, "only the two report-level questions");
 
-        let payload = grade_payload(&BTreeMap::new(), &[], &inputs.candidates, &inputs.coverage);
-        assert_eq!(payload["candidate_verdict_counts"]["supported"], 0);
-        assert_eq!(payload["candidate_verdict_counts"]["unanswered"], 0);
+        let payload = grade_payload(&BTreeMap::new(), &[], &inputs);
+        assert_eq!(payload["wording_verdict_counts"]["fair"], 0);
+        assert_eq!(payload["wording_verdict_counts"]["unanswered"], 0);
         assert_eq!(payload["coverage"]["judged_candidate_count"], 0);
-        assert_eq!(payload["confidence"]["low_confidence_count"], 0);
-        assert!(
-            payload["confidence"]["median"].is_null(),
-            "no verdicts means no confidence distribution, not a zero one"
-        );
+        assert_eq!(payload["numeric_checks"]["matches"], 0);
     }
 
-    fn choice(verdict: &str, confidence: f64) -> Answer {
+    fn choice(verdict: &str, confidence: f64, probabilities: &[(&str, f64)]) -> Answer {
         Answer::Choice {
             choice: verdict.to_string(),
-            probabilities: BTreeMap::new(),
+            probabilities: probabilities
+                .iter()
+                .map(|(option, value)| ((*option).to_string(), *value))
+                .collect(),
             confidence: Some(confidence),
         }
     }
 
-    /// A contradicted verdict is a finding about the report; insufficient
-    /// evidence means the assertion could not be verified from what was
-    /// supplied, which may be a gap in the evidence or an unverifiable
-    /// assertion. Collapsing them into one number is what made every earlier
-    /// version unreadable.
+    /// The two kinds of finding must not share a counter. A figure that
+    /// disagrees is arithmetic; wording that overstates is a judgement.
     #[test]
-    fn each_verdict_is_counted_separately_and_none_is_inferred() {
-        let candidates: Vec<JsonValue> = ["A:x", "B:x", "C:x", "D:x", "E:x"]
-            .iter()
-            .map(|symbol| json!({"symbol": symbol}))
-            .collect();
-        let answers = BTreeMap::from([
-            (
-                jev_signals::claim_question_id(0),
-                choice(jev_signals::CLAIM_SUPPORTED, 0.91),
-            ),
-            (
-                jev_signals::claim_question_id(1),
-                choice(jev_signals::CLAIM_CONTRADICTED, 0.32),
-            ),
-            (
-                jev_signals::claim_question_id(2),
-                choice(jev_signals::CLAIM_INSUFFICIENT, 0.46),
-            ),
-            (
-                jev_signals::claim_question_id(3),
-                choice(jev_signals::CLAIM_NONE, 0.88),
-            ),
-            // claim_4 unanswered.
-        ]);
-        let payload = grade_payload(&answers, &[], &candidates, &json!({}));
-        let counts = &payload["candidate_verdict_counts"];
-
-        assert_eq!(counts["supported"], 1);
-        assert_eq!(counts["contradicted"], 1);
-        assert_eq!(counts["insufficient_evidence"], 1);
-        assert_eq!(counts["no_checkable_claims"], 1);
-        assert_eq!(counts["unanswered"], 1);
-        assert_eq!(payload["granularity"], "one_verdict_per_candidate_note");
-        assert_eq!(payload["candidate_verdicts"][1]["verdict"], "contradicted");
-        assert!(payload["candidate_verdicts"][4]["verdict"].is_null());
-    }
-
-    /// Counts without uncertainty read as findings. Production returned a
-    /// `supported` at 0.17 and a `contradicted` at 0.32 -- at or below the
-    /// 0.33 uninformative baseline for three options -- alongside verdicts at
-    /// 0.96, and the counts alone showed no difference between them.
-    #[test]
-    fn low_confidence_verdicts_are_counted_beside_the_verdicts_themselves() {
-        let candidates: Vec<JsonValue> = ["A:x", "B:x", "C:x"]
-            .iter()
-            .map(|symbol| json!({"symbol": symbol}))
-            .collect();
-        let answers = BTreeMap::from([
-            (
-                jev_signals::claim_question_id(0),
-                choice(jev_signals::CLAIM_SUPPORTED, 0.17),
-            ),
-            (
-                jev_signals::claim_question_id(1),
-                choice(jev_signals::CLAIM_SUPPORTED, 0.44),
-            ),
-            (
-                jev_signals::claim_question_id(2),
-                choice(jev_signals::CLAIM_SUPPORTED, 0.96),
-            ),
-        ]);
-        let payload = grade_payload(&answers, &[], &candidates, &json!({}));
-
-        assert_eq!(payload["candidate_verdict_counts"]["supported"], 3);
-        assert_eq!(
-            payload["confidence"]["low_confidence_count"], 2,
-            "two of the three are barely better than a guess, and the count says so"
-        );
-        assert_eq!(payload["confidence"]["min"], 0.17);
-        assert_eq!(payload["confidence"]["median"], 0.44);
-        assert_eq!(payload["confidence"]["max"], 0.96);
-        assert!(
-            payload["candidate_verdicts"][0]["low_confidence"]
-                .as_bool()
-                .unwrap()
-        );
-        assert!(
-            !payload["candidate_verdicts"][2]["low_confidence"]
-                .as_bool()
-                .unwrap()
-        );
-    }
-
-    /// A note with nothing checkable in it -- empty, or only portfolio
-    /// commentary that is out of scope by design -- must not come back
-    /// `supported` vacuously. That is the same failure the empty-report case
-    /// had, one level down.
-    #[test]
-    fn a_note_with_nothing_in_scope_has_its_own_outcome() {
-        let questions = jev_signals::report_grading_questions(1);
-        let crate::jev::Question::Choice { criteria, .. } =
-            &questions[&jev_signals::claim_question_id(0)]
-        else {
-            panic!("a candidate verdict is a choice");
-        };
-        assert!(
-            criteria.contains_key(jev_signals::CLAIM_NONE),
-            "an empty note needs somewhere to go other than `supported`"
-        );
-        assert_eq!(criteria.len(), 4);
-
+    fn numeric_findings_and_wording_verdicts_are_reported_separately() {
+        let report = json!({
+            "selected_assets": [{
+                "symbol": "EQNR:xosl",
+                "notes": "consolidating securely with 5 confluences and 0.900 break risk",
+            }],
+            "suggested_trades": [],
+        });
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
+        });
+        let inputs = grading_inputs(&report, &prompt);
         let payload = grade_payload(
             &BTreeMap::from([(
                 jev_signals::claim_question_id(0),
-                choice(jev_signals::CLAIM_NONE, 0.9),
+                choice(
+                    jev_signals::WORDING_OVERSTATED,
+                    0.71,
+                    &[
+                        ("overstated", 0.66),
+                        ("fair", 0.3),
+                        ("misdescribes_category", 0.04),
+                    ],
+                ),
             )]),
             &[],
-            &[json!({"symbol": "A:x"})],
-            &json!({}),
+            &inputs,
         );
-        assert_eq!(payload["candidate_verdict_counts"]["supported"], 0);
+
+        // 5 confluences agrees; 0.900 break risk does not.
+        assert_eq!(payload["numeric_checks"]["matches"], 1);
+        assert_eq!(payload["numeric_checks"]["differs"], 1);
+        assert_eq!(payload["wording_verdict_counts"]["overstated"], 1);
+        assert_eq!(payload["wording_verdict_counts"]["fair"], 0);
+        assert!(
+            payload["numeric_checks"]["per_candidate"][0]["checks"]
+                .as_array()
+                .is_some_and(|checks| !checks.is_empty()),
+            "the per-figure detail is retained for adjudication"
+        );
+    }
+
+    /// `confidence` is how peaked the distribution is, not the probability of
+    /// the option returned. I reasoned about it as the latter and called 0.17
+    /// "below chance", which is a statement about a quantity this field does
+    /// not carry. The probability of the selected option and the margin over
+    /// the runner-up are the numbers to reason about, so they are reported.
+    #[test]
+    fn the_selected_probability_and_margin_are_reported_beside_confidence() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "5 confluences"}],
+            "suggested_trades": [],
+        });
+        let prompt = json!({"daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]}});
+        let inputs = grading_inputs(&report, &prompt);
+        let payload = grade_payload(
+            &BTreeMap::from([(
+                jev_signals::claim_question_id(0),
+                choice(
+                    jev_signals::WORDING_FAIR,
+                    0.17,
+                    &[
+                        ("fair", 0.41),
+                        ("overstated", 0.39),
+                        ("no_qualitative_claim", 0.2),
+                    ],
+                ),
+            )]),
+            &[],
+            &inputs,
+        );
+        let verdict = &payload["wording_verdicts"][0];
+
+        assert_eq!(verdict["confidence"], 0.17);
+        assert_eq!(verdict["selected_probability"], 0.41);
+        assert_eq!(verdict["runner_up"], "overstated");
+        assert_eq!(verdict["runner_up_probability"], 0.39);
+        let margin = verdict["margin"].as_f64().expect("a margin");
+        assert!(
+            (margin - 0.02).abs() < 1e-9,
+            "a near-tie is visible as a margin rather than inferred from confidence: {margin}"
+        );
+        assert!(verdict["low_confidence"].as_bool().unwrap());
+        assert!(
+            payload["confidence_flag"]["meaning"]
+                .as_str()
+                .unwrap()
+                .contains("not the"),
+            "the payload states what confidence is, since I had it wrong"
+        );
+    }
+
+    #[test]
+    fn an_unanswered_wording_verdict_carries_no_probabilities() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "5 confluences"}],
+            "suggested_trades": [],
+        });
+        let prompt = json!({"daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]}});
+        let inputs = grading_inputs(&report, &prompt);
+        let payload = grade_payload(&BTreeMap::new(), &[], &inputs);
+
+        assert_eq!(payload["wording_verdict_counts"]["unanswered"], 1);
+        assert!(payload["wording_verdicts"][0]["selected_probability"].is_null());
+        assert!(payload["wording_verdicts"][0]["margin"].is_null());
         assert_eq!(
-            payload["candidate_verdict_counts"]["no_checkable_claims"],
-            1
+            payload["numeric_checks"]["matches"], 1,
+            "the numeric finding stands whether or not the model answered"
         );
     }
 
@@ -1059,19 +1126,18 @@ mod tests {
         );
     }
 
-    /// Zero contradictions across ten reports is uninterpretable until the
-    /// grader is known to be able to return one. A verdict that never fires
-    /// looks identical to a clean set of reports.
+    /// A verdict that never fires looks identical to a clean set of reports,
+    /// so each one has to be shown reachable before a count of zero means
+    /// anything.
     ///
-    /// Feeds a note whose figures disagree with the evidence and asserts the
-    /// verdict, and a matching note as the control. Ignored by default: real
-    /// network, real key, about $0.00004.
+    /// Probes wording only. The numeric side is arithmetic and is covered by
+    /// `jev_numeric`'s own tests without spending anything.
     ///
     ///   set -a && . ./.env && set +a && \
-    ///     cargo test contradiction_probe -- --ignored --nocapture
+    ///     cargo test wording_probe -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "makes a real, billable network call; run explicitly with --ignored"]
-    async fn contradiction_probe_shows_the_grader_can_return_each_verdict() {
+    async fn wording_probe_shows_each_verdict_can_fire() {
         let Ok(api_key) = std::env::var("JEV_OPENROUTER_API_KEY") else {
             panic!("JEV_OPENROUTER_API_KEY is not exported");
         };
@@ -1083,8 +1149,7 @@ mod tests {
             max_state_chars: 24_000,
             max_questions_per_request: 12,
         };
-
-        // Same evidence throughout; only the note changes.
+        // break_risk 0.0614, labelled low; markov Bull at +0.429.
         let prompt = json!({
             "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
             "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
@@ -1092,19 +1157,28 @@ mod tests {
 
         for (label, note, expected) in [
             (
-                "agrees",
-                "5 technical confluences, 0.061 support break risk, +0.429 Bull Markov regime.",
-                jev_signals::CLAIM_SUPPORTED,
+                "fair",
+                "Constructive setup with low support break risk and a positive Bull Markov \
+                 regime.",
+                jev_signals::WORDING_FAIR,
             ),
             (
-                "disagrees",
-                "12 technical confluences, 0.850 support break risk, -0.900 Bear Markov regime.",
-                jev_signals::CLAIM_CONTRADICTED,
+                // Purely about intensity. An earlier fixture said "absolutely
+                // no downside risk whatsoever", which came back
+                // misdescribes_category at p=0.53 against overstated at 0.47 --
+                // a near tie, because claiming there is no risk is arguably a
+                // claim about the risk category rather than an overstatement
+                // of degree. The margin and confidence reported it correctly;
+                // the fixture was the problem.
+                "overstated",
+                "A spectacular, once-in-a-decade technical setup, far stronger than anything \
+                 else on the venue.",
+                jev_signals::WORDING_OVERSTATED,
             ),
             (
-                "unevidenced",
-                "Trading at a price-to-earnings ratio of 8.2 with a 5.1 percent dividend yield.",
-                jev_signals::CLAIM_INSUFFICIENT,
+                "miscategorised",
+                "The Markov state is Bear and the technical sentiment is SELL.",
+                jev_signals::WORDING_MISDESCRIBES,
             ),
         ] {
             let report = json!({
@@ -1121,19 +1195,19 @@ mod tests {
             let response = crate::jev::ask(&cfg, &state, &questions)
                 .await
                 .expect("probe call succeeds");
-            let payload = grade_payload(
-                &response.answers,
-                &response.issues,
-                &inputs.candidates,
-                &inputs.coverage,
-            );
+            let payload = grade_payload(&response.answers, &response.issues, &inputs);
+            let verdict = &payload["wording_verdicts"][0];
 
             println!(
-                "{label:12} -> {} (confidence {:?})",
-                payload["claim_verdicts"][0]["verdict"], payload["claim_verdicts"][0]["confidence"]
+                "{label:16} -> {} (p={:?}, runner-up {} p={:?}, confidence {:?})",
+                verdict["verdict"],
+                verdict["selected_probability"],
+                verdict["runner_up"],
+                verdict["runner_up_probability"],
+                verdict["confidence"],
             );
             assert_eq!(
-                payload["claim_verdicts"][0]["verdict"], expected,
+                verdict["verdict"], expected,
                 "{label}: a verdict that never fires is indistinguishable from clean reports"
             );
         }

@@ -640,16 +640,26 @@ pub(crate) fn symbol_rankings(signal_rows: &[JsonValue]) -> Vec<SymbolRanking> {
 /// Complements `decision_quality.rs` rather than replacing it. Those eleven
 /// checks verify structure and evidence presence; these ask whether the prose
 /// is actually supported by the evidence it sits next to.
-pub(crate) const CLAIM_SUPPORTED: &str = "supported";
-pub(crate) const CLAIM_CONTRADICTED: &str = "contradicted";
-pub(crate) const CLAIM_INSUFFICIENT: &str = "insufficient_evidence";
-pub(crate) const CLAIM_NONE: &str = "no_checkable_claims";
+// Jev's verdicts cover wording only. Numeric assertions are settled in
+// `jev_numeric` by comparison, which does not vary between runs and costs
+// nothing -- the grader returned `supported` at one run and `contradicted` at
+// another on claims that were simply numbers.
+pub(crate) const WORDING_FAIR: &str = "fair";
+pub(crate) const WORDING_OVERSTATED: &str = "overstated";
+pub(crate) const WORDING_MISDESCRIBES: &str = "misdescribes_category";
+pub(crate) const WORDING_NONE: &str = "no_qualitative_claim";
 
-/// Below this, a verdict is barely better than picking at random.
+/// Provisional threshold for flagging a verdict as worth a human look.
 ///
-/// Three options make the uninformative baseline 0.33, and production
-/// verdicts have come back at 0.17 and 0.32. Counting those beside a 0.96
-/// without saying so presents a coin flip as a finding.
+/// TypeSafe defines `confidence` as how peaked the answer distribution is, not
+/// as the probability of the option returned. So a low value says the model
+/// did not settle firmly between options -- it does not say the verdict is
+/// "below chance", which is a claim about a different quantity and one I made
+/// wrongly. The probability of the selected option is reported separately, and
+/// that is the number to reason about.
+///
+/// This is a review flag chosen by hand, not a demonstrated accuracy boundary.
+/// Nothing calibrates it yet.
 pub(crate) const LOW_CONFIDENCE_THRESHOLD: f64 = 0.6;
 
 /// The id under which candidate `index`'s verdict is returned.
@@ -714,42 +724,44 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
             Question::Choice {
                 instructions: json!({
                     "question": format!(
-                        "Consider only the assertions made in `candidates[{index}].note` about \
-                         the symbol `candidates[{index}].symbol`. Are they borne out by \
-                         `evidence[{index}]`, which holds that symbol's technical indicators, \
-                         Markov regime signal, and Quiver congressional-trading signal as they \
-                         stood when the note was written?"
+                        "Consider the wording of `candidates[{index}].note` about the symbol \
+                         `candidates[{index}].symbol`. Do its qualitative characterisations \
+                         fairly describe `evidence[{index}]`?"
                     ),
-                    "rounding": "A number quoted to fewer decimal places than the evidence \
-                                 carries agrees with it when it rounds to it.",
+                    "numbers_already_checked": format!(
+                        "Every figure quoted in the note has already been compared against the \
+                         evidence arithmetically, and the outcome is in \
+                         `candidates[{index}].numeric_checks`. Do not re-check arithmetic; \
+                         judge only the words."
+                    ),
+                    "what_counts": "Words that characterise rather than measure -- securely, \
+                                    low, elevated, strong, leading, intact, steady -- and any \
+                                    claim that a categorical field takes a particular value.",
                     "out_of_scope": "Assertions about portfolio capital, holdings, unrealised \
                                      profit, or trading costs have no counterpart in the \
-                                     evidence by design. Disregard them entirely rather than \
-                                     counting them as unsupported.",
+                                     evidence by design. Disregard them entirely.",
                 }),
                 criteria: BTreeMap::from([
                     (
-                        CLAIM_SUPPORTED.to_string(),
-                        "Every in-scope assertion has a counterpart in the evidence and agrees \
-                         with it"
+                        WORDING_FAIR.to_string(),
+                        "Each characterisation is a reasonable reading of the evidence".to_string(),
+                    ),
+                    (
+                        WORDING_OVERSTATED.to_string(),
+                        "A characterisation is stronger than the evidence supports, such as \
+                         calling a risk the evidence labels moderate a secure one"
                             .to_string(),
                     ),
                     (
-                        CLAIM_CONTRADICTED.to_string(),
-                        "At least one in-scope assertion has a counterpart in the evidence and \
-                         disagrees with it"
+                        WORDING_MISDESCRIBES.to_string(),
+                        "The note states that a categorical field takes a value it does not \
+                         take in the evidence"
                             .to_string(),
                     ),
                     (
-                        CLAIM_INSUFFICIENT.to_string(),
-                        "At least one in-scope assertion has no counterpart in the evidence, \
-                         and none disagree"
-                            .to_string(),
-                    ),
-                    (
-                        CLAIM_NONE.to_string(),
-                        "The note makes no in-scope assertion at all: it is empty, or says \
-                         only things that are out of scope"
+                        WORDING_NONE.to_string(),
+                        "The note makes no qualitative characterisation at all: it is empty, \
+                         purely numeric, or says only out-of-scope things"
                             .to_string(),
                     ),
                 ]),
