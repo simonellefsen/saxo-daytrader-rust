@@ -698,7 +698,12 @@ jev:
   # rather than truncated: truncated JSON is both invalid and a silent change
   # to what the model was shown.
   max_state_chars: 24000
-  max_questions_per_request: 12
+  # Raised 12 -> 24 on 2026-09-21. Each graded candidate now asks two
+  # questions: one about wording and one about evidence sufficiency. They were
+  # one choice before, which meant a note overstating what the evidence shows
+  # and also asserting something it does not contain could only be recorded as
+  # one or the other. Ten candidates plus two report-level questions is 22.
+  max_questions_per_request: 24
   # How far back the grader looks for ungraded reports, and how many it judges
   # per cycle. Raised on 2026-09-21 to grade the held-out set (reports 83-271),
   # which was never used to tune the numeric checker and so is the only

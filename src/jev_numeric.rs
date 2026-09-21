@@ -36,7 +36,7 @@ use serde_json::Value as JsonValue;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n4-2026-09-21";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n5-2026-09-21";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -261,13 +261,65 @@ const NON_FIELD_UNITS: &[&str] = &[
     "bar", "bars", "year", "years", "share", "shares",
 ];
 
-/// Words that make a claim relational rather than an equality.
-const RELATIONAL_ABOVE: &[&str] = &["above", "over", "exceeds", "exceeding"];
-const RELATIONAL_BELOW: &[&str] = &["below", "under", "beneath"];
+/// Comparison words, matched as whole words only.
+///
+/// Substring matching read the "over" inside "overbought" as a comparison.
+const COMPARATOR_ABOVE: &[&str] = &["above", "over", "exceeds", "exceeding", "greater"];
+const COMPARATOR_BELOW: &[&str] = &["below", "under", "beneath", "less"];
+
+/// Words that reverse a comparison. Ignoring them accepted "RSI is not above
+/// 70" as satisfied by 71.049 -- a false statement recorded as agreement,
+/// which is the invisible direction to be wrong in.
+const NEGATORS: &[&str] = &[
+    "not", "no", "never", "nor", "without", "isn't", "wasn't", "longer", "n't", "fails", "failing",
+];
+
+/// Words that put the claim in another time. "RSI was above 70 last week" says
+/// nothing about the stored value.
+const TEMPORAL: &[&str] = &[
+    "was",
+    "were",
+    "had",
+    "previously",
+    "earlier",
+    "last",
+    "formerly",
+    "until",
+    "since",
+    "before",
+    "yesterday",
+    "recently",
+    "once",
+];
+
+/// Words that leave the relation between figure and field unclear. "RSI is
+/// overbought at 70" neither asserts equality nor a comparison.
+const HEDGES: &[&str] = &[
+    "near",
+    "around",
+    "approximately",
+    "roughly",
+    "about",
+    "overbought",
+    "oversold",
+    "toward",
+    "towards",
+    "nearly",
+    "almost",
+    "circa",
+];
 
 pub(crate) const RELATION_EQUALS: &str = "equals";
 pub(crate) const RELATION_ABOVE: &str = "above";
 pub(crate) const RELATION_BELOW: &str = "below";
+/// The construction is not one this grammar supports, so nothing is compared.
+pub(crate) const RELATION_UNSUPPORTED: &str = "unsupported_construction";
+
+fn words(text: &str) -> Vec<&str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '\''))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
 
 /// Whether the figure is a quantity of something rather than a field value.
 ///
@@ -298,14 +350,46 @@ fn relation_for(text: &str, field_end: Option<usize>, number_start: usize) -> &'
     if field_end >= number_start {
         return RELATION_EQUALS;
     }
-    let between = &text[field_end..number_start];
-    if RELATIONAL_ABOVE.iter().any(|word| between.contains(word)) {
-        RELATION_ABOVE
-    } else if RELATIONAL_BELOW.iter().any(|word| between.contains(word)) {
-        RELATION_BELOW
-    } else {
-        RELATION_EQUALS
+    let between = words(&text[field_end..number_start]);
+    let is = |set: &[&str], word: &str| set.contains(&word);
+
+    // Anything that reverses or relocates the claim means this grammar cannot
+    // read it. Abstaining is the only safe outcome: assuming equality would
+    // manufacture a disagreement and assuming the comparison would accept a
+    // false statement.
+    if between
+        .iter()
+        .any(|word| is(NEGATORS, word) || is(TEMPORAL, word) || is(HEDGES, word))
+    {
+        return RELATION_UNSUPPORTED;
     }
+
+    // The comparator has to be the last word before the figure. A comparator
+    // further back belongs to some other construction this grammar does not
+    // parse, so that abstains too.
+    let last = between.last().copied().unwrap_or_default();
+    let last = if last == "than" {
+        between
+            .len()
+            .checked_sub(2)
+            .and_then(|index| between.get(index).copied())
+            .unwrap_or_default()
+    } else {
+        last
+    };
+    if is(COMPARATOR_ABOVE, last) {
+        return RELATION_ABOVE;
+    }
+    if is(COMPARATOR_BELOW, last) {
+        return RELATION_BELOW;
+    }
+    if between
+        .iter()
+        .any(|word| is(COMPARATOR_ABOVE, word) || is(COMPARATOR_BELOW, word))
+    {
+        return RELATION_UNSUPPORTED;
+    }
+    RELATION_EQUALS
 }
 
 /// Checks every numeric assertion in `note` against `evidence`.
@@ -714,6 +798,16 @@ fn check_one(
     // A relational claim is satisfied by any value on the right side of the
     // threshold, so "RSI is above 70" is true of 71.049 and testing it for
     // equality turns every such note into a disagreement.
+    if relation == RELATION_UNSUPPORTED {
+        return NumericCheck {
+            quoted,
+            field: Some(field.path),
+            actual: Some(actual),
+            relation,
+            verdict: NumericVerdict::UncertainAttribution,
+            excerpt,
+        };
+    }
     let verdict = match relation {
         RELATION_ABOVE if stored > written => NumericVerdict::Matches,
         RELATION_BELOW if stored < written => NumericVerdict::Matches,
@@ -1634,5 +1728,76 @@ mod heldout_regressions {
                 "{note}"
             );
         }
+    }
+
+    /// Substring matching accepted false statements as agreement. All five of
+    /// these returned `above` / `Matches` against an RSI of 71.049.
+    #[test]
+    fn the_comparison_grammar_refuses_what_it_cannot_read() {
+        let ev = json!({"daily_indicators": {"rsi14": 71.04899226674894}});
+        let verdict = |note: &str| {
+            let c = &numeric_checks(note, &ev)[0];
+            (c.relation, c.verdict)
+        };
+
+        assert_eq!(
+            verdict("RSI is above 70"),
+            (RELATION_ABOVE, NumericVerdict::Matches),
+            "the supported construction still reads"
+        );
+        for refused in [
+            "RSI is not above 70",
+            "RSI is no longer above 70",
+            "RSI was above 70 last week",
+            "RSI is overbought at 70",
+            "RSI is near 70",
+        ] {
+            assert_eq!(
+                verdict(refused),
+                (RELATION_UNSUPPORTED, NumericVerdict::UncertainAttribution),
+                "{refused}"
+            );
+        }
+    }
+
+    /// Whole words only: "over" inside "overbought" is not a comparison.
+    #[test]
+    fn a_comparator_inside_a_longer_word_is_not_a_comparison() {
+        let ev = json!({"daily_indicators": {"rsi14": 45.0}});
+        assert_eq!(
+            numeric_checks("RSI 45", &ev)[0].relation,
+            RELATION_EQUALS,
+            "a plain reading is unaffected"
+        );
+        // "overbought" must not be read as "over".
+        let hedged = &numeric_checks("RSI overbought 45", &ev)[0];
+        assert_eq!(hedged.relation, RELATION_UNSUPPORTED);
+    }
+
+    /// A comparator that is not the word immediately before the figure belongs
+    /// to some other construction, and this grammar does not parse it.
+    #[test]
+    fn a_comparator_away_from_the_figure_abstains() {
+        let ev = json!({"daily_indicators": {"rsi14": 71.049}});
+        assert_eq!(
+            numeric_checks("RSI above the level we watch of 70", &ev)[0].relation,
+            RELATION_UNSUPPORTED
+        );
+        assert_eq!(
+            numeric_checks("RSI greater than 70", &ev)[0].relation,
+            RELATION_ABOVE,
+            "but an explicit 'greater than' is supported"
+        );
+    }
+
+    /// An abstention compares nothing, so it can neither agree nor disagree.
+    #[test]
+    fn an_unsupported_construction_is_never_a_finding() {
+        let ev = json!({"daily_indicators": {"rsi14": 20.0}});
+        // 71-style claim against a very different value: were this read as
+        // equality or as a comparison it would be a disagreement.
+        let check = &numeric_checks("RSI is not above 70", &ev)[0];
+        assert_eq!(check.verdict, NumericVerdict::UncertainAttribution);
+        assert_eq!(summarize(std::slice::from_ref(check))["differs"], 0);
     }
 }

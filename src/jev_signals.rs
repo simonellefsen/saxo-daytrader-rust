@@ -657,6 +657,10 @@ pub(crate) const WORDING_NONE: &str = "no_qualitative_claim";
 /// neither a fair description nor an exaggeration of evidence, because there
 /// is no evidence to describe or exaggerate. It also contains no number, so
 /// the numeric checker cannot reach it either.
+/// The label this took while it was briefly a rival wording verdict, kept so
+/// a test can assert it is no longer one. v9 grades in storage still carry it
+/// under `wording_verdict_counts`; nothing reads them by this name.
+#[cfg(test)]
 pub(crate) const WORDING_UNSUPPORTED: &str = "asserts_absent_evidence";
 
 /// Provisional threshold for flagging a verdict as worth a human look.
@@ -675,6 +679,11 @@ pub(crate) const LOW_CONFIDENCE_THRESHOLD: f64 = 0.6;
 /// The id under which candidate `index`'s verdict is returned.
 pub(crate) fn claim_question_id(index: usize) -> String {
     format!("claim_{index}")
+}
+
+/// The id under which candidate `index`'s evidence-sufficiency answer returns.
+pub(crate) fn sufficiency_question_id(index: usize) -> String {
+    format!("unsupported_{index}")
 }
 
 /// One verdict per candidate, plus two questions about the report as a whole.
@@ -739,10 +748,12 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                          fairly describe `evidence[{index}]`?"
                     ),
                     "numbers_already_checked": format!(
-                        "Every figure quoted in the note has already been compared against the \
-                         evidence arithmetically, and the outcome is in \
-                         `candidates[{index}].numeric_checks`. Do not re-check arithmetic; \
-                         judge only the words."
+                        "Figures quoted in the note were compared against the evidence \
+                         arithmetically where they could be, and every outcome is in \
+                         `candidates[{index}].numeric_checks`. A verdict of `matches` or \
+                         `differs` was compared; any other verdict means it was **not** \
+                         compared and nothing is known about it. Do not re-check arithmetic, \
+                         and do not treat an uncompared figure as either correct or wrong."
                     ),
                     "what_counts": "Words that characterise rather than measure -- securely, \
                                     low, elevated, strong, leading, intact, steady -- and any \
@@ -774,18 +785,39 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                             .to_string(),
                     ),
                     (
-                        WORDING_UNSUPPORTED.to_string(),
-                        "The note states a value or condition for a field the evidence does not \
-                         contain at all, so there is nothing to describe fairly or to overstate"
-                            .to_string(),
-                    ),
-                    (
                         WORDING_NONE.to_string(),
                         "The note makes no qualitative characterisation at all: it is empty, \
                          purely numeric, or says only out-of-scope things"
                             .to_string(),
                     ),
                 ]),
+            },
+        );
+        // Evidence sufficiency is a separate axis, not a rival verdict.
+        //
+        // As a fifth option it competed with fair, overstated and
+        // misdescribes_category, and a note can do both at once -- overstate
+        // what the evidence does show while also asserting something it does
+        // not contain. One choice cannot carry both findings.
+        questions.insert(
+            sufficiency_question_id(index),
+            Question::Noul {
+                instructions: json!({
+                    "question": format!(
+                        "Does `candidates[{index}].note` state a value or condition for something \
+                         that `evidence[{index}]` does not contain at all?"
+                    ),
+                    "absent_versus_excluded": "Judge only fields the evidence would normally \
+                                               carry and here does not. Portfolio capital, \
+                                               holdings, unrealised profit and trading costs are \
+                                               excluded from this evidence deliberately, so a \
+                                               statement about those is out of scope rather than \
+                                               unsupported.",
+                }),
+                criteria: Some(json!({
+                    "true": "At least one assertion concerns something absent from the evidence",
+                    "false": "Every in-scope assertion has something in the evidence to check against",
+                })),
             },
         );
     }

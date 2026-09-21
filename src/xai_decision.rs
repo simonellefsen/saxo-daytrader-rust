@@ -1972,26 +1972,6 @@ async fn build_decision_prompt(
         "earlier_same_scope_report": earlier_same_scope_report,
         "watchlists": compact_watchlists(&watchlists, &allowed_codes),
         "markov_method": markov_method,
-        // The thresholds in force when this report was written.
-        //
-        // They change: `min_signed_signal` was 0.15 until it was recalibrated
-        // to 0.20 on 2026-08-31. A note saying a signal is "just above
-        // threshold" can only be judged against the value that applied at the
-        // time, and reading today's config to assess an older report gives the
-        // wrong answer. Recording it here makes the report self-describing.
-        "decision_policy": {
-            "markov_gate": {
-                "enabled": markov_gate.enabled,
-                "min_signed_signal": markov_gate.min_signed_signal,
-                "max_position_pct": markov_gate.max_position_pct,
-                "max_signal_age_days": markov_gate.max_signal_age_days,
-            },
-            "daily_indicators": {
-                "min_confluences": daily_indicator_policy.get("min_confluences").cloned().unwrap_or(JsonValue::Null),
-                "min_reward_risk": daily_indicator_policy.get("min_reward_risk").cloned().unwrap_or(JsonValue::Null),
-            },
-            "interpretation": "The thresholds in force at this report's creation. They change over time; a later reading of configuration is not the value that applied here.",
-        },
         "quiver_signals": quiver_signals,
         "quiver_conflicts": quiver_conflicts,
         "editorial_research": editorial_research,

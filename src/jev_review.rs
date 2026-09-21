@@ -99,7 +99,7 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v9";
+const REPORT_GRADING_VERSION: &str = "v10";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -293,8 +293,10 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 /// construction rather than by an instruction asking Jev to ignore the rest.
 /// At most this many candidates are judged in one request.
 ///
-/// Two report-level questions share the budget with them, and `jev.max_questions_per_request`
-/// is 12. Any candidate beyond this is reported as excluded rather than dropped.
+/// Each candidate asks two questions -- wording and evidence sufficiency --
+/// and two report-level questions share the budget, so ten candidates is 22
+/// against a configured maximum of 24. Any candidate beyond this is reported
+/// as excluded rather than dropped.
 const MAX_JUDGED_CANDIDATES: usize = 10;
 
 struct GradingInputs {
@@ -307,6 +309,49 @@ struct GradingInputs {
     policy: Option<JsonValue>,
     /// Deterministic numeric findings, settled before any model call.
     numeric: Vec<JsonValue>,
+}
+
+/// The thresholds in force when the report was written, from whichever shape
+/// that report recorded them in.
+///
+/// `decision_time_gate_policy` has been in the prompt since 2026-08-20 and 87
+/// stored reports carry it; I added a second `decision_policy` block without
+/// checking, and read only mine, so every one of those reported no policy at
+/// all. The duplicate is gone and both shapes normalise here.
+///
+/// Configuration is deliberately not consulted. `min_signed_signal` was 0.15
+/// until it was recalibrated to 0.20 on 2026-08-31, so today's value would
+/// misjudge any report written before that.
+///
+/// Availability is per field, because a report can record the Markov gate and
+/// not the confluence minimum.
+fn decision_time_policy(prompt: &JsonValue) -> Option<JsonValue> {
+    let gate = prompt.get("decision_time_gate_policy");
+    let legacy = prompt.get("decision_policy");
+    let read = |value: Option<&JsonValue>, path: &[&str]| -> Option<JsonValue> {
+        let mut cursor = value?;
+        for key in path {
+            cursor = cursor.get(key)?;
+        }
+        (!cursor.is_null()).then(|| cursor.clone())
+    };
+
+    let min_signed_signal = read(gate, &["markov_starter", "min_signed_signal"])
+        .or_else(|| read(legacy, &["markov_gate", "min_signed_signal"]));
+    let min_confluences = read(gate, &["daily_technical", "min_confluences"])
+        .or_else(|| read(legacy, &["daily_indicators", "min_confluences"]));
+    if min_signed_signal.is_none() && min_confluences.is_none() {
+        return None;
+    }
+    Some(json!({
+        "markov_gate": {"min_signed_signal": min_signed_signal},
+        "daily_indicators": {"min_confluences": min_confluences},
+        "provenance": if gate.is_some() { "decision_time_gate_policy" } else { "decision_policy" },
+        "interpretation": "The thresholds this report recorded at the time it was written. A \
+                           field that is null was not recorded, and a claim about it cannot be \
+                           judged. Current configuration is not a substitute: these values \
+                           change.",
+    }))
 }
 
 /// Builds the grading state, aligned by index, with explicit coverage.
@@ -422,14 +467,16 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
         }));
     }
 
-    // Thresholds as the report recorded them, never as configuration reads
-    // today. A gate that has since been recalibrated would make an older note
-    // look wrong; an absent one means a threshold claim cannot be judged at
-    // all, which is a coverage fact rather than a fault in the note.
-    let policy = prompt.get("decision_policy").cloned();
+    let policy = decision_time_policy(prompt);
 
     let coverage = json!({
         "decision_policy_available": policy.is_some(),
+        "decision_policy_fields": policy
+            .as_ref()
+            .map(|p| json!({
+                "min_signed_signal": !p["markov_gate"]["min_signed_signal"].is_null(),
+                "min_confluences": !p["daily_indicators"]["min_confluences"].is_null(),
+            })),
         "selected_candidate_count": selected.len(),
         "judged_candidate_count": candidates.len(),
         "excluded": excluded,
@@ -496,11 +543,26 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
         "not_in_evidence": total("not_in_evidence"),
         "unattributed": total("unattributed"),
         "implausible_attribution": total("implausible_attribution"),
+        // Present in the per-candidate detail but previously missing from the
+        // totals, so the totals did not account for every figure found.
+        "not_a_field_value": total("not_a_field_value"),
+        "uncertain_attribution": total("uncertain_attribution"),
+        "compared": total("matches") + total("differs"),
+        "abstained": total("not_in_evidence")
+            + total("unattributed")
+            + total("implausible_attribution")
+            + total("not_a_field_value")
+            + total("uncertain_attribution"),
         "per_candidate": inputs.numeric,
         "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
-        "method": "the quoted text is tested against what rounding and truncating the stored \
-                   value actually produce at the precision written; a discrete field requires \
-                   a whole number and exact equality",
+        "method": "A quoted figure is attributed to a field only when one phrase names it more \
+                   closely than any rival, and abstains otherwise. An equality is tested against \
+                   what rounding and truncating the stored value actually produce at the \
+                   precision written; a discrete field requires a whole number and exact \
+                   equality. `above` and `below` are read only in a narrow grammar -- a \
+                   whole-word comparator immediately before the figure, with the field named \
+                   first -- and negated, past-tense, hedged or compound constructions abstain \
+                   rather than guess. `compared` plus `abstained` is every figure found.",
     })
 }
 
@@ -646,12 +708,21 @@ fn grade_payload(
             Some(jev_signals::WORDING_FAIR) => fair += 1,
             Some(jev_signals::WORDING_OVERSTATED) => overstated += 1,
             Some(jev_signals::WORDING_MISDESCRIBES) => misdescribes += 1,
-            Some(jev_signals::WORDING_UNSUPPORTED) => unsupported += 1,
             Some(jev_signals::WORDING_NONE) => no_claim += 1,
             _ => unanswered += 1,
         }
         if confidence.is_some_and(|value| value < jev_signals::LOW_CONFIDENCE_THRESHOLD) {
             low_confidence += 1;
+        }
+        // Read independently of the wording verdict, so a note can be recorded
+        // as both overstating what the evidence shows and asserting something
+        // it does not contain.
+        let sufficiency = match answers.get(&jev_signals::sufficiency_question_id(index)) {
+            Some(crate::jev::Answer::Noul { noul }) => Some(*noul),
+            _ => None,
+        };
+        if sufficiency.is_some_and(|value| value >= 0.5) {
+            unsupported += 1;
         }
 
         // The probability of the option returned, and of the nearest
@@ -684,6 +755,7 @@ fn grade_payload(
                 .map(|(selected, runner_up)| selected - runner_up),
             "low_confidence": confidence
                 .is_some_and(|value| value < jev_signals::LOW_CONFIDENCE_THRESHOLD),
+            "asserts_absent_evidence": sufficiency,
         }));
     }
 
@@ -699,14 +771,20 @@ fn grade_payload(
             "fair": fair,
             "overstated": overstated,
             "misdescribes_category": misdescribes,
-            // Evidence sufficiency, kept apart from wording strength: a note
-            // asserting something the evidence does not contain is neither a
-            // fair description nor an exaggeration of one.
-            "asserts_absent_evidence": unsupported,
             "no_qualitative_claim": no_claim,
             "unanswered": unanswered,
         },
         "wording_verdicts": verdicts,
+        // A separate axis, answered per candidate alongside the wording
+        // verdict rather than competing with it.
+        "evidence_sufficiency": {
+            "asserts_absent_evidence": unsupported,
+            "threshold": 0.5,
+            "meaning": "Counts candidates whose note states a value or condition for something \
+                        the evidence does not contain. Independent of the wording verdict: a \
+                        note can overstate what the evidence shows and also assert something \
+                        absent from it.",
+        },
         "confidence_flag": {
             "low_confidence_count": low_confidence,
             "threshold": jev_signals::LOW_CONFIDENCE_THRESHOLD,
@@ -1282,7 +1360,11 @@ mod tests {
             "and the two beyond it are named rather than dropped"
         );
         let questions = jev_signals::report_grading_questions(inputs.candidates.len());
-        assert_eq!(questions.len(), MAX_JUDGED_CANDIDATES + 2);
+        assert_eq!(
+            questions.len(),
+            MAX_JUDGED_CANDIDATES * 2 + 2,
+            "one wording and one sufficiency question per candidate, plus two report-level"
+        );
 
         let rendered = serde_json::to_string(&jev_signals::report_grading_state(
             &inputs.report,
@@ -1520,8 +1602,12 @@ mod tests {
         else {
             panic!("a candidate verdict is a choice");
         };
-        assert!(criteria.contains_key(jev_signals::WORDING_UNSUPPORTED));
-        assert_eq!(criteria.len(), 5);
+        assert!(
+            !criteria.contains_key(jev_signals::WORDING_UNSUPPORTED),
+            "sufficiency is its own question now, not a rival wording verdict"
+        );
+        assert_eq!(criteria.len(), 4);
+        assert!(questions.contains_key(&jev_signals::sufficiency_question_id(0)));
 
         let report = json!({
             "selected_assets": [{"symbol": "EQNR:xosl", "notes": "strongly negative Markov signal"}],
@@ -1535,23 +1621,31 @@ mod tests {
             "the candidate is judged with no Markov evidence, which is the point"
         );
 
+        // Both findings at once: the wording overstates what the evidence does
+        // show, and a separate assertion concerns something it does not
+        // contain. A single verdict could not carry both.
         let payload = grade_payload(
-            &BTreeMap::from([(
-                jev_signals::claim_question_id(0),
-                choice(
-                    jev_signals::WORDING_UNSUPPORTED,
-                    0.8,
-                    &[("asserts_absent_evidence", 0.8)],
+            &BTreeMap::from([
+                (
+                    jev_signals::claim_question_id(0),
+                    choice(jev_signals::WORDING_OVERSTATED, 0.8, &[("overstated", 0.8)]),
                 ),
-            )]),
+                (
+                    jev_signals::sufficiency_question_id(0),
+                    Answer::Noul { noul: 0.93 },
+                ),
+            ]),
             &[],
             &inputs,
         );
+        assert_eq!(payload["wording_verdict_counts"]["overstated"], 1);
         assert_eq!(
-            payload["wording_verdict_counts"]["asserts_absent_evidence"],
+            payload["evidence_sufficiency"]["asserts_absent_evidence"],
             1
         );
-        assert_eq!(payload["wording_verdict_counts"]["fair"], 0);
-        assert_eq!(payload["wording_verdict_counts"]["overstated"], 0);
+        assert_eq!(
+            payload["wording_verdicts"][0]["asserts_absent_evidence"], 0.93,
+            "the per-candidate probability is kept beside its wording verdict"
+        );
     }
 }
