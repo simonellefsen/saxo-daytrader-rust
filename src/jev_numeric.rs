@@ -64,10 +64,24 @@ pub(crate) struct NumericCheck {
 /// How a quoted figure relates to the stored one.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unit {
-    /// Stored in the same units it is quoted in.
+    /// Stored in the same units it is quoted in, and never written as a
+    /// percentage -- a price, a count, an index level, a ratio.
     AsQuoted,
+    /// Stored in the same units and naturally written with a `%`.
+    AsQuotedPercentage,
     /// Stored as a fraction of one; a `%` quote is divided by 100.
     FractionOfOne,
+}
+
+impl Unit {
+    /// Whether a figure carrying a `%` could be this field.
+    ///
+    /// "currently 9.9% above nearest support" was attributed to the support
+    /// *price* and compared 9.9 against 617.21. A percentage is never a price
+    /// or a count, and the suffix says so without any guessing.
+    fn admits_percent(self) -> bool {
+        !matches!(self, Self::AsQuoted)
+    }
 }
 
 struct FieldSpec {
@@ -101,9 +115,11 @@ const FIELDS: &[FieldSpec] = &[
         keywords: &[
             "downside to nearest support",
             "downside to support",
+            "above nearest support",
+            "above support",
             "downside",
         ],
-        unit: Unit::AsQuoted,
+        unit: Unit::AsQuotedPercentage,
     },
     FieldSpec {
         path: "daily_indicators.support.nearest_support",
@@ -284,6 +300,11 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
                     } else {
                         0
                     };
+                    // A `%` figure cannot name a price, a count or an index
+                    // level, whatever phrase sits beside it.
+                    if number.percent && !field.unit.admits_percent() {
+                        continue;
+                    }
                     if distance <= CONTEXT_CHARS {
                         pairs.push(Pair {
                             number: index,
@@ -392,7 +413,7 @@ fn check_one(
         quoted
     };
 
-    let verdict = if (comparable - actual).abs() <= tolerance {
+    let verdict = if within_tolerance(comparable, actual, tolerance) {
         NumericVerdict::Matches
     } else {
         NumericVerdict::Differs
@@ -414,6 +435,19 @@ fn check_one(
 /// which keeps "5 confluences" exact while not failing on a rounded "7%".
 fn tolerance_for(decimals: usize) -> f64 {
     0.5 * 10f64.powi(-(decimals as i32))
+}
+
+/// Whether the figures agree, with the boundary inclusive in practice as well
+/// as in principle.
+///
+/// 23.135 written as "23.13" is a legitimate truncation, and the difference
+/// computes to 0.005000000000002558 in binary floating point -- a hair over a
+/// tolerance of exactly 0.005, which reported a disagreement that existed only
+/// in the representation. The slack errs toward agreement deliberately:
+/// manufacturing a finding about a report is worse than missing one.
+fn within_tolerance(quoted: f64, actual: f64, tolerance: f64) -> bool {
+    let scale = quoted.abs().max(actual.abs()).max(1.0);
+    (quoted - actual).abs() <= tolerance + scale * 8.0 * f64::EPSILON
 }
 
 fn lookup(evidence: &JsonValue, path: &str) -> Option<f64> {
@@ -684,5 +718,76 @@ mod tests {
         assert_eq!(summary["matches"], 2);
         assert_eq!(summary["differs"], 1);
         assert_eq!(summary["unattributed"], 1);
+    }
+
+    /// Both false positives production produced, as regressions.
+    ///
+    /// "9.9% above nearest support" was compared against the support price of
+    /// 617.21, because the phrase named the price field and the `%` was
+    /// ignored. And "23.13" against a stored 23.135 is a legitimate
+    /// truncation whose difference computes a hair over an exactly-half tolerance.
+    #[test]
+    fn the_two_disagreements_production_reported_were_this_modules_own() {
+        let support_evidence = json!({
+            "daily_indicators": {
+                "support": {"nearest_support": 617.21, "downside_to_support_pct": 9.94},
+            }
+        });
+        let checks = numeric_checks(
+            "currently 9.9% above nearest support, awaiting a tighter entry",
+            &support_evidence,
+        );
+        assert_eq!(checks.len(), 1);
+        assert_eq!(
+            checks[0].field,
+            Some("daily_indicators.support.downside_to_support_pct"),
+            "a percentage is never a price"
+        );
+        assert_eq!(checks[0].verdict, NumericVerdict::Matches);
+
+        let boundary = json!({
+            "daily_indicators": {"support": {"nearest_support": 23.135}}
+        });
+        assert_eq!(
+            numeric_checks("steady support hold above 23.13 EUR base", &boundary)[0].verdict,
+            NumericVerdict::Matches,
+            "23.13 is a legitimate truncation of 23.135"
+        );
+    }
+
+    /// The gate must not swallow percentages that genuinely belong to a field.
+    #[test]
+    fn a_percentage_still_reaches_the_fields_that_can_be_percentages() {
+        assert_eq!(
+            verdict_for("0% bear probability", "markov.bear_prob"),
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            verdict_for(
+                "downside to support (7.17%)",
+                "daily_indicators.support.downside_to_support_pct"
+            ),
+            NumericVerdict::Matches
+        );
+    }
+
+    /// A price quoted with a `%` beside no percentage-capable field has no
+    /// home, and staying silent beats comparing it to a price.
+    #[test]
+    fn a_percentage_beside_only_price_fields_is_left_unattributed() {
+        let checks = numeric_checks("trading 5.0% clear of support", &evidence());
+        assert_eq!(checks[0].verdict, NumericVerdict::Unattributed);
+    }
+
+    /// The slack is small enough that a real disagreement still registers.
+    #[test]
+    fn the_boundary_slack_does_not_hide_a_genuine_disagreement() {
+        let boundary = json!({
+            "daily_indicators": {"support": {"nearest_support": 23.14}}
+        });
+        assert_eq!(
+            numeric_checks("support hold above 23.12 EUR base", &boundary)[0].verdict,
+            NumericVerdict::Differs
+        );
     }
 }
