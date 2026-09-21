@@ -37,6 +37,10 @@ pub(crate) enum NumericVerdict {
     NotInEvidence,
     /// No field could be identified for this figure.
     Unattributed,
+    /// A field was identified but the stored value is orders of magnitude
+    /// away, which means the phrase was matched to the wrong figure far more
+    /// often than it means the report is wrong.
+    ImplausibleAttribution,
 }
 
 impl NumericVerdict {
@@ -46,6 +50,7 @@ impl NumericVerdict {
             Self::Differs => "differs",
             Self::NotInEvidence => "not_in_evidence",
             Self::Unattributed => "unattributed",
+            Self::ImplausibleAttribution => "implausible_attribution",
         }
     }
 }
@@ -87,6 +92,11 @@ impl Unit {
 struct FieldSpec {
     /// Dotted path within one candidate's evidence object.
     path: &'static str,
+    /// Whether a figure written with an explicit `+` or `-` could be this
+    /// field. "low support break risk, and +0.466 Bull Markov regime" gave the
+    /// Markov figure to the break risk, because "break risk" sat closer -- but
+    /// a break risk is never written signed, and the sign says so.
+    signed: bool,
     /// Phrases that identify the field. The longest phrase matched anywhere
     /// wins, so a more specific one beats a more general one that contains it
     /// -- "break risk" must win over "support" in "support break risk".
@@ -97,21 +107,25 @@ struct FieldSpec {
 const FIELDS: &[FieldSpec] = &[
     FieldSpec {
         path: "daily_indicators.confluence_count",
+        signed: false,
         keywords: &["confluences", "confluence"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.support.break_risk",
+        signed: false,
         keywords: &["support break risk", "break risk", "break-risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.reward_risk",
+        signed: false,
         keywords: &["reward/risk", "reward-risk", "reward risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.support.downside_to_support_pct",
+        signed: false,
         keywords: &[
             "downside to nearest support",
             "downside to support",
@@ -123,31 +137,37 @@ const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         path: "daily_indicators.support.nearest_support",
+        signed: false,
         keywords: &["support hold above", "nearest support", "support"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.rsi14",
+        signed: false,
         keywords: &["rsi"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "markov.conviction",
+        signed: true,
         keywords: &["markov conviction", "regime conviction", "conviction"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "markov.bear_prob",
+        signed: false,
         keywords: &["bear probability", "bear prob"],
         unit: Unit::FractionOfOne,
     },
     FieldSpec {
         path: "markov.bull_prob",
+        signed: false,
         keywords: &["bull probability", "bull prob"],
         unit: Unit::FractionOfOne,
     },
     FieldSpec {
         path: "markov.signed_signal",
+        signed: true,
         keywords: &[
             "markov regime",
             "markov signal",
@@ -159,6 +179,7 @@ const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         path: "quiver.signal",
+        signed: true,
         keywords: &[
             "congressional buying signal",
             "congressional buying",
@@ -189,6 +210,8 @@ struct FoundNumber {
     value: f64,
     decimals: usize,
     percent: bool,
+    /// Written with a leading `+` or `-`.
+    explicit_sign: bool,
     start: usize,
     end: usize,
 }
@@ -208,10 +231,12 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
         let preceded_by_letter = index > 0 && bytes[index - 1].is_ascii_alphabetic();
         let mut start = index;
         let mut sign = 1.0;
+        let mut explicit_sign = false;
         if start > 0 && (bytes[start - 1] == b'+' || bytes[start - 1] == b'-') {
             if bytes[start - 1] == b'-' {
                 sign = -1.0;
             }
+            explicit_sign = true;
             start -= 1;
         }
         let digits_start = index;
@@ -238,6 +263,7 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
                     value: sign * magnitude,
                     decimals,
                     percent,
+                    explicit_sign,
                     start,
                     end,
                 });
@@ -303,6 +329,9 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
                     // A `%` figure cannot name a price, a count or an index
                     // level, whatever phrase sits beside it.
                     if number.percent && !field.unit.admits_percent() {
+                        continue;
+                    }
+                    if number.explicit_sign && !field.signed {
                         continue;
                     }
                     if distance <= CONTEXT_CHARS {
@@ -415,8 +444,10 @@ fn check_one(
 
     let verdict = if within_tolerance(comparable, actual, tolerance) {
         NumericVerdict::Matches
-    } else {
+    } else if plausible_magnitude(comparable, actual) {
         NumericVerdict::Differs
+    } else {
+        NumericVerdict::ImplausibleAttribution
     };
     NumericCheck {
         quoted,
@@ -434,7 +465,44 @@ fn check_one(
 /// so "0.061" agrees with 0.06147651902511747. An integer carries half a unit,
 /// which keeps "5 confluences" exact while not failing on a rounded "7%".
 fn tolerance_for(decimals: usize) -> f64 {
-    0.5 * 10f64.powi(-(decimals as i32))
+    if decimals == 0 {
+        // A whole number is a count or a round price; half a unit is right and
+        // a full one would let "5 confluences" match four.
+        0.5
+    } else {
+        // A full unit in the last place, because truncating is as ordinary a
+        // way to quote as rounding. "+0.4199" for 0.4199841320514679 is the
+        // note dropping digits, not disagreeing -- at half a unit it was
+        // reported as a disagreement.
+        10f64.powi(-(decimals as i32))
+    }
+}
+
+/// Whether a figure is even in the right range to be this field.
+///
+/// "steady near support with 6 technical confluences" gave the 6 to the
+/// support price of 428.11, because "support" sat closer than "confluences".
+/// A figure seventy times away from the stored value is a phrase matched to
+/// the wrong number far more often than it is a report error, so it is
+/// recorded as unchecked rather than as a finding.
+fn plausible_magnitude(quoted: f64, actual: f64) -> bool {
+    const RATIO: f64 = 10.0;
+    /// Above this, a figure is a price, a level or a count rather than a
+    /// probability or a signal.
+    const UNIT_RANGE: f64 = 1.5;
+
+    let (quoted, actual) = (quoted.abs(), actual.abs());
+    // On a field bounded to roughly the unit interval, every in-range figure
+    // is a possible value and the ratio says nothing: a break risk of 0.900
+    // against a stored 0.061 is fifteen times larger and still a genuine
+    // disagreement rather than a phrase matched to the wrong number.
+    if quoted.max(actual) <= UNIT_RANGE {
+        return true;
+    }
+    if quoted < f64::EPSILON || actual < f64::EPSILON {
+        return true;
+    }
+    quoted.max(actual) / quoted.min(actual) <= RATIO
 }
 
 /// Whether the figures agree, with the boundary inclusive in practice as well
@@ -471,6 +539,7 @@ pub(crate) fn summarize(checks: &[NumericCheck]) -> serde_json::Value {
         "differs": count(NumericVerdict::Differs),
         "not_in_evidence": count(NumericVerdict::NotInEvidence),
         "unattributed": count(NumericVerdict::Unattributed),
+        "implausible_attribution": count(NumericVerdict::ImplausibleAttribution),
     })
 }
 
@@ -787,6 +856,135 @@ mod tests {
         });
         assert_eq!(
             numeric_checks("support hold above 23.12 EUR base", &boundary)[0].verdict,
+            NumericVerdict::Differs
+        );
+    }
+
+    /// The three production notes whose figures were reported as
+    /// disagreements and were all this module's own doing.
+    #[test]
+    fn the_three_misattributed_production_notes_are_regressions() {
+        // 296 FORTUM: "break risk" sat closer to +0.466 than "Markov regime"
+        // did, but a break risk is never written with a sign.
+        let fortum = json!({
+            "daily_indicators": {"support": {"break_risk": 0.2292374167990884}},
+            "markov": {"signed_signal": 0.4661},
+        });
+        let checks = numeric_checks(
+            "Utility leader with 5 confluences, low support break risk, and +0.466 Bull \
+             Markov regime.",
+            &fortum,
+        );
+        let signed = checks
+            .iter()
+            .find(|check| (check.quoted - 0.466).abs() < 1e-9)
+            .expect("the signed figure");
+        assert_eq!(signed.field, Some("markov.signed_signal"));
+        assert_eq!(signed.verdict, NumericVerdict::Matches);
+
+        // 295 TSM: "support" sat closer to the 6 than "confluences" did, and
+        // the 6 was compared against a price of 428.11.
+        let tsm = json!({
+            "daily_indicators": {
+                "confluence_count": 6,
+                "support": {"nearest_support": 428.11, "break_risk": 0.221},
+            }
+        });
+        let checks = numeric_checks(
+            "Held semiconductor leader steady near support with 6 technical confluences, low \
+             0.221 break risk, and active stop at 415.40 USD.",
+            &tsm,
+        );
+        assert!(
+            !checks
+                .iter()
+                .any(|check| check.verdict == NumericVerdict::Differs),
+            "no disagreement should be reported here: {checks:?}"
+        );
+
+        // 293 ISP: a truncation, not a disagreement.
+        let isp = json!({"markov": {"signed_signal": 0.4199841320514679}});
+        assert_eq!(
+            numeric_checks("solid +0.4199 Bull Markov signal", &isp)[0].verdict,
+            NumericVerdict::Matches
+        );
+    }
+
+    /// A figure orders of magnitude from the stored value says the phrase was
+    /// matched to the wrong number, not that the report is wrong. Recording it
+    /// as a disagreement would put a finding on the report for this module's
+    /// mistake.
+    #[test]
+    fn an_implausible_attribution_is_not_reported_as_a_disagreement() {
+        let evidence = json!({
+            "daily_indicators": {"support": {"nearest_support": 428.11}}
+        });
+        let checks = numeric_checks("steady near support with 6 shares", &evidence);
+        assert_eq!(checks[0].verdict, NumericVerdict::ImplausibleAttribution);
+        assert_eq!(summarize(&checks)["differs"], 0);
+        assert_eq!(summarize(&checks)["implausible_attribution"], 1);
+    }
+
+    /// The guard must not swallow a disagreement of ordinary size.
+    #[test]
+    fn a_plausible_sized_disagreement_still_registers() {
+        let evidence = json!({
+            "daily_indicators": {"support": {"break_risk": 0.229}}
+        });
+        assert_eq!(
+            numeric_checks("break risk 0.466", &evidence)[0].verdict,
+            NumericVerdict::Differs,
+            "twice the stored value is a disagreement, not a misattribution"
+        );
+    }
+
+    /// Truncation is accepted; a genuinely different figure at the same
+    /// precision is not.
+    #[test]
+    fn the_truncation_tolerance_does_not_accept_a_different_figure() {
+        let evidence = json!({"markov": {"signed_signal": 0.4199841320514679}});
+        assert_eq!(
+            numeric_checks("+0.4199 Markov signal", &evidence)[0].verdict,
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("+0.4185 Markov signal", &evidence)[0].verdict,
+            NumericVerdict::Differs
+        );
+        // A count keeps half a unit, so an adjacent integer is still wrong.
+        let counts = json!({"daily_indicators": {"confluence_count": 5}});
+        assert_eq!(
+            numeric_checks("4 confluences", &counts)[0].verdict,
+            NumericVerdict::Differs
+        );
+    }
+
+    /// An unsigned figure still reaches the signed fields; the gate only
+    /// excludes signed figures from fields that are never written signed.
+    #[test]
+    fn the_sign_gate_only_narrows_figures_that_carry_a_sign() {
+        let evidence = json!({"markov": {"signed_signal": 0.4291}});
+        assert_eq!(
+            numeric_checks("Markov signal of 0.429", &evidence)[0].verdict,
+            NumericVerdict::Matches
+        );
+    }
+
+    /// The guard is a test of whether a figure could belong to a field at all.
+    /// On a field bounded to the unit interval every in-range value could, so
+    /// the ratio says nothing there -- 0.900 against 0.061 is fifteen times
+    /// larger and still a real disagreement about a break risk.
+    #[test]
+    fn the_magnitude_guard_does_not_apply_inside_the_unit_interval() {
+        let evidence = json!({
+            "daily_indicators": {"support": {"break_risk": 0.06147651902511747}}
+        });
+        assert_eq!(
+            numeric_checks("0.900 support break risk", &evidence)[0].verdict,
+            NumericVerdict::Differs
+        );
+        assert_eq!(
+            numeric_checks("0.001 support break risk", &evidence)[0].verdict,
             NumericVerdict::Differs
         );
     }
