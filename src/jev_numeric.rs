@@ -92,6 +92,13 @@ impl Unit {
 struct FieldSpec {
     /// Dotted path within one candidate's evidence object.
     path: &'static str,
+    /// Whether the field takes only whole values.
+    ///
+    /// A count is quoted exactly, so "4 confluences" against five is a
+    /// disagreement. A continuous quantity is routinely written short --
+    /// "295 DKK support" for 295.73302 -- and that is truncation, not
+    /// disagreement.
+    discrete: bool,
     /// Whether a figure written with an explicit `+` or `-` could be this
     /// field. "low support break risk, and +0.466 Bull Markov regime" gave the
     /// Markov figure to the break risk, because "break risk" sat closer -- but
@@ -107,24 +114,28 @@ struct FieldSpec {
 const FIELDS: &[FieldSpec] = &[
     FieldSpec {
         path: "daily_indicators.confluence_count",
+        discrete: true,
         signed: false,
         keywords: &["confluences", "confluence"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.support.break_risk",
+        discrete: false,
         signed: false,
         keywords: &["support break risk", "break risk", "break-risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.reward_risk",
+        discrete: false,
         signed: false,
         keywords: &["reward/risk", "reward-risk", "reward risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.support.downside_to_support_pct",
+        discrete: false,
         signed: false,
         keywords: &[
             "downside to nearest support",
@@ -137,36 +148,42 @@ const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         path: "daily_indicators.support.nearest_support",
+        discrete: false,
         signed: false,
         keywords: &["support hold above", "nearest support", "support"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.rsi14",
+        discrete: false,
         signed: false,
         keywords: &["rsi"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "markov.conviction",
+        discrete: false,
         signed: true,
         keywords: &["markov conviction", "regime conviction", "conviction"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "markov.bear_prob",
+        discrete: false,
         signed: false,
         keywords: &["bear probability", "bear prob"],
         unit: Unit::FractionOfOne,
     },
     FieldSpec {
         path: "markov.bull_prob",
+        discrete: false,
         signed: false,
         keywords: &["bull probability", "bull prob"],
         unit: Unit::FractionOfOne,
     },
     FieldSpec {
         path: "markov.signed_signal",
+        discrete: false,
         signed: true,
         keywords: &[
             "markov regime",
@@ -179,6 +196,7 @@ const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         path: "quiver.signal",
+        discrete: false,
         signed: true,
         keywords: &[
             "congressional buying signal",
@@ -406,7 +424,7 @@ fn check_one(
             quoted: found.value,
             field: None,
             actual: None,
-            tolerance: tolerance_for(found.decimals),
+            tolerance: tolerance_for(found.decimals, false),
             verdict: NumericVerdict::Unattributed,
             excerpt,
         };
@@ -419,8 +437,8 @@ fn check_one(
         _ => found.value,
     };
     let tolerance = match (field.unit, found.percent) {
-        (Unit::FractionOfOne, true) => tolerance_for(found.decimals) / 100.0,
-        _ => tolerance_for(found.decimals),
+        (Unit::FractionOfOne, true) => tolerance_for(found.decimals, field.discrete) / 100.0,
+        _ => tolerance_for(found.decimals, field.discrete),
     };
 
     let Some(actual) = lookup(evidence, field.path) else {
@@ -464,16 +482,16 @@ fn check_one(
 /// A figure quoted to three decimals asserts only what three decimals carry,
 /// so "0.061" agrees with 0.06147651902511747. An integer carries half a unit,
 /// which keeps "5 confluences" exact while not failing on a rounded "7%".
-fn tolerance_for(decimals: usize) -> f64 {
-    if decimals == 0 {
-        // A whole number is a count or a round price; half a unit is right and
-        // a full one would let "5 confluences" match four.
+fn tolerance_for(decimals: usize, discrete: bool) -> f64 {
+    if discrete {
+        // A count is quoted exactly, so half a unit keeps "5 confluences" from
+        // matching four.
         0.5
     } else {
         // A full unit in the last place, because truncating is as ordinary a
-        // way to quote as rounding. "+0.4199" for 0.4199841320514679 is the
-        // note dropping digits, not disagreeing -- at half a unit it was
-        // reported as a disagreement.
+        // way to quote as rounding: "+0.4199" for 0.4199841320514679, and
+        // "295 DKK support" for 295.73302. At half a unit both were reported
+        // as disagreements.
         10f64.powi(-(decimals as i32))
     }
 }
@@ -986,6 +1004,59 @@ mod tests {
         assert_eq!(
             numeric_checks("0.001 support break risk", &evidence)[0].verdict,
             NumericVerdict::Differs
+        );
+    }
+
+    /// "295 DKK support" for a stored 295.73302 is truncation. A count is not
+    /// written that way, so "4 confluences" against five stays a disagreement.
+    #[test]
+    fn a_whole_number_truncates_on_a_price_but_not_on_a_count() {
+        let price = json!({
+            "daily_indicators": {"support": {"nearest_support": 295.73302}}
+        });
+        assert_eq!(
+            numeric_checks("consolidating near 295 DKK support", &price)[0].verdict,
+            NumericVerdict::Matches
+        );
+
+        let counts = json!({"daily_indicators": {"confluence_count": 5}});
+        assert_eq!(
+            numeric_checks("4 technical confluences", &counts)[0].verdict,
+            NumericVerdict::Differs
+        );
+    }
+
+    /// The first genuine numeric finding production produced: a note calling
+    /// the close a support level. 593.0 is the close; support is 551.5.
+    #[test]
+    fn a_price_named_as_support_that_is_not_the_support_still_disagrees() {
+        let fls = json!({
+            "daily_indicators": {
+                "close": 593.0,
+                "confluence_count": 4,
+                "support": {"nearest_support": 551.5},
+            },
+            "markov": {"signed_signal": 0.391},
+        });
+        let checks = numeric_checks(
+            "Danish industrial exhibiting 4 technical confluences and +0.391 Bull Markov \
+             reading; consolidating near 593 DKK support.",
+            &fls,
+        );
+        let support = checks
+            .iter()
+            .find(|check| check.field == Some("daily_indicators.support.nearest_support"))
+            .expect("the support claim");
+        assert_eq!(support.verdict, NumericVerdict::Differs);
+        assert_eq!(support.quoted, 593.0);
+        assert_eq!(support.actual, Some(551.5));
+        assert!(
+            checks
+                .iter()
+                .filter(|check| check.verdict == NumericVerdict::Differs)
+                .count()
+                == 1,
+            "the confluence count and Markov reading in the same note are correct"
         );
     }
 }
