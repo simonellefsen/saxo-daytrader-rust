@@ -36,7 +36,7 @@ use serde_json::Value as JsonValue;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n2-2026-09-21";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n3-2026-09-21";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -285,8 +285,26 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
             }
         }
         let digits_start = index;
-        while index < bytes.len() && bytes[index].is_ascii_digit() {
-            index += 1;
+        while index < bytes.len() {
+            if bytes[index].is_ascii_digit() {
+                index += 1;
+                continue;
+            }
+            // A comma between digits, followed by exactly three more, is a
+            // group separator: "12,816 DKK" is one figure, and reading it as
+            // 12 and 816 leaves two loose numbers able to attach themselves to
+            // a field.
+            let grouped = bytes[index] == b','
+                && index + 3 < bytes.len()
+                && bytes[index + 1..index + 4].iter().all(u8::is_ascii_digit)
+                && bytes
+                    .get(index + 4)
+                    .is_none_or(|byte| !byte.is_ascii_digit());
+            if grouped {
+                index += 4;
+                continue;
+            }
+            break;
         }
         let mut decimals = 0usize;
         if index + 1 < bytes.len() && bytes[index] == b'.' && bytes[index + 1].is_ascii_digit() {
@@ -303,7 +321,10 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
 
         if !preceded_by_letter && !followed_by_letter {
             let numeral_end = if percent { end - 1 } else { end };
-            if let Ok(magnitude) = text[digits_start..numeral_end].parse::<f64>() {
+            if let Ok(magnitude) = text[digits_start..numeral_end]
+                .replace(',', "")
+                .parse::<f64>()
+            {
                 found.push(FoundNumber {
                     value: sign * magnitude,
                     decimals,
@@ -434,9 +455,14 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
         if right.start != left.end + 1 || text.as_bytes().get(left.end) != Some(&b'/') {
             continue;
         }
-        let names_confluences = assigned[index]
-            .or(assigned[index + 1])
-            .is_some_and(|field| field.path.ends_with("confluence_count"));
+        // Either side naming the count is enough. `a.or(b)` short-circuits on
+        // the first `Some`, so when "High conviction setup with 5/3" gave the
+        // 5 to markov.conviction, the check read only that and the remap never
+        // fired -- leaving the 3 compared against a count of 5.
+        let names_confluences = [assigned[index], assigned[index + 1]]
+            .iter()
+            .flatten()
+            .any(|field| field.path.ends_with("confluence_count"));
         if !names_confluences {
             continue;
         }
@@ -1236,5 +1262,75 @@ mod tests {
             numeric_checks("55% bull probability", &probs)[0].verdict,
             NumericVerdict::Differs
         );
+    }
+
+    /// Both notes that survived the n2 recomputation as apparent findings, and
+    /// were not.
+    ///
+    /// `a.or(b)` short-circuits on the first `Some`, so when "High conviction
+    /// setup with 5/3" gave the 5 to markov.conviction, the count/minimum
+    /// remap read only that side, never fired, and left the 3 compared against
+    /// a count of 5. The same happened where "support break-risk" claimed the
+    /// 5 first.
+    #[test]
+    fn the_count_minimum_remap_fires_whichever_side_names_the_count() {
+        let evidence = json!({
+            "daily_indicators": {
+                "confluence_count": 5,
+                "min_confluences": 3,
+                "support": {"nearest_support": 20.99, "break_risk": 0.25},
+            },
+            "markov": {"signed_signal": 0.243},
+        });
+
+        for note in [
+            "High conviction setup with 5/3 confluences and +0.243 Bull Markov signal.",
+            "Bullish daily trend, 5/3 confluences, low support break-risk (0.25), and \
+             supportive +0.243 Bull Markov signal.",
+        ] {
+            let checks = numeric_checks(note, &evidence);
+            assert!(
+                !checks
+                    .iter()
+                    .any(|check| check.verdict == NumericVerdict::Differs),
+                "no disagreement is present in {note:?}: {checks:?}"
+            );
+            let count = checks
+                .iter()
+                .find(|check| check.field == Some("daily_indicators.confluence_count"))
+                .expect("the count");
+            assert_eq!(count.quoted, 5.0);
+            assert_eq!(count.verdict, NumericVerdict::Matches);
+            let minimum = checks
+                .iter()
+                .find(|check| check.field == Some("daily_indicators.min_confluences"))
+                .expect("the minimum");
+            assert_eq!(minimum.quoted, 3.0);
+            assert_eq!(minimum.verdict, NumericVerdict::Matches);
+        }
+    }
+
+    /// "12,816 DKK" is one figure. Read as 12 and 816 it leaves two loose
+    /// numbers free to attach themselves to a field.
+    #[test]
+    fn a_grouped_thousand_is_one_figure() {
+        let evidence = json!({"daily_indicators": {"close": 12816.0}});
+        let checks = numeric_checks("unit price of ~12,816 DKK exceeds the budget", &evidence);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].quoted, 12816.0);
+
+        let mixed = numeric_checks("available budget of 7,579.89 DKK", &evidence);
+        assert_eq!(mixed.len(), 1);
+        assert!(
+            (mixed[0].quoted - 7579.89).abs() < 1e-9,
+            "{}",
+            mixed[0].quoted
+        );
+
+        // A comma that is not a group separator still ends the figure.
+        let listed = numeric_checks("5 confluences, 20 sessions", &evidence);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].quoted, 5.0);
+        assert_eq!(listed[1].quoted, 20.0);
     }
 }
