@@ -648,6 +648,16 @@ pub(crate) const WORDING_FAIR: &str = "fair";
 pub(crate) const WORDING_OVERSTATED: &str = "overstated";
 pub(crate) const WORDING_MISDESCRIBES: &str = "misdescribes_category";
 pub(crate) const WORDING_NONE: &str = "no_qualitative_claim";
+/// The note asserts a value or condition for something the evidence does not
+/// contain at all.
+///
+/// Separate from wording strength on purpose. #110 NNIT asserts a "strongly
+/// negative Markov signal" where its prompt carries no Markov data, and with
+/// only fair/overstated available such a note has nowhere to go -- it is
+/// neither a fair description nor an exaggeration of evidence, because there
+/// is no evidence to describe or exaggerate. It also contains no number, so
+/// the numeric checker cannot reach it either.
+pub(crate) const WORDING_UNSUPPORTED: &str = "asserts_absent_evidence";
 
 /// Provisional threshold for flagging a verdict as worth a human look.
 ///
@@ -737,6 +747,11 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                     "what_counts": "Words that characterise rather than measure -- securely, \
                                     low, elevated, strong, leading, intact, steady -- and any \
                                     claim that a categorical field takes a particular value.",
+                    "thresholds": "Where the note compares something to a threshold, use \
+                                   `decision_policy` for the value that applied. If \
+                                   `decision_policy` is null, no threshold was recorded and such \
+                                   a comparison cannot be judged -- treat it as out of scope \
+                                   rather than as wrong.",
                     "out_of_scope": "Assertions about portfolio capital, holdings, unrealised \
                                      profit, or trading costs have no counterpart in the \
                                      evidence by design. Disregard them entirely.",
@@ -759,6 +774,12 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                             .to_string(),
                     ),
                     (
+                        WORDING_UNSUPPORTED.to_string(),
+                        "The note states a value or condition for a field the evidence does not \
+                         contain at all, so there is nothing to describe fairly or to overstate"
+                            .to_string(),
+                    ),
+                    (
                         WORDING_NONE.to_string(),
                         "The note makes no qualitative characterisation at all: it is empty, \
                          purely numeric, or says only out-of-scope things"
@@ -778,8 +799,17 @@ pub(crate) fn report_grading_state(
     report: &JsonValue,
     candidates: &[JsonValue],
     evidence: &[JsonValue],
+    policy: Option<&JsonValue>,
 ) -> JsonValue {
-    json!({ "report": report, "candidates": candidates, "evidence": evidence })
+    json!({
+        "report": report,
+        "candidates": candidates,
+        "evidence": evidence,
+        // The thresholds the report itself recorded, so a claim like "just
+        // above threshold" is judged against the value that applied when it
+        // was written rather than whatever configuration says now.
+        "decision_policy": policy,
+    })
 }
 
 /// Classifies a broker or provider error whose wording the substring cascades

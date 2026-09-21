@@ -99,7 +99,7 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v8";
+const REPORT_GRADING_VERSION: &str = "v9";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -204,8 +204,12 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         }
 
         let inputs = grading_inputs(&report, &prompt);
-        let jev_state =
-            jev_signals::report_grading_state(&inputs.report, &inputs.candidates, &inputs.evidence);
+        let jev_state = jev_signals::report_grading_state(
+            &inputs.report,
+            &inputs.candidates,
+            &inputs.evidence,
+            inputs.policy.as_ref(),
+        );
         let questions = jev_signals::report_grading_questions(inputs.candidates.len());
         // No guard needed for a report with nothing to check: zero candidates
         // generate zero claim questions, so there is no conjunction over an
@@ -298,6 +302,9 @@ struct GradingInputs {
     candidates: Vec<JsonValue>,
     evidence: Vec<JsonValue>,
     coverage: JsonValue,
+    /// Decision-time thresholds, as the report recorded them. `None` for
+    /// reports written before the prompt carried them.
+    policy: Option<JsonValue>,
     /// Deterministic numeric findings, settled before any model call.
     numeric: Vec<JsonValue>,
 }
@@ -415,7 +422,14 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
         }));
     }
 
+    // Thresholds as the report recorded them, never as configuration reads
+    // today. A gate that has since been recalibrated would make an older note
+    // look wrong; an absent one means a threshold claim cannot be judged at
+    // all, which is a coverage fact rather than a fault in the note.
+    let policy = prompt.get("decision_policy").cloned();
+
     let coverage = json!({
+        "decision_policy_available": policy.is_some(),
         "selected_candidate_count": selected.len(),
         "judged_candidate_count": candidates.len(),
         "excluded": excluded,
@@ -447,6 +461,7 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
         candidates,
         evidence,
         coverage,
+        policy,
         numeric: numeric_summaries,
     }
 }
@@ -611,6 +626,7 @@ fn grade_payload(
     let mut fair = 0i64;
     let mut overstated = 0i64;
     let mut misdescribes = 0i64;
+    let mut unsupported = 0i64;
     let mut no_claim = 0i64;
     let mut unanswered = 0i64;
     let mut low_confidence = 0i64;
@@ -630,6 +646,7 @@ fn grade_payload(
             Some(jev_signals::WORDING_FAIR) => fair += 1,
             Some(jev_signals::WORDING_OVERSTATED) => overstated += 1,
             Some(jev_signals::WORDING_MISDESCRIBES) => misdescribes += 1,
+            Some(jev_signals::WORDING_UNSUPPORTED) => unsupported += 1,
             Some(jev_signals::WORDING_NONE) => no_claim += 1,
             _ => unanswered += 1,
         }
@@ -682,6 +699,10 @@ fn grade_payload(
             "fair": fair,
             "overstated": overstated,
             "misdescribes_category": misdescribes,
+            // Evidence sufficiency, kept apart from wording strength: a note
+            // asserting something the evidence does not contain is neither a
+            // fair description nor an exaggeration of one.
+            "asserts_absent_evidence": unsupported,
             "no_qualitative_claim": no_claim,
             "unanswered": unanswered,
         },
@@ -1267,6 +1288,7 @@ mod tests {
             &inputs.report,
             &inputs.candidates,
             &inputs.evidence,
+            inputs.policy.as_ref(),
         ))
         .expect("serializes");
         assert!(
@@ -1341,6 +1363,7 @@ mod tests {
                 &inputs.report,
                 &inputs.candidates,
                 &inputs.evidence,
+                inputs.policy.as_ref(),
             );
             let response = crate::jev::ask(&cfg, &state, &questions)
                 .await
@@ -1437,5 +1460,98 @@ mod tests {
             numeric_payload(&grading_inputs(&report, &moved))["evidence_sha256"],
             "evidence that moved is visible as such rather than read as a method change"
         );
+    }
+
+    /// A threshold claim can only be judged against the value that applied
+    /// when the note was written. `min_signed_signal` was 0.15 until it was
+    /// recalibrated to 0.20 on 2026-08-31, so reading configuration today to
+    /// assess an older report gives the wrong answer -- and #163 AAKI was
+    /// called a grader false positive on exactly that basis.
+    #[test]
+    fn the_thresholds_that_applied_are_taken_from_the_report_not_from_config() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "just above threshold"}],
+            "suggested_trades": [],
+        });
+        let base = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.1592, "Sideways")]},
+        });
+
+        // A report written before the prompt carried policy cannot have its
+        // threshold claims judged, and that is recorded rather than guessed.
+        let older = grading_inputs(&report, &base);
+        assert!(older.policy.is_none());
+        assert_eq!(older.coverage["decision_policy_available"], false);
+        let state = jev_signals::report_grading_state(
+            &older.report,
+            &older.candidates,
+            &older.evidence,
+            older.policy.as_ref(),
+        );
+        assert!(state["decision_policy"].is_null());
+
+        // A report that recorded it supplies the value that applied.
+        let mut with_policy = base.clone();
+        with_policy["decision_policy"] = json!({"markov_gate": {"min_signed_signal": 0.15}});
+        let recent = grading_inputs(&report, &with_policy);
+        assert_eq!(recent.coverage["decision_policy_available"], true);
+        let state = jev_signals::report_grading_state(
+            &recent.report,
+            &recent.candidates,
+            &recent.evidence,
+            recent.policy.as_ref(),
+        );
+        assert_eq!(
+            state["decision_policy"]["markov_gate"]["min_signed_signal"], 0.15,
+            "the gate in force then, not the 0.20 it was later recalibrated to"
+        );
+    }
+
+    /// A note asserting what the evidence does not contain is neither fair nor
+    /// an overstatement, and forcing it into either loses the finding. #110
+    /// NNIT claims a strongly negative Markov signal where its prompt carries
+    /// no Markov data, and contains no number for the checker to reach.
+    #[test]
+    fn an_assertion_with_no_evidence_behind_it_has_its_own_outcome() {
+        let questions = jev_signals::report_grading_questions(1);
+        let crate::jev::Question::Choice { criteria, .. } =
+            &questions[&jev_signals::claim_question_id(0)]
+        else {
+            panic!("a candidate verdict is a choice");
+        };
+        assert!(criteria.contains_key(jev_signals::WORDING_UNSUPPORTED));
+        assert_eq!(criteria.len(), 5);
+
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "strongly negative Markov signal"}],
+            "suggested_trades": [],
+        });
+        // Indicators present, Markov absent -- exactly #110's shape.
+        let prompt = json!({"daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]}});
+        let inputs = grading_inputs(&report, &prompt);
+        assert!(
+            inputs.evidence[0]["markov"].is_null(),
+            "the candidate is judged with no Markov evidence, which is the point"
+        );
+
+        let payload = grade_payload(
+            &BTreeMap::from([(
+                jev_signals::claim_question_id(0),
+                choice(
+                    jev_signals::WORDING_UNSUPPORTED,
+                    0.8,
+                    &[("asserts_absent_evidence", 0.8)],
+                ),
+            )]),
+            &[],
+            &inputs,
+        );
+        assert_eq!(
+            payload["wording_verdict_counts"]["asserts_absent_evidence"],
+            1
+        );
+        assert_eq!(payload["wording_verdict_counts"]["fair"], 0);
+        assert_eq!(payload["wording_verdict_counts"]["overstated"], 0);
     }
 }
