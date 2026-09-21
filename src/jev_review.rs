@@ -91,10 +91,12 @@ pub(crate) async fn run_observation_loop(state: AppState) {
         return;
     }
     loop {
+        let recomputed = recompute_numeric_measurements(&state).await;
         let grades = grade_reports(&state).await;
         let failures = classify_unknown_failures(&state).await;
         let editorial = crate::editorial_research::score_items_with_jev(&state).await;
         info!(
+            ?recomputed,
             ?grades,
             ?failures,
             ?editorial,
@@ -360,7 +362,6 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
                     "quoted": check.quoted,
                     "field": check.field,
                     "actual": check.actual,
-                    "tolerance": check.tolerance,
                     "verdict": check.verdict.as_str(),
                     "excerpt": check.excerpt,
                 }))
@@ -428,6 +429,108 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
         coverage,
         numeric: numeric_summaries,
     }
+}
+
+/// The numeric half of a grade, derived from evidence alone.
+fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
+    let total = |key: &str| {
+        inputs
+            .numeric
+            .iter()
+            .filter_map(|entry| entry["summary"][key].as_i64())
+            .sum::<i64>()
+    };
+    json!({
+        "matches": total("matches"),
+        "differs": total("differs"),
+        "not_in_evidence": total("not_in_evidence"),
+        "unattributed": total("unattributed"),
+        "implausible_attribution": total("implausible_attribution"),
+        "per_candidate": inputs.numeric,
+        "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+        "method": "the quoted text is tested against what rounding and truncating the stored \
+                   value actually produce at the precision written; a discrete field requires \
+                   a whole number and exact equality",
+    })
+}
+
+/// Re-derives the numeric half of every grade computed by an older method.
+///
+/// No provider call: the evidence is the stored prompt and the arithmetic is
+/// local, so a corrected method can be applied to the whole history for
+/// nothing. This exists because three different arithmetics once shipped under
+/// a single grading version while the worker skipped anything already graded
+/// under it -- so production kept findings the code had stopped producing,
+/// including two it had specifically been fixed to stop producing.
+pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValue {
+    if availability(state).is_none() {
+        return json!({"status": "disabled"});
+    }
+    let stale = match jev_store::grades_with_stale_numeric_method(
+        &state.pool,
+        crate::jev_numeric::NUMERIC_METHOD_VERSION,
+        200,
+    )
+    .await
+    {
+        Ok(stale) => stale,
+        Err(err) => {
+            warn!(error = %err, "reading grades with a stale numeric method");
+            return json!({"status": "error", "stage": "select"});
+        }
+    };
+    if stale.is_empty() {
+        return json!({"status": "ok", "recomputed": 0});
+    }
+
+    let mut recomputed = 0usize;
+    for (id, subject) in &stale {
+        let Ok(subject_id) = subject.parse::<i64>() else {
+            continue;
+        };
+        let row =
+            sqlx::query("SELECT report_json, request_json FROM decision_reports WHERE id = $1")
+                .bind(subject_id)
+                .fetch_optional(&state.pool)
+                .await;
+        let Ok(Some(row)) = row else { continue };
+        let row = row_to_json(&row);
+        let Some(report) = parse_embedded(row.get("report_json")) else {
+            continue;
+        };
+        let prompt = parse_embedded(row.get("request_json"))
+            .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
+            .unwrap_or(JsonValue::Null);
+
+        let inputs = grading_inputs(&report, &prompt);
+        let superseded = json!({
+            "reason": "recomputed by a corrected numeric method",
+            "superseded_at": jev_signals::now_rfc3339(),
+        });
+        if let Err(err) = jev_store::replace_numeric_measurement(
+            &state.pool,
+            id,
+            &numeric_payload(&inputs),
+            &superseded,
+        )
+        .await
+        {
+            warn!(error = %err, "replacing a numeric measurement");
+        } else {
+            recomputed += 1;
+        }
+    }
+    info!(
+        recomputed,
+        method = crate::jev_numeric::NUMERIC_METHOD_VERSION,
+        "Jev numeric measurements recomputed"
+    );
+    json!({
+        "status": "ok",
+        "recomputed": recomputed,
+        "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+        "provider_calls": 0,
+    })
 }
 
 /// Composes the deterministic numeric findings and the model's wording
@@ -504,29 +607,13 @@ fn grade_payload(
         }));
     }
 
-    // Deterministic totals across candidates.
-    let numeric_total = |key: &str| {
-        inputs
-            .numeric
-            .iter()
-            .filter_map(|entry| entry["summary"][key].as_i64())
-            .sum::<i64>()
-    };
-
     json!({
         "version": REPORT_GRADING_VERSION,
         "evidence_scope": "decision_time_prompt_snapshot_not_independent_source_verification",
         "granularity": "one_verdict_per_candidate_note",
         // Settled by comparison, not by a model. These do not vary between
         // runs and carry no confidence because none is needed.
-        "numeric_checks": {
-            "matches": numeric_total("matches"),
-            "differs": numeric_total("differs"),
-            "not_in_evidence": numeric_total("not_in_evidence"),
-            "unattributed": numeric_total("unattributed"),
-            "per_candidate": inputs.numeric,
-            "method": "arithmetic_comparison_at_the_precision_quoted",
-        },
+        "numeric_checks": numeric_payload(inputs),
         // Model judgements about wording only.
         "wording_verdict_counts": {
             "fair": fair,

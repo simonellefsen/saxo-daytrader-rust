@@ -27,6 +27,17 @@
 
 use serde_json::Value as JsonValue;
 
+/// Version of the comparison method: the parser, the field table, the unit
+/// handling and the tolerance policy together.
+///
+/// Separate from the grading question version on purpose. The arithmetic
+/// changed three times under a single `v8` while the worker skipped every
+/// report already graded under it, so production held findings from three
+/// different algorithms behind one label -- including two that the code had
+/// already stopped producing. Recomputing needs no provider call, so a bump
+/// here re-derives every stored measurement from the evidence already on disk.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n2-2026-09-21";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
     /// The quoted figure agrees with the evidence at the precision quoted.
@@ -60,7 +71,6 @@ pub(crate) struct NumericCheck {
     pub quoted: f64,
     pub field: Option<&'static str>,
     pub actual: Option<f64>,
-    pub tolerance: f64,
     pub verdict: NumericVerdict,
     /// The fragment the figure was read from, for adjudication.
     pub excerpt: String,
@@ -112,6 +122,14 @@ struct FieldSpec {
 }
 
 const FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        path: "daily_indicators.min_confluences",
+        discrete: true,
+        signed: false,
+        // Reached only through the `N/M` rule below; no note names it directly.
+        keywords: &["minimum confluences"],
+        unit: Unit::AsQuoted,
+    },
     FieldSpec {
         path: "daily_indicators.confluence_count",
         discrete: true,
@@ -256,6 +274,15 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
             }
             explicit_sign = true;
             start -= 1;
+        } else if let Some(minus_start) = start.checked_sub(3) {
+            // U+2212 MINUS SIGN, three bytes. Discarding it read a negative
+            // figure as positive and reported a sign error as agreement --
+            // silently, and in the direction that hides a disagreement.
+            if &bytes[minus_start..start] == "\u{2212}".as_bytes() {
+                sign = -1.0;
+                explicit_sign = true;
+                start = minus_start;
+            }
         }
         let digits_start = index;
         while index < bytes.len() && bytes[index].is_ascii_digit() {
@@ -398,6 +425,28 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Vec<Option<&'static Fie
         consumed.push(pair.span);
         assigned[pair.number] = if ambiguous { None } else { Some(pair.field) };
     }
+    // "6/3 technical confluences" is the count over the minimum. Without this
+    // the 6 went unattributed and the 3 was compared against the count of 6,
+    // reporting a disagreement that is purely notation -- and #279 MU carried
+    // exactly that in production.
+    for index in 0..numbers.len().saturating_sub(1) {
+        let (left, right) = (&numbers[index], &numbers[index + 1]);
+        if right.start != left.end + 1 || text.as_bytes().get(left.end) != Some(&b'/') {
+            continue;
+        }
+        let names_confluences = assigned[index]
+            .or(assigned[index + 1])
+            .is_some_and(|field| field.path.ends_with("confluence_count"));
+        if !names_confluences {
+            continue;
+        }
+        assigned[index] = FIELDS
+            .iter()
+            .find(|field| field.path == "daily_indicators.confluence_count");
+        assigned[index + 1] = FIELDS
+            .iter()
+            .find(|field| field.path == "daily_indicators.min_confluences");
+    }
     assigned
 }
 
@@ -424,7 +473,6 @@ fn check_one(
             quoted: found.value,
             field: None,
             actual: None,
-            tolerance: tolerance_for(found.decimals, false),
             verdict: NumericVerdict::Unattributed,
             excerpt,
         };
@@ -432,13 +480,15 @@ fn check_one(
 
     // A `%` quote of a value stored as a fraction of one is divided; otherwise
     // the figure is compared in the units it was written in.
-    let quoted = match (field.unit, found.percent) {
-        (Unit::FractionOfOne, true) => found.value / 100.0,
-        _ => found.value,
-    };
-    let tolerance = match (field.unit, found.percent) {
-        (Unit::FractionOfOne, true) => tolerance_for(found.decimals, field.discrete) / 100.0,
-        _ => tolerance_for(found.decimals, field.discrete),
+    // A `%` quote of a value stored as a fraction of one is compared in the
+    // units the note wrote, by scaling the stored value rather than the quote:
+    // the convention test has to run at the precision that was actually
+    // written.
+    let percent_scaled = matches!((field.unit, found.percent), (Unit::FractionOfOne, true));
+    let quoted = if percent_scaled {
+        found.value / 100.0
+    } else {
+        found.value
     };
 
     let Some(actual) = lookup(evidence, field.path) else {
@@ -446,7 +496,6 @@ fn check_one(
             quoted,
             field: Some(field.path),
             actual: None,
-            tolerance,
             verdict: NumericVerdict::NotInEvidence,
             excerpt,
         };
@@ -460,7 +509,16 @@ fn check_one(
         quoted
     };
 
-    let verdict = if within_tolerance(comparable, actual, tolerance) {
+    // Test in the units the note wrote them in.
+    let (written, stored) = if percent_scaled {
+        (found.value.abs(), actual * 100.0)
+    } else if field.path == "markov.conviction" {
+        (found.value.abs(), actual)
+    } else {
+        (found.value, actual)
+    };
+
+    let verdict = if quoted_from(written, found.decimals, stored, field.discrete) {
         NumericVerdict::Matches
     } else if plausible_magnitude(comparable, actual) {
         NumericVerdict::Differs
@@ -471,28 +529,51 @@ fn check_one(
         quoted,
         field: Some(field.path),
         actual: Some(actual),
-        tolerance,
         verdict,
         excerpt,
     }
 }
 
-/// Half a unit in the last place the note wrote.
+/// Whether the quoted text could have been produced from the stored value.
 ///
-/// A figure quoted to three decimals asserts only what three decimals carry,
-/// so "0.061" agrees with 0.06147651902511747. An integer carries half a unit,
-/// which keeps "5 confluences" exact while not failing on a rounded "7%".
-fn tolerance_for(decimals: usize, discrete: bool) -> f64 {
+/// Not a tolerance band. A band of one unit in the last place accepted "392"
+/// for a stored 391 and "0.060" for 0.061, neither of which any convention
+/// produces -- and on a count it accepted "4.5" against five, though a count
+/// is never written with a fraction. Accepting rounding and truncation means
+/// testing what each actually yields, not allowing everything between them.
+///
+/// A discrete field requires a whole number and exact equality.
+fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> bool {
     if discrete {
-        // A count is quoted exactly, so half a unit keeps "5 confluences" from
-        // matching four.
-        0.5
+        return quoted.fract().abs() < f64::EPSILON && (quoted - actual).abs() < 1e-9;
+    }
+    let scale = 10f64.powi(decimals as i32);
+    let scaled = actual * scale;
+    let candidates = [
+        // Round half away from zero, the common convention.
+        scaled.round() / scale,
+        // Round half to even, which differs only at an exact half.
+        round_half_even(scaled) / scale,
+        // Truncate, which is how "295" and "+0.4199" were written.
+        scaled.trunc() / scale,
+    ];
+    let slack = quoted.abs().max(actual.abs()).max(1.0) * 8.0 * f64::EPSILON;
+    candidates
+        .iter()
+        .any(|candidate| (quoted - candidate).abs() <= slack)
+}
+
+fn round_half_even(value: f64) -> f64 {
+    let floor = value.floor();
+    let fraction = value - floor;
+    if (fraction - 0.5).abs() < f64::EPSILON {
+        if (floor / 2.0).fract().abs() < f64::EPSILON {
+            floor
+        } else {
+            floor + 1.0
+        }
     } else {
-        // A full unit in the last place, because truncating is as ordinary a
-        // way to quote as rounding: "+0.4199" for 0.4199841320514679, and
-        // "295 DKK support" for 295.73302. At half a unit both were reported
-        // as disagreements.
-        10f64.powi(-(decimals as i32))
+        value.round()
     }
 }
 
@@ -521,19 +602,6 @@ fn plausible_magnitude(quoted: f64, actual: f64) -> bool {
         return true;
     }
     quoted.max(actual) / quoted.min(actual) <= RATIO
-}
-
-/// Whether the figures agree, with the boundary inclusive in practice as well
-/// as in principle.
-///
-/// 23.135 written as "23.13" is a legitimate truncation, and the difference
-/// computes to 0.005000000000002558 in binary floating point -- a hair over a
-/// tolerance of exactly 0.005, which reported a disagreement that existed only
-/// in the representation. The slack errs toward agreement deliberately:
-/// manufacturing a finding about a report is worse than missing one.
-fn within_tolerance(quoted: f64, actual: f64, tolerance: f64) -> bool {
-    let scale = quoted.abs().max(actual.abs()).max(1.0);
-    (quoted - actual).abs() <= tolerance + scale * 8.0 * f64::EPSILON
 }
 
 fn lookup(evidence: &JsonValue, path: &str) -> Option<f64> {
@@ -1057,6 +1125,116 @@ mod tests {
                 .count()
                 == 1,
             "the confluence count and Markov reading in the same note are correct"
+        );
+    }
+
+    /// Gaps an isolated probe found after the module already had thirty
+    /// passing tests. Each was reachable from wording production had produced
+    /// or could produce, and three of the five hid an error rather than
+    /// inventing one.
+    #[test]
+    fn the_probed_parser_and_tolerance_gaps_are_closed() {
+        // U+2212 is not ASCII '-'. Discarding it read a negative figure as
+        // positive, so a sign error was reported as agreement.
+        let mkv = json!({"markov": {"signed_signal": 0.429226}});
+        let unicode = &numeric_checks("\u{2212}0.429 Markov signal", &mkv)[0];
+        assert_eq!(unicode.quoted, -0.429);
+        assert_eq!(unicode.verdict, NumericVerdict::Differs);
+        assert_eq!(
+            numeric_checks("-0.429 Markov signal", &mkv)[0].verdict,
+            NumericVerdict::Differs,
+            "the ASCII spelling must behave identically"
+        );
+
+        // "6/3 confluences" is the count over the minimum. #279 MU carried
+        // this, and the 3 was compared against the count of 6.
+        let counts = json!({
+            "daily_indicators": {"confluence_count": 6, "min_confluences": 3}
+        });
+        let checks = numeric_checks("Top-tier setup with 6/3 technical confluences", &counts);
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0].field, Some("daily_indicators.confluence_count"));
+        assert_eq!(checks[0].verdict, NumericVerdict::Matches);
+        assert_eq!(checks[1].field, Some("daily_indicators.min_confluences"));
+        assert_eq!(checks[1].verdict, NumericVerdict::Matches);
+
+        // A band of one unit accepted values no convention produces.
+        let support = json!({"daily_indicators": {"support": {"nearest_support": 391.0}}});
+        assert_eq!(
+            numeric_checks("support at 392 DKK", &support)[0].verdict,
+            NumericVerdict::Differs,
+            "neither rounding nor truncating 391 yields 392"
+        );
+        let risk = json!({"daily_indicators": {"support": {"break_risk": 0.061}}});
+        assert_eq!(
+            numeric_checks("break risk 0.060", &risk)[0].verdict,
+            NumericVerdict::Differs
+        );
+
+        // A count is never written with a fraction.
+        let five = json!({"daily_indicators": {"confluence_count": 5}});
+        assert_eq!(
+            numeric_checks("4.5 confluences", &five)[0].verdict,
+            NumericVerdict::Differs
+        );
+        assert_eq!(
+            numeric_checks("5 confluences", &five)[0].verdict,
+            NumericVerdict::Matches
+        );
+    }
+
+    /// The convention test has to keep accepting what it was built to accept.
+    #[test]
+    fn rounding_and_truncating_are_both_still_accepted() {
+        let support = json!({"daily_indicators": {"support": {"nearest_support": 295.73302}}});
+        assert_eq!(
+            numeric_checks("near 295 DKK support", &support)[0].verdict,
+            NumericVerdict::Matches,
+            "truncated"
+        );
+        assert_eq!(
+            numeric_checks("near 296 DKK support", &support)[0].verdict,
+            NumericVerdict::Matches,
+            "rounded"
+        );
+        assert_eq!(
+            numeric_checks("near 297 DKK support", &support)[0].verdict,
+            NumericVerdict::Differs,
+            "and nothing else"
+        );
+
+        let markov = json!({"markov": {"signed_signal": 0.4199841320514679}});
+        assert_eq!(
+            numeric_checks("+0.4199 Markov signal", &markov)[0].verdict,
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("+0.4200 Markov signal", &markov)[0].verdict,
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("+0.4198 Markov signal", &markov)[0].verdict,
+            NumericVerdict::Differs
+        );
+    }
+
+    /// A percentage of a value stored as a fraction is tested at the precision
+    /// the note wrote, not at the stored precision.
+    #[test]
+    fn a_percentage_quote_is_tested_in_the_units_written() {
+        let probs = json!({"markov": {"bear_prob": 0.0041, "bull_prob": 0.5349}});
+        assert_eq!(
+            numeric_checks("0% bear probability", &probs)[0].verdict,
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("53% bull probability", &probs)[0].verdict,
+            NumericVerdict::Matches,
+            "53.49 truncates to 53"
+        );
+        assert_eq!(
+            numeric_checks("55% bull probability", &probs)[0].verdict,
+            NumericVerdict::Differs
         );
     }
 }

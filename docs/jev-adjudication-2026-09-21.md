@@ -1,103 +1,120 @@
 # Adjudication run — 2026-09-21
 
-Against `docs/jev-adjudication-rubric.md`, frozen 2026-09-21 before any example
-was read under it. Grades are v8.
+**Revised after review.** The first version of this file overstated its result
+and contained a wrong finding. Corrections are marked below rather than edited
+away. Complete case-level data: `jev-adjudication-2026-09-21-cases.json`.
+
+Rubric: `docs/jev-adjudication-rubric.md`, frozen before any example was read.
+
+## What this is, and is not
+
+The adjudicator is **Claude Opus 5 — the same agent that built the grader.**
+This is one AI system checking another it wrote. It is not independent human
+ground truth, and a self-adjudicated agreement rate is worth less than the
+number suggests.
 
 ## Method
 
-111 unique (symbol, note) pairs had been graded. Every fourth was taken, giving
-28. Each was read against the technical, Markov and Quiver evidence from the
-report's own stored prompt, and a category recorded, **before** the grader's
-verdict was looked at.
+111 unique (symbol, note) pairs carried v8 grades. Every fourth was taken,
+ordered by report id then symbol, giving 28. Each was read against the
+technical, Markov and Quiver evidence from that report's own stored prompt, and
+a category recorded before the verdict was looked at.
 
-**Blindness, stated exactly.** Four verdicts had been seen earlier in the
-session while debugging (#304 CHEMM, #308 ALV, #309 ALV, #311 TSM). Of those,
-two fall in this sample: case 24 (#309 ALV) and case 27 (#311 TSM). Both are
-marked below. The remaining 26 were genuinely blind. A future run should be
-done by someone who has not been debugging the grader.
+**26 of 28 were blind.** Cases 24 (#309 ALV) and 27 (#311 TSM) were not: those
+verdicts had been seen earlier while debugging. They are flagged in the dataset.
 
-## Result
+## Two tasks, reported separately
+
+v8 instructs the model to judge **wording** and explicitly not to re-check
+arithmetic. Numbers are settled by `jev_numeric`. The first version of this
+report compared adjudicator labels that mixed both against a model doing only
+one, which is not a like-for-like comparison.
+
+### Wording agreement
 
 | | |
 |---|---|
-| Exact category agreement | **24 / 28** |
-| Both flagged, category differs | 2 (cases 24, 28) |
+| Exact category agreement | **23 / 28** |
+| Flag vs no-flag agreement | **26 / 28** |
 | Grader flagged, adjudicator did not | 2 (cases 8, 19) |
 | Adjudicator flagged, grader did not | **0** |
 
-## The margin separates agreement from disagreement
+The three cases where both flagged (24, 27, 28) are counted as category
+disagreements, because the adjudicator recorded **ambiguous** and the rubric
+says an ambiguous case stays ambiguous rather than being rounded to whichever
+category the grader chose.
 
-`margin` is the selected option's probability minus the runner-up's. It was
-added because `confidence` measures how peaked the distribution is, not how
-likely the selected option is.
+### Numeric correctness
 
-| margin | cases | disagreements |
+Not measurable from this run. The v8 grades were produced by **three different
+numeric methods** under one label, because the arithmetic was corrected several
+times without bumping a version the worker gates on. Production retained
+findings the code had already been fixed to stop producing:
+
+| report | stored finding | status |
 |---|---|---|
-| ≤ 0.25 | 5 | **4** |
+| #311 | 9.9% compared against a support price of 617.21 | fixed in code, stale in storage |
+| #304 | 23.13 against 23.135 recorded as a disagreement | fixed in code, stale in storage |
+| #279 | "6/3 confluences": the 3 compared against the count of 6 | not fixed at the time |
+| #286 | 593 DKK called support where support is 551.5 | **genuine, independently confirmed** |
+
+So "87 figures verified" meant "87 values accepted by whichever parser and
+tolerance policy happened to be stored", and cannot be read as a correctness
+rate. The method now carries `NUMERIC_METHOD_VERSION` and is recomputed from
+stored evidence when it changes, with no provider call.
+
+## The margin
+
+`margin` is the selected option's probability minus the runner-up's.
+
+| margin | cases | flag-level disagreements |
+|---|---|---|
+| ≤ 0.25 | 5 | **2** (both of them) |
 | > 0.25 | 23 | **0** |
 
-Median margin: **0.66** where we agreed, **0.17** where we did not.
+Both grader false positives sat at or below 0.25. Treat 0.25 as a **hypothesis
+selected from this sample**. Testing it means applying it unchanged to fresh
+cases; re-picking a threshold on each new sample would validate nothing.
 
-Every disagreement in this sample sat at or below 0.25. That is 28 cases, one
-sample, one adjudicator — it is a pattern worth acting on as a review trigger,
-not a calibrated threshold. It should be re-derived on the next run rather than
-assumed to hold.
+## The two grader false positives
 
-## The four disagreements
+**Case 8 — #283 TSM** (`misdescribes_category`, p=0.52, margin 0.20).
+*"strong Markov Sideways-to-Bull conviction (+0.3506)"* with `state=Sideways`.
+The note names Sideways explicitly and describes movement toward Bull, which is
+the situation. It is the most precisely worded note in the sample, and it was
+the one flagged.
 
-**Case 8 — #283 TSM, grader `misdescribes_category` (p=0.52, margin 0.20).**
-*"strong Markov Sideways-to-Bull conviction (+0.3506)"* with `state=Sideways`,
-signal +0.3506, direction long. The note **names Sideways explicitly** and
-describes a move toward Bull, which is the situation. Adjudicated `fair`; the
-grader's flag reads as a false positive, and it is the most precisely worded
-note in the sample.
+**Case 19 — #299 CRM** (`overstated`, p=0.49, margin 0.07).
+Both figures match; the unmentioned moderate break risk is an omission, not a
+misstatement.
 
-**Case 19 — #299 CRM, grader `overstated` (p=0.49, margin 0.07).**
-*"advancing with +0.559 Bull Markov confirmation, positive Congressional
-trading flow"*. Both figures match. The break risk is 0.441, labelled
-`moderate`, and the note does not mention it — an omission, not a
-misstatement. Adjudicated `fair`. Margin 0.07 is very nearly a tie.
+## Retracted: case 28 was not a finding
 
-**Case 24 — #309 ALV, grader `misdescribes_category` (p=0.43, margin 0.14).**
-*Not blind.* *"consolidating comfortably above 446 EUR support ... and positive
-Markov regime"* with `break_risk=0.392/moderate` and `state=Sideways`,
-signal +0.2467. Adjudicated **ambiguous, overstated-leaning**: "comfortably"
-against a moderate break risk overstates, and "positive Markov regime" may name
-the positive signal rather than assert the categorical state. Both of us flagged
-it; we disagree on which category, and the rubric says an ambiguous case stays
-ambiguous.
+The first version called #313 CHEMM — *"trading above 525 DKK"* against a daily
+indicator close of 510.0 — a numerical contradiction, and called it the most
+useful result of the run. **It is wrong.**
 
-**Case 28 — #313 CHEMM, grader `overstated` (p=0.60, margin 0.25).**
-*"Top held conviction holding trading above 525 DKK"* with `close=510.0`. The
-stock was not trading above 525. Adjudicated a **numerical contradiction**, not
-an overstatement. The grader flagged the note; the deterministic checker did
-not, and that is the more interesting half.
+The same stored prompt carries `current_price_local = 525.0`, quoted at
+`12:25:01Z`; the report was created at `12:25:17Z`, sixteen seconds later. The
+note quotes the live price. There is no 15-DKK discrepancy. What remains is
+that "above 525" is not strictly true of a quote of exactly 525, which is
+imprecision, not error. Re-adjudicated **ambiguous**.
 
-## What the deterministic layer missed
+This also disposes of the conclusion drawn from it. A relational checker that
+compared "trading above X" against the daily close would have produced this
+error systematically, on every held position quoted at a live price. Relational
+assertions need both the right operator **and** the right time-specific price
+source; the daily close is the wrong source for a note written against a quote.
 
-Case 28 is a false negative in `jev_numeric`. There is no keyword mapping
-"trading above" to `daily_indicators.close`, so 525 was never compared to 510.
+## What this establishes
 
-The obvious fix is wrong. "above X" is a **relational** claim — that the price
-exceeds X — and the checker compares for equality. Mapping "trading above" to
-`close` and testing equality would report a disagreement for every note saying
-"trading above 500" when the close is 510, which is true. Closing this needs a
-relational comparison, and the number must be read as a threshold only when no
-field keyword already names it: in case 24 the 446 *is* the support level and an
-equality check against `nearest_support` is the correct reading.
+On 28 notes, a self-adjudicating agent agreed with the grader on flagging in 26
+cases, both grader false positives sat at low margin, and the grader missed
+nothing the adjudicator caught.
 
-Left unfixed rather than half-fixed. Rushing exactly this kind of rule is what
-produced six false disagreements earlier in the week.
-
-## What this establishes, and what it does not
-
-It establishes that on 28 notes, one adjudicator and the grader agreed on 24,
-that the two clear grader false positives both sat at low margin, and that the
-grader did not miss anything the adjudicator caught.
-
-It does not establish accuracy on unreviewed notes, that the categories predict
-anything about returns, or that any grade should influence a trading decision.
-The sample contains one `misdescribes_category` I would accept and one I would
-not, which is too few of either to say anything about that category.
+It does not establish accuracy on unreviewed notes, numeric correctness at all,
+independence, or that any grade should influence a trading decision. The next
+run should use fresh cases not used to tune the parser, and ideally an
+adjudicator that did not write it.
 
 No trading parameter changed.

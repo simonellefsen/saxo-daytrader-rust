@@ -498,6 +498,74 @@ pub(crate) async fn screening_agreement(pool: &AnyPool, threshold: f64) -> Resul
     }))
 }
 
+/// Stored grades whose numeric half was computed by an older method.
+///
+/// Returns the request id and subject so the measurement can be re-derived
+/// from evidence already on disk, with no provider call.
+pub(crate) async fn grades_with_stale_numeric_method(
+    pool: &AnyPool,
+    method_version: &str,
+    limit: i64,
+) -> Result<Vec<(String, String)>> {
+    let limit = limit.clamp(1, 2_000);
+    Ok(sqlx::query(&format!(
+        "SELECT id, subject FROM jev_requests
+         WHERE purpose = $1 AND status = 'completed'
+           AND subject IS NOT NULL AND result_json IS NOT NULL
+           AND result_json NOT LIKE $2
+         ORDER BY created_at DESC
+         LIMIT {limit}"
+    ))
+    .bind(PURPOSE_REPORT_GRADING)
+    .bind(format!("%\"method_version\":\"{method_version}\"%"))
+    .fetch_all(pool)
+    .await
+    .context("reading grades with a stale numeric method")?
+    .iter()
+    .filter_map(|row| {
+        Some((
+            row.try_get::<String, _>("id").ok()?,
+            row.try_get::<String, _>("subject").ok()?,
+        ))
+    })
+    .collect())
+}
+
+/// Replaces the numeric half of a stored grade in place.
+///
+/// The wording verdicts are untouched: the model was not asked again, and its
+/// answers are still the answers it gave.
+pub(crate) async fn replace_numeric_measurement(
+    pool: &AnyPool,
+    id: &str,
+    numeric: &JsonValue,
+    superseded: &JsonValue,
+) -> Result<()> {
+    let row = sqlx::query("SELECT result_json FROM jev_requests WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .context("reading a grade for numeric recomputation")?;
+    let Some(row) = row else { return Ok(()) };
+    let Ok(text) = row.try_get::<String, _>("result_json") else {
+        return Ok(());
+    };
+    let Ok(mut result) = serde_json::from_str::<JsonValue>(&text) else {
+        return Ok(());
+    };
+    // The superseded findings are kept rather than dropped, so a measurement
+    // that was acted on can still be traced after it is corrected.
+    result["numeric_checks_superseded"] = superseded.clone();
+    result["numeric_checks"] = numeric.clone();
+    sqlx::query("UPDATE jev_requests SET result_json = $1 WHERE id = $2")
+        .bind(result.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("replacing a numeric measurement")?;
+    Ok(())
+}
+
 /// Subjects already judged for a given purpose, so a sidecar pass never
 /// re-spends on work it has done.
 pub(crate) async fn judged_subjects_at_version(
@@ -1349,6 +1417,73 @@ mod tests {
             crate::jev_signals::retention_summary(&rows, "2999-01-01T00:00:00Z")["features_available"],
             1,
             "and becomes usable only once the stamp exists"
+        );
+    }
+
+    /// A corrected arithmetic must reach measurements already stored. Three
+    /// arithmetics once shipped under one grading version while the worker
+    /// skipped anything graded under it, so production kept findings the code
+    /// had been fixed to stop producing.
+    #[tokio::test]
+    async fn a_stale_numeric_method_is_found_and_replaced_without_touching_the_wording() {
+        let pool = pool().await;
+        record_success(
+            &pool,
+            RecordedRequest {
+                id: "req-1",
+                created_at: "2026-09-21T06:12:44Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("304"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            &response(),
+            Some(&serde_json::json!({
+                "version": "v8",
+                "numeric_checks": {"differs": 1, "method_version": "n1-old"},
+                "wording_verdicts": [{"symbol": "FORTUM:xhel", "verdict": "fair"}],
+            })),
+        )
+        .await
+        .expect("a grade under the old method");
+
+        let stale = grades_with_stale_numeric_method(&pool, "n2-2026-09-21", 100)
+            .await
+            .expect("stale lookup");
+        assert_eq!(stale, vec![("req-1".to_string(), "304".to_string())]);
+
+        replace_numeric_measurement(
+            &pool,
+            "req-1",
+            &serde_json::json!({"differs": 0, "method_version": "n2-2026-09-21"}),
+            &serde_json::json!({"reason": "recomputed"}),
+        )
+        .await
+        .expect("replace");
+
+        let rows = results_for(&pool, PURPOSE_REPORT_GRADING, 10)
+            .await
+            .expect("results");
+        let result = &rows[0]["result_json"];
+        assert_eq!(result["numeric_checks"]["differs"], 0);
+        assert_eq!(result["numeric_checks"]["method_version"], "n2-2026-09-21");
+        assert_eq!(
+            result["wording_verdicts"][0]["verdict"], "fair",
+            "the model was not asked again, so its answers stand"
+        );
+        assert_eq!(
+            result["numeric_checks_superseded"]["reason"], "recomputed",
+            "a corrected measurement keeps what it replaced, so a finding that was acted \
+             on can still be traced"
+        );
+        assert_eq!(result["version"], "v8", "the wording version is untouched");
+
+        assert!(
+            grades_with_stale_numeric_method(&pool, "n2-2026-09-21", 100)
+                .await
+                .expect("stale lookup")
+                .is_empty(),
+            "and it is not recomputed twice"
         );
     }
 }
