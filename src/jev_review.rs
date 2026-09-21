@@ -440,7 +440,22 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
             .filter_map(|entry| entry["summary"][key].as_i64())
             .sum::<i64>()
     };
+    // Identity of the evidence the measurement was made against.
+    //
+    // The history preserves each prior measurement, and this is what makes the
+    // comparison between two of them meaningful: identical fingerprints isolate
+    // the method as the only thing that changed, and differing ones say the
+    // evidence moved underneath and the measurements are not comparable at all.
+    let evidence_sha256 = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_string(&inputs.evidence)
+                .unwrap_or_default()
+                .as_bytes()
+        )
+    );
     json!({
+        "evidence_sha256": evidence_sha256,
         "matches": total("matches"),
         "differs": total("differs"),
         "not_in_evidence": total("not_in_evidence"),
@@ -1368,6 +1383,39 @@ mod tests {
                 .and_then(JsonValue::as_array)
                 .is_some(),
             "an empty snapshot is evidence that nothing matched, not missing evidence"
+        );
+    }
+
+    /// A preserved measurement is only comparable to its replacement if both
+    /// were made against the same evidence. The fingerprint isolates the
+    /// method as the variable; without it, a changed figure could equally mean
+    /// the evidence moved underneath.
+    #[test]
+    fn a_measurement_carries_the_identity_of_the_evidence_it_was_made_against() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "5 confluences"}],
+            "suggested_trades": [],
+        });
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.429226, "Bull")]},
+        });
+        let first = numeric_payload(&grading_inputs(&report, &prompt));
+        let again = numeric_payload(&grading_inputs(&report, &prompt));
+        assert_eq!(
+            first["evidence_sha256"], again["evidence_sha256"],
+            "the same evidence fingerprints identically, so a later measurement is comparable"
+        );
+        assert_eq!(first["evidence_sha256"].as_str().map(str::len), Some(64));
+
+        let moved = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+            "markov_method": {"signals": [markov_signal("EQNR:xosl", 0.9, "Bull")]},
+        });
+        assert_ne!(
+            first["evidence_sha256"],
+            numeric_payload(&grading_inputs(&report, &moved))["evidence_sha256"],
+            "evidence that moved is visible as such rather than read as a method change"
         );
     }
 }

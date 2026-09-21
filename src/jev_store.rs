@@ -572,6 +572,14 @@ pub(crate) async fn replace_numeric_measurement(
                 .get("method_version")
                 .cloned()
                 .unwrap_or(JsonValue::Null),
+            // Lifted out of the measurement so a reader can compare identities
+            // without unpacking it. Same fingerprint means the method is the
+            // only difference; a different one means the evidence moved and
+            // the two measurements are not comparable.
+            "evidence_sha256": previous
+                .get("evidence_sha256")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
             "measurement": previous,
         });
         match result.get_mut("numeric_checks_history") {
@@ -1464,6 +1472,7 @@ mod tests {
                 "numeric_checks": {
                     "differs": 1,
                     "method_version": "n0-band",
+                    "evidence_sha256": "abc123",
                     "per_candidate": [{"symbol": "FORTUM:xhel", "summary": {"differs": 1}}],
                 },
                 "wording_verdicts": [{"symbol": "FORTUM:xhel", "verdict": "fair"}],
@@ -1507,6 +1516,11 @@ mod tests {
             .expect("an append-only history");
         assert_eq!(history.len(), 2, "both earlier measurements are retained");
         assert_eq!(history[0]["method_version"], "n0-band");
+        assert_eq!(
+            history[0]["evidence_sha256"], "abc123",
+            "the evidence identity travels with the preserved measurement, so the two \
+             can be compared with the method as the only variable"
+        );
         assert_eq!(
             history[0]["measurement"]["per_candidate"][0]["symbol"], "FORTUM:xhel",
             "the whole prior measurement survives, not a note that one existed"
