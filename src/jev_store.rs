@@ -531,15 +531,22 @@ pub(crate) async fn grades_with_stale_numeric_method(
     .collect())
 }
 
-/// Replaces the numeric half of a stored grade in place.
+/// Replaces the numeric half of a stored grade, appending what it replaced.
 ///
 /// The wording verdicts are untouched: the model was not asked again, and its
 /// answers are still the answers it gave.
+///
+/// The history is append-only and holds the whole prior measurement, not a
+/// note that one existed. An earlier version stored only a reason and a
+/// timestamp while its comment claimed the findings were kept, and its test
+/// asserted the reason survived rather than the findings -- so a corrected
+/// measurement silently destroyed the one that may have been acted on, and a
+/// second correction destroyed even the note.
 pub(crate) async fn replace_numeric_measurement(
     pool: &AnyPool,
     id: &str,
     numeric: &JsonValue,
-    superseded: &JsonValue,
+    reason: &str,
 ) -> Result<()> {
     let row = sqlx::query("SELECT result_json FROM jev_requests WHERE id = $1")
         .bind(id)
@@ -553,9 +560,25 @@ pub(crate) async fn replace_numeric_measurement(
     let Ok(mut result) = serde_json::from_str::<JsonValue>(&text) else {
         return Ok(());
     };
-    // The superseded findings are kept rather than dropped, so a measurement
-    // that was acted on can still be traced after it is corrected.
-    result["numeric_checks_superseded"] = superseded.clone();
+    let previous = result
+        .get("numeric_checks")
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    if !previous.is_null() {
+        let entry = serde_json::json!({
+            "superseded_at": crate::jev_signals::now_rfc3339(),
+            "reason": reason,
+            "method_version": previous
+                .get("method_version")
+                .cloned()
+                .unwrap_or(JsonValue::Null),
+            "measurement": previous,
+        });
+        match result.get_mut("numeric_checks_history") {
+            Some(JsonValue::Array(history)) => history.push(entry),
+            _ => result["numeric_checks_history"] = JsonValue::Array(vec![entry]),
+        }
+    }
     result["numeric_checks"] = numeric.clone();
     sqlx::query("UPDATE jev_requests SET result_json = $1 WHERE id = $2")
         .bind(result.to_string())
@@ -1420,12 +1443,10 @@ mod tests {
         );
     }
 
-    /// A corrected arithmetic must reach measurements already stored. Three
-    /// arithmetics once shipped under one grading version while the worker
-    /// skipped anything graded under it, so production kept findings the code
-    /// had been fixed to stop producing.
+    /// A corrected arithmetic must reach measurements already stored, and must
+    /// not destroy what it corrects.
     #[tokio::test]
-    async fn a_stale_numeric_method_is_found_and_replaced_without_touching_the_wording() {
+    async fn successive_recomputations_preserve_every_earlier_measurement() {
         let pool = pool().await;
         record_success(
             &pool,
@@ -1440,12 +1461,16 @@ mod tests {
             &response(),
             Some(&serde_json::json!({
                 "version": "v8",
-                "numeric_checks": {"differs": 1, "method_version": "n1-old"},
+                "numeric_checks": {
+                    "differs": 1,
+                    "method_version": "n0-band",
+                    "per_candidate": [{"symbol": "FORTUM:xhel", "summary": {"differs": 1}}],
+                },
                 "wording_verdicts": [{"symbol": "FORTUM:xhel", "verdict": "fair"}],
             })),
         )
         .await
-        .expect("a grade under the old method");
+        .expect("a grade under the original method");
 
         let stale = grades_with_stale_numeric_method(&pool, "n2-2026-09-21", 100)
             .await
@@ -1455,26 +1480,44 @@ mod tests {
         replace_numeric_measurement(
             &pool,
             "req-1",
-            &serde_json::json!({"differs": 0, "method_version": "n2-2026-09-21"}),
-            &serde_json::json!({"reason": "recomputed"}),
+            &serde_json::json!({"differs": 1, "method_version": "n1-truncation"}),
+            "first correction",
         )
         .await
-        .expect("replace");
+        .expect("first replace");
+        replace_numeric_measurement(
+            &pool,
+            "req-1",
+            &serde_json::json!({"differs": 0, "method_version": "n2-2026-09-21"}),
+            "second correction",
+        )
+        .await
+        .expect("second replace");
 
         let rows = results_for(&pool, PURPOSE_REPORT_GRADING, 10)
             .await
             .expect("results");
         let result = &rows[0]["result_json"];
-        assert_eq!(result["numeric_checks"]["differs"], 0);
+
         assert_eq!(result["numeric_checks"]["method_version"], "n2-2026-09-21");
+        assert_eq!(result["numeric_checks"]["differs"], 0);
+
+        let history = result["numeric_checks_history"]
+            .as_array()
+            .expect("an append-only history");
+        assert_eq!(history.len(), 2, "both earlier measurements are retained");
+        assert_eq!(history[0]["method_version"], "n0-band");
+        assert_eq!(
+            history[0]["measurement"]["per_candidate"][0]["symbol"], "FORTUM:xhel",
+            "the whole prior measurement survives, not a note that one existed"
+        );
+        assert_eq!(history[0]["measurement"]["differs"], 1);
+        assert_eq!(history[1]["method_version"], "n1-truncation");
+        assert_eq!(history[1]["reason"], "second correction");
+
         assert_eq!(
             result["wording_verdicts"][0]["verdict"], "fair",
             "the model was not asked again, so its answers stand"
-        );
-        assert_eq!(
-            result["numeric_checks_superseded"]["reason"], "recomputed",
-            "a corrected measurement keeps what it replaced, so a finding that was acted \
-             on can still be traced"
         );
         assert_eq!(result["version"], "v8", "the wording version is untouched");
 
@@ -1483,7 +1526,7 @@ mod tests {
                 .await
                 .expect("stale lookup")
                 .is_empty(),
-            "and it is not recomputed twice"
+            "and it is not recomputed again"
         );
     }
 }

@@ -32,14 +32,25 @@ one, which is not a like-for-like comparison.
 
 ### Wording agreement
 
+Computed from `prereveal_label` only. The dataset keeps any later revision in
+separate `revised_*` fields with its own blindness flag, so a label changed
+after the verdict was known cannot be counted as a blind one.
+
+| basis | exact category | flag vs no-flag |
+|---|---|---|
+| **26 blind cases** | **23 / 26** | **24 / 26** |
+| all 28, including the two not blind | 23 / 28 | 26 / 28 |
+
 | | |
 |---|---|
-| Exact category agreement | **23 / 28** |
-| Flag vs no-flag agreement | **26 / 28** |
 | Grader flagged, adjudicator did not | 2 (cases 8, 19) |
 | Adjudicator flagged, grader did not | **0** |
 
-The three cases where both flagged (24, 27, 28) are counted as category
+The blind figure is the one that means anything. The two non-blind cases (24,
+27) were both flagged by both sides, so including them only inflates the
+flag-level agreement.
+
+Cases where both flagged but chose different categories count as category
 disagreements, because the adjudicator recorded **ambiguous** and the rubric
 says an ambiguous case stays ambiguous rather than being rounded to whichever
 category the grader chose.
@@ -106,6 +117,11 @@ error systematically, on every held position quoted at a live price. Relational
 assertions need both the right operator **and** the right time-specific price
 source; the daily close is the wrong source for a note written against a quote.
 
+The retraction itself was made **after** the verdict and the new evidence were
+both known, so it is recorded as `revised_label` with `revision_blind: false`
+and is excluded from the blind totals above. Its pre-reveal label,
+`numeric_contradiction`, is what the totals use.
+
 ## What this establishes
 
 On 28 notes, a self-adjudicating agent agreed with the grader on flagging in 26
@@ -116,5 +132,9 @@ It does not establish accuracy on unreviewed notes, numeric correctness at all,
 independence, or that any grade should influence a trading decision. The next
 run should use fresh cases not used to tune the parser, and ideally an
 adjudicator that did not write it.
+
+A recomputation under `n2` makes the stored measurements **consistent**. That is
+not a numeric correctness rate, which needs independently checked examples and
+has not been produced.
 
 No trading parameter changed.

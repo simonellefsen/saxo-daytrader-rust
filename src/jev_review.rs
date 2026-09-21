@@ -484,8 +484,10 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
     }
 
     let mut recomputed = 0usize;
+    let mut unable = Vec::new();
     for (id, subject) in &stale {
         let Ok(subject_id) = subject.parse::<i64>() else {
+            unable.push(json!({"subject": subject, "reason": "subject is not a report id"}));
             continue;
         };
         let row =
@@ -493,41 +495,67 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
                 .bind(subject_id)
                 .fetch_optional(&state.pool)
                 .await;
-        let Ok(Some(row)) = row else { continue };
-        let row = row_to_json(&row);
-        let Some(report) = parse_embedded(row.get("report_json")) else {
+        let Ok(Some(row)) = row else {
+            unable.push(json!({"subject": subject, "reason": "report row is gone"}));
             continue;
         };
-        let prompt = parse_embedded(row.get("request_json"))
+        let row = row_to_json(&row);
+        let Some(report) = parse_embedded(row.get("report_json")) else {
+            unable.push(json!({"subject": subject, "reason": "report json could not be decoded"}));
+            continue;
+        };
+        let Some(prompt) = parse_embedded(row.get("request_json"))
             .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
-            .unwrap_or(JsonValue::Null);
+        else {
+            unable.push(json!({"subject": subject, "reason": "request json could not be decoded"}));
+            continue;
+        };
+        // A prompt carrying no indicator block is absent evidence, not a
+        // report that selected nothing. Recomputing against it yields zero
+        // checks, and stamping that with the current method would record a
+        // clean revalidation of something never examined. The earlier
+        // measurement is left exactly where it is.
+        if prompt
+            .get("daily_indicators")
+            .and_then(|block| block.get("signals"))
+            .and_then(JsonValue::as_array)
+            .is_none()
+        {
+            unable.push(json!({
+                "subject": subject,
+                "reason": "stored prompt carries no daily indicator snapshot",
+            }));
+            continue;
+        }
 
         let inputs = grading_inputs(&report, &prompt);
-        let superseded = json!({
-            "reason": "recomputed by a corrected numeric method",
-            "superseded_at": jev_signals::now_rfc3339(),
-        });
         if let Err(err) = jev_store::replace_numeric_measurement(
             &state.pool,
             id,
             &numeric_payload(&inputs),
-            &superseded,
+            "recomputed by a corrected numeric method",
         )
         .await
         {
             warn!(error = %err, "replacing a numeric measurement");
+            unable.push(json!({"subject": subject, "reason": "write failed"}));
         } else {
             recomputed += 1;
         }
     }
     info!(
         recomputed,
+        unable = unable.len(),
         method = crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "Jev numeric measurements recomputed"
     );
     json!({
         "status": "ok",
         "recomputed": recomputed,
+        // Named, not counted as done. A measurement that could not be
+        // re-derived keeps its earlier findings and its earlier method
+        // version, so it stays visibly stale rather than reading as revalidated.
+        "unable_to_recompute": unable,
         "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "provider_calls": 0,
     })
@@ -1298,5 +1326,48 @@ mod tests {
                 "{label}: a verdict that never fires is indistinguishable from clean reports"
             );
         }
+    }
+
+    /// Zero checks must not read as a clean revalidation. A prompt with no
+    /// indicator snapshot is absent evidence, and recomputing against it
+    /// produced an empty result stamped with the current method -- a report
+    /// that had never been examined, recorded as examined and clean.
+    #[test]
+    fn a_prompt_without_evidence_yields_nothing_to_stamp_as_current() {
+        let report = json!({
+            "selected_assets": [{"symbol": "EQNR:xosl", "notes": "5 confluences"}],
+            "suggested_trades": [],
+        });
+        for absent in [json!({}), JsonValue::Null, json!({"daily_indicators": {}})] {
+            let inputs = grading_inputs(&report, &absent);
+            assert_eq!(
+                inputs.candidates.len(),
+                0,
+                "no evidence means nothing is checkable: {absent}"
+            );
+            let payload = numeric_payload(&inputs);
+            assert_eq!(payload["matches"], 0);
+            assert_eq!(payload["differs"], 0);
+            assert!(
+                absent
+                    .get("daily_indicators")
+                    .and_then(|block| block.get("signals"))
+                    .and_then(JsonValue::as_array)
+                    .is_none(),
+                "and the recompute path recognises it as absent rather than empty"
+            );
+        }
+
+        // A prompt that does carry the block, for a report that selected
+        // nothing, is a legitimate zero and must remain recomputable.
+        let present = json!({"daily_indicators": {"signals": []}});
+        assert!(
+            present
+                .get("daily_indicators")
+                .and_then(|block| block.get("signals"))
+                .and_then(JsonValue::as_array)
+                .is_some(),
+            "an empty snapshot is evidence that nothing matched, not missing evidence"
+        );
     }
 }

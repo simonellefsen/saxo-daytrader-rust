@@ -14,12 +14,15 @@
    "note": "Strong technicals (5/3 confluence, BUY sentiment, +0.4347 Markov Bull signal), but 1 share consumes ~12,807 DKK, leaving near-zero buffer flexibility.",
    "evidence_sha256": "a80d8b5d0eef762462f92ac56281ca0d6a340738fe2d28a0d715e6f9b4d7afce",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.572 close=1991.055 brisk=0.228/low nsup=1967.7839999999999 dnsd%=1.17 | mkv=0.4347/Bull/long | qvr=0.1183",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.83,
-   "margin": 0.71
+   "margin": 0.71,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 2,
@@ -28,12 +31,15 @@
    "note": "Strong technical setup with 5 confluences and 0.21 break-risk, but Markov conviction (+0.182) is lower than FORTUM and budget only accommodates one position.",
    "evidence_sha256": "8b0566f4dd4d1258cd76a380fd0cb545f04958d526ef53e1b02818ea6ae48cf8",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.712 close=215.6 brisk=0.214/low nsup=212.7625 dnsd%=1.32 | mkv=0.1823/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.91,
-   "margin": 0.83
+   "margin": 0.83,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 3,
@@ -42,12 +48,15 @@
    "note": "Strong technical confluence (5/3) with low support break-risk (0.227) and fresh Bull-state Markov signal (+0.206). Actionable swing entry.",
    "evidence_sha256": "4ca2f8f02faf6fad2ce67929c2b85fe7cd9ea8262eb1084baac091c346417b3f",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.097 close=211.8 brisk=0.227/low nsup=210.0 dnsd%=0.85 | mkv=0.2060/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.84,
-   "margin": 0.72
+   "margin": 0.72,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 4,
@@ -56,12 +65,15 @@
    "note": "Bullish daily trend with 5 confluences, but modest Markov signal (+0.1387) and 0.31 reward/risk justify monitoring on the medium-term watchlist.",
    "evidence_sha256": "a64b7221d087fa5970b27a5f64e194062818cda089e59438a868fa41218408e6",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.309 close=693.53 brisk=0.000/low nsup=610.1600000000001 dnsd%=12.02 | mkv=0.1387/Bull/long | qvr=-0.0896",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.79,
-   "margin": 0.62
+   "margin": 0.62,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 5,
@@ -70,12 +82,15 @@
    "note": "Strong technical foundation with 5 confluences, low break-risk projection of 0.022, and confirmed Bull-state Markov regime (+0.386).",
    "evidence_sha256": "93da2e683f380bd29aa980a52ccf10eb4b8b819ab87618a008f81ff01a2bab93",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.000 close=18.85 brisk=0.022/low nsup=17.03 dnsd%=9.66 | mkv=0.3858/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.86,
-   "margin": 0.73
+   "margin": 0.73,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 6,
@@ -84,12 +99,15 @@
    "note": "High technical confluence (6 confluences) and low support break-risk (0.219), but Markov conviction (+0.045) is too weak for immediate entry. Keep on watchlist.",
    "evidence_sha256": "ab9c2da7065733099445b72214a5bbc4a82dfebf4e4418b290f316c6d3e96962",
    "evidence": "confl=6 min=3 trend=bullish sent=BUY rr=2.489 close=946.0 brisk=0.219/low nsup=934.5 dnsd%=1.22 | mkv=0.0453/Sideways/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.84,
-   "margin": 0.74
+   "margin": 0.74,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 7,
@@ -98,12 +116,15 @@
    "note": "Held enterprise software leader showing steady +31% gain with +0.5174 Bull Markov regime and low break risk.",
    "evidence_sha256": "6f05c37bf135a096b73ede76fa8267e6cf3c6a24bf1253849cf6beb7ea676118",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.908 close=249.12 brisk=0.215/low nsup=243.1727076923077 dnsd%=2.39 | mkv=0.5174/Bull/long | qvr=0.1623",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.85,
-   "margin": 0.72
+   "margin": 0.72,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 8,
@@ -112,12 +133,15 @@
    "note": "Foundry leader showing 5 technical confluences, low break risk (0.192), and strong Markov Sideways-to-Bull conviction (+0.3506).",
    "evidence_sha256": "71c99b4f5d719bd6c8923048a7c0261fd2e16aba293ee1673aec54a789384cc3",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.695 close=439.0 brisk=0.192/low nsup=428.11 dnsd%=2.48 | mkv=0.3506/Sideways/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "misdescribes_category",
    "selected_probability": 0.52,
-   "margin": 0.2
+   "margin": 0.2,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 9,
@@ -126,12 +150,15 @@
    "note": "Core memory holding demonstrating strong Bull Markov regime (+0.5791) and intact 6-confluence technical profile.",
    "evidence_sha256": "e6175c62591f6e8552967ab2ade7ef601f90495ac8528297a57af464577cabf8",
    "evidence": "confl=6 min=3 trend=bullish sent=BUY rr=2.358 close=1000.26 brisk=0.239/low nsup=991.1001 dnsd%=0.92 | mkv=0.5791/Bull/long | qvr=-0.3142",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.88,
-   "margin": 0.78
+   "margin": 0.78,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 10,
@@ -140,12 +167,15 @@
    "note": "Danish industrial with 4 confluences and +0.391 Markov bull signal; monitored on near-term watchlist.",
    "evidence_sha256": "acff7bdef264cef0d59ea519a43d7c34842e7b309cbca440006ec8f181859905",
    "evidence": "confl=4 min=3 trend=bullish sent=OVERWEIGHT rr=0.571 close=593.0 brisk=0.305/low nsup=551.5 dnsd%=7.00 | mkv=0.3909/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.76,
-   "margin": 0.65
+   "margin": 0.65,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 11,
@@ -154,12 +184,15 @@
    "note": "Danish industrial exhibiting 4 technical confluences and +0.391 Bull Markov reading; consolidating near 593 DKK support.",
    "evidence_sha256": "acff7bdef264cef0d59ea519a43d7c34842e7b309cbca440006ec8f181859905",
    "evidence": "confl=4 min=3 trend=bullish sent=OVERWEIGHT rr=0.571 close=593.0 brisk=0.305/low nsup=551.5 dnsd%=7.00 | mkv=0.3909/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "wording fair; checker separately flagged 593-vs-551.5 (confirmed genuine)",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.83,
-   "margin": 0.71
+   "margin": 0.71,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "wording fair; checker separately flagged 593-vs-551.5 (confirmed genuine)",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 12,
@@ -168,12 +201,15 @@
    "note": "Intact bullish technical structure with very low 0.032 break risk, monitored on watchlist for entry timing.",
    "evidence_sha256": "b995af6cb81e43a1a9da4864cb02e8cc68e2198966daac9b34f46e80deb76ef9",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.745 close=677.21 brisk=0.032/low nsup=610.1600000000001 dnsd%=9.90 | mkv=0.1566/Bull/long | qvr=-0.0866",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.81,
-   "margin": 0.65
+   "margin": 0.65,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 13,
@@ -182,12 +218,15 @@
    "note": "Newly added enterprise software position up +0.528 Markov signal, operating with active stop at 222.97 USD.",
    "evidence_sha256": "b95ed9ef1868fddab12aae4c8dda438f6de8c26295d04c7770dcced48864997a",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.138 close=244.16 brisk=0.228/low nsup=240.38492000000002 dnsd%=1.55 | mkv=0.5283/Bull/long | qvr=0.1588",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.79,
-   "margin": 0.67
+   "margin": 0.67,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 14,
@@ -196,12 +235,15 @@
    "note": "Top Nordic chemical candidate exhibiting 5 technical confluences, low break-risk support at 520 DKK, and strong +0.739 Markov regime conviction.",
    "evidence_sha256": "f1f287b5f98875fa7f4a243fb3ba1ec84a42a8b4af5377c7ea8fae7fdc01bd8f",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.328 close=522.5 brisk=0.242/low nsup=520.0 dnsd%=0.48 | mkv=0.7389/Sideways/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "borderline: \"regime conviction\" names conviction, not state",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.72,
-   "margin": 0.57
+   "margin": 0.57,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "borderline: \"regime conviction\" names conviction, not state",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 15,
@@ -210,12 +252,15 @@
    "note": "Industrial machinery giant with 5 technical confluences and exceptionally low support break risk (0.053), but reward/risk is compressed (0.81); held on near-term watch.",
    "evidence_sha256": "325deae7f9bba33eadf51161821ef5246ba4344b4bd9e65b169ffc6c6bf3edd3",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.813 close=675.74 brisk=0.053/low nsup=617.21 dnsd%=8.66 | mkv=0.1799/Bull/long | qvr=-0.0807",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.69,
-   "margin": 0.44
+   "margin": 0.44,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 16,
@@ -224,12 +269,15 @@
    "note": "Held E&P core maintaining low break-risk (0.083) and positive return trajectory.",
    "evidence_sha256": "b83d5af121051888f2599fe521ef6f3717f69e2b2c51860634d61f65d1184ba7",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.000 close=368.5 brisk=0.083/low nsup=349.1 dnsd%=5.26 | mkv=0.1507/Sideways/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.68,
-   "margin": 0.5
+   "margin": 0.5,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 17,
@@ -238,12 +286,15 @@
    "note": "Held Norwegian E&P core maintaining low break risk (0.083) and protected by active stop at 353.97 NOK.",
    "evidence_sha256": "b83d5af121051888f2599fe521ef6f3717f69e2b2c51860634d61f65d1184ba7",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.000 close=368.5 brisk=0.083/low nsup=349.1 dnsd%=5.26 | mkv=0.1507/Sideways/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.48,
-   "margin": 0.16
+   "margin": 0.16,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 18,
@@ -252,12 +303,15 @@
    "note": "Resilient compounder exhibiting 5 confluences, BUY sentiment, 0.075 break risk, and robust support clustering.",
    "evidence_sha256": "7c20883a1af526724a1cda2fad07e97db4dd91fe9f1d825bd3cd8dab207bde97",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.872 close=514.95 brisk=0.075/low nsup=497.93408125 dnsd%=3.30 | mkv=0.0581/Sideways/long | qvr=0.0000",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.54,
-   "margin": 0.28
+   "margin": 0.28,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 19,
@@ -266,12 +320,15 @@
    "note": "Enterprise cloud leader advancing with +0.559 Bull Markov confirmation, positive Congressional trading flow, and stop at 238.72 USD.",
    "evidence_sha256": "e1dd47e2648ad8aa5a01c66a125ad5458e0a8b16d29caac446ecbc14067fc130",
    "evidence": "confl=4 min=3 trend=bullish sent=OVERWEIGHT rr=0.427 close=259.43 brisk=0.441/moderate nsup=257.9825 dnsd%=0.56 | mkv=0.5591/Bull/long | qvr=0.1577",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "overstated",
    "selected_probability": 0.49,
-   "margin": 0.07
+   "margin": 0.07,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 20,
@@ -280,12 +337,15 @@
    "note": "Held Norwegian E&P core showing steady +10.5% total return, low break risk (0.145), and active stop at 353.97 NOK.",
    "evidence_sha256": "b5c7219865e97855d91a5da62c90bedf94b27b4c8b961f3ff6595c917f4453a8",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.000 close=370.1 brisk=0.145/low nsup=357.8 dnsd%=3.32 | mkv=0.2642/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.79,
-   "margin": 0.61
+   "margin": 0.61,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 21,
@@ -294,12 +354,15 @@
    "note": "Top technical and Markov setup: 6 BUY confluences, bullish trend bias, 2.96 reward/risk, low break risk (0.233), and +0.429 Bull regime conviction.",
    "evidence_sha256": "00fa13fdb27c5d59775f7dab9fd274675fe750d94453ef5d4d7a241570fc65aa",
    "evidence": "confl=6 min=3 trend=bullish sent=BUY rr=2.964 close=187.8 brisk=0.233/low nsup=185.76 dnsd%=1.09 | mkv=0.4289/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.94,
-   "margin": 0.9
+   "margin": 0.9,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 22,
@@ -308,12 +371,15 @@
    "note": "Finnish utility core demonstrating steady support hold above 23.13 EUR base with 5 confluences and +0.522 Markov score.",
    "evidence_sha256": "252135ff9e3b50b31851453ebf2ed768e5a7968f05c6f95772230e50e64b91fb",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=1.366 close=23.76 brisk=0.199/low nsup=23.134999999999998 dnsd%=2.63 | mkv=0.5216/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.84,
-   "margin": 0.7
+   "margin": 0.7,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 23,
@@ -322,12 +388,15 @@
    "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal.",
    "evidence_sha256": "0a7a7a5e89a20a956ce028113a7286cfac98053720d9208e90515fc18e132c71",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.152 close=648.43 brisk=0.180/low nsup=630.0350000000001 dnsd%=2.84 | mkv=0.5163/Bull/long | qvr=-",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.89,
-   "margin": 0.8
+   "margin": 0.8,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 24,
@@ -336,12 +405,15 @@
    "note": "German insurance blue-chip consolidating comfortably above 446 EUR support with 4 confluences and positive Markov regime.",
    "evidence_sha256": "3b4878422f130db85bbbf14c06e1b04bf64a931ad201eb98f4ace9cb52cffd7e",
    "evidence": "confl=4 min=3 trend=bullish sent=OVERWEIGHT rr=0.319 close=451.1 brisk=0.392/moderate nsup=446.0 dnsd%=1.13 | mkv=0.2467/Sideways/long | qvr=-",
-   "adjudicator_label": "ambiguous",
-   "adjudicator_note": "overstated-leaning: \"comfortably\" vs moderate break-risk; \"positive Markov regime\" vs state Sideways",
-   "blind": false,
    "grader_verdict": "misdescribes_category",
    "selected_probability": 0.43,
-   "margin": 0.14
+   "margin": 0.14,
+   "prereveal_label": "ambiguous",
+   "prereveal_blind": false,
+   "prereveal_note": "overstated-leaning: \"comfortably\" vs moderate break-risk; \"positive Markov regime\" vs state Sideways",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 25,
@@ -350,12 +422,15 @@
    "note": "Resilient defensive core with 6 confluences and 0.142 break risk; awaiting stronger Markov momentum before entry.",
    "evidence_sha256": "ca22bf23a21f97957256c17e083cf18b2b389d2a771489909596a07430b9f788",
    "evidence": "confl=6 min=3 trend=bullish sent=BUY rr=2.192 close=509.2 brisk=0.142/low nsup=497.93408125 dnsd%=2.21 | mkv=0.0581/Sideways/long | qvr=0.0000",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.7,
-   "margin": 0.43
+   "margin": 0.43,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 26,
@@ -364,12 +439,15 @@
    "note": "Strong technical foundation (5 confluences) and +0.631 Markov Bull signal; held in reserve due to net congressional selling.",
    "evidence_sha256": "41e9bcb39a99fe1a3229b4e6d6ab4a2b611e7a50ddb8fa007c939f7093139e5d",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=0.511 close=337.0 brisk=0.101/low nsup=319.35 dnsd%=5.24 | mkv=0.6309/Bull/long | qvr=-0.5261",
-   "adjudicator_label": "fair",
-   "adjudicator_note": "",
-   "blind": true,
    "grader_verdict": "fair",
    "selected_probability": 0.7,
-   "margin": 0.47
+   "margin": 0.47,
+   "prereveal_label": "fair",
+   "prereveal_blind": true,
+   "prereveal_note": "",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 27,
@@ -378,12 +456,15 @@
    "note": "Position initiated at market open and protected by broker stop at 407.83 USD; consolidating comfortably within bullish structure.",
    "evidence_sha256": "e132d58f73a6fa0e39478937a4abc03af1111507e233a77b5e3d8b50dff4e784",
    "evidence": "confl=5 min=3 trend=bullish sent=BUY rr=2.173 close=430.26 brisk=0.438/moderate nsup=428.11 dnsd%=0.50 | mkv=0.3012/Sideways/long | qvr=0.0747",
-   "adjudicator_label": "ambiguous",
-   "adjudicator_note": "overstated-leaning: \"consolidating comfortably\" vs moderate break-risk 0.438",
-   "blind": false,
    "grader_verdict": "overstated",
    "selected_probability": 0.72,
-   "margin": 0.49
+   "margin": 0.49,
+   "prereveal_label": "ambiguous",
+   "prereveal_blind": false,
+   "prereveal_note": "overstated-leaning: \"consolidating comfortably\" vs moderate break-risk 0.438",
+   "revised_label": null,
+   "revision_blind": null,
+   "revision_basis": null
   },
   {
    "case": 28,
@@ -392,12 +473,17 @@
    "note": "Top held conviction holding trading above 525 DKK with +0.749 Markov Bull regime and live broker stop at 477.54 DKK.",
    "evidence_sha256": "3a73c5c5c480af504f7b5b03c038fa04b8b6618133ab0f6ccd86882033d88f1c",
    "evidence": "confl=4 min=3 trend=bullish sent=OVERWEIGHT rr=0.579 close=510.0 brisk=0.430/moderate nsup=502.89 dnsd%=1.39 | mkv=0.7491/Bull/long | qvr=-",
-   "adjudicator_label": "ambiguous",
-   "adjudicator_note": "RETRACTED from \"numeric contradiction\": 525 is the live quote (current_price_local=525.0 @12:25:01Z), not a 15-DKK error vs the daily close of 510",
-   "blind": true,
    "grader_verdict": "overstated",
    "selected_probability": 0.6,
-   "margin": 0.25
+   "margin": 0.25,
+   "prereveal_label": "numeric_contradiction",
+   "prereveal_blind": true,
+   "prereveal_note": "read \"trading above 525 DKK\" against the daily indicator close of 510.0",
+   "revised_label": "ambiguous",
+   "revision_blind": false,
+   "revision_basis": "retracted after review supplied current_price_local=525.0 quoted 12:25:01Z, 16s before the report; the note quotes the live price, so there is no discrepancy. Revised with the verdict and new evidence both known."
   }
- ]
+ ],
+ "label_provenance": "prereveal_* is the label recorded before the grader verdict was seen. revised_* is any later change, with the basis and its blindness stated. Case 28 is the only revision, and it was not blind. Cases 24 and 27 had prereveal_blind=false because their verdicts had been seen earlier while debugging.",
+ "caveat": "An n2 recomputation makes measurements consistent. It is not a numeric correctness rate, which needs independently checked examples."
 }
