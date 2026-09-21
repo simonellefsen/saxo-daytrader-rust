@@ -147,10 +147,15 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
     let mut failed = 0usize;
 
     for pair in &pairs {
-        let now = Utc::now().to_rfc3339();
+        // Three distinct moments, because collapsing them into one taken
+        // before the await stamps a judgement with a time before it existed.
+        let requested_at = Utc::now().to_rfc3339();
         // Content-hashed rather than random: reproducible, and the pair
         // dedup above already guarantees one call per (item, symbol) per run.
-        let request_id = stable_id("jev", &format!("{}|{}|{now}", pair.item_id, pair.symbol));
+        let request_id = stable_id(
+            "jev",
+            &format!("{}|{}|{requested_at}", pair.item_id, pair.symbol),
+        );
         let jev_state = crate::jev_signals::news_state(
             &pair.symbol,
             company_names.get(&pair.symbol).map(String::as_str),
@@ -162,11 +167,12 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
 
         match crate::jev::ask(&cfg, &jev_state, &questions).await {
             Ok(response) => {
+                let answered_at = Utc::now().to_rfc3339();
                 if let Err(err) = crate::jev_store::record_success(
                     &state.pool,
                     crate::jev_store::RecordedRequest {
                         id: &request_id,
-                        created_at: &now,
+                        created_at: &requested_at,
                         purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
                         subject: Some(&pair.item_id),
                         model_requested: &cfg.model,
@@ -191,14 +197,15 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                     &pair.summary,
                     pair.published_at.as_deref(),
                     pair.first_seen_at.as_deref(),
-                    &now,
+                    &requested_at,
+                    &answered_at,
                 );
                 if let Err(err) = crate::jev_store::record_editorial_signal(
                     &state.pool,
                     crate::jev_store::RecordedSignal {
                         item_id: &pair.item_id,
                         symbol: &pair.symbol,
-                        created_at: &now,
+                        created_at: &answered_at,
                         request_id: Some(&request_id),
                         marker_screened: pair.marker_screened,
                         provenance: &provenance,
@@ -224,7 +231,7 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                     &state.pool,
                     crate::jev_store::RecordedRequest {
                         id: &request_id,
-                        created_at: &now,
+                        created_at: &requested_at,
                         purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
                         subject: Some(&pair.item_id),
                         model_requested: &cfg.model,
@@ -1230,6 +1237,7 @@ mod tests {
             Some(created_at),
             Some(created_at),
             created_at,
+            created_at,
         );
         crate::jev_store::record_editorial_signal(
             &state.pool,
@@ -1553,6 +1561,7 @@ mod tests {
             pairs[0].published_at.as_deref(),
             pairs[0].first_seen_at.as_deref(),
             "2026-09-20T08:00:00Z",
+            "2026-09-20T08:00:02Z",
         );
         assert_eq!(
             provenance.timing,

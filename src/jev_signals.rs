@@ -325,8 +325,35 @@ pub(crate) fn evidence_timing(
 /// The ordering test is the one that matters and the one an "as of" column
 /// cannot answer by itself: a judgement recorded after a fill did not inform
 /// it, however promptly it followed the headline.
-pub(crate) fn feature_available_at(timing: &str, scored_at: &str, decided_at: &str) -> bool {
-    timing == TIMING_DECISION_TIME && scored_at <= decided_at
+pub(crate) fn feature_available_at(timing: &str, available_at: &str, decided_at: &str) -> bool {
+    if timing != TIMING_DECISION_TIME {
+        return false;
+    }
+    // Parsed instants, not strings. This codebase emits two RFC3339 spellings
+    // -- `Utc::now().to_rfc3339()` gives nanoseconds and a `+00:00` offset,
+    // while `to_rfc3339_opts(Secs, true)` gives whole seconds and `Z` -- and
+    // '.' sorts before 'Z', so a lexical compare ranked the later instant
+    // first. It failed in the unsafe direction, reporting a judgement as
+    // available to a decision that preceded it.
+    let (Some(available), Some(decided)) = (parse_instant(available_at), parse_instant(decided_at))
+    else {
+        return false;
+    };
+    // Strict: a judgement stamped at the same instant as the decision is not
+    // established to have preceded it.
+    available < decided
+}
+
+/// The one spelling of "now" this module writes, so stored timestamps do not
+/// mix formats the way the two that caused the lexical-compare bug did.
+pub(crate) fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn parse_instant(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    DateTime::parse_from_rfc3339(value.trim())
+        .ok()
+        .map(|value| value.with_timezone(&chrono::Utc))
 }
 
 /// Whether a partially answered signal may be asked again.
@@ -364,25 +391,51 @@ pub(crate) struct EvidenceProvenance {
     pub published_at: Option<String>,
     pub first_seen_at: Option<String>,
     pub content_sha256: String,
+    /// The sanitized text the judgement was made about.
+    ///
+    /// A hash identifies evidence but cannot reconstruct it, and
+    /// `editorial_research_items` is pruned on a retention schedule -- so a
+    /// hash alone leaves a judgement that can be matched but never
+    /// adjudicated. This is the same bounded, injection-screened text that
+    /// reached Jev, not the raw feed.
+    pub title: String,
+    pub summary: String,
+    /// When the request was sent.
+    pub requested_at: String,
+    /// When Jev's answer arrived. This is when the judgement existed.
+    pub answered_at: String,
     pub timing: &'static str,
     pub lag_seconds: Option<i64>,
     pub measurement_version: &'static str,
 }
 
 impl EvidenceProvenance {
+    /// `requested_at` is when the call was sent and `answered_at` when it
+    /// returned. They are recorded separately because a single timestamp taken
+    /// before the await -- which is what this did -- stamps a judgement with a
+    /// moment before it existed, and a decision taken while the request was in
+    /// flight would then appear to have had access to it.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         canonical_url: &str,
         title: &str,
         summary: &str,
         published_at: Option<&str>,
         first_seen_at: Option<&str>,
-        scored_at: &str,
+        requested_at: &str,
+        answered_at: &str,
     ) -> Self {
-        let (timing, lag_seconds) = evidence_timing(first_seen_at, scored_at);
+        // Promptness is measured to when the judgement existed, not to when it
+        // was asked for.
+        let (timing, lag_seconds) = evidence_timing(first_seen_at, answered_at);
         Self {
             published_at: published_at.map(str::to_string),
             first_seen_at: first_seen_at.map(str::to_string),
             content_sha256: content_fingerprint(canonical_url, title, summary),
+            title: title.to_string(),
+            summary: summary.to_string(),
+            requested_at: requested_at.to_string(),
+            answered_at: answered_at.to_string(),
             timing,
             lag_seconds,
             measurement_version: NEWS_QUESTION_SET_VERSION,
@@ -408,9 +461,9 @@ pub(crate) fn content_fingerprint(canonical_url: &str, title: &str, summary: &st
 }
 
 fn elapsed_seconds(from: Option<&str>, to: &str) -> Option<i64> {
-    let from = DateTime::parse_from_rfc3339(from?.trim()).ok()?;
-    let to = DateTime::parse_from_rfc3339(to.trim()).ok()?;
-    Some((to.timestamp()) - (from.timestamp()))
+    let from = parse_instant(from?)?;
+    let to = parse_instant(to)?;
+    Some(to.timestamp() - from.timestamp())
 }
 
 /// How much of the collected sample is usable as decision-time features.
@@ -443,8 +496,12 @@ pub(crate) fn retention_summary(signal_rows: &[JsonValue], as_of: &str) -> JsonV
         // place of `as_of`. Applying it here keeps the policy executable
         // rather than documented, and catches a judgement stamped in the
         // future by a clock disagreement.
-        if let Some(scored_at) = row.get("created_at").and_then(JsonValue::as_str) {
-            if feature_available_at(timing, scored_at, as_of) {
+        // `available_at`, not `created_at`: a judgement becomes usable when it
+        // is readable, and `created_at` is the answer time, which precedes it.
+        // A row written before these columns existed has no availability
+        // instant and cannot be shown to have preceded anything.
+        if let Some(available_at) = row.get("available_at").and_then(JsonValue::as_str) {
+            if feature_available_at(timing, available_at, as_of) {
                 features_available += 1;
             }
         }
@@ -583,39 +640,27 @@ pub(crate) fn symbol_rankings(signal_rows: &[JsonValue]) -> Vec<SymbolRanking> {
 /// Complements `decision_quality.rs` rather than replacing it. Those eleven
 /// checks verify structure and evidence presence; these ask whether the prose
 /// is actually supported by the evidence it sits next to.
-pub(crate) fn report_grading_questions() -> BTreeMap<String, Question> {
-    BTreeMap::from([
-        (
-            "rationale_supported".to_string(),
-            Question::Noul {
-                // Scoped to the candidates on purpose.
-                //
-                // Asking whether *every* claim in `reasoning_steps` is
-                // supported produced 0.03-0.05 on every report in the first
-                // live run -- not because the reports were unsupported, but
-                // because the reasoning cites capital state, held positions,
-                // Quiver flags, protective stops, and commission thresholds,
-                // none of which fits in Jev's window alongside the report. Jev
-                // was answering the question asked, over a fifth of the
-                // material the claims referenced.
-                //
-                // The candidate notes and their signal metadata do both fit,
-                // so the question now asks only what the evidence can settle.
-                instructions: json!(
-                    "Does each entry of `report.selected_assets` make claims about its symbol \
-                     that are borne out by that symbol's entry in `evidence.candidate_evidence`, \
-                     rather than citing figures or conditions that are absent from or \
-                     contradicted by it? Numbers quoted to fewer decimal places than the \
-                     evidence carries are borne out when they round to it. Judge only the \
-                     candidate claims; ignore statements about portfolio capital, held \
-                     positions, or costs, whose supporting material is not provided here."
-                ),
-                criteria: Some(json!({
-                    "true": "Every candidate claim is borne out by that candidate's evidence",
-                    "false": "At least one candidate claim is absent from or contradicted by its evidence",
-                })),
-            },
-        ),
+pub(crate) const CLAIM_SUPPORTED: &str = "supported";
+pub(crate) const CLAIM_CONTRADICTED: &str = "contradicted";
+pub(crate) const CLAIM_INSUFFICIENT: &str = "insufficient_evidence";
+
+/// The id under which candidate `index`'s verdict is returned.
+pub(crate) fn claim_question_id(index: usize) -> String {
+    format!("claim_{index}")
+}
+
+/// One verdict per candidate, plus two questions about the report as a whole.
+///
+/// The candidate checks are deliberately atomic and three-valued. A single
+/// Noul over "is every claim borne out" conflated two different findings: a
+/// figure that disagrees with the evidence, which is about the report, and a
+/// figure with no counterpart in the evidence, which is about the grader. It
+/// also invited a reading of the probability as a proportion of claims. A Noul
+/// is the probability that one proposition is true, not a score out of the
+/// claims it ranges over, so a mid-range value there meant uncertainty about
+/// the whole conjunction and nothing more.
+pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<String, Question> {
+    let mut questions = BTreeMap::from([
         (
             "view_consistent".to_string(),
             Question::Noul {
@@ -645,11 +690,62 @@ pub(crate) fn report_grading_questions() -> BTreeMap<String, Question> {
                 ],
             },
         ),
-    ])
+    ]);
+
+    for index in 0..candidate_count {
+        questions.insert(
+            claim_question_id(index),
+            Question::Choice {
+                instructions: json!({
+                    "question": format!(
+                        "Consider only the assertions made in `candidates[{index}].note` about \
+                         the symbol `candidates[{index}].symbol`. Are they borne out by \
+                         `evidence[{index}]`, which holds that symbol's technical indicators, \
+                         Markov regime signal, and Quiver congressional-trading signal as they \
+                         stood when the note was written?"
+                    ),
+                    "rounding": "A number quoted to fewer decimal places than the evidence \
+                                 carries agrees with it when it rounds to it.",
+                    "out_of_scope": "Assertions about portfolio capital, holdings, unrealised \
+                                     profit, or trading costs have no counterpart in the \
+                                     evidence by design. Disregard them entirely rather than \
+                                     counting them as unsupported.",
+                }),
+                criteria: BTreeMap::from([
+                    (
+                        CLAIM_SUPPORTED.to_string(),
+                        "Every in-scope assertion has a counterpart in the evidence and agrees \
+                         with it"
+                            .to_string(),
+                    ),
+                    (
+                        CLAIM_CONTRADICTED.to_string(),
+                        "At least one in-scope assertion has a counterpart in the evidence and \
+                         disagrees with it"
+                            .to_string(),
+                    ),
+                    (
+                        CLAIM_INSUFFICIENT.to_string(),
+                        "At least one in-scope assertion has no counterpart in the evidence, \
+                         and none disagree"
+                            .to_string(),
+                    ),
+                ]),
+            },
+        );
+    }
+    questions
 }
 
-pub(crate) fn report_grading_state(report: &JsonValue, evidence: &JsonValue) -> JsonValue {
-    json!({ "report": report, "evidence": evidence })
+/// `candidates` and `evidence` are aligned by index, so a question can point
+/// at `candidates[n]` and `evidence[n]` by path instead of naming a symbol
+/// inside prose.
+pub(crate) fn report_grading_state(
+    report: &JsonValue,
+    candidates: &[JsonValue],
+    evidence: &[JsonValue],
+) -> JsonValue {
+    json!({ "report": report, "candidates": candidates, "evidence": evidence })
 }
 
 /// Classifies a broker or provider error whose wording the substring cascades
@@ -1086,6 +1182,7 @@ mod tests {
             "Full-year outlook lifted.",
             Some("2026-09-20T07:55:00Z"),
             Some("2026-09-20T08:00:00Z"),
+            "2026-09-20T08:09:58Z",
             "2026-09-20T08:10:00Z",
         );
         assert_eq!(provenance.timing, TIMING_DECISION_TIME);
@@ -1181,6 +1278,7 @@ mod tests {
         let row = |timing: &str, answered: i64| {
             json!({
                 "created_at": "2026-09-20T08:00:00Z",
+                "available_at": "2026-09-20T08:00:01Z",
                 "evidence_timing": timing,
                 "measurement_version": NEWS_QUESTION_SET_VERSION,
                 "model_resolved": "typesafe/jev-1.13-20260917",
@@ -1225,10 +1323,128 @@ mod tests {
     fn a_judgement_stamped_after_the_decision_is_not_counted_as_available() {
         let rows = vec![json!({
             "created_at": "2026-09-20T14:00:00Z",
+            "available_at": "2026-09-20T14:00:01Z",
             "evidence_timing": TIMING_DECISION_TIME,
         })];
         let summary = retention_summary(&rows, "2026-09-20T12:00:00Z");
         assert_eq!(summary["decision_time"], 1);
         assert_eq!(summary["features_available"], 0);
+    }
+
+    /// This codebase emits two RFC3339 spellings: `Utc::now().to_rfc3339()`
+    /// gives nanoseconds and a `+00:00` offset, `to_rfc3339_opts(Secs, true)`
+    /// gives whole seconds and `Z`. '.' sorts before 'Z', so a lexical compare
+    /// ranked the later instant first -- and it failed in the unsafe
+    /// direction, calling a judgement available to a decision that preceded it.
+    #[test]
+    fn availability_compares_instants_not_the_two_timestamp_spellings() {
+        let later = "2026-09-21T04:30:00.123456789+00:00";
+        let earlier = "2026-09-21T04:30:00Z";
+        assert!(later <= earlier, "the lexical compare that was wrong");
+        assert!(
+            !feature_available_at(TIMING_DECISION_TIME, later, earlier),
+            "a judgement stamped after the decision is not available to it, \
+             whichever spelling each timestamp uses"
+        );
+        assert!(feature_available_at(TIMING_DECISION_TIME, earlier, later));
+    }
+
+    /// An instant equal to the decision has not been shown to precede it.
+    #[test]
+    fn an_equal_instant_does_not_count_as_available() {
+        let at = "2026-09-21T04:30:00Z";
+        assert!(!feature_available_at(TIMING_DECISION_TIME, at, at));
+    }
+
+    #[test]
+    fn an_unparseable_timestamp_is_never_available() {
+        assert!(!feature_available_at(
+            TIMING_DECISION_TIME,
+            "not a timestamp",
+            "2026-09-21T04:30:00Z"
+        ));
+        assert!(!feature_available_at(
+            TIMING_DECISION_TIME,
+            "2026-09-21T04:30:00Z",
+            ""
+        ));
+    }
+
+    /// A single timestamp taken before the await stamps the judgement with a
+    /// moment before it existed, so a decision taken while the request was in
+    /// flight would appear to have had access to it.
+    #[test]
+    fn the_request_and_answer_moments_are_recorded_separately() {
+        let provenance = EvidenceProvenance::new(
+            "https://example.test/a",
+            "Novo raises guidance",
+            "Outlook lifted.",
+            Some("2026-09-21T07:55:00Z"),
+            Some("2026-09-21T08:00:00Z"),
+            "2026-09-21T08:00:01Z",
+            "2026-09-21T08:00:03Z",
+        );
+        assert_eq!(provenance.requested_at, "2026-09-21T08:00:01Z");
+        assert_eq!(provenance.answered_at, "2026-09-21T08:00:03Z");
+        assert!(
+            !feature_available_at(
+                provenance.timing,
+                &provenance.answered_at,
+                "2026-09-21T08:00:02Z"
+            ),
+            "a decision taken while the request was in flight had no answer to use"
+        );
+        assert_eq!(
+            provenance.lag_seconds,
+            Some(3),
+            "promptness is measured to when the judgement existed, not to when it was asked for"
+        );
+    }
+
+    /// A hash identifies evidence; it cannot reconstruct it. Without the text,
+    /// a judgement whose source row has been pruned can be matched but never
+    /// adjudicated -- and adjudication is the only way to tell a correct
+    /// judgement from a confident wrong one.
+    #[test]
+    fn the_judged_text_is_retained_alongside_its_fingerprint() {
+        let provenance = EvidenceProvenance::new(
+            "https://example.test/a",
+            "Novo raises guidance",
+            "Full-year outlook lifted.",
+            None,
+            None,
+            "2026-09-21T08:00:01Z",
+            "2026-09-21T08:00:03Z",
+        );
+        assert_eq!(provenance.title, "Novo raises guidance");
+        assert_eq!(provenance.summary, "Full-year outlook lifted.");
+        assert_eq!(provenance.content_sha256.len(), 64);
+    }
+
+    #[test]
+    fn the_written_timestamp_format_parses_back() {
+        let now = now_rfc3339();
+        assert!(now.ends_with('Z'), "{now}");
+        assert!(parse_instant(&now).is_some(), "{now}");
+    }
+
+    /// A row written before availability was recorded cannot be shown to have
+    /// preceded anything, so it is not counted as an available feature. Only
+    /// `available_at` establishes that; `created_at` is the answer time, which
+    /// precedes readability.
+    #[test]
+    fn a_row_without_an_availability_instant_is_not_counted_as_available() {
+        let summary = retention_summary(
+            &[json!({
+                "created_at": "2026-09-20T08:00:00Z",
+                "evidence_timing": TIMING_DECISION_TIME,
+            })],
+            "2026-09-20T12:00:00Z",
+        );
+        assert_eq!(summary["decision_time"], 1);
+        assert_eq!(
+            summary["features_available"], 0,
+            "pre-migration rows are not retroactively usable as features"
+        );
     }
 }

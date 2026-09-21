@@ -91,6 +91,16 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             measurement_version TEXT,
             answered_question_count INTEGER NOT NULL DEFAULT 0,
             expected_question_count INTEGER NOT NULL DEFAULT 0,
+            -- Three distinct moments. `created_at` is kept as the answer time
+            -- for continuity; `available_at` is the one availability is judged
+            -- against, because a judgement is only usable once it is readable.
+            requested_at TEXT,
+            answered_at TEXT,
+            available_at TEXT,
+            -- The sanitized text judged, so a pruned source row does not leave
+            -- a judgement that can be matched by hash but never adjudicated.
+            evidence_title TEXT,
+            evidence_summary TEXT,
             PRIMARY KEY (item_id, symbol)
         )",
         "CREATE INDEX IF NOT EXISTS idx_jev_requests_created
@@ -128,6 +138,11 @@ pub fn signal_columns_to_ensure() -> &'static [&'static str] {
         "measurement_version TEXT",
         "answered_question_count INTEGER NOT NULL DEFAULT 0",
         "expected_question_count INTEGER NOT NULL DEFAULT 0",
+        "requested_at TEXT",
+        "answered_at TEXT",
+        "available_at TEXT",
+        "evidence_title TEXT",
+        "evidence_summary TEXT",
     ]
 }
 
@@ -253,9 +268,10 @@ pub(crate) async fn record_editorial_signal(
             company_specific, instruction_shaped, restates_known, signed_score, marker_screened,
             evidence_published_at, evidence_first_seen_at, evidence_sha256, evidence_timing,
             evidence_lag_seconds, model_resolved, measurement_version,
-            answered_question_count, expected_question_count
+            answered_question_count, expected_question_count,
+            requested_at, answered_at, available_at, evidence_title, evidence_summary
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                   $16, $17, $18, $19, $20, $21, $22, $23, $24)
+                   $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
          ON CONFLICT (item_id, symbol) DO UPDATE SET
            created_at = excluded.created_at, request_id = excluded.request_id,
            about_symbol = excluded.about_symbol, direction = excluded.direction,
@@ -273,7 +289,11 @@ pub(crate) async fn record_editorial_signal(
            model_resolved = excluded.model_resolved,
            measurement_version = excluded.measurement_version,
            answered_question_count = excluded.answered_question_count,
-           expected_question_count = excluded.expected_question_count",
+           expected_question_count = excluded.expected_question_count,
+           requested_at = excluded.requested_at, answered_at = excluded.answered_at,
+           available_at = excluded.available_at,
+           evidence_title = excluded.evidence_title,
+           evidence_summary = excluded.evidence_summary",
     )
     .bind(item_id)
     .bind(symbol)
@@ -299,6 +319,16 @@ pub(crate) async fn record_editorial_signal(
     .bind(meta.provenance.measurement_version)
     .bind(meta.answered_question_count)
     .bind(meta.expected_question_count)
+    .bind(meta.provenance.requested_at.as_str())
+    .bind(meta.provenance.answered_at.as_str())
+    // Taken immediately before the insert. The true moment of availability is
+    // this plus the write latency, so the figure is conservative in the right
+    // direction: it can only understate availability, never claim it early.
+    // `feature_available_at` compares strictly, so an equal instant does not
+    // count as available either.
+    .bind(crate::jev_signals::now_rfc3339())
+    .bind(meta.provenance.title.as_str())
+    .bind(meta.provenance.summary.as_str())
     .execute(pool)
     .await
     .context("recording a Jev editorial signal")?;
@@ -368,7 +398,8 @@ pub(crate) async fn recent_signals(
                 instruction_shaped, restates_known, signed_score, marker_screened,
                 evidence_published_at, evidence_first_seen_at, evidence_sha256, evidence_timing,
                 evidence_lag_seconds, model_resolved, measurement_version,
-                answered_question_count, expected_question_count
+                answered_question_count, expected_question_count,
+                requested_at, answered_at, available_at, evidence_title, evidence_summary
          FROM jev_editorial_signals
          WHERE created_at >= $1
          ORDER BY created_at DESC
@@ -607,6 +638,7 @@ mod tests {
             "",
             Some(created_at),
             Some(created_at),
+            created_at,
             created_at,
         );
         record_editorial_signal(
@@ -901,6 +933,7 @@ mod tests {
             "Outlook lifted.",
             Some("2026-09-20T07:55:00Z"),
             Some("2026-09-20T08:00:00Z"),
+            "2026-09-20T08:09:58Z",
             "2026-09-20T08:10:00Z",
         );
         record_editorial_signal(
@@ -965,6 +998,7 @@ mod tests {
                 "",
                 Some(at),
                 Some(at),
+                at,
                 at,
             );
             record_editorial_signal(
