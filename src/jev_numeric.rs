@@ -38,7 +38,7 @@ use std::sync::LazyLock;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n7-2026-09-22";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n8-2026-09-22";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -1129,10 +1129,14 @@ fn check_one(
             excerpt,
         };
     }
-    // An inclusive bound is satisfied at the boundary as well, and the
-    // boundary is what the note actually wrote -- so equality there is tested
-    // at the precision written, exactly as a bare equality claim is.
-    let at_boundary = quoted_from(written, found.decimals, stored, field.discrete);
+    // A threshold is compared at face value. The rounding and truncation
+    // allowance belongs to equality alone, where a note quotes a stored value
+    // short: "295 DKK support" for 295.733. A bound is not a value quoted
+    // short -- "RSI <= 70" asserts 70, not 70-point-something -- and letting
+    // it borrow that allowance made "RSI <= 70" and "RSI > 70" both true of a
+    // stored 70.9, because 70 is a legitimate truncation of it. A grader that
+    // accepts two mutually exclusive claims is agreeing with whatever it is
+    // shown.
     // A threshold an order of magnitude away from the field is not a claim
     // about that field. The guard used to protect equality only, so "top held
     // conviction position trading above 525 dkk" -- a price, given to
@@ -1152,12 +1156,14 @@ fn check_one(
     let verdict = match relation {
         RELATION_ABOVE if stored > written => NumericVerdict::Matches,
         RELATION_BELOW if stored < written => NumericVerdict::Matches,
-        RELATION_AT_LEAST if stored > written || at_boundary => NumericVerdict::Matches,
-        RELATION_AT_MOST if stored < written || at_boundary => NumericVerdict::Matches,
+        RELATION_AT_LEAST if stored >= written => NumericVerdict::Matches,
+        RELATION_AT_MOST if stored <= written => NumericVerdict::Matches,
         RELATION_ABOVE | RELATION_BELOW | RELATION_AT_LEAST | RELATION_AT_MOST => {
             NumericVerdict::Differs
         }
-        _ if at_boundary => NumericVerdict::Matches,
+        _ if quoted_from(written, found.decimals, stored, field.discrete) => {
+            NumericVerdict::Matches
+        }
         _ => NumericVerdict::Differs,
     };
     NumericCheck {
@@ -2236,6 +2242,44 @@ mod grammar_regressions {
         );
     }
 
+    /// A threshold is compared at face value, so contradictory bounds cannot
+    /// both hold.
+    ///
+    /// Inclusive bounds borrowed equality's rounding and truncation
+    /// allowance, and 70 is a legitimate truncation of 70.9 -- so against a
+    /// stored 70.9 both "RSI <= 70" and "RSI > 70" were satisfied. A grader
+    /// that accepts two mutually exclusive claims agrees with whatever it is
+    /// shown, which is the failure this whole module exists to avoid.
+    #[test]
+    fn contradictory_bounds_cannot_both_be_satisfied() {
+        let evidence = json!({"daily_indicators": {"rsi14": 70.9}});
+        for (claim, opposite) in [("RSI <= 70", "RSI > 70"), ("RSI >= 71", "RSI < 71")] {
+            let held = numeric_checks(claim, &evidence)[0].verdict;
+            let other = numeric_checks(opposite, &evidence)[0].verdict;
+            assert_ne!(held, other, "{claim:?} and {opposite:?} cannot both hold");
+        }
+        assert_eq!(
+            numeric_checks("RSI <= 70", &evidence)[0].verdict,
+            NumericVerdict::Differs
+        );
+        assert_eq!(
+            numeric_checks("RSI > 70", &evidence)[0].verdict,
+            NumericVerdict::Matches
+        );
+
+        // Equality keeps the allowance: a note quoting a stored value short is
+        // truncating, not asserting a bound.
+        assert_eq!(
+            numeric_checks("RSI 70.9", &evidence)[0].verdict,
+            NumericVerdict::Matches
+        );
+        let support = json!({"daily_indicators": {"support": {"nearest_support": 295.73302}}});
+        assert_eq!(
+            numeric_checks("295 DKK support", &support)[0].verdict,
+            NumericVerdict::Matches
+        );
+    }
+
     /// The readings the grammar must keep. Abstention is the safe direction,
     /// but a grammar that abstains on everything measures nothing.
     #[test]
@@ -2351,6 +2395,13 @@ mod grammar_regressions {
 /// It exists because the grammar abstains outside an enumerated set of
 /// constructions, and the size of that abstention is the thing to know about
 /// it. `docs/jev-numeric-grammar.md` records the figures this prints.
+///
+/// What it measures is **grammar acceptance, not comparison.** It reads notes
+/// with no evidence to check them against, so it stops at `relation_for`. A
+/// figure the grammar accepts can still end `not_in_evidence` or
+/// `implausible_attribution` when a real check runs -- 179 of them did on the
+/// stored history -- so this rate is a floor on how much goes uncompared, not
+/// the figure itself. That one only exists in production.
 #[cfg(test)]
 mod grammar_coverage {
     use super::*;
@@ -2436,7 +2487,9 @@ mod grammar_coverage {
             "notes={} figures={figures} attributed={attributed}",
             notes.len()
         );
-        println!("relations={relations:?}");
+        println!(
+            "grammar_accepted_or_rejected={relations:?} (not verdicts: nothing is compared here)"
+        );
         let mut ranked: Vec<_> = causes.into_iter().collect();
         ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (cause, count) in &ranked {

@@ -99,7 +99,7 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v12";
+const REPORT_GRADING_VERSION: &str = "v13";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -573,10 +573,12 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
                    same way. Everything outside those forms is recorded \
                    `unsupported_construction` and not compared; `not_read` means no field could \
                    be attributed at all. `compared` plus `abstained` is every figure found. The \
-                   known cost is over-abstention, measured at 4.0% of attributed figures on the \
-                   stored corpus. A figure whose magnitude is an order of magnitude from the \
-                   field is recorded `implausible_attribution` whatever the relation, because a \
-                   relation does not make a wrong field right. Known limitations, including six \
+                   grammar rejects 4.0% of attributed figures on the stored corpus, which is \
+                   not the same as the share that goes uncompared: a recognised relation can \
+                   still end in `not_in_evidence` or `implausible_attribution`. `relation` is \
+                   the parsed claim and `verdict` is the outcome; only `matches` and `differs` \
+                   were compared. A threshold is tested at face value, and the rounding \
+                   allowance applies to equality alone. Known limitations, including five \
                    attribution defects still present, are listed in docs/jev-numeric-grammar.md.",
     })
 }

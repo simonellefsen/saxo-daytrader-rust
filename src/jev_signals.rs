@@ -755,13 +755,17 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                          compared and nothing is known about it. Do not re-check arithmetic, \
                          and do not treat an uncompared figure as either correct or wrong."
                     ),
-                    "what_each_check_asserts": "`relation` is what the note was read as \
-                                                claiming: `equals`, `above`, `below`, \
-                                                `at_least` or `at_most` was compared; \
-                                                `unsupported_construction` means the wording \
-                                                was outside the grammar and the figure was \
-                                                left alone; `not_read` means no field could be \
-                                                attributed to it.",
+                    "what_each_check_asserts": "`relation` is only what the note was read as \
+                                                claiming -- `equals`, `above`, `below`, \
+                                                `at_least` or `at_most`, or \
+                                                `unsupported_construction` where the wording \
+                                                was outside the grammar, or `not_read` where \
+                                                no field could be attributed. It does not say \
+                                                a comparison happened: a recognised relation \
+                                                can still end in `not_in_evidence` or \
+                                                `implausible_attribution`. Only `verdict` says \
+                                                whether the figure was checked, and only \
+                                                `matches` and `differs` mean it was.",
                     "what_counts": "Words that characterise rather than measure -- securely, \
                                     low, elevated, strong, leading, intact, steady -- and any \
                                     claim that a categorical field takes a particular value.",

@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n7-2026-09-22`**, grading version **`v12`**. Frozen as the
+Method version **`n8-2026-09-22`**, grading version **`v13`**. Frozen as the
 evaluation baseline: the limitations below are measured and recorded rather
 than fixed, and the method must not move during an evaluation run.
 
@@ -53,18 +53,40 @@ from a comparison that actually happened.
 
 ## What it costs, measured
 
-Against all 1,105 stored candidate notes (1,715 figures, 1,320 attributed):
+Two different numbers, and they must not be confused.
+
+**Grammar acceptance.** Against all 1,105 stored candidate notes (1,715
+figures, 1,320 attributed):
 
 | | |
 |---|---|
-| compared as `equals` | 1,254 |
-| compared as `above` | 13 |
-| abstained (`unsupported_construction`) | **53 — 4.0% of attributed** |
+| accepted as `equals` | 1,254 |
+| accepted as `above` | 13 |
+| rejected (`unsupported_construction`) | **53 — 4.0% of attributed** |
 
-Unchanged from `n6` to `n7`: the magnitude guard moves verdicts between
-`differs` and `implausible_attribution`, not between compared and abstained.
+This measures only whether the grammar could read the claim. The harness has no
+evidence to check anything against, so it stops at the parse.
 
-Reproduce with the `#[ignore]`d harness in `src/jev_numeric.rs`:
+**Figures actually compared.** From production at `n7`, 2,076 stored checks:
+
+| verdict | | |
+|---|---|---|
+| `matches` | 1,345 | compared |
+| `differs` | 25 | compared |
+| `unattributed` | 407 | no field |
+| `implausible_attribution` | 139 | field an order of magnitude off |
+| `uncertain_attribution` | 92 | contested attribution, or wording the grammar refused |
+| `not_in_evidence` | 41 | field absent from the snapshot |
+| `not_a_field_value` | 27 | a horizon or a share count |
+
+**1,370 of 2,076 compared — 34% of figures found are never checked**, eight
+times the grammar's own rejection rate. 179 of those carry a relation the
+grammar *did* recognise and still ended uncompared. `relation` is the parsed
+claim; `verdict` is the outcome; only `matches` and `differs` mean a comparison
+happened. The instruction shown to the model says so explicitly.
+
+Reproduce the first table with the `#[ignore]`d harness in
+`src/jev_numeric.rs`:
 
 ```
 JEV_NOTES_PATH=notes.json cargo test grammar_coverage -- --ignored --nocapture
@@ -117,6 +139,32 @@ confluences` against 4), #255 BMW (`6.0% downside-to-support` against 7.00),
 and #286 FLS (`593 DKK support` against 551.5, already independently
 confirmed). Four out of 1,914 checks. None has been adjudicated, and
 `agreement` is not `accuracy`.
+
+## Fixed in `n8`: contradictory bounds both held
+
+Inclusive bounds borrowed equality's rounding and truncation allowance. Against
+a stored RSI of 70.9, **`RSI <= 70` and `RSI > 70` were both `matches`** —
+because 70 is a legitimate truncation of 70.9, so the boundary test passed while
+the strict comparison used the raw value. `RSI >= 71` and `RSI < 71` likewise.
+
+A grader that accepts two mutually exclusive claims agrees with whatever it is
+shown, which is the failure this module exists to prevent.
+
+A threshold is now compared at face value: `at_least` is `stored >= written`,
+`at_most` is `stored <= written`, with no allowance. The allowance belongs to
+equality alone, where a note quotes a stored value short — "295 DKK support"
+for 295.733 — and a bound is not a value quoted short. `RSI >= 70` against a
+stored exactly 70.0 still matches where `RSI > 70` does not.
+
+## Reading the sufficiency numbers
+
+Grade versions cover overlapping populations. `v11` and `v12` are the **same
+120 reports**, so pooling them repeats observations rather than enlarging the
+sample; a version-specific, subject-deduplicated count is the only honest one.
+
+`v12` alone: **244 flagged out of 450 answered, 0 unanswered, across 120
+reports** — 54%. That is a review workload, not a finding that half the reports
+are defective. None of it is adjudicated.
 
 ## Known limitations, not fixed
 
