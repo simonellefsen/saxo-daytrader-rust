@@ -601,6 +601,29 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
 /// a single grading version while the worker skipped anything already graded
 /// under it -- so production kept findings the code had stopped producing,
 /// including two it had specifically been fixed to stop producing.
+/// The outcome of looking up the report a grade refers to.
+///
+/// The distinction is the whole point: one of these is permanent and the other
+/// is a moment's unavailability, and a single `let Ok(Some(..))` treated them
+/// alike.
+enum ReportRow<T> {
+    Found(T),
+    /// The lookup succeeded and there is no such report.
+    Gone,
+    /// The lookup itself failed.
+    Unreadable(sqlx::Error),
+}
+
+impl<T> ReportRow<T> {
+    fn of(result: Result<Option<T>, sqlx::Error>) -> Self {
+        match result {
+            Ok(Some(row)) => Self::Found(row),
+            Ok(None) => Self::Gone,
+            Err(err) => Self::Unreadable(err),
+        }
+    }
+}
+
 pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValue {
     if availability(state).is_none() {
         return json!({"status": "disabled"});
@@ -650,9 +673,25 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
                 .bind(subject_id)
                 .fetch_optional(&state.pool)
                 .await;
-        let Ok(Some(row)) = row else {
-            to_block.push(block(&mut unable, id, subject, "report row is gone"));
-            continue;
+        let row = match ReportRow::of(row) {
+            ReportRow::Found(row) => row,
+            ReportRow::Gone => {
+                to_block.push(block(&mut unable, id, subject, "report row is gone"));
+                continue;
+            }
+            // Not blocked. A database unavailable for a moment is not a report
+            // that no longer exists, and `let Ok(Some(row)) = ...` read the two
+            // as the same thing -- so one timeout would have excluded a valid
+            // grade from every future recomputation.
+            ReportRow::Unreadable(err) => {
+                warn!(error = %err, subject, "reading a report for numeric recomputation");
+                unable.push(json!({
+                    "subject": subject,
+                    "reason": "report row could not be read",
+                    "blocked": false,
+                }));
+                continue;
+            }
         };
         let row = row_to_json(&row);
         let Some(report) = parse_embedded(row.get("report_json")) else {
@@ -1832,5 +1871,27 @@ mod tests {
             payload["wording_verdicts"][0]["asserts_absent_evidence"], 0.93,
             "the per-candidate probability is kept beside its wording verdict"
         );
+    }
+}
+
+#[cfg(test)]
+mod recompute_lookup_tests {
+    use super::*;
+
+    /// A database that is briefly unavailable is not a report that no longer
+    /// exists.
+    ///
+    /// `let Ok(Some(row)) = lookup else { block permanently }` read the two as
+    /// the same thing, so one timeout would have excluded a valid grade from
+    /// every future recomputation -- silently, and in the direction that looks
+    /// like progress.
+    #[test]
+    fn a_failed_read_is_not_a_missing_report() {
+        assert!(matches!(ReportRow::of(Ok(Some(7))), ReportRow::Found(7)));
+        assert!(matches!(ReportRow::<i32>::of(Ok(None)), ReportRow::Gone));
+        assert!(matches!(
+            ReportRow::<i32>::of(Err(sqlx::Error::PoolTimedOut)),
+            ReportRow::Unreadable(_)
+        ));
     }
 }

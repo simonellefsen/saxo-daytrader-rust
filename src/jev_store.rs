@@ -502,6 +502,16 @@ pub(crate) async fn screening_agreement(pool: &AnyPool, threshold: f64) -> Resul
 ///
 /// Returns the request id and subject so the measurement can be re-derived
 /// from evidence already on disk, with no provider call.
+/// Partial grades are selected too.
+///
+/// `partial` describes the *model's* answers: some question came back missing.
+/// The numeric half is arithmetic over the stored prompt and owes nothing to
+/// those answers, and the read path shows partial grades to anyone looking --
+/// so excluding them left 37 rows carrying findings from six superseded
+/// methods, with no cycle able to reach them. Recomputing changes
+/// `numeric_checks` and nothing else: the status stays `partial` and the
+/// missing answers stay missing.
+///
 /// Marker for a grade whose numeric half can never be recomputed.
 ///
 /// Reports 1 to 82 predate the indicator snapshot being stored in the prompt,
@@ -551,7 +561,7 @@ pub(crate) async fn grades_with_stale_numeric_method(
     let limit = limit.clamp(1, 2_000);
     Ok(sqlx::query(&format!(
         "SELECT id, subject FROM jev_requests
-         WHERE purpose = $1 AND status = 'completed'
+         WHERE purpose = $1 AND status IN ('completed', 'partial')
            AND subject IS NOT NULL AND result_json IS NOT NULL
            AND result_json NOT LIKE $2
            AND result_json NOT LIKE $3
@@ -1619,6 +1629,56 @@ mod recompute_selection_tests {
             .await
             .expect("select");
         assert_eq!(before.len(), 1, "a stale grade is selected");
+
+        // A partial grade is selected too, and recomputing it must not make it
+        // look complete.
+        sqlx::query(
+            "INSERT INTO jev_requests
+             (id, created_at, purpose, subject, model_requested, question_count, answer_count,
+              issue_count, input_tokens, output_tokens, cost_source, latency_ms, attempts,
+              status, result_json)
+             VALUES ('partial-1', '2026-09-20T12:00:00Z', $1, '8', 'alias', 4, 2, 2, 10, 0,
+                     'not_reported', 1, 1, 'partial', $2)",
+        )
+        .bind(PURPOSE_REPORT_GRADING)
+        .bind(serde_json::json!({"numeric_checks": {"method_version": "n1-old"}}).to_string())
+        .execute(&pool)
+        .await
+        .expect("insert partial");
+
+        let with_partial = grades_with_stale_numeric_method(&pool, "n2-new", 10)
+            .await
+            .expect("select");
+        assert_eq!(
+            with_partial.len(),
+            2,
+            "a partial grade's numeric half is arithmetic and owes nothing to the missing \
+             answers: {with_partial:?}"
+        );
+
+        replace_numeric_measurement(
+            &pool,
+            "partial-1",
+            &serde_json::json!({"method_version": "n2-new"}),
+            "recomputed",
+        )
+        .await
+        .expect("replace");
+        let partial = sqlx::query(
+            "SELECT status, answer_count, result_json FROM jev_requests WHERE id = 'partial-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+        assert_eq!(
+            partial.try_get::<String, _>("status").expect("status"),
+            "partial",
+            "recomputing arithmetic must not turn an incomplete model response into a complete one"
+        );
+        assert_eq!(
+            partial.try_get::<i64, _>("answer_count").expect("answers"),
+            2
+        );
 
         mark_recompute_blocked(
             &pool,
