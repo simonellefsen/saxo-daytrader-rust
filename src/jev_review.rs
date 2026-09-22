@@ -99,7 +99,7 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v15";
+const REPORT_GRADING_VERSION: &str = "v16";
 
 /// The grading version a measurement was taken against.
 #[cfg(test)]

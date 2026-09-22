@@ -769,6 +769,24 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                     "what_counts": "Words that characterise rather than measure -- securely, \
                                     low, elevated, strong, leading, intact, steady -- and any \
                                     claim that a categorical field takes a particular value.",
+                    // Named one by one because naming them as a class was not
+                    // enough. A seeded measurement flipped `bull markov` to
+                    // `bear markov` against a stored `state: Bull` thirty
+                    // times over: flips of `trend_bias` and `break_risk_label`
+                    // were caught 19 times in 20, and flips of the Markov
+                    // state 2 times in 10.
+                    "categorical_fields": "The categorical fields are \
+                                           `daily_indicators.trend_bias`, \
+                                           `daily_indicators.sentiment`, \
+                                           `daily_indicators.support.break_risk_label`, \
+                                           `markov.state`, `markov.direction` and \
+                                           `quiver.direction`. A note naming a value one of them \
+                                           does not take misdescribes it. This applies to the \
+                                           Markov regime exactly as it does to the daily trend: \
+                                           calling the regime bear, bearish or short when \
+                                           `markov.state` reads Bull and `markov.direction` \
+                                           reads long is a misdescription, and so is the \
+                                           reverse.",
                     "thresholds": "Where the note compares something to a threshold, use \
                                    `decision_policy` for the value that applied. If \
                                    `decision_policy` is null, no threshold was recorded and such \

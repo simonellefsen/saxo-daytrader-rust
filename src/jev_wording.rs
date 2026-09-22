@@ -46,6 +46,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
+use sha2::Digest;
 
 pub(crate) const WORDING_SET_VERSION: &str = "wording-v1-2026-09-22";
 
@@ -193,6 +194,15 @@ pub(crate) enum Outcome {
     /// A paired case changed its verdict although nothing about the wording
     /// changed.
     Unstable,
+    /// The grader answered, but not with a category that flags anything.
+    /// `no_qualitative_claim` on a note full of characterisations does not
+    /// detect a seeded error, and counting it as detection was a loophole --
+    /// it inflates the number in exactly the direction that flatters.
+    WrongCategory,
+    /// The control already crossed the sufficiency threshold before the claim
+    /// was added, so the mutated note crossing it proves nothing about the
+    /// claim.
+    Inconclusive,
     /// The case carries no ground truth and is recorded only.
     Observed,
     /// No answer came back for this candidate.
@@ -205,6 +215,8 @@ impl Outcome {
             Self::Correct => "correct",
             Self::Missed => "missed",
             Self::Unstable => "unstable",
+            Self::WrongCategory => "wrong_category",
+            Self::Inconclusive => "inconclusive",
             Self::Observed => "observed",
             Self::Unanswered => "unanswered",
         }
@@ -220,6 +232,7 @@ pub(crate) fn outcome_for(
     verdict: Option<&str>,
     sufficiency: Option<f64>,
     baseline: Option<&str>,
+    baseline_sufficiency: Option<f64>,
 ) -> Outcome {
     match case.expect {
         Expect::Observed => {
@@ -229,10 +242,15 @@ pub(crate) fn outcome_for(
                 Outcome::Unanswered
             }
         }
+        // Only the two categories that flag something count as detection.
+        // Treating "any answer but `fair`" as a hit credits
+        // `no_qualitative_claim` on a note full of characterisations.
         Expect::Flagged => match verdict {
             None => Outcome::Unanswered,
+            Some(crate::jev_signals::WORDING_OVERSTATED)
+            | Some(crate::jev_signals::WORDING_MISDESCRIBES) => Outcome::Correct,
             Some(crate::jev_signals::WORDING_FAIR) => Outcome::Missed,
-            Some(_) => Outcome::Correct,
+            Some(_) => Outcome::WrongCategory,
         },
         Expect::NoQualitativeClaim => match verdict {
             None => Outcome::Unanswered,
@@ -244,10 +262,14 @@ pub(crate) fn outcome_for(
             (Some(verdict), Some(baseline)) if verdict == baseline => Outcome::Correct,
             _ => Outcome::Unstable,
         },
-        Expect::AssertsAbsentEvidence => match sufficiency {
-            None => Outcome::Unanswered,
-            Some(value) if value >= 0.5 => Outcome::Correct,
-            Some(_) => Outcome::Missed,
+        // Read against the control, because a note that already crossed the
+        // threshold before anything was added says nothing about what was
+        // added. Four of twelve controls did.
+        Expect::AssertsAbsentEvidence => match (sufficiency, baseline_sufficiency) {
+            (None, _) | (_, None) => Outcome::Unanswered,
+            (Some(value), Some(_)) if value < 0.5 => Outcome::Missed,
+            (Some(_), Some(before)) if before >= 0.5 => Outcome::Inconclusive,
+            _ => Outcome::Correct,
         },
     }
 }
@@ -308,7 +330,13 @@ mod tests {
     fn detection_is_any_verdict_other_than_fair() {
         let seeded = case(Expect::Flagged);
         assert_eq!(
-            outcome_for(&seeded, Some(crate::jev_signals::WORDING_FAIR), None, None),
+            outcome_for(
+                &seeded,
+                Some(crate::jev_signals::WORDING_FAIR),
+                None,
+                None,
+                None
+            ),
             Outcome::Missed
         );
         for flagged in [
@@ -316,11 +344,14 @@ mod tests {
             crate::jev_signals::WORDING_MISDESCRIBES,
         ] {
             assert_eq!(
-                outcome_for(&seeded, Some(flagged), None, None),
+                outcome_for(&seeded, Some(flagged), None, None, None),
                 Outcome::Correct
             );
         }
-        assert_eq!(outcome_for(&seeded, None, None, None), Outcome::Unanswered);
+        assert_eq!(
+            outcome_for(&seeded, None, None, None, None),
+            Outcome::Unanswered
+        );
     }
 
     /// A paired case has no seeded error in it: it is wrong only by
@@ -329,41 +360,82 @@ mod tests {
     fn a_paraphrase_is_wrong_only_when_the_verdict_moves() {
         let paired = case(Expect::SameAsBaseline);
         assert_eq!(
-            outcome_for(&paired, Some("fair"), None, Some("fair")),
+            outcome_for(&paired, Some("fair"), None, Some("fair"), None),
             Outcome::Correct
         );
         assert_eq!(
-            outcome_for(&paired, Some("overstated"), None, Some("overstated")),
+            outcome_for(&paired, Some("overstated"), None, Some("overstated"), None),
             Outcome::Correct,
             "agreeing on a flag is agreement too"
         );
         assert_eq!(
-            outcome_for(&paired, Some("fair"), None, Some("overstated")),
+            outcome_for(&paired, Some("fair"), None, Some("overstated"), None),
             Outcome::Unstable
         );
         assert_eq!(
-            outcome_for(&paired, Some("fair"), None, None),
+            outcome_for(&paired, Some("fair"), None, None, None),
             Outcome::Unanswered,
             "with no baseline there is nothing to be stable against"
         );
     }
 
-    /// The sufficiency axis is read from its own probability, not from the
-    /// wording verdict.
+    /// The sufficiency axis is read from its own probability, against the
+    /// control's.
+    ///
+    /// A note that already crossed the threshold before anything was added
+    /// says nothing about what was added. Four of the twelve controls in the
+    /// first run were already above 0.5, so scoring the mutated note alone
+    /// credited the question with four detections it had not made.
     #[test]
-    fn an_invented_claim_is_judged_on_the_sufficiency_answer_alone() {
+    fn an_invented_claim_is_judged_against_what_the_control_already_scored() {
         let invented = case(Expect::AssertsAbsentEvidence);
         assert_eq!(
-            outcome_for(&invented, Some("fair"), Some(0.9), None),
-            Outcome::Correct
+            outcome_for(&invented, Some("fair"), Some(0.9), None, Some(0.2)),
+            Outcome::Correct,
+            "below the threshold before, above it after"
         );
         assert_eq!(
-            outcome_for(&invented, Some("overstated"), Some(0.2), None),
+            outcome_for(&invented, Some("fair"), Some(0.9), None, Some(0.8)),
+            Outcome::Inconclusive,
+            "already above it before the claim was added"
+        );
+        assert_eq!(
+            outcome_for(&invented, Some("overstated"), Some(0.2), None, Some(0.1)),
             Outcome::Missed
         );
         assert_eq!(
-            outcome_for(&invented, Some("fair"), None, None),
+            outcome_for(&invented, Some("fair"), None, None, Some(0.1)),
             Outcome::Unanswered
+        );
+        assert_eq!(
+            outcome_for(&invented, Some("fair"), Some(0.9), None, None),
+            Outcome::Unanswered,
+            "with no control there is nothing to read it against"
+        );
+    }
+
+    /// Detection means a category that flags something.
+    ///
+    /// `no_qualitative_claim` on a note full of characterisations does not
+    /// detect a seeded error, and counting every answer but `fair` as a hit
+    /// credited it as one. No result used the loophole, but it inflated in
+    /// exactly the flattering direction.
+    #[test]
+    fn a_no_claim_answer_does_not_detect_a_seeded_error() {
+        let seeded = case(Expect::Flagged);
+        assert_eq!(
+            outcome_for(
+                &seeded,
+                Some(crate::jev_signals::WORDING_NONE),
+                None,
+                None,
+                None
+            ),
+            Outcome::WrongCategory
+        );
+        assert_eq!(
+            outcome_for(&seeded, Some("something_else"), None, None, None),
+            Outcome::WrongCategory
         );
     }
 }
@@ -393,10 +465,19 @@ mod live {
     /// the corpus decide what the arm measures.
     const PER_FLIP_PHRASE: usize = 5;
 
-    fn load() -> Vec<WordingCase> {
+    /// The frozen cases, and a fingerprint of the exact bytes they came from.
+    ///
+    /// Without it a later difference in the numbers cannot be attributed: the
+    /// set, the code, the questions and the model all move independently, and
+    /// a result recording none of them is a number with no provenance.
+    fn load() -> (Vec<WordingCase>, String) {
         let raw = std::fs::read_to_string(WORDING_PATH).expect("the frozen wording set");
         let document: JsonValue = serde_json::from_str(&raw).expect("json");
-        serde_json::from_value(document["cases"].clone()).expect("cases")
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(raw.as_bytes()));
+        (
+            serde_json::from_value(document["cases"].clone()).expect("cases"),
+            fingerprint,
+        )
     }
 
     /// A candidate of a real report, with everything a grading call needs.
@@ -590,6 +671,22 @@ mod live {
                     source.note.clone(),
                     Some(control.clone()),
                 ));
+                // Paired with the same control, because a note that already
+                // crossed the sufficiency threshold before anything was added
+                // says nothing about what was added.
+                let claim = INVENTED[(nth - 1) % INVENTED.len()];
+                cases.push(case(
+                    source,
+                    format!("invented_evidence-{nth:03}"),
+                    "invented_evidence",
+                    Expect::AssertsAbsentEvidence,
+                    format!(
+                        "appends \"{}\", which has no counterpart in the evidence",
+                        claim.trim()
+                    ),
+                    format!("{}{claim}", source.note),
+                    Some(control.clone()),
+                ));
                 if let Some((word, synonym)) =
                     PARAPHRASES.iter().find(|(word, _)| lowered.contains(word))
                 {
@@ -627,22 +724,6 @@ mod live {
                         None,
                     ));
                 }
-            }
-
-            if let Some(nth) = count("invented_evidence", PER_ARM) {
-                let claim = INVENTED[(nth - 1) % INVENTED.len()];
-                cases.push(case(
-                    source,
-                    format!("invented_evidence-{nth:03}"),
-                    "invented_evidence",
-                    Expect::AssertsAbsentEvidence,
-                    format!(
-                        "appends \"{}\", which has no counterpart in the evidence",
-                        claim.trim()
-                    ),
-                    format!("{}{claim}", source.note),
-                    None,
-                ));
             }
         }
 
@@ -696,8 +777,12 @@ mod live {
             max_questions_per_request: 24,
         };
 
-        let cases = load();
+        let (cases, set_fingerprint) = load();
         let mut verdicts: BTreeMap<String, String> = BTreeMap::new();
+        let mut sufficiencies: BTreeMap<String, f64> = BTreeMap::new();
+        let mut probabilities: BTreeMap<String, JsonValue> = BTreeMap::new();
+        let mut resolved_models: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         let mut answered: Vec<(String, Option<String>, Option<f64>, Option<f64>)> = Vec::new();
         let mut spent = 0.0f64;
         let mut failures = Vec::new();
@@ -732,6 +817,21 @@ mod live {
                     if let Some(verdict) = &verdict {
                         verdicts.insert(entry.id.clone(), verdict.clone());
                     }
+                    if let Some(value) = sufficiency {
+                        sufficiencies.insert(entry.id.clone(), value);
+                    }
+                    if let Some(model) = response.model_resolved.clone() {
+                        resolved_models.insert(model);
+                    }
+                    probabilities.insert(
+                        entry.id.clone(),
+                        match response.answers.get(&claim) {
+                            Some(crate::jev::Answer::Choice { probabilities, .. }) => {
+                                json!(probabilities)
+                            }
+                            _ => JsonValue::Null,
+                        },
+                    );
                     println!(
                         "{:28} {:22} verdict={:24} sufficiency={:?}",
                         entry.id,
@@ -758,7 +858,18 @@ mod live {
                 .as_ref()
                 .and_then(|id| verdicts.get(id))
                 .map(String::as_str);
-            let outcome = outcome_for(entry, verdict.as_deref(), *sufficiency, baseline);
+            let baseline_sufficiency = entry
+                .baseline_id
+                .as_ref()
+                .and_then(|id| sufficiencies.get(id))
+                .copied();
+            let outcome = outcome_for(
+                entry,
+                verdict.as_deref(),
+                *sufficiency,
+                baseline,
+                baseline_sufficiency,
+            );
             *by_arm
                 .entry(entry.arm.clone())
                 .or_default()
@@ -773,17 +884,45 @@ mod live {
                 "confidence": confidence,
                 "sufficiency": sufficiency,
                 "baseline_verdict": baseline,
+                "baseline_sufficiency": baseline_sufficiency,
+                "probabilities": probabilities.get(&entry.id),
                 "rationale": entry.rationale,
                 "note": entry.candidates[entry.target_index]["note"],
             }));
         }
 
+        let questions_fingerprint = format!(
+            "{:x}",
+            sha2::Sha256::digest(
+                // Fingerprinted through the request builder, which is what the
+                // provider actually receives.
+                crate::jev::build_request(
+                    &json!(null),
+                    &cfg.model,
+                    &crate::jev_signals::report_grading_questions(3),
+                )
+                .to_string()
+                .as_bytes()
+            )
+        );
         let results = json!({
             "set": WORDING_SET_VERSION,
             "grading_version": crate::jev_review::report_grading_version(),
             "run_at": crate::jev_signals::now_rfc3339(),
             "cases": cases.len(),
             "billed_usd": spent,
+            // Provenance. A later run that differs has to be attributable to
+            // one of these rather than to all of them at once.
+            "provenance": {
+                "source_commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unset".into()),
+                "case_set_sha256": set_fingerprint,
+                "questions_sha256": questions_fingerprint,
+                "model_requested": cfg.model,
+                "model_resolved": resolved_models,
+                "numeric_method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+                "max_state_chars": cfg.max_state_chars,
+                "max_questions_per_request": cfg.max_questions_per_request,
+            },
             "by_arm": by_arm,
             "failures": failures,
             "detail": detail,
@@ -794,9 +933,15 @@ mod live {
                         `observed` carries no ground truth. One run, so every number here is a \
                         single sample of a probabilistic answer.",
         });
-        let path = "docs/jev-wording-results-2026-09-22.json";
+        // Named by the grading version, so two runs that differ by an
+        // instruction change sit side by side instead of one overwriting the
+        // other and taking the comparison with it.
+        let path = format!(
+            "docs/jev-wording-results-{}.json",
+            crate::jev_review::report_grading_version()
+        );
         std::fs::write(
-            path,
+            &path,
             serde_json::to_string_pretty(&results).expect("serialize"),
         )
         .expect("write");
