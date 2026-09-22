@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n9-2026-09-22`**, grading version **`v14`**. Frozen as the
+Method version **`n10-2026-09-22`**, grading version **`v15`**. Frozen as the
 evaluation baseline: the limitations below are measured and recorded rather
 than fixed, and the method must not move during an evaluation run.
 
@@ -56,13 +56,13 @@ from a comparison that actually happened.
 Two different numbers, and they must not be confused.
 
 **Grammar acceptance.** Against all 1,105 stored candidate notes (1,715
-figures, 1,342 attributed):
+figures, 1,456 attributed):
 
 | | |
 |---|---|
-| accepted as `equals` | 1,282 |
+| accepted as `equals` | 1,401 |
 | accepted as `above` | 13 |
-| rejected (`unsupported_construction`) | **47 — 3.5% of attributed** |
+| rejected (`unsupported_construction`) | **42 — 2.9% of attributed** |
 
 This measures only whether the grammar could read the claim. The harness has no
 evidence to check anything against, so it stops at the parse.
@@ -102,25 +102,23 @@ sits in the gap ("markov edge (signed_signal 0.09)", "markov long bias 0.18")
 or because an operator elsewhere in the clause suspends it ("rsi above 75
 argues for waiting for a pullback **before** adding").
 
-## Attribution defects, named rather than fixed
+## Attribution defects, all six now fixed
 
-Recomputing the whole history at `n6` produced 24 disagreements across 163
-reports (1.25% of checks, against 1.21% at `n5` — the grammar neither created
-nor cleared them). Reading all 20 distinct ones, **most are this checker's
-attribution failures, not report errors.** They are listed here with their
-production examples so an independent evaluation can score them as what they
-are, instead of rediscovering them one at a time.
+Recomputing the history at `n6` produced 24 disagreements across 163 reports.
+Reading all 20 distinct ones, most were this checker's attribution failures
+rather than report errors. They were recorded here first and fixed afterwards,
+one at a time, each with its production example.
 
-| # | Defect | Production example | Effect |
+| | defect | production example | fixed |
 |---|---|---|---|
-| ~~A~~ | ~~A field name written with an underscore does not match its keyword~~ — **fixed in `n9`** | #101 AMD `markov bull_prob 0.72 / signed_signal 0.61` | 0.72 given to `signed_signal` (0.612) → false `differs` |
-| B | The `N/M` remap needs the word "confluences" adjacent, so a bare ratio is not recognised | #103 BAC `bullish 4/3, markov long 0.555` | the 3 given to `markov.signed_signal` → false `differs` |
-| C | "support" as a verb matches the support field | #256 ALV `the 453.0 EUR daily close support a controlled limit` | 453.0 given to `nearest_support` (434.6) → false `differs` |
-| D | `~` before a figure is not read as an approximation marker | #106 ARKK `rsi ~55` against 61.34 | compared as an exact equality |
-| E | A field named further away can still win when the near phrase is not in the field table | #158 BAC `markov long 0.576 and quiver bullish` | 0.576 given to `quiver.signal` (0.355) → false `differs` |
-| F | Attribution ignores clause boundaries; the 40-character window crosses them | seen in testing, not in the corpus | a field in the next clause can claim a figure |
+| A | a name written with an underscore does not match its keyword | #101 AMD `markov bull_prob 0.72` | `n9` |
+| B | the `N/M` remap needs the word "confluences" adjacent | #103 BAC `bullish 4/3, markov long 0.555` | `n10` |
+| C | "support" as a verb matches the support field | #256 ALV `the 453.0 EUR daily close support a controlled limit` | `n10` |
+| D | `~` before a figure is not read as an approximation marker | #106 ARKK `rsi ~55` against 61.34 | `n10` |
+| E | a field named further away wins when the near phrase is taken | #158 BAC `markov long 0.576 and quiver bullish` | `n10` |
+| F | attribution ignores sentence boundaries | #197 AJG `+0.404 signal. Quiver is supportive only` | `n10` |
 
-### A, fixed in `n9`
+### A, in `n9`
 
 The keyword search was a plain substring match, so `bull_prob` never matched
 `bull prob`. **`markov.bull_prob` and `markov.bear_prob` had zero checks in all
@@ -135,31 +133,50 @@ gone.
 
 That fix alone would have broken another attribution: with `bull_prob` matching,
 the nearest phrase to the 0.61 in `markov bull_prob 0.72 / signed_signal 0.61`
-became `bull_prob`. `signed signal` is now a name in its own right, so the
-figure beside it keeps its own field. Grammar acceptance rose from 1,267 to
-1,295 of 1,342 attributed figures; rejection fell from 4.0% to 3.5%.
+became `bull_prob`. `signed signal` is now a name in its own right.
 
-### D, fixed in `n7`
+### B, E and F, in `n10` — one cause behind three symptoms
 
-One rule rather than six: a threshold an order of
+The `N/M` rule ran **last**, and only when one side had already been attributed
+to the count. So "bullish 4/3, markov long 0.555" left the 3 compared against a
+Markov signal.
+
+The worse consequence was indirect. While the notation went unrecognised, those
+figures competed for phrases in the ordinary way — and in #158 the **4 claimed
+`markov` from sixteen characters away**, because its own name had already been
+taken by the 3. A phrase another figure holds cannot contest anything, so
+`markov` could not contest the 0.576 six characters from it, and Quiver won by a
+single character. The false disagreement in E was caused by B.
+
+The notation is now settled from its own shape, before any phrase is read: two
+whole unsigned numbers, 1 to 12, separated by one slash that is not part of a
+longer chain. Across all 1,105 notes, every one of the 298 occurrences of that
+shape is a confluence count. It consumes the word where the note writes it —
+"6/3 technical confluences" — so `confluences,` does not then contest the 2.71
+two characters after it.
+
+F is separate and simple: a phrase in the next sentence names nothing here. Full
+stops and semicolons only. Commas were tried and cost more than they saved,
+because these notes are comma-spliced lists and a figure is routinely separated
+from its own field name by one.
+
+`#158` now **abstains** rather than answering: `markov` and `quiver` really are
+within a character of each other there, and the note does not settle which one
+owns the figure.
+
+### C and D, in `n10`
+
+A name followed by a determiner is a verb. English does not put a determiner
+after a noun, so "close support a controlled limit" is a narrow syntactic test
+rather than a guess, and `above 446 EUR support` still reads as the noun.
+
+`~` and `≈` before a figure are hedges written as punctuation, and now abstain
+the way "near" and "around" do.
+
+### The magnitude guard, in `n7`
+
+One rule rather than a list: a threshold an order of
 magnitude from its field is `implausible_attribution` whatever the relation.
-"top held conviction holding trading above 525 DKK with +0.749 Markov Bull
-regime" gave a price to `markov.conviction` and, because the magnitude guard
-protected equality only, reported a disagreement between 525 and 0.749 rather
-than naming the misattribution.
-
-B, C, E and F are **left in place deliberately.** Each is small and I could fix
-them now, which is exactly the pattern four review rounds have criticised:
-patch, declare success, have the next review find what the patch missed. They
-are frozen as part of the baseline so the evaluation measures the grader that
-exists.
-
-Of the 20, the ones that look like genuine report discrepancies rather than
-checker failures are #106 BAC (`rsi 58` against 67.76), #183 DDOG (`5
-confluences` against 4), #255 BMW (`6.0% downside-to-support` against 7.00),
-and #286 FLS (`593 DKK support` against 551.5, already independently
-confirmed). Four out of 1,914 checks. None has been adjudicated, and
-`agreement` is not `accuracy`.
 
 ## Fixed in `n8`: contradictory bounds both held
 
@@ -205,12 +222,24 @@ defective. None of it is adjudicated, and the question itself is uncalibrated.
 2. **An operator joined by `and` still suspends the figure.** "five-day markov
    signal is only 0.138 and does not justify adding exposure now" abstains
    although the figure is stated as fact.
-3. **Attribution crosses clause boundaries.** The 40-character window ignores
-   punctuation, so a field named in the next clause can claim a figure. Seen in
-   testing, not observed in the corpus.
-4. **Signs are not read.** "markov is positive at 0.1634" abstains rather than
+3. **Attribution crosses commas, though no longer sentences.** A field named
+   in the next clause of the same sentence can still claim a figure. Commas
+   were tried as barriers and cost more than they saved: these notes are
+   comma-spliced lists and a figure is routinely separated from its own field
+   name by one.
+4. **`N/M` is read as a count over its minimum from its shape alone.** A
+   genuine small fraction — "1/2 position" — would be misread. Every one of the
+   298 occurrences of that shape in the stored corpus is a confluence count,
+   and the rule is bounded to whole numbers from 1 to 12, but the note model's
+   wording could change.
+5. **A break risk written as a percentage is not attributed.**
+   `support.break_risk` is stored as a fraction and declared as quoted in its
+   own units, so "very low 3.7% modeled support-break risk" against a stored
+   0.037 goes unattributed rather than being converted. A unit declaration
+   problem, not an attribution one, and not fixed.
+6. **Signs are not read.** "markov is positive at 0.1634" abstains rather than
    check the sign, because the grammar compares magnitudes written as quoted.
-5. **The whitelist is English and hand-built.** A new phrasing abstains until
+7. **The whitelist is English and hand-built.** A new phrasing abstains until
    someone adds it, which is the intended failure direction but means coverage
    drifts as the report model's wording drifts. The harness above is how that
    is detected.

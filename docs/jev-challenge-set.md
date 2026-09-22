@@ -7,6 +7,9 @@ Two frozen sets, both scored by a hermetic test on every build:
 | `docs/jev-challenge-v1.json` | `n8-2026-09-22` | 240 |
 | `docs/jev-challenge-v2.json` | `n9-2026-09-22` | 242 |
 
+Both are scored against the current method on every build, whatever that method
+is now. `v1` and `v2` both score clean at `n10`.
+
 **`v1` stays frozen rather than being regenerated.** A regression set rebuilt
 on every method change cannot catch a regression, because it has never seen the
 method it would catch. `v1` scoring clean at `n9` is the evidence that the `n9`

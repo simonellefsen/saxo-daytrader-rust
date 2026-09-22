@@ -38,7 +38,7 @@ use std::sync::LazyLock;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n9-2026-09-22";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n10-2026-09-22";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -617,6 +617,12 @@ fn symbolic_relation(text: &str, number_start: usize) -> Option<&'static str> {
         (">", RELATION_ABOVE),
         ("<", RELATION_BELOW),
         ("=", RELATION_EQUALS),
+        // An approximation marker is a hedge written as punctuation. "rsi ~55"
+        // against a stored 61.34 was compared as an exact equality and
+        // reported as a disagreement, though the note claims only that it is
+        // about 55.
+        ("~", RELATION_UNSUPPORTED),
+        ("\u{2248}", RELATION_UNSUPPORTED),
     ] {
         if head.ends_with(token) {
             return Some(relation);
@@ -902,6 +908,94 @@ type Attribution = (
     Vec<Option<usize>>,
 );
 
+/// Whether two adjacent figures are the count-over-minimum notation.
+///
+/// `N/M` is how every report in this system writes confluences against the
+/// minimum required, and the rule used to fire only when one side had already
+/// been attributed to the count -- so "bullish 4/3, markov long 0.555", which
+/// never writes the word, had its 3 compared against a Markov signal.
+///
+/// Recognised from the notation alone: two whole numbers, unsigned, no
+/// percentage, separated by a single slash that is not part of a longer chain.
+/// Across all 1,105 stored notes every one of the 298 occurrences of this shape
+/// is a confluence count, and the bound on their size keeps a date or a version
+/// out. The limitation it accepts is a genuine small fraction -- "1/2 position"
+/// would be read as a confluence count.
+fn count_over_minimum(text: &str, left: &FoundNumber, right: &FoundNumber) -> bool {
+    /// Larger than any confluence count this system produces, and smaller than
+    /// a year or a price.
+    const LARGEST: f64 = 12.0;
+    let bytes = text.as_bytes();
+    right.start == left.end + 1
+        && bytes.get(left.end) == Some(&b'/')
+        && bytes.get(right.end) != Some(&b'/')
+        && left.start.checked_sub(1).map(|before| bytes[before]) != Some(b'/')
+        && left.decimals == 0
+        && right.decimals == 0
+        && !left.explicit_sign
+        && !right.explicit_sign
+        && !left.percent
+        && !right.percent
+        && (1.0..=LARGEST).contains(&left.value)
+        && (1.0..=LARGEST).contains(&right.value)
+}
+
+/// Whether a sentence ends between two positions.
+///
+/// A phrase in the next sentence does not name this figure. "markov is
+/// bull/long with +0.404 signal. quiver is supportive only" put `quiver` nine
+/// characters from the figure and `markov` nineteen, so the closest-phrase
+/// rule handed a Markov signal to Quiver and reported a disagreement.
+///
+/// Only full stops and semicolons count. Commas were tried and cost more than
+/// they saved: these notes are comma-spliced lists, and a figure is routinely
+/// separated from its own field name by one.
+fn sentence_ends_between(text: &str, left: usize, right: usize) -> bool {
+    if left >= right {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    (left..right).any(|position| {
+        let byte = bytes[position];
+        if byte == b';' || byte == b'!' || byte == b'?' {
+            return true;
+        }
+        if byte != b'.' {
+            return false;
+        }
+        let before_is_digit = position
+            .checked_sub(1)
+            .is_some_and(|previous| bytes[previous].is_ascii_digit());
+        let after_is_digit = bytes.get(position + 1).is_some_and(u8::is_ascii_digit);
+        !(before_is_digit && after_is_digit)
+    })
+}
+
+/// Words that cannot follow a noun, and so mark the word before them as a verb.
+///
+/// "the 453.0 EUR daily close support a controlled limit entry" uses `support`
+/// as a verb; the field table reads it as the support level and reported a
+/// disagreement against 434.6. English does not put a determiner after a noun,
+/// so this is a narrow syntactic test rather than a guess.
+const DETERMINERS: &[&str] = &[
+    "a", "an", "the", "this", "that", "these", "those", "its", "their", "our", "my", "his", "her",
+    "any", "some",
+];
+
+/// Whether the phrase ending at `end` is being used as a verb.
+fn used_as_a_verb(text: &str, end: usize) -> bool {
+    let tail = text[end..].trim_start_matches(' ');
+    if tail.len() == text[end..].len() {
+        // Nothing separated them, so this is not a following word at all.
+        return false;
+    }
+    DETERMINERS.iter().any(|determiner| {
+        tail.strip_prefix(determiner)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|next| next == ' ')
+    })
+}
+
 /// Maps every separator a note may write inside a field's name to a space.
 ///
 /// Notes write `bull_prob`, `signed_signal`, `break-risk` and `reward/risk`
@@ -970,8 +1064,18 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
                 let start = from + offset;
                 let end = start + keyword.len();
                 from = start + 1;
+                // A verb is not a name.
+                if used_as_a_verb(&searchable, end) {
+                    continue;
+                }
                 for (index, number) in numbers.iter().enumerate() {
                     if !eligible[index] {
+                        continue;
+                    }
+                    // A phrase in the next sentence names nothing here.
+                    if sentence_ends_between(text, number.end.min(start), start.max(number.end))
+                        && (number.end <= start || end <= number.start)
+                    {
                         continue;
                     }
                     let distance = if number.end <= start {
@@ -1021,6 +1125,52 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
             .iter()
             .any(|(start, end)| span.0 < *end && *start < span.1)
     };
+    // The count-over-minimum notation, settled before anything else reads the
+    // phrases.
+    //
+    // It used to run last and only when one side had already been attributed
+    // to the count, so "bullish 4/3, markov long 0.555" left the 3 compared
+    // against the Markov signal. Worse, the figures it was about to settle had
+    // meanwhile claimed phrases they had no business holding -- the 4 took
+    // `markov` at sixteen characters, which then could not contest the 0.576
+    // six characters from it, and a Markov signal was reported against Quiver.
+    // Settling the notation first leaves those phrases where they belong.
+    for index in 0..numbers.len().saturating_sub(1) {
+        if !count_over_minimum(text, &numbers[index], &numbers[index + 1]) {
+            continue;
+        }
+        if !eligible[index] || !eligible[index + 1] {
+            continue;
+        }
+        assigned[index] = FIELDS
+            .iter()
+            .find(|field| field.path == "daily_indicators.confluence_count");
+        assigned[index + 1] = FIELDS
+            .iter()
+            .find(|field| field.path == "daily_indicators.min_confluences");
+        settled[index] = true;
+        settled[index + 1] = true;
+        // No `phrase_end` is recorded: a gap measured from some other phrase
+        // would be measured from one this figure never used.
+        //
+        // But where the word is written too -- "6/3 technical confluences" --
+        // that phrase is part of this naming and is used up by it. Leaving it
+        // free let "confluences," contest the 2.71 two characters after it in
+        // "6/3 technical confluences, 2.71 reward/risk", and a reading that
+        // had been correct became an abstention.
+        if let Some(naming) = pairs
+            .iter()
+            .filter(|pair| {
+                (pair.number == index || pair.number == index + 1)
+                    && (pair.field.path.ends_with("confluence_count")
+                        || pair.field.path.ends_with("min_confluences"))
+            })
+            .min_by_key(|pair| pair.distance)
+        {
+            consumed.push(naming.span);
+        }
+    }
+
     for pair in &pairs {
         if settled[pair.number] || overlaps(&consumed, pair.span) {
             continue;
@@ -1066,45 +1216,6 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
         });
     }
 
-    // "6/3 technical confluences" is the count over the minimum. Without this
-    // the 6 went unattributed and the 3 was compared against the count of 6,
-    // reporting a disagreement that is purely notation -- and #279 MU carried
-    // exactly that in production.
-    for index in 0..numbers.len().saturating_sub(1) {
-        let (left, right) = (&numbers[index], &numbers[index + 1]);
-        if right.start != left.end + 1 || text.as_bytes().get(left.end) != Some(&b'/') {
-            continue;
-        }
-        // Either side naming the count is enough. `a.or(b)` short-circuits on
-        // the first `Some`, so when "High conviction setup with 5/3" gave the
-        // 5 to markov.conviction, the check read only that and the remap never
-        // fired -- leaving the 3 compared against a count of 5.
-        let names_confluences = [assigned[index], assigned[index + 1]]
-            .iter()
-            .flatten()
-            .any(|field| field.path.ends_with("confluence_count"));
-        if !names_confluences {
-            continue;
-        }
-        // The pattern is unambiguous, so it settles both figures. Leaving an
-        // earlier doubt in place would abstain on a reading this rule has
-        // just determined.
-        assigned[index] = FIELDS
-            .iter()
-            .find(|field| field.path == "daily_indicators.confluence_count");
-        assigned[index + 1] = FIELDS
-            .iter()
-            .find(|field| field.path == "daily_indicators.min_confluences");
-        uncertain[index] = false;
-        uncertain[index + 1] = false;
-        // The notation is the construction. Leaving the naming phrase of
-        // whatever lost the attribution in place would make the grammar read
-        // the words between *that* phrase and the figure -- "High conviction
-        // setup with 5/3" measured the gap from "conviction", found "setup",
-        // and abstained on a reading this rule had just settled.
-        phrase_end[index] = None;
-        phrase_end[index + 1] = None;
-    }
     (assigned, uncertain, phrase_end)
 }
 
@@ -2322,6 +2433,18 @@ mod grammar_regressions {
             (RELATION_AT_LEAST, NumericVerdict::Matches)
         );
 
+        // An approximation marker is a hedge written as punctuation. #106
+        // ARKK's "rsi ~55" against a stored 61.34 was compared as an exact
+        // equality and reported as a disagreement.
+        assert_eq!(
+            reading("RSI ~55"),
+            (RELATION_UNSUPPORTED, NumericVerdict::UncertainAttribution)
+        );
+        assert_eq!(
+            reading("RSI \u{2248}55"),
+            (RELATION_UNSUPPORTED, NumericVerdict::UncertainAttribution)
+        );
+
         // An inclusive bound is satisfied at the boundary, where a strict one
         // is not. Folding `>=` into `above` would call a correct note wrong.
         let exact = json!({"daily_indicators": {"rsi14": 70.0}});
@@ -2586,6 +2709,9 @@ mod grammar_coverage {
                 .unwrap_or("?");
             return format!("clause:{token}");
         }
+        if symbolic_relation(text, number_start) == Some(RELATION_UNSUPPORTED) {
+            return "approximation_marker".to_string();
+        }
         let Some(field_end) = phrase_end else {
             return "none".to_string();
         };
@@ -2665,5 +2791,141 @@ mod grammar_coverage {
                 examples.get(cause).map_or("", String::as_str)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod attribution_regressions {
+    use super::*;
+    use serde_json::json;
+
+    fn fields(note: &str, evidence: &JsonValue) -> Vec<(f64, Option<&'static str>, &'static str)> {
+        numeric_checks(note, evidence)
+            .into_iter()
+            .map(|check| (check.quoted, check.field, check.verdict.as_str()))
+            .collect()
+    }
+
+    /// The count-over-minimum notation is recognised from its own shape.
+    ///
+    /// The rule used to fire only when one side had already been attributed to
+    /// the count, so "bullish 4/3, markov long 0.555" -- which never writes the
+    /// word -- gave the 3 to `markov.signed_signal` and reported a
+    /// disagreement against 0.555. It cost the Markov figure too: with its
+    /// phrase taken, 0.555 went unattributed.
+    #[test]
+    fn a_bare_count_over_minimum_is_read_without_the_word() {
+        let evidence = json!({
+            "daily_indicators": {"confluence_count": 4, "min_confluences": 3, "rsi14": 70.9},
+            "markov": {"signed_signal": 0.5549628138542175},
+        });
+        assert_eq!(
+            fields(
+                "Affordable US-pulse starter add; bullish 4/3, Markov long 0.555. RSI 70.9 \
+                 elevated, capped size.",
+                &evidence
+            ),
+            vec![
+                (4.0, Some("daily_indicators.confluence_count"), "matches"),
+                (3.0, Some("daily_indicators.min_confluences"), "matches"),
+                (0.555, Some("markov.signed_signal"), "matches"),
+                (70.9, Some("daily_indicators.rsi14"), "matches"),
+            ]
+        );
+
+        // The notation still uses up the word where the note writes it, so
+        // "confluences," does not then contest the figure beside it.
+        let neighbour = json!({
+            "daily_indicators": {"confluence_count": 6, "min_confluences": 3, "reward_risk": 2.71},
+        });
+        assert_eq!(
+            fields("6/3 technical confluences, 2.71 reward/risk", &neighbour)[2],
+            (2.71, Some("daily_indicators.reward_risk"), "matches")
+        );
+    }
+
+    /// A phrase in the next sentence names nothing here.
+    ///
+    /// "markov is bull/long with +0.404 signal. quiver is supportive only" put
+    /// `quiver` nine characters from the figure and `markov` nineteen, so a
+    /// Markov signal was compared against the Quiver score and reported as a
+    /// disagreement.
+    #[test]
+    fn a_field_named_in_the_next_sentence_does_not_claim_the_figure() {
+        let evidence = json!({
+            "daily_indicators": {"confluence_count": 4, "min_confluences": 3},
+            "markov": {"signed_signal": 0.404},
+            "quiver": {"signal": 0.32695674896240234},
+        });
+        let checks = fields(
+            "New US financial-services starter. Daily technicals are OVERWEIGHT with bullish \
+             trend and 4/3 confluences; Markov is Bull/long with +0.404 signal. Quiver is \
+             supportive only.",
+            &evidence,
+        );
+        assert_eq!(checks[2], (0.404, Some("markov.signed_signal"), "matches"));
+    }
+
+    /// Within one sentence the rivalry stands, and a near tie abstains.
+    ///
+    /// "Markov long 0.576 and Quiver bullish" names both within a character of
+    /// each other. Reporting the marginally closer one had the figure compared
+    /// against the wrong field; abstaining says only that the note does not
+    /// settle which.
+    #[test]
+    fn two_fields_naming_one_figure_in_the_same_sentence_still_abstain() {
+        let evidence = json!({
+            "daily_indicators": {"confluence_count": 4, "min_confluences": 3},
+            "markov": {"signed_signal": 0.576},
+            "quiver": {"signal": 0.35456347465515137},
+        });
+        let checks = fields(
+            "Constructive bank setup: daily OVERWEIGHT, bullish trend, 4/3 confluences, \
+             Markov long 0.576 and Quiver bullish.",
+            &evidence,
+        );
+        assert_eq!(checks[2].0, 0.576);
+        assert_eq!(checks[2].2, "uncertain_attribution");
+    }
+
+    /// A verb is not a field name.
+    ///
+    /// "the 453.0 EUR daily close support a controlled limit entry" uses
+    /// `support` as a verb, and the figure is the daily close. Reading it as
+    /// the support level reported a disagreement against 434.6. English does
+    /// not put a determiner after a noun, which is the whole test.
+    #[test]
+    fn a_keyword_used_as_a_verb_names_nothing() {
+        let evidence = json!({
+            "daily_indicators": {
+                "confluence_count": 5,
+                "min_confluences": 3,
+                "support": {"break_risk": 0.037, "nearest_support": 434.6},
+            },
+            "markov": {"signed_signal": 0.2467},
+        });
+        let checks = fields(
+            "Bullish 5/3 BUY technical configuration, fresh +0.2467 long Markov signal, and a \
+             current 452.5 EUR quote below the 453.0 EUR daily close support a controlled limit \
+             entry.",
+            &evidence,
+        );
+        let four_five_three = checks
+            .iter()
+            .find(|(quoted, ..)| *quoted == 453.0)
+            .expect("the close");
+        assert_eq!(four_five_three.1, None);
+        assert_eq!(four_five_three.2, "unattributed");
+
+        // And the noun still names its field.
+        let noun = json!({"daily_indicators": {"support": {"nearest_support": 446.0}}});
+        assert_eq!(
+            fields("consolidating comfortably above 446 EUR support", &noun)[0],
+            (
+                446.0,
+                Some("daily_indicators.support.nearest_support"),
+                "matches"
+            )
+        );
     }
 }
