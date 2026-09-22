@@ -118,6 +118,33 @@ one at a time, each with its production example.
 | E | a field named further away wins when the near phrase is taken | #158 BAC `markov long 0.576 and quiver bullish` | `n10` |
 | F | attribution ignores sentence boundaries | #197 AJG `+0.404 signal. Quiver is supportive only` | `n10` |
 
+### What is left at `n10`
+
+Across the reports recomputed at `n10` so far, **nine distinct disagreements**
+remain, down from twenty at `n6`. None is obviously a checker artefact:
+
+| | note | evidence |
+|---|---|---|
+| #101 AMAT | `reward_risk only 0.65` | 0.542 |
+| #101 AMD | `5/5 confluence` | count 4, minimum 3 |
+| #101 AMGN | `5/5 confluence` | count 5, minimum 3 |
+| #101 ARM | `4/4 confluence` | count 4, minimum 3 |
+| #106 BAC | `rsi 58` | 67.76 |
+| #183 DDOG | `5 confluences` | 4 |
+| #255 BMW | `6.0% downside-to-support` | 7.00 |
+| #286 FLS | `593 DKK support` | 551.5 |
+
+Three of them — AMGN, ARM, and the minimum half of AMD — turn on how `N/N`
+should be read. The system's own prompt writes `N/M` as count over minimum, but
+a report writing `5/5` where the count is 5 and the minimum 3 may be saying
+"five of five checks passed". That is an ambiguity in the notation, not
+necessarily an error in the note, and it is not resolved here.
+
+The rest look like genuine report discrepancies. None has been adjudicated, and
+**the history is still mixed-version**: the observation loop works through 200
+grades a cycle and older method versions remain in the table, so this is a
+census of what has been recomputed, not of everything.
+
 ### A, in `n9`
 
 The keyword search was a plain substring match, so `bull_prob` never matched
