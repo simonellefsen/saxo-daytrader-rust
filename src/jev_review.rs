@@ -100,6 +100,12 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
 const REPORT_GRADING_VERSION: &str = "v15";
+
+/// The grading version a measurement was taken against.
+#[cfg(test)]
+pub(crate) fn report_grading_version() -> &'static str {
+    REPORT_GRADING_VERSION
+}
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -300,13 +306,13 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 const MAX_JUDGED_CANDIDATES: usize = 10;
 
 pub(crate) struct GradingInputs {
-    report: JsonValue,
+    pub(crate) report: JsonValue,
     pub(crate) candidates: Vec<JsonValue>,
     pub(crate) evidence: Vec<JsonValue>,
     coverage: JsonValue,
     /// Decision-time thresholds, as the report recorded them. `None` for
     /// reports written before the prompt carried them.
-    policy: Option<JsonValue>,
+    pub(crate) policy: Option<JsonValue>,
     /// Deterministic numeric findings, settled before any model call.
     numeric: Vec<JsonValue>,
 }

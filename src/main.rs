@@ -27,7 +27,10 @@ mod jev_challenge;
 mod jev_numeric;
 mod jev_review;
 mod jev_signals;
+// A regression and measurement asset, not a runtime path.
 mod jev_store;
+#[cfg(test)]
+mod jev_wording;
 mod llm_usage;
 mod localization;
 mod market_state;
