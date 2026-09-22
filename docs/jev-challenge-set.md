@@ -1,8 +1,16 @@
 # The seeded challenge set
 
-`challenge-v1-2026-09-22`, scored against numeric method `n8-2026-09-22`.
-Frozen in `docs/jev-challenge-v1.json`, scored by a hermetic test on every
-build.
+Two frozen sets, both scored by a hermetic test on every build:
+
+| set | generated against | cases |
+|---|---|---|
+| `docs/jev-challenge-v1.json` | `n8-2026-09-22` | 240 |
+| `docs/jev-challenge-v2.json` | `n9-2026-09-22` | 242 |
+
+**`v1` stays frozen rather than being regenerated.** A regression set rebuilt
+on every method change cannot catch a regression, because it has never seen the
+method it would catch. `v1` scoring clean at `n9` is the evidence that the `n9`
+attribution fix broke nothing it covers.
 
 ## Why it exists
 
@@ -50,16 +58,18 @@ offset bugs.
 | `future_tense` | appends "tomorrow" to the clause | unsettleable |
 | `field_removed_from_evidence` | deletes the field from the snapshot | unsettleable |
 
-## Results at `n8`
+## Results
 
-| | |
-|---|---|
-| **false negatives** — a seeded falsehood recorded as agreement | **0 of 135** |
-| false positives — a true claim called a disagreement | 0 of 75 |
-| overreach — an unsettleable claim settled anyway | 0 of 30 |
-| not checked — the case measured nothing | 0 |
-| agreed | 185 |
-| abstained | 55 |
+`v1` at `n8`, and `v2` at `n9` after the attribution fix the set prompted:
+
+| | `v1` at `n8` | `v2` at `n9` |
+|---|---|---|
+| **false negatives** — a seeded falsehood recorded as agreement | **0 of 135** | **0 of 135** |
+| false positives — a true claim called a disagreement | 0 of 75 | 0 of 77 |
+| overreach — an unsettleable claim settled anyway | 0 of 30 | 0 of 30 |
+| not checked — the case measured nothing | 0 | 0 |
+| agreed | 185 | 189 |
+| abstained | 55 | 53 |
 
 Per mutation, the abstentions are not spread evenly. They are three findings:
 
@@ -69,7 +79,7 @@ Per mutation, the abstentions are not spread evenly. They are three findings:
 | `negated_true_claim` | 0 | **15** | a negated claim is never checked |
 | `negated_false_claim` | 0 | **15** | nor is a negated false one |
 | `figures_swapped` | 8 | **7** | about half of transcription swaps go uncaught |
-| everything else | 162 | 3 | |
+| everything else | 166 | 1 | |
 
 **A unit error off by a factor of a hundred is never reported.** The magnitude
 guard added in `n7` — a threshold an order of magnitude from its field is a
@@ -93,11 +103,14 @@ needs a foothold, so every case starts from a figure attributed without
 difficulty. The largest abstention class in production — 407 figures at `n8`
 with no field attributable at all — is under-represented here by construction.
 
-**Two fields have never been checked once.** `markov.bull_prob` and
-`markov.bear_prob` have zero checks in all of production at `n8`, because notes
-write them as `bull_prob` and the keyword is "bull prob" — defect A in
-`jev-numeric-grammar.md`. No anchor exists for them, so the unit-conversion
-mutation produced zero cases. The set found the hole by being unable to fill it.
+**Two fields had never been checked once, and now are.** `markov.bull_prob`
+and `markov.bear_prob` had zero checks in all of production at `n8`, because
+notes write them as `bull_prob` and the keyword was "bull prob". The set found
+the hole by being unable to build a single case for them; `n9` reads
+underscores, hyphens and slashes as spaces, and `v2` carries the first two
+cases those fields have ever had. Two is not coverage — across all 1,105 stored
+notes only nineteen name a probability field at all, and most write it as a
+percentage or as the word "zero" — but it is no longer nothing.
 
 **This measures the numeric checker, not the grader.** The wording judgement is
 a model's opinion about prose and nothing here touches it. Its sensitivity
@@ -106,6 +119,15 @@ remains unmeasured.
 **Zero false negatives is not zero errors.** It says the checker did not
 silently agree with anything this set planted. It abstained on 23% of cases,
 and an abstention tells an operator nothing.
+
+## What the set has caught so far
+
+One defect, and it was a silent one: `markov.bull_prob` and `markov.bear_prob`
+unverified in their entirety. Adjudication could not have found it, because a
+field that is never checked produces no verdict to adjudicate.
+
+It has caught no regression yet, which is the point of keeping `v1` frozen —
+that number only becomes meaningful after the method moves under it.
 
 ## Regenerating
 

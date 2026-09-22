@@ -38,7 +38,7 @@ use std::sync::LazyLock;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n8-2026-09-22";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n9-2026-09-22";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -162,14 +162,14 @@ static FIELDS: &[FieldSpec] = &[
         path: "daily_indicators.support.break_risk",
         discrete: false,
         signed: false,
-        keywords: &["support break risk", "break risk", "break-risk"],
+        keywords: &["support break risk", "break risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "daily_indicators.reward_risk",
         discrete: false,
         signed: false,
-        keywords: &["reward/risk", "reward-risk", "reward risk"],
+        keywords: &["reward risk"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
@@ -225,6 +225,12 @@ static FIELDS: &[FieldSpec] = &[
         discrete: false,
         signed: true,
         keywords: &[
+            // `signed signal` names this field directly and sits right
+            // beside its figure. Without it, "markov bull_prob 0.72 /
+            // signed_signal 0.61" gave the 0.61 to whichever other phrase was
+            // nearest -- and once `bull_prob` started matching, that was
+            // `bull_prob`.
+            "signed signal",
             "markov regime",
             "markov signal",
             "markov score",
@@ -896,6 +902,36 @@ type Attribution = (
     Vec<Option<usize>>,
 );
 
+/// Maps every separator a note may write inside a field's name to a space.
+///
+/// Notes write `bull_prob`, `signed_signal`, `break-risk` and `reward/risk`
+/// for names the table spells with spaces, and the keyword search is a plain
+/// substring match -- so `bull_prob` matched nothing, and in all of production
+/// `markov.bull_prob` and `markov.bear_prob` were never checked once. Two of
+/// twelve fields, silently unverified.
+///
+/// Normalising both sides matches every spelling with one rule rather than a
+/// list of variants. Each separator is a single ASCII byte, so every offset in
+/// the text is preserved exactly and a phrase found in the normalised copy
+/// sits at the same place in the original.
+fn with_separators_normalised(text: &str) -> String {
+    text.replace(['_', '-', '/'], " ")
+}
+
+/// The field table's keywords, separator-normalised once.
+static NORMALISED_KEYWORDS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
+    FIELDS
+        .iter()
+        .map(|field| {
+            field
+                .keywords
+                .iter()
+                .map(|keyword| with_separators_normalised(keyword))
+                .collect()
+        })
+        .collect()
+});
+
 fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
     struct Pair {
         number: usize,
@@ -925,11 +961,12 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
         .map(|number| !measures_something_else(text, number.end))
         .collect();
 
+    let searchable = with_separators_normalised(text);
     let mut pairs: Vec<Pair> = Vec::new();
-    for field in FIELDS {
-        for keyword in field.keywords {
+    for (field, keywords) in FIELDS.iter().zip(NORMALISED_KEYWORDS.iter()) {
+        for keyword in keywords {
             let mut from = 0usize;
-            while let Some(offset) = text[from..].find(keyword) {
+            while let Some(offset) = searchable[from..].find(keyword.as_str()) {
                 let start = from + offset;
                 let end = start + keyword.len();
                 from = start + 1;
@@ -2431,6 +2468,80 @@ mod grammar_regressions {
         for check in checks.iter().take(2) {
             assert_eq!(check.relation, RELATION_EQUALS, "{check:?}");
             assert_eq!(check.verdict, NumericVerdict::Matches, "{check:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod separator_regressions {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence() -> JsonValue {
+        json!({
+            "markov": {
+                "bull_prob": 0.72,
+                "bear_prob": 0.11,
+                "signed_signal": 0.6124185919761658,
+            },
+            "daily_indicators": {
+                "reward_risk": 0.2397,
+                "support": {"break_risk": 0.0614},
+            },
+        })
+    }
+
+    /// A field name written with an underscore is the same name.
+    ///
+    /// The keyword search was a plain substring match, so `bull_prob` never
+    /// matched `bull prob` and in all of production `markov.bull_prob` and
+    /// `markov.bear_prob` were checked zero times. Two of twelve fields
+    /// silently unverified, and the challenge set found it by being unable to
+    /// build a single case for them.
+    #[test]
+    fn a_name_written_with_an_underscore_reaches_its_field() {
+        let checks = numeric_checks(
+            "markov bull_prob 0.72 / bear_prob 0.11 / signed_signal 0.6124",
+            &evidence(),
+        );
+        let field_of = |quoted: f64| {
+            checks
+                .iter()
+                .find(|check| (check.quoted - quoted).abs() < 1e-9)
+                .unwrap_or_else(|| panic!("no check for {quoted} in {checks:?}"))
+        };
+        assert_eq!(field_of(0.72).field, Some("markov.bull_prob"));
+        assert_eq!(field_of(0.72).verdict, NumericVerdict::Matches);
+        assert_eq!(field_of(0.11).field, Some("markov.bear_prob"));
+        assert_eq!(field_of(0.11).verdict, NumericVerdict::Matches);
+        // And the figure beside it keeps its own field. Before `signed signal`
+        // was a name in its own right, the nearest phrase to 0.6124 was
+        // `bull_prob` -- so fixing one attribution would have broken another.
+        assert_eq!(field_of(0.6124).field, Some("markov.signed_signal"));
+        assert_eq!(field_of(0.6124).verdict, NumericVerdict::Matches);
+
+        // A wrong probability is now a finding rather than silence.
+        let wrong = numeric_checks("markov bull_prob 0.80", &evidence());
+        assert_eq!(wrong[0].field, Some("markov.bull_prob"));
+        assert_eq!(wrong[0].verdict, NumericVerdict::Differs);
+    }
+
+    /// The hyphen and slash spellings the table used to carry explicitly are
+    /// still read, now by the same rule rather than by their own entries.
+    #[test]
+    fn the_hyphen_and_slash_spellings_still_match() {
+        for note in [
+            "low support break-risk 0.0614 and reward/risk 0.2397",
+            "low support break risk 0.0614 and reward risk 0.2397",
+            "low support_break_risk 0.0614 and reward_risk 0.2397",
+        ] {
+            let checks = numeric_checks(note, &evidence());
+            assert!(
+                checks
+                    .iter()
+                    .all(|check| check.verdict == NumericVerdict::Matches),
+                "{note:?} -> {checks:?}"
+            );
         }
     }
 }

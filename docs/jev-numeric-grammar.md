@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n8-2026-09-22`**, grading version **`v13`**. Frozen as the
+Method version **`n9-2026-09-22`**, grading version **`v14`**. Frozen as the
 evaluation baseline: the limitations below are measured and recorded rather
 than fixed, and the method must not move during an evaluation run.
 
@@ -56,13 +56,13 @@ from a comparison that actually happened.
 Two different numbers, and they must not be confused.
 
 **Grammar acceptance.** Against all 1,105 stored candidate notes (1,715
-figures, 1,320 attributed):
+figures, 1,342 attributed):
 
 | | |
 |---|---|
-| accepted as `equals` | 1,254 |
+| accepted as `equals` | 1,282 |
 | accepted as `above` | 13 |
-| rejected (`unsupported_construction`) | **53 — 4.0% of attributed** |
+| rejected (`unsupported_construction`) | **47 — 3.5% of attributed** |
 
 This measures only whether the grammar could read the claim. The harness has no
 evidence to check anything against, so it stops at the parse.
@@ -113,24 +113,45 @@ are, instead of rediscovering them one at a time.
 
 | # | Defect | Production example | Effect |
 |---|---|---|---|
-| A | A field name written with an underscore does not match its keyword: `bull_prob` never matches "bull prob" | #101 AMD `markov bull_prob 0.72 / signed_signal 0.61` | 0.72 given to `signed_signal` (0.612) → false `differs` |
+| ~~A~~ | ~~A field name written with an underscore does not match its keyword~~ — **fixed in `n9`** | #101 AMD `markov bull_prob 0.72 / signed_signal 0.61` | 0.72 given to `signed_signal` (0.612) → false `differs` |
 | B | The `N/M` remap needs the word "confluences" adjacent, so a bare ratio is not recognised | #103 BAC `bullish 4/3, markov long 0.555` | the 3 given to `markov.signed_signal` → false `differs` |
 | C | "support" as a verb matches the support field | #256 ALV `the 453.0 EUR daily close support a controlled limit` | 453.0 given to `nearest_support` (434.6) → false `differs` |
 | D | `~` before a figure is not read as an approximation marker | #106 ARKK `rsi ~55` against 61.34 | compared as an exact equality |
 | E | A field named further away can still win when the near phrase is not in the field table | #158 BAC `markov long 0.576 and quiver bullish` | 0.576 given to `quiver.signal` (0.355) → false `differs` |
 | F | Attribution ignores clause boundaries; the 40-character window crosses them | seen in testing, not in the corpus | a field in the next clause can claim a figure |
 
-Fixed in `n7`, because it is one rule rather than six: a threshold an order of
+### A, fixed in `n9`
+
+The keyword search was a plain substring match, so `bull_prob` never matched
+`bull prob`. **`markov.bull_prob` and `markov.bear_prob` had zero checks in all
+of production** — two of twelve fields silently unverified, found by the
+challenge set being unable to build a single case for them.
+
+Underscores, hyphens and slashes are now read as spaces on both sides of the
+match, which handles every spelling with one rule rather than a list of
+variants. Each is a single ASCII byte, so offsets are preserved exactly. The
+explicit `break-risk` and `reward/risk` keyword entries became redundant and are
+gone.
+
+That fix alone would have broken another attribution: with `bull_prob` matching,
+the nearest phrase to the 0.61 in `markov bull_prob 0.72 / signed_signal 0.61`
+became `bull_prob`. `signed signal` is now a name in its own right, so the
+figure beside it keeps its own field. Grammar acceptance rose from 1,267 to
+1,295 of 1,342 attributed figures; rejection fell from 4.0% to 3.5%.
+
+### D, fixed in `n7`
+
+One rule rather than six: a threshold an order of
 magnitude from its field is `implausible_attribution` whatever the relation.
 "top held conviction holding trading above 525 DKK with +0.749 Markov Bull
 regime" gave a price to `markov.conviction` and, because the magnitude guard
 protected equality only, reported a disagreement between 525 and 0.749 rather
 than naming the misattribution.
 
-The rest are **left in place deliberately.** Each is small and I could fix them
-now, which is exactly the pattern four review rounds have criticised: patch,
-declare success, have the next review find what the patch missed. They are
-frozen as part of the baseline so the evaluation measures the grader that
+B, C, E and F are **left in place deliberately.** Each is small and I could fix
+them now, which is exactly the pattern four review rounds have criticised:
+patch, declare success, have the next review find what the patch missed. They
+are frozen as part of the baseline so the evaluation measures the grader that
 exists.
 
 Of the 20, the ones that look like genuine report discrepancies rather than
