@@ -143,10 +143,13 @@ necessarily an error in the note, and it is not resolved here.
 The rest look like genuine report discrepancies. None has been adjudicated.
 
 **The census is now complete.** Every grade that can be recomputed is at `n10`:
-1,744 completed and 42 partial, 12,711 checks in all. The 210 that cannot are
+1,745 completed and 42 partial, around 12,700 checks. The 210 that cannot are
 marked and stay at their original method version — reports 1 to 82, whose stored
 prompts predate the indicator snapshot, so there is nothing to recompute them
 against.
+
+Of the 47 partial grades, **10 were already at `n10`, 32 were brought there by
+the repair, and 5 were marked unrecomputable.** All kept their partial status.
 
 | verdict | | |
 |---|---|---|
@@ -158,10 +161,41 @@ against.
 | `not_a_field_value` | 176 | a horizon or a share count |
 | `implausible_attribution` | 60 | field an order of magnitude off |
 
-**10,327 of 12,711 compared — 81%**, against 66% at `n7` before the attribution
-fixes. The 69 `differs` rows are the same nine findings repeated across grade
-versions of the same reports: widening the census from a partial pass to the
-whole history produced no finding the partial pass had missed.
+**10,258 matches and 69 disagreements are 81% of the checks compared.** That is
+comparison coverage, not correctness: it counts how often the checker reached a
+verdict, and says nothing about whether the verdict was right. The 69 `differs`
+rows are the same nine findings repeated across grade versions of the same
+reports, so the row count weights some reports far more than others.
+
+### Measuring the attribution fixes properly
+
+Comparing 12,700 checks now against 2,076 earlier is not a measurement of
+anything: different denominators, and repeated grades weighting some reports
+many times over. The retained history makes a real comparison possible, because
+each superseded measurement is kept whole.
+
+Taking every claim measured under **both** `n7` and `n10` — deduplicated by
+report, symbol, figure and excerpt, so each distinct claim counts once:
+
+| | `n7` | `n10` |
+|---|---|---|
+| shared claims | 1,429 | 1,429 |
+| compared | 955 — 66.8% | **1,146 — 80.2%** |
+
+195 claims went from abstention to a verdict; 4 went the other way. Of those
+four, **three were false positives the fixes were meant to remove**: `rsi ~55`
+read as an exact equality, `markov long 0.576` compared against Quiver, and
+`453.0 EUR daily close support` compared against the support level. Each is now
+an abstention, which is the correct reading.
+
+The fourth is a genuine loss: #161 AAKI's `rsi 51.8` was a correct `matches` at
+`n7` and is a contested `uncertain_attribution` at `n10` — another field's
+phrase now falls inside the attribution margin. One correct comparison traded
+for three false ones removed and 195 gained.
+
+The single new disagreement is #101 AMAT's `reward_risk only 0.65` against
+0.542, which `n7` could not attribute at all because the note writes the field
+name with an underscore.
 
 ### A, in `n9`
 
