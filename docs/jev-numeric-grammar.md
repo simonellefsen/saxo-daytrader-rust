@@ -140,10 +140,28 @@ a report writing `5/5` where the count is 5 and the minimum 3 may be saying
 "five of five checks passed". That is an ambiguity in the notation, not
 necessarily an error in the note, and it is not resolved here.
 
-The rest look like genuine report discrepancies. None has been adjudicated, and
-**the history is still mixed-version**: the observation loop works through 200
-grades a cycle and older method versions remain in the table, so this is a
-census of what has been recomputed, not of everything.
+The rest look like genuine report discrepancies. None has been adjudicated.
+
+**The census is now complete.** Every grade that can be recomputed is at `n10`:
+1,744 completed and 42 partial, 12,711 checks in all. The 210 that cannot are
+marked and stay at their original method version — reports 1 to 82, whose stored
+prompts predate the indicator snapshot, so there is nothing to recompute them
+against.
+
+| verdict | | |
+|---|---|---|
+| `matches` | 10,258 | compared |
+| `differs` | 69 | compared — **9 distinct findings**, the table above |
+| `unattributed` | 1,318 | no field |
+| `uncertain_attribution` | 432 | contested, or wording the grammar refused |
+| `not_in_evidence` | 398 | field absent from the snapshot |
+| `not_a_field_value` | 176 | a horizon or a share count |
+| `implausible_attribution` | 60 | field an order of magnitude off |
+
+**10,327 of 12,711 compared — 81%**, against 66% at `n7` before the attribution
+fixes. The 69 `differs` rows are the same nine findings repeated across grade
+versions of the same reports: widening the census from a partial pass to the
+whole history produced no finding the partial pass had missed.
 
 ### A, in `n9`
 
