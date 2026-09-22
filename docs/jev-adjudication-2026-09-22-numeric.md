@@ -1,117 +1,108 @@
 # Adjudicating the nine numeric findings
 
-Method `n10-2026-09-22`, the complete recomputed history: 12,700 checks, 69
-`differs` rows, **nine distinct findings**. Adjudicated 2026-09-22 under the
-frozen rubric in `jev-adjudication-rubric.md`.
+Method `n10-2026-09-22`, the complete recomputed history. Adjudicated
+2026-09-22 under the frozen rubric in `jev-adjudication-rubric.md`, and
+**amended the same day** after review — the first version recorded nine
+contradictions and a precision claim, and neither survived.
 
 ## Who did this, and what that costs
 
 The rubric says these are "answered by a human reading the note against the
-evidence". **I am not that, and I am not independent.** I wrote the checker, and
-I have looked at these nine repeatedly across the work that produced them. What
-follows is triage — a reading of each note against the stored decision-time
-evidence, with the reasoning shown so someone else can disagree with it — and
-not an independent verdict.
+evidence". **I am not that, and I am not independent.** I wrote the checker and
+have looked at these nine repeatedly across the work that produced them. The
+review that corrected this document was a second agent, which is not blinded
+human adjudication either.
 
-Under the rubric, a category-1 finding is adjudicated on one question only:
-**was the figure matched to the field the note meant?** If yes, the
-disagreement is the report's. If no, it is the checker's.
+Under the rubric a category-1 finding is adjudicated on one question: **was the
+figure matched to the field the note meant?** And rule 4 says that where two
+readings are both defensible, the result is *ambiguous* — ambiguity being a
+result rather than a failure to decide.
 
-## What settles four of the nine
+## Verdicts
 
-Four findings turn on whether `N/M` means *count over the minimum required* or
-*N of M possible*. Two facts from the stored prompts settle it.
+**Five confirmed contradictions. Four unresolved.**
 
-- **`min_confluences` is 3 in all 12,160 indicator snapshots.** It has never
-  taken another value.
-- **`confluence_count` ranges 1 to 6** (1:64, 2:119, 3:263, 4:4553, 5:7011,
-  6:150).
-
-Across 297 uses of the notation in stored notes, the denominator is **3 in 294
-of them**. A denominator of 3 cannot be a count of available checks, because
-counts reach 6. So the notation is count-over-minimum, and the three deviations
-— two `5/5` and one `4/4` — assert a minimum of 5 or 4 where the evidence says
-3.
-
-The competing reading, that the writer switched to "N of N" in exactly those
-three cases, has no supporting instance in the other 294.
-
-## The nine
-
-| # | report | note fragment | evidence | verdict |
+| # | report | note says | evidence | verdict |
 |---|---|---|---|---|
-| 1 | 101 AMAT | `reward_risk only 0.65` | 0.5423 | contradiction |
-| 2 | 101 AMD | `5/5 confluence` — count | 4 | contradiction |
-| 3 | 101 AMD | `5/5 confluence` — minimum | 3 | contradiction |
-| 4 | 101 AMGN | `5/5 confluence` — minimum | 3 | contradiction |
-| 5 | 101 ARM | `4/4 confluence` — minimum | 3 | contradiction |
-| 6 | 106 BAC | `RSI 58` | 67.76 | contradiction |
-| 7 | 183 DDOG | `5 confluences` | 4 | contradiction |
-| 8 | 255 BMW | `low 6.0% downside-to-support` | 7.003 | contradiction |
-| 9 | 286 FLS | `consolidating near 593 DKK support` | 551.5 | contradiction, noted below |
+| 1 | 101 AMAT | `reward_risk only 0.65` | 0.5423 | **contradiction** |
+| 2 | 101 AMD | `5/5 confluence` — numerator | count 4 | **contradiction** |
+| 3 | 106 BAC | `RSI 58` | 67.7608 | **contradiction** |
+| 4 | 183 DDOG | `5 confluences` | count 4 | **contradiction** |
+| 5 | 255 BMW | `low 6.0% downside-to-support` | 7.003% | **contradiction** |
+| 6 | 101 AMD | `5/5` — denominator | minimum 3 | *ambiguous* |
+| 7 | 101 AMGN | `5/5` — denominator | minimum 3 | *ambiguous* |
+| 8 | 101 ARM | `4/4` — denominator | minimum 3 | *ambiguous* |
+| 9 | 286 FLS | `near 593 DKK support` | support 551.5, **close 593.0** | *ambiguous* |
 
-**Nine of nine confirmed. No checker false positive among them.**
+### The five
 
-Case by case, where the reading needed work:
+**AMAT** writes the field name itself, `reward_risk`, so attribution is not in
+question, and no rounding or truncation of 0.5423 produces 0.65. **AMD's
+numerator** says five confluences where the count is four — wrong under every
+reading of the notation, including the one that would rescue its denominator.
+**BAC** says `RSI 58` against 67.7608; the rest of that note is accurate.
+**DDOG** says five confluences against a count of four, named directly.
 
-**1 — AMAT.** The note writes the field name itself, `reward_risk`, so the
-attribution is not in question. No rounding or truncation of 0.5423 produces
-0.65. The same note's `RSI 70 overbought` against 70.309 is correct and was
-matched.
+**BMW** says `low 6.0% downside-to-support` where the downside is 7.003% — and
+its stored `break_risk` is 0.06002732, which is 6.0027%. The report appears to
+have put the break-risk probability where the distance to support goes. That is
+a plausible mechanism for the error, not a separate finding.
 
-**2 and 3 — AMD.** `confluence_count` is 4 and the note says 5. That is wrong
-under *every* reading of the notation, including the one that would rescue the
-denominator. The denominator is wrong separately, per the section above.
+### The four
 
-**4 and 5 — AMGN and ARM.** The numerator is right in both (5 against 5, 4
-against 4); only the denominator is wrong. These are the two findings most
-likely to be called ambiguous by someone else, and the corpus evidence above is
-the whole of my reason for not calling them that.
+**The three denominators.** The corpus shows count-over-minimum is the dominant
+convention: `min_confluences` is 3 in all 12,160 indicator snapshots,
+`confluence_count` runs 1 to 6, and 294 of 297 notation uses in stored notes
+write 3. A denominator of 3 cannot be a count of available checks when counts
+reach 6.
 
-**6 — BAC.** `RSI 58` against 67.76. Nothing in the note or the evidence makes
-58 a way of writing 67.76. The rest of the note is accurate: `R/R 0.75` against
-0.74992, `5 confluences` against 5, `Markov long 0.557`.
+That establishes the convention. It does not settle these three, and the first
+version of this document argued that it did — by saying the reading "has no
+supporting instance in the other 294", as though three independent
+counterexamples had been weighed against 294. **All three occur in report 101.**
+They are one writer's choice on one occasion, not three deviations, and a report
+switching to "N out of N" for its own candidates is exactly what one occasion
+looks like. That wording may still be misleading or unsupported; it does not
+unambiguously assert a minimum of 5 or 4.
 
-**7 — DDOG.** `5 confluences` against a count of 4, named directly, no notation
-involved.
+**FLS.** The note says `consolidating near 593 DKK support` against a
+`nearest_support` of 551.5 — but `close` is **exactly 593.0**. The competing
+attribution is grounded in the evidence rather than hypothetical. The first
+version recorded this as a contradiction while stating in the same paragraph
+that an independent adjudicator would likely overturn it. That is not applying
+rule 4; it is hedging while keeping the score.
 
-**8 — BMW.** The note names `downside-to-support` explicitly. 7.003 to one
-decimal is 7.0, not 6.0. The same note's `5/3` matches the count and the
-minimum exactly, which is one of the 294 instances supporting the notation
-reading above.
+## What this establishes, and what was withdrawn
 
-**9 — FLS.** The note says `consolidating near 593 DKK support`; `nearest_support`
-is 551.5. **But `close` is exactly 593.0.** So there is a competing reading in
-which 593 is the price and the wording is loose, and the checker matched the
-wrong field. I record it as a contradiction because the note names support and
-because "consolidating near [its own close]" asserts nothing — but the
-coincidence is exact, and this is the one of the nine I would expect an
-independent adjudicator to overturn.
+**Precision is not established at 9 of 9.** Five of the nine flags are
+confirmed; four are unresolved. Unresolved does not mean the checker was wrong —
+it means the evidence does not settle it either way.
 
-## What this establishes
+**The accuracy conclusion is withdrawn.** The first version said "nine findings
+in 12,700 checks is 0.07%" and concluded the reports are "numerically accurate
+almost all of the time". Three things are wrong with that:
 
-**Precision on this set: 9 of 9.** Every disagreement the checker reported in
-the whole recomputed history is a real disagreement between a note and the
-evidence it was written from.
+- It divided deduplicated findings by repeated check rows. The comparable
+  figures are **69 flag rows in 12,716 check rows — 0.54%** — or **9 distinct
+  findings in 1,445 distinct claims — 0.62%**.
+- A flag rate is not an error rate. It counts what the checker noticed.
+- **283 of the 1,445 distinct claims, 19.6%, were never compared at all.** An
+  error in any of them could not have been flagged.
 
-**It says nothing about recall.** How often a note misstates the evidence and
-the checker stays silent is a different question, measured separately and only
-on seeded cases: `jev-challenge-set.md`.
+Even perfect precision among flagged cases would say nothing about the claims
+that were never flagged, which is where a missed error would be.
 
-**Four of the nine are in one report.** #101 contributes AMAT, AMD (twice),
-AMGN and ARM. That is a signal about one report, not five independent ones, and
-a per-report count would read very differently from a per-finding count.
+**Two counting corrections.** Report 101 contributes **five** of the nine, not
+four — AMAT, AMD's numerator, AMD's denominator, AMGN and ARM. Confluence counts
+and denominators account for **five** findings, not six: two counts (AMD, DDOG)
+and three denominators.
 
-**Six of the nine are two habits.** Writing a confluence count that does not
-match the evidence (AMD, DDOG), and writing a denominator that is not the
-minimum (AMD, AMGN, ARM).
+**These nine must not become a held-out test set.** They have now been inspected
+repeatedly by the party that wrote the checker and once by a reviewing agent.
+They are triage and regression material.
 
-**Nine findings in 12,700 checks is 0.07%.** On the 1,449 distinct claims the
-history contains, it is well under one percent. The reports are, by this
-measure, numerically accurate almost all of the time.
-
-**And these nine must not become a held-out test set.** They have been inspected
-repeatedly, by the same party that wrote the checker, throughout the work that
-produced them. They are triage material and regression material, nothing else.
+What remains necessary, and is not this: independently labelled clean controls
+and unflagged examples. Reviewing only the cases the checker flagged can measure
+its false positives and can never measure its false negatives.
 
 No trading parameter changes on the strength of this.
