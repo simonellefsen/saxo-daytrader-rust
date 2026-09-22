@@ -158,13 +158,20 @@ stored exactly 70.0 still matches where `RSI > 70` does not.
 
 ## Reading the sufficiency numbers
 
-Grade versions cover overlapping populations. `v11` and `v12` are the **same
-120 reports**, so pooling them repeats observations rather than enlarging the
-sample; a version-specific, subject-deduplicated count is the only honest one.
+Grade versions cover overlapping populations, so pooling them repeats
+observations rather than enlarging the sample. A version-specific,
+subject-deduplicated count is the only honest one.
 
-`v12` alone: **244 flagged out of 450 answered, 0 unanswered, across 120
-reports** — 54%. That is a review workload, not a finding that half the reports
-are defective. None of it is adjudicated.
+**And no count taken while a backfill is running is stable.** Measured at 120
+reports, `v12` read 244 flagged of 450 answered — 54%. The same version
+complete, at all 229 reports, reads **545 flagged of 830 answered — 66%**, zero
+unanswered. Nothing changed but the sample. Every figure in an evaluation must
+come from a version whose backfill has finished; the observation loop works
+through 120 reports a cycle and a version takes two cycles to complete.
+
+66% of candidate notes flagged as asserting something the evidence does not
+contain is a review workload, not a finding that two thirds of the reports are
+defective. None of it is adjudicated, and the question itself is uncalibrated.
 
 ## Known limitations, not fixed
 
