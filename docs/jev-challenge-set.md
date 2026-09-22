@@ -6,9 +6,10 @@ Two frozen sets, both scored by a hermetic test on every build:
 |---|---|---|
 | `docs/jev-challenge-v1.json` | `n8-2026-09-22` | 240 |
 | `docs/jev-challenge-v2.json` | `n9-2026-09-22` | 242 |
+| `docs/jev-challenge-v3.json` | `n10-2026-09-22` | 242 |
 
-Both are scored against the current method on every build, whatever that method
-is now. `v1` and `v2` both score clean at `n10`.
+All three are scored against the current method on every build, whatever that
+method is now.
 
 **`v1` stays frozen rather than being regenerated.** A regression set rebuilt
 on every method change cannot catch a regression, because it has never seen the
@@ -30,13 +31,31 @@ snapshot holds 0.612 is false, and it is false whatever the checker says.
 Two rules keep it honest.
 
 **The answer key is the truth of the claim, not the verdict the checker ought to
-return.** Each case records `holds`, `fails` or `unsettleable`. Nothing in
-generation consults a verdict, and the arithmetic that decides whether a written
-figure could have come from a stored one is a second implementation, not a call
-into the thing under test.
+return.** Each case records `holds`, `fails` or `unsettleable`. The arithmetic
+that decides whether a written figure could have come from a stored one is a
+second implementation, not a call into the thing under test.
 
 **An abstention is neither a hit nor a miss.** It has its own column. A checker
 that abstains everywhere scores zero agreed, not a clean sheet.
+
+**But the key is not fully independent of the checker, and this document said
+otherwise.** Generation picks its anchors by running the checker and keeping the
+figures it already reads as a settled equality, and it takes `target_field` from
+that reading. A case therefore knows which field a figure refers to only because
+the checker said so. What follows is a real limit: **these cases cannot detect
+an attribution that was wrong from the start, only one a later change breaks.**
+Everything downstream of the anchor is the key's own — the stored value is read
+from the evidence, not from the check, and each mutation's truth is computed
+independently.
+
+**A verdict about the wrong field is not a decision.** The scorer used to match
+a case to a check by text offset alone, so a comparison that reached the right
+answer through a broken attribution would have been credited. It now requires
+the returned field to be the one the case mutated, and `wrong_field` is asserted
+at zero. Adding that guard immediately caught three cases where the generator,
+not the checker, was at fault: it composed "reward is 0.31" for a field the
+table spells "reward risk", so nothing was attributed and three negation cases
+decided nothing at all.
 
 ## What is in it
 
@@ -57,22 +76,30 @@ offset bugs.
 | `figures_swapped` | two figures in the note exchanged | fails |
 | `comparator_true` / `_false` | inserts `above X` either side of the value | holds / fails |
 | `inclusive_bound_holds` / `_fails` | inserts `>= X` / `<= X` | holds / fails |
-| `negated_true_claim` / `_false_claim` | wraps the clause in "it is false that" | fails / holds |
+| `negated_true_claim` / `_false_claim` | appends "it is false that `<field>` is `<value>`." | fails / holds |
 | `future_tense` | appends "tomorrow" to the clause | unsettleable |
 | `field_removed_from_evidence` | deletes the field from the snapshot | unsettleable |
 
 ## Results
 
-`v1` at `n8`, and `v2` at `n9` after the attribution fix the set prompted:
+The honest headline, `v3` at `n10`:
 
-| | `v1` at `n8` | `v2` at `n9` |
-|---|---|---|
-| **false negatives** — a seeded falsehood recorded as agreement | **0 of 135** | **0 of 135** |
-| false positives — a true claim called a disagreement | 0 of 75 | 0 of 77 |
-| overreach — an unsettleable claim settled anyway | 0 of 30 | 0 of 30 |
-| not checked — the case measured nothing | 0 | 0 |
-| agreed | 185 | 189 |
-| abstained | 55 | 53 |
+> **72.6% of seeded false claims detected. None wrongly accepted. 27.4% left
+> unresolved.**
+
+"No false negatives" on its own reads as a clean sheet and is not one. It says
+only that nothing seeded was waved through — which is worth knowing, and is a
+different and larger claim than detection. Both numbers belong together, and
+these are results on a selected regression set, not production sensitivity.
+
+| `v3` at `n10` | cases | decided correctly | unresolved | decided wrongly |
+|---|---|---|---|---|
+| false claims | 135 | **98** | 37 | **0** |
+| true claims | 77 | 62 | 15 | 0 |
+| unsettleable claims | 30 | 30 | — | 0 |
+
+`v1` and `v2` score the same way at `n10`: 187 and 190 decided correctly, 53 and
+52 unresolved, nothing decided wrongly.
 
 Per mutation, the abstentions are not spread evenly. They are three findings:
 
@@ -95,6 +122,29 @@ negated claims by design, and the set shows exactly what that buys: it cannot
 distinguish "it is false that RSI is above 70" when the claim is true from when
 it is false. Abstaining is still better than the alternative — before `n6` those
 constructions returned *agreement* — but it is not detection.
+
+## Guarding one mutation at a time
+
+A total-abstention ceiling can hide a regression: one detected error becoming an
+abstention while a different case improves leaves the total unchanged and the
+build green. Each set now also carries `recorded_baseline.agreed_by_mutation`,
+the method's own per-mutation results when the baseline was recorded, and every
+mutation must decide at least as many cases correctly as it did then. The
+assertion is one-sided, so an improvement never fails the build, and
+`record_baselines` re-records them after a deliberate change — never to make a
+failing build pass.
+
+## A correction to the negation cases in `v1` and `v2`
+
+Those sets wrap the note's own clause in "it is false that". That is not a sound
+seeding: "it is false that (A and B)" is true whenever either conjunct fails, so
+negating a clause that carries a true figure alongside other claims does not
+make the clause false, and the key said it did. `v3` appends a standalone
+sentence about one field instead, which is atomic and explicit in scope.
+
+No number is corrupted by this — every negation case abstains in all three sets,
+so none of them contributes to a decided column — but the labels in `v1` and
+`v2` for that mutation are unreliable and should not be read as ground truth.
 
 ## What this does not establish
 

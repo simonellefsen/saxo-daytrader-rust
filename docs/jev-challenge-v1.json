@@ -15307,6 +15307,28 @@
     }
   ],
   "generated": "2026-09-22",
+  "recorded_baseline": {
+    "agreed_by_mutation": {
+      "boundary_last_place": 15,
+      "boundary_truncated": 15,
+      "comparator_false": 14,
+      "comparator_true": 15,
+      "digits_transposed": 15,
+      "field_removed_from_evidence": 15,
+      "figures_swapped": 8,
+      "future_tense": 15,
+      "inclusive_bound_fails": 15,
+      "inclusive_bound_holds": 15,
+      "negated_false_claim": null,
+      "negated_true_claim": null,
+      "scaled_by_a_hundred": null,
+      "sign_flipped": 15,
+      "unchanged": 15,
+      "value_contradiction": 15
+    },
+    "method_version": "n10-2026-09-22",
+    "note": "the method's own results when this baseline was recorded, kept so a later regression in one mutation cannot be cancelled by an improvement in another; not part of the answer key"
+  },
   "source": "stored decision report notes and their decision-time evidence, lowercased",
   "version": "challenge-v1-2026-09-22"
 }
