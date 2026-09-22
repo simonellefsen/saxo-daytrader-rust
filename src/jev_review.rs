@@ -624,9 +624,25 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
 
     let mut recomputed = 0usize;
     let mut unable = Vec::new();
+    let mut blocked = 0usize;
+    // A grade that can never be recomputed is marked so the selection stops
+    // handing it back. Skipping without recording was a live-lock: the same
+    // two hundred old reports filled every batch, `recomputed=0 unable=200`
+    // cycle after cycle, while grades that could be recomputed waited behind
+    // them. Named rather than stamped -- the absence stays an absence.
+    let block = |unable: &mut Vec<JsonValue>, id: &str, subject: &str, reason: &'static str| {
+        unable.push(json!({"subject": subject, "reason": reason, "blocked": true}));
+        (id.to_string(), reason)
+    };
+    let mut to_block: Vec<(String, &'static str)> = Vec::new();
     for (id, subject) in &stale {
         let Ok(subject_id) = subject.parse::<i64>() else {
-            unable.push(json!({"subject": subject, "reason": "subject is not a report id"}));
+            to_block.push(block(
+                &mut unable,
+                id,
+                subject,
+                "subject is not a report id",
+            ));
             continue;
         };
         let row =
@@ -635,18 +651,28 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
                 .fetch_optional(&state.pool)
                 .await;
         let Ok(Some(row)) = row else {
-            unable.push(json!({"subject": subject, "reason": "report row is gone"}));
+            to_block.push(block(&mut unable, id, subject, "report row is gone"));
             continue;
         };
         let row = row_to_json(&row);
         let Some(report) = parse_embedded(row.get("report_json")) else {
-            unable.push(json!({"subject": subject, "reason": "report json could not be decoded"}));
+            to_block.push(block(
+                &mut unable,
+                id,
+                subject,
+                "report json could not be decoded",
+            ));
             continue;
         };
         let Some(prompt) = parse_embedded(row.get("request_json"))
             .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
         else {
-            unable.push(json!({"subject": subject, "reason": "request json could not be decoded"}));
+            to_block.push(block(
+                &mut unable,
+                id,
+                subject,
+                "request json could not be decoded",
+            ));
             continue;
         };
         // A prompt carrying no indicator block is absent evidence, not a
@@ -660,10 +686,12 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
             .and_then(JsonValue::as_array)
             .is_none()
         {
-            unable.push(json!({
-                "subject": subject,
-                "reason": "stored prompt carries no daily indicator snapshot",
-            }));
+            to_block.push(block(
+                &mut unable,
+                id,
+                subject,
+                "stored prompt carries no daily indicator snapshot",
+            ));
             continue;
         }
 
@@ -682,19 +710,31 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
             recomputed += 1;
         }
     }
+    for (id, reason) in &to_block {
+        if let Err(err) = jev_store::mark_recompute_blocked(&state.pool, id, reason).await {
+            warn!(error = %err, "marking a grade unrecomputable");
+        } else {
+            blocked += 1;
+        }
+    }
     info!(
         recomputed,
         unable = unable.len(),
+        blocked,
         method = crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "Jev numeric measurements recomputed"
     );
     json!({
         "status": "ok",
         "recomputed": recomputed,
-        // Named, not counted as done. A measurement that could not be
-        // re-derived keeps its earlier findings and its earlier method
-        // version, so it stays visibly stale rather than reading as revalidated.
-        "unable_to_recompute": unable,
+        // A measurement that could not be re-derived keeps its earlier
+        // findings and its earlier method version, so it stays visibly stale
+        // rather than reading as revalidated.
+        // Named, not counted as done, and capped: the whole list ran to
+        // twenty thousand characters in a log line every ten minutes.
+        "unable_to_recompute": unable.iter().take(10).collect::<Vec<_>>(),
+        "unable_to_recompute_count": unable.len(),
+        "newly_blocked": blocked,
         "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "provider_calls": 0,
     })

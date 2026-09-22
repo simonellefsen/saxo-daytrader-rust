@@ -502,6 +502,47 @@ pub(crate) async fn screening_agreement(pool: &AnyPool, threshold: f64) -> Resul
 ///
 /// Returns the request id and subject so the measurement can be re-derived
 /// from evidence already on disk, with no provider call.
+/// Marker for a grade whose numeric half can never be recomputed.
+///
+/// Reports 1 to 82 predate the indicator snapshot being stored in the prompt,
+/// so there is nothing to recompute against and stamping them with the current
+/// method would record a clean revalidation of something never examined. They
+/// were skipped instead -- and skipped again on every cycle, because the
+/// selection kept handing back the same two hundred. The loop recomputed
+/// nothing for hours while grades that *could* be recomputed sat behind them.
+pub(crate) const BLOCKED_KEY: &str = "numeric_recompute_blocked";
+
+/// Records that a grade's numeric half cannot be recomputed, and why.
+///
+/// Permanent by design: a stored prompt does not change, so a later method
+/// version must not pick it up again. Nothing about the measurement is
+/// altered -- the absence stays an absence.
+pub(crate) async fn mark_recompute_blocked(pool: &AnyPool, id: &str, reason: &str) -> Result<()> {
+    let row = sqlx::query("SELECT result_json FROM jev_requests WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .context("reading a grade to mark it unrecomputable")?;
+    let Some(row) = row else { return Ok(()) };
+    let Ok(text) = row.try_get::<String, _>("result_json") else {
+        return Ok(());
+    };
+    let Ok(mut result) = serde_json::from_str::<JsonValue>(&text) else {
+        return Ok(());
+    };
+    result[BLOCKED_KEY] = serde_json::json!({
+        "reason": reason,
+        "at": crate::jev_signals::now_rfc3339(),
+    });
+    sqlx::query("UPDATE jev_requests SET result_json = $1 WHERE id = $2")
+        .bind(serde_json::to_string(&result).unwrap_or(text))
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("marking a grade unrecomputable")?;
+    Ok(())
+}
+
 pub(crate) async fn grades_with_stale_numeric_method(
     pool: &AnyPool,
     method_version: &str,
@@ -513,11 +554,13 @@ pub(crate) async fn grades_with_stale_numeric_method(
          WHERE purpose = $1 AND status = 'completed'
            AND subject IS NOT NULL AND result_json IS NOT NULL
            AND result_json NOT LIKE $2
+           AND result_json NOT LIKE $3
          ORDER BY created_at DESC
          LIMIT {limit}"
     ))
     .bind(PURPOSE_REPORT_GRADING)
     .bind(format!("%\"method_version\":\"{method_version}\"%"))
+    .bind(format!("%\"{BLOCKED_KEY}\"%"))
     .fetch_all(pool)
     .await
     .context("reading grades with a stale numeric method")?
@@ -725,7 +768,7 @@ mod tests {
         );
     }
 
-    async fn pool() -> AnyPool {
+    pub(super) async fn pool() -> AnyPool {
         DRIVERS.call_once(sqlx::any::install_default_drivers);
         // One connection: each new connection to `sqlite::memory:` gets its
         // own empty database, so a larger pool would serve queries against a
@@ -1541,6 +1584,71 @@ mod tests {
                 .expect("stale lookup")
                 .is_empty(),
             "and it is not recomputed again"
+        );
+    }
+}
+
+#[cfg(test)]
+mod recompute_selection_tests {
+    use super::*;
+
+    /// A grade that can never be recomputed must stop being selected.
+    ///
+    /// Reports 1 to 82 predate the indicator snapshot being stored, so the
+    /// recompute skipped them -- and the selection handed back the same two
+    /// hundred on every cycle. Production logged `recomputed=0 unable=200`
+    /// for hours while 386 grades that could be recomputed waited behind them.
+    #[tokio::test]
+    async fn a_grade_marked_unrecomputable_is_not_selected_again() {
+        let pool = super::tests::pool().await;
+        sqlx::query(
+            "INSERT INTO jev_requests
+             (id, created_at, purpose, subject, model_requested, question_count, answer_count,
+              issue_count, input_tokens, output_tokens, cost_source, latency_ms, attempts,
+              status, result_json)
+             VALUES ('blocked-1', '2026-09-20T12:00:00Z', $1, '7', 'alias', 1, 1, 0, 10, 0,
+                     'not_reported', 1, 1, 'completed', $2)",
+        )
+        .bind(PURPOSE_REPORT_GRADING)
+        .bind(serde_json::json!({"numeric_checks": {"method_version": "n1-old"}}).to_string())
+        .execute(&pool)
+        .await
+        .expect("insert");
+
+        let before = grades_with_stale_numeric_method(&pool, "n2-new", 10)
+            .await
+            .expect("select");
+        assert_eq!(before.len(), 1, "a stale grade is selected");
+
+        mark_recompute_blocked(
+            &pool,
+            "blocked-1",
+            "stored prompt carries no daily indicator snapshot",
+        )
+        .await
+        .expect("mark");
+
+        let after = grades_with_stale_numeric_method(&pool, "n2-new", 10)
+            .await
+            .expect("select");
+        assert!(
+            after.is_empty(),
+            "and not once it cannot be recomputed: {after:?}"
+        );
+
+        // The measurement itself is untouched: the absence stays an absence
+        // rather than being stamped with a version it never ran under.
+        let row = sqlx::query("SELECT result_json FROM jev_requests WHERE id = 'blocked-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("row");
+        let stored: JsonValue =
+            serde_json::from_str(&row.try_get::<String, _>("result_json").expect("text"))
+                .expect("json");
+        assert_eq!(stored["numeric_checks"]["method_version"], "n1-old");
+        assert_eq!(
+            stored[BLOCKED_KEY]["reason"],
+            "stored prompt carries no daily indicator snapshot"
         );
     }
 }
