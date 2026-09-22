@@ -88,6 +88,10 @@ pub(crate) struct NumericCheck {
     pub verdict: NumericVerdict,
     /// The fragment the figure was read from, for adjudication.
     pub excerpt: String,
+    /// Byte offset of the figure in the lowercased note. Not serialized: it
+    /// exists so a seeded challenge case can name exactly which figure it
+    /// mutated, rather than matching on a value the checker itself reported.
+    pub offset: usize,
 }
 
 /// How a quoted figure relates to the stored one.
@@ -706,6 +710,51 @@ fn relation_for(text: &str, field_end: Option<usize>, number_start: usize) -> &'
     }
 }
 
+/// Where a figure sits in the text, and how it was written.
+///
+/// Exposed for the seeded challenge set, which rewrites exactly the figure a
+/// case names rather than searching for it. Test-only: nothing in the runtime
+/// needs to edit a note.
+#[cfg(test)]
+pub(crate) struct FigureSpan {
+    pub start: usize,
+    pub end: usize,
+    pub decimals: usize,
+    pub percent: bool,
+    pub explicit_sign: bool,
+}
+
+#[cfg(test)]
+pub(crate) fn figure_at(text: &str, offset: usize) -> Option<FigureSpan> {
+    scan_numbers(text)
+        .into_iter()
+        .find(|found| found.start == offset)
+        .map(|found| FigureSpan {
+            start: found.start,
+            end: found.end,
+            decimals: found.decimals,
+            percent: found.percent,
+            explicit_sign: found.explicit_sign,
+        })
+}
+
+/// The clause around a byte offset, for a challenge case that negates or
+/// tenses exactly the predication its figure sits in.
+#[cfg(test)]
+pub(crate) fn clause_span(text: &str, offset: usize) -> (usize, usize) {
+    clause_bounds(text, offset)
+}
+
+/// Whether a field takes only whole values, so a challenge case does not seed
+/// a fractional count.
+#[cfg(test)]
+pub(crate) fn field_is_discrete(path: &str) -> bool {
+    FIELDS
+        .iter()
+        .find(|field| field.path == path)
+        .is_some_and(|field| field.discrete)
+}
+
 /// Checks every numeric assertion in `note` against `evidence`.
 pub(crate) fn numeric_checks(note: &str, evidence: &JsonValue) -> Vec<NumericCheck> {
     let lowered = note.to_lowercase();
@@ -1051,6 +1100,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::NotAFieldValue,
             excerpt,
+            offset: found.start,
         };
     }
     let Some(field) = field else {
@@ -1061,6 +1111,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::Unattributed,
             excerpt,
+            offset: found.start,
         };
     };
     if uncertain {
@@ -1071,6 +1122,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::UncertainAttribution,
             excerpt,
+            offset: found.start,
         };
     }
     let relation = relation_for(text, phrase_end, found.start);
@@ -1096,6 +1148,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::NotInEvidence,
             excerpt,
+            offset: found.start,
         };
     };
 
@@ -1127,6 +1180,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::UncertainAttribution,
             excerpt,
+            offset: found.start,
         };
     }
     // A threshold is compared at face value. The rounding and truncation
@@ -1151,6 +1205,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::ImplausibleAttribution,
             excerpt,
+            offset: found.start,
         };
     }
     let verdict = match relation {
@@ -1173,6 +1228,7 @@ fn check_one(
         relation,
         verdict,
         excerpt,
+        offset: found.start,
     }
 }
 

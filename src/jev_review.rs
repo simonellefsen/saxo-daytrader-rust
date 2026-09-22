@@ -299,10 +299,10 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
 /// as excluded rather than dropped.
 const MAX_JUDGED_CANDIDATES: usize = 10;
 
-struct GradingInputs {
+pub(crate) struct GradingInputs {
     report: JsonValue,
-    candidates: Vec<JsonValue>,
-    evidence: Vec<JsonValue>,
+    pub(crate) candidates: Vec<JsonValue>,
+    pub(crate) evidence: Vec<JsonValue>,
     coverage: JsonValue,
     /// Decision-time thresholds, as the report recorded them. `None` for
     /// reports written before the prompt carried them.
@@ -361,7 +361,7 @@ fn decision_time_policy(prompt: &JsonValue) -> Option<JsonValue> {
 /// today's tables. A candidate with no snapshot cannot be judged, and saying
 /// so is the point: report 306 listed five candidates and had indicators for
 /// four, and a grade that silently covered 4/5 read as if it covered all five.
-fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
+pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
     let by_symbol = |block: &str| -> std::collections::HashMap<String, JsonValue> {
         prompt
             .get(block)

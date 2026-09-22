@@ -1,0 +1,1045 @@
+//! A seeded challenge set for the numeric checker.
+//!
+//! Every adjudicated label this project has produced was `fair`. A grader that
+//! never flags anything would have scored identically, so sensitivity — whether
+//! a genuine error is caught — has never been measured in either direction.
+//!
+//! Adjudication cannot fix that on its own, because natural reports supply
+//! whatever errors they happen to contain and the labelling is a judgement.
+//! Seeding does: take a real note and its real decision-time evidence, change
+//! one thing, and the right answer follows from the change rather than from
+//! anyone's opinion. Writing 0.912 where the snapshot holds 0.612 is false, and
+//! it is false whatever the checker says about it.
+//!
+//! Two rules keep that honest.
+//!
+//! **The expectation is the truth of the claim, not the verdict the checker
+//! ought to return.** A case records that the note is now true, false, or
+//! unsettleable by the evidence. Nothing in generation consults the verdict,
+//! so a defect cannot be written into the answer key.
+//!
+//! **An abstention is neither a hit nor a miss.** It is counted in its own
+//! column. A checker that abstains on everything scores zero correct, not a
+//! clean sheet, and the `false_negative` column — a seeded falsehood recorded
+//! as agreement — is the number this whole exercise exists to produce.
+//!
+//! The set is frozen in `docs/jev-challenge-v1.json` and scored by a hermetic
+//! test on every build. It is a regression set, not held-out evidence: the
+//! method has seen it.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonValue, json};
+
+use crate::jev_numeric::{NumericCheck, NumericVerdict};
+
+pub(crate) const CHALLENGE_SET_VERSION: &str = "challenge-v1-2026-09-22";
+
+/// What is true of the mutated note, settled by how the case was built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Truth {
+    /// The claim holds against the evidence.
+    Holds,
+    /// It does not.
+    Fails,
+    /// The evidence cannot settle it, so any verdict but an abstention is
+    /// overreach.
+    Unsettleable,
+}
+
+/// One case: a real note with one thing changed, and what that change makes
+/// true.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct ChallengeCase {
+    pub id: String,
+    /// Which property is under test: value, boundary, sign, units, grammar,
+    /// relation, bounds, evidence, or control.
+    pub family: String,
+    pub mutation: String,
+    pub truth: Truth,
+    /// Why the change makes the claim hold or fail, in terms of the change.
+    pub rationale: String,
+    pub symbol: String,
+    pub source_report: i64,
+    /// Lowercased, because the checker lowercases before scanning and mutating
+    /// the same text it will read removes a class of offset bugs.
+    pub note: String,
+    pub evidence: JsonValue,
+    /// Byte offset of the mutated figure in `note`. The case names the figure
+    /// it changed rather than matching on a value the checker reported.
+    pub target_offset: usize,
+    pub target_field: String,
+}
+
+/// How the checker answered a case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// The verdict matches what the change made true.
+    Agreed,
+    /// A true claim called a disagreement.
+    FalsePositive,
+    /// A seeded falsehood recorded as agreement. The number that matters.
+    FalseNegative,
+    /// Something the evidence cannot settle, settled anyway.
+    Overreach,
+    /// No verdict either way. Neither a hit nor a miss.
+    Abstained,
+    /// The checker produced no check for the mutated figure at all, so the
+    /// case measured nothing and is reported rather than quietly dropped.
+    NotChecked,
+}
+
+impl Outcome {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Agreed => "agreed",
+            Self::FalsePositive => "false_positive",
+            Self::FalseNegative => "false_negative",
+            Self::Overreach => "overreach",
+            Self::Abstained => "abstained",
+            Self::NotChecked => "not_checked",
+        }
+    }
+}
+
+/// Scores one case against the checks the checker produced for it.
+pub(crate) fn outcome_for(case: &ChallengeCase, checks: &[NumericCheck]) -> Outcome {
+    let Some(check) = checks
+        .iter()
+        .find(|check| check.offset == case.target_offset)
+    else {
+        return Outcome::NotChecked;
+    };
+    match (case.truth, check.verdict) {
+        (Truth::Holds, NumericVerdict::Matches) => Outcome::Agreed,
+        (Truth::Holds, NumericVerdict::Differs) => Outcome::FalsePositive,
+        (Truth::Fails, NumericVerdict::Differs) => Outcome::Agreed,
+        (Truth::Fails, NumericVerdict::Matches) => Outcome::FalseNegative,
+        (Truth::Unsettleable, NumericVerdict::Matches | NumericVerdict::Differs) => {
+            Outcome::Overreach
+        }
+        (Truth::Unsettleable, _) => Outcome::Agreed,
+        (Truth::Holds | Truth::Fails, _) => Outcome::Abstained,
+    }
+}
+
+/// Runs the whole set and reports every column separately.
+pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
+    use std::collections::BTreeMap;
+
+    let mut by_family: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut by_mutation: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut totals: BTreeMap<&'static str, i64> = BTreeMap::new();
+    let mut misses = Vec::new();
+    for case in cases {
+        let checks = crate::jev_numeric::numeric_checks(&case.note, &case.evidence);
+        let outcome = outcome_for(case, &checks);
+        *by_family
+            .entry(case.family.clone())
+            .or_default()
+            .entry(outcome.as_str())
+            .or_default() += 1;
+        *by_mutation
+            .entry(case.mutation.clone())
+            .or_default()
+            .entry(outcome.as_str())
+            .or_default() += 1;
+        *totals.entry(outcome.as_str()).or_default() += 1;
+        if matches!(
+            outcome,
+            Outcome::FalseNegative | Outcome::FalsePositive | Outcome::Overreach
+        ) {
+            misses.push(json!({
+                "id": case.id,
+                "mutation": case.mutation,
+                "outcome": outcome.as_str(),
+                "truth": case.truth,
+                "rationale": case.rationale,
+                "note": case.note,
+            }));
+        }
+    }
+    json!({
+        "version": CHALLENGE_SET_VERSION,
+        "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+        "cases": cases.len(),
+        "totals": totals,
+        "by_family": by_family,
+        // The family rolls up mutations that behave very differently: a unit
+        // error is refused where a transposed digit is caught, and both are
+        // "value" work.
+        "by_mutation": by_mutation,
+        // Named individually, because a count of misses that cannot be read
+        // back is a number nobody can act on.
+        "misses": misses,
+        "reading": "`agreed` is the verdict the change makes correct. \
+                    `false_negative` is a seeded falsehood recorded as agreement and is the \
+                    number this set exists to produce. `abstained` is neither a hit nor a \
+                    miss: a checker that abstains everywhere scores zero agreed, not a clean \
+                    sheet. `not_checked` means the case measured nothing.",
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(truth: Truth) -> ChallengeCase {
+        ChallengeCase {
+            id: "t".into(),
+            family: "f".into(),
+            mutation: "m".into(),
+            truth,
+            rationale: "r".into(),
+            symbol: "S".into(),
+            source_report: 0,
+            note: "rsi 70".into(),
+            evidence: json!({}),
+            target_offset: 4,
+            target_field: "daily_indicators.rsi14".into(),
+        }
+    }
+
+    fn check(verdict: NumericVerdict, offset: usize) -> NumericCheck {
+        NumericCheck {
+            quoted: 70.0,
+            field: Some("daily_indicators.rsi14"),
+            actual: Some(70.0),
+            relation: crate::jev_numeric::RELATION_EQUALS,
+            verdict,
+            excerpt: String::new(),
+            offset,
+        }
+    }
+
+    /// An abstention must not be scored as a pass. Folding it into `agreed`
+    /// would make a checker that answers nothing look perfect, which is the
+    /// exact reading this set exists to make impossible.
+    #[test]
+    fn an_abstention_is_neither_a_hit_nor_a_miss() {
+        for verdict in [
+            NumericVerdict::NotInEvidence,
+            NumericVerdict::Unattributed,
+            NumericVerdict::UncertainAttribution,
+            NumericVerdict::ImplausibleAttribution,
+            NumericVerdict::NotAFieldValue,
+        ] {
+            assert_eq!(
+                outcome_for(&case(Truth::Fails), &[check(verdict, 4)]),
+                Outcome::Abstained,
+                "{verdict:?}"
+            );
+            assert_eq!(
+                outcome_for(&case(Truth::Holds), &[check(verdict, 4)]),
+                Outcome::Abstained,
+                "{verdict:?}"
+            );
+            // Where the evidence cannot settle the claim, abstaining is the
+            // right answer rather than a non-answer.
+            assert_eq!(
+                outcome_for(&case(Truth::Unsettleable), &[check(verdict, 4)]),
+                Outcome::Agreed,
+                "{verdict:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_seeded_falsehood_called_agreement_is_a_false_negative() {
+        assert_eq!(
+            outcome_for(&case(Truth::Fails), &[check(NumericVerdict::Matches, 4)]),
+            Outcome::FalseNegative
+        );
+        assert_eq!(
+            outcome_for(&case(Truth::Holds), &[check(NumericVerdict::Differs, 4)]),
+            Outcome::FalsePositive
+        );
+        assert_eq!(
+            outcome_for(
+                &case(Truth::Unsettleable),
+                &[check(NumericVerdict::Matches, 4)]
+            ),
+            Outcome::Overreach
+        );
+    }
+
+    /// A case whose figure the checker never produced a check for measured
+    /// nothing, and must not be counted as either outcome.
+    #[test]
+    fn a_case_the_checker_never_reached_is_reported_not_dropped() {
+        assert_eq!(
+            outcome_for(&case(Truth::Fails), &[check(NumericVerdict::Matches, 99)]),
+            Outcome::NotChecked
+        );
+        assert_eq!(outcome_for(&case(Truth::Fails), &[]), Outcome::NotChecked);
+    }
+}
+
+/// Builds the frozen set from stored reports, and scores it.
+///
+/// The generator is `#[ignore]`d because it needs a dump of production reports
+/// with their decision prompts, which is not in the repository:
+///
+/// ```text
+/// psql -tAc "copy (select jsonb_agg(jsonb_build_object('id', id,
+///   'report', report_json::jsonb, 'request', request_json::jsonb))
+///   from (select id, report_json, request_json from decision_reports
+///   where status='completed' and report_json is not null
+///   and request_json is not null order by id desc limit 80) t) to stdout" > prompts.json
+/// JEV_PROMPTS_PATH=prompts.json cargo test regenerate_the_challenge_set -- --ignored --nocapture
+/// ```
+///
+/// The scoring test is hermetic and runs on every build.
+#[cfg(test)]
+mod generation {
+    use super::*;
+    use serde_json::Value as JsonValue;
+
+    const CHALLENGE_PATH: &str = "docs/jev-challenge-v1.json";
+    /// How many cases each mutation contributes. Capped so the set stays
+    /// readable and no single mutation dominates the totals.
+    const PER_MUTATION: usize = 15;
+
+    /// Fields written with a sign, where flipping it is a genuine falsehood.
+    /// `markov.conviction` is absent on purpose: the checker compares its
+    /// magnitude, so a sign flip there is not a claim about the stored value.
+    const SIGNED_FIELDS: &[&str] = &["markov.signed_signal", "quiver.signal"];
+    /// Fields stored as a fraction of one, where a percentage is the same
+    /// claim written differently.
+    const FRACTION_FIELDS: &[&str] = &["markov.bull_prob", "markov.bear_prob"];
+
+    /// How a note names each field, used to decide word order without asking
+    /// the checker.
+    ///
+    /// A comparator reads as a comparison only when the field is named first.
+    /// Inserting one before a figure whose field is named *after* it produced
+    /// "low above 0.212 support break risk", which is not English and which
+    /// the checker rightly read as an equality -- seven cases that measured
+    /// the generator rather than the thing under test.
+    const FIELD_NAMES: &[(&str, &[&str])] = &[
+        ("daily_indicators.rsi14", &["rsi"]),
+        ("daily_indicators.confluence_count", &["confluence"]),
+        ("daily_indicators.min_confluences", &["confluence"]),
+        ("daily_indicators.reward_risk", &["reward"]),
+        (
+            "daily_indicators.support.break_risk",
+            &["break risk", "break-risk"],
+        ),
+        ("daily_indicators.support.nearest_support", &["support"]),
+        (
+            "daily_indicators.support.downside_to_support_pct",
+            &["downside"],
+        ),
+        ("markov.signed_signal", &["markov"]),
+        ("markov.conviction", &["conviction"]),
+        ("markov.bull_prob", &["bull prob"]),
+        ("markov.bear_prob", &["bear prob"]),
+        ("quiver.signal", &["quiver", "congressional"]),
+    ];
+
+    fn field_named_before_the_figure(anchor: &Anchor) -> bool {
+        let head = &anchor.note[..anchor.offset];
+        FIELD_NAMES
+            .iter()
+            .find(|(path, _)| *path == anchor.field)
+            .is_some_and(|(_, names)| names.iter().any(|name| head.contains(name)))
+    }
+
+    /// Whether `text` is a way the stored value could have been written at
+    /// `decimals`.
+    ///
+    /// Deliberately a second implementation of the three conventions rather
+    /// than a call into the checker. An answer key derived from the thing
+    /// under test cannot catch that thing being wrong.
+    fn could_be_written_as(stored: f64, text: &str, decimals: usize) -> bool {
+        let factor = 10f64.powi(decimals as i32);
+        let magnitude = stored.abs();
+        let sign = if stored < 0.0 { -1.0 } else { 1.0 };
+        let candidates = [
+            format!("{stored:.decimals$}"),
+            format!(
+                "{:.decimals$}",
+                sign * (magnitude * factor).floor() / factor
+            ),
+            format!(
+                "{:.decimals$}",
+                sign * (magnitude * factor + 0.5).floor() / factor
+            ),
+        ];
+        candidates.iter().any(|candidate| candidate == text)
+    }
+
+    fn truncated(stored: f64, decimals: usize) -> String {
+        let factor = 10f64.powi(decimals as i32);
+        let sign = if stored < 0.0 { -1.0 } else { 1.0 };
+        format!(
+            "{:.decimals$}",
+            sign * (stored.abs() * factor).floor() / factor
+        )
+    }
+
+    fn splice(note: &str, start: usize, end: usize, replacement: &str) -> String {
+        format!("{}{replacement}{}", &note[..start], &note[end..])
+    }
+
+    /// A mutated note, what the change made true, and where the changed
+    /// figure now sits. The offset is carried rather than searched for:
+    /// inserting "above " or "it is false that " moves every figure after it,
+    /// and a case that names the wrong figure measures nothing.
+    struct Mutated {
+        note: String,
+        evidence: JsonValue,
+        truth: Truth,
+        rationale: String,
+        offset: usize,
+    }
+
+    struct Anchor {
+        note: String,
+        evidence: JsonValue,
+        symbol: String,
+        report: i64,
+        field: String,
+        stored: f64,
+        offset: usize,
+        end: usize,
+        decimals: usize,
+        /// Whether the note wrote the figure with a leading `+` or `-`. Markov
+        /// and Quiver figures nearly always are, and excluding them left the
+        /// most-checked field in production without a single case.
+        explicit_sign: bool,
+        /// Another figure in the same note naming a different field, where the
+        /// note has one. Swapping the two is the natural transcription error
+        /// and the only mutation here that tests attribution directly.
+        partner: Option<Partner>,
+    }
+
+    #[derive(Clone)]
+    struct Partner {
+        field: String,
+        stored: f64,
+        offset: usize,
+        end: usize,
+        decimals: usize,
+        explicit_sign: bool,
+    }
+
+    /// One mutation applied to one anchor, or `None` where the anchor cannot
+    /// carry it -- a sign flip on an unsigned field, a fractional boundary on
+    /// a count. Skipping is silent by design: a case that cannot be built is
+    /// not a case.
+    fn mutate(anchor: &Anchor, mutation: &str) -> Option<Mutated> {
+        let Anchor {
+            note,
+            evidence,
+            field,
+            stored,
+            offset,
+            end,
+            decimals,
+            ..
+        } = anchor;
+        let (stored, decimals) = (*stored, *decimals);
+        let discrete = crate::jev_numeric::field_is_discrete(field);
+        // Two renderings of the same value: `plain` for deciding what the
+        // change makes true, `written` for the note, which keeps the leading
+        // `+` this note used. Mixing them would compare "+0.43" against a
+        // stored 0.43 and call the note wrong for its own punctuation.
+        let plain = |value: f64| format!("{value:.decimals$}");
+        let written = |value: f64| {
+            if anchor.explicit_sign && value >= 0.0 {
+                format!("+{value:.decimals$}")
+            } else {
+                plain(value)
+            }
+        };
+        // `prefix` is whatever is written before the numeral -- a comparator,
+        // an operator -- and is what moves the figure.
+        let rewrite = |prefix: &str, numeral: &str, truth, rationale: String| Mutated {
+            note: splice(note, *offset, *end, &format!("{prefix}{numeral}")),
+            evidence: evidence.clone(),
+            truth,
+            rationale,
+            offset: *offset + prefix.len(),
+        };
+
+        match mutation {
+            "unchanged" => Some(Mutated {
+                note: note.clone(),
+                evidence: evidence.clone(),
+                truth: Truth::Holds,
+                rationale: "the note is untouched, so what it quotes is what the evidence holds"
+                    .into(),
+                offset: *offset,
+            }),
+
+            "value_contradiction" => {
+                let value = if discrete {
+                    (stored + 2.0).trunc()
+                } else {
+                    stored * 1.37
+                };
+                let changed = plain(value);
+                (!could_be_written_as(stored, &changed, decimals)).then(|| {
+                    rewrite(
+                        "",
+                        &written(value),
+                        Truth::Fails,
+                        format!(
+                            "{changed} written where the evidence holds {stored}; no rounding \
+                             or truncation of the stored value produces it"
+                        ),
+                    )
+                })
+            }
+
+            "boundary_truncated" => (!discrete && decimals >= 1).then_some(()).and_then(|()| {
+                let shorter = truncated(stored, decimals - 1);
+                let shorter_written = if anchor.explicit_sign && stored >= 0.0 {
+                    format!("+{shorter}")
+                } else {
+                    shorter.clone()
+                };
+                could_be_written_as(stored, &shorter, decimals - 1).then(|| {
+                    rewrite(
+                        "",
+                        &shorter_written,
+                        Truth::Holds,
+                        format!(
+                            "{shorter} is {stored} truncated to {} decimals, which is a way of \
+                             writing it, not a different value",
+                            decimals - 1
+                        ),
+                    )
+                })
+            }),
+
+            "boundary_last_place" => (!discrete && decimals >= 1).then_some(()).and_then(|()| {
+                let factor = 10f64.powi(decimals as i32);
+                let value = (stored.abs() * factor).floor() / factor * stored.signum()
+                    + stored.signum() / factor;
+                let nudged = plain(value);
+                (!could_be_written_as(stored, &nudged, decimals)).then(|| {
+                    rewrite(
+                        "",
+                        &written(value),
+                        Truth::Fails,
+                        format!(
+                            "{nudged} is one unit in the last place away from every way of \
+                             writing {stored} at {decimals} decimals"
+                        ),
+                    )
+                })
+            }),
+
+            "sign_flipped" => (SIGNED_FIELDS.contains(&field.as_str()) && stored.abs() > 1e-9)
+                .then_some(())
+                .and_then(|()| {
+                    let flipped = plain(-stored.abs());
+                    (!could_be_written_as(stored, &flipped, decimals)).then(|| {
+                        rewrite(
+                            "",
+                            &written(-stored.abs()),
+                            Truth::Fails,
+                            format!("{flipped} has the opposite sign to the stored {stored}"),
+                        )
+                    })
+                }),
+
+            "scaled_by_a_hundred" => (!discrete).then_some(()).and_then(|()| {
+                let scaled = plain(stored * 100.0);
+                (!could_be_written_as(stored, &scaled, decimals)).then(|| {
+                    rewrite(
+                        "",
+                        &written(stored * 100.0),
+                        Truth::Fails,
+                        format!("{scaled} is {stored} in the wrong units by a factor of a hundred"),
+                    )
+                })
+            }),
+
+            "fraction_as_percent" => FRACTION_FIELDS.contains(&field.as_str()).then_some(()).map(
+                |()| {
+                    let percent = format!("{:.1}%", stored * 100.0);
+                    rewrite(
+                        "",
+                        &percent,
+                        Truth::Holds,
+                        format!(
+                            "{percent} is the stored fraction {stored} written as a percentage, \
+                             the same claim in other units"
+                        ),
+                    )
+                },
+            ),
+
+            "negated_true_claim" | "negated_false_claim" => {
+                const NEGATION: &str = "it is false that ";
+                let falsifying = mutation == "negated_false_claim";
+                let (base, base_offset) = if falsifying {
+                    let changed = plain(stored * 1.37);
+                    if could_be_written_as(stored, &changed, decimals) {
+                        return None;
+                    }
+                    (
+                        splice(note, *offset, *end, &written(stored * 1.37)),
+                        *offset,
+                    )
+                } else {
+                    (note.clone(), *offset)
+                };
+                let (clause_start, _) = crate::jev_numeric::clause_span(&base, base_offset);
+                Some(Mutated {
+                    note: format!(
+                        "{}{NEGATION}{}",
+                        &base[..clause_start],
+                        &base[clause_start..]
+                    ),
+                    evidence: evidence.clone(),
+                    truth: if falsifying {
+                        Truth::Holds
+                    } else {
+                        Truth::Fails
+                    },
+                    rationale: if falsifying {
+                        "a false quantity inside a negation, so the note as a whole is true".into()
+                    } else {
+                        "a true quantity inside a negation, so the note as a whole is false".into()
+                    },
+                    offset: base_offset + NEGATION.len(),
+                })
+            }
+
+            "future_tense" => {
+                let (_, end_of_clause) = crate::jev_numeric::clause_span(note, *offset);
+                Some(Mutated {
+                    note: format!(
+                        "{} tomorrow{}",
+                        &note[..end_of_clause],
+                        &note[end_of_clause..]
+                    ),
+                    evidence: evidence.clone(),
+                    truth: Truth::Unsettleable,
+                    rationale: "a claim about tomorrow, which today's snapshot can neither \
+                                confirm nor contradict"
+                        .into(),
+                    // The insertion is after the figure, so nothing moves.
+                    offset: *offset,
+                })
+            }
+
+            "comparator_true" | "comparator_false" => {
+                (!discrete && stored > 0.0 && field_named_before_the_figure(anchor))
+                    .then_some(())
+                    .and_then(|()| {
+                        let holds = mutation == "comparator_true";
+                        let threshold = if holds { stored * 0.9 } else { stored * 1.1 };
+                        let numeral = format!("{threshold:.decimals$}");
+                        let rendered: f64 = numeral.parse().ok()?;
+                        // Rendering can collapse the gap at a coarse precision.
+                        (if holds {
+                            stored > rendered
+                        } else {
+                            stored <= rendered
+                        })
+                        .then(|| {
+                            rewrite(
+                                "above ",
+                                &numeral,
+                                if holds { Truth::Holds } else { Truth::Fails },
+                                format!(
+                                    "the note claims above {numeral}, and the evidence holds \
+                                 {stored}, which {} it",
+                                    if holds {
+                                        "satisfies"
+                                    } else {
+                                        "does not satisfy"
+                                    }
+                                ),
+                            )
+                        })
+                    })
+            }
+
+            "inclusive_bound_holds" => {
+                (!discrete && decimals >= 1 && field_named_before_the_figure(anchor))
+                    .then_some(())
+                    .and_then(|()| {
+                        let bound = truncated(stored, decimals);
+                        let rendered: f64 = bound.parse().ok()?;
+                        (stored >= rendered).then(|| {
+                    rewrite(
+                        ">= ",
+                        &bound,
+                        Truth::Holds,
+                        format!(
+                            "the note claims at least {bound}, and the evidence holds {stored}"
+                        ),
+                    )
+                })
+                    })
+            }
+
+            "inclusive_bound_fails" => {
+                (!discrete && stored > 0.0 && field_named_before_the_figure(anchor))
+                    .then_some(())
+                    .and_then(|()| {
+                        let bound = format!("{:.decimals$}", stored * 0.9);
+                        let rendered: f64 = bound.parse().ok()?;
+                        (stored > rendered).then(|| {
+                    rewrite(
+                        "<= ",
+                        &bound,
+                        Truth::Fails,
+                        format!(
+                            "the note claims at most {bound}, and the evidence holds {stored}, \
+                             which exceeds it"
+                        ),
+                    )
+                })
+                    })
+            }
+
+            "digits_transposed" => {
+                // The quietest kind of numeric error and the one a coarse
+                // contradiction does not test: two adjacent digits swapped,
+                // which leaves the magnitude and the precision intact.
+                let numeral = plain(stored);
+                let bytes: Vec<char> = numeral.chars().collect();
+                let position = (0..bytes.len().saturating_sub(1)).find(|&index| {
+                    bytes[index].is_ascii_digit()
+                        && bytes[index + 1].is_ascii_digit()
+                        && bytes[index] != bytes[index + 1]
+                })?;
+                let mut swapped: Vec<char> = bytes.clone();
+                swapped.swap(position, position + 1);
+                let swapped: String = swapped.into_iter().collect();
+                let value: f64 = swapped.parse().ok()?;
+                (!could_be_written_as(stored, &swapped, decimals)).then(|| {
+                    rewrite(
+                        "",
+                        &written(value),
+                        Truth::Fails,
+                        format!(
+                            "{swapped} is {numeral} with two adjacent digits swapped, and the \
+                             evidence holds {stored}"
+                        ),
+                    )
+                })
+            }
+
+            "figures_swapped" => {
+                // Two figures in one note exchanged. The values are both still
+                // present and both still plausible, so nothing but attribution
+                // distinguishes the note from a correct one.
+                let partner = anchor.partner.as_ref()?;
+                let ours = plain(partner.stored);
+                if could_be_written_as(stored, &ours, decimals) {
+                    return None;
+                }
+                let theirs = if partner.explicit_sign && stored >= 0.0 {
+                    format!("+{stored:.*}", partner.decimals)
+                } else {
+                    format!("{stored:.*}", partner.decimals)
+                };
+                let mine = written(partner.stored);
+                // The later span is replaced first so the earlier offset stays
+                // valid. Where the partner comes first, replacing it moves our
+                // figure by the difference in length.
+                let (note, target) = if partner.offset > *offset {
+                    let once = splice(note, partner.offset, partner.end, &theirs);
+                    (splice(&once, *offset, *end, &mine), *offset)
+                } else {
+                    let once = splice(note, *offset, *end, &mine);
+                    let widened = theirs.len() + partner.offset - partner.end;
+                    (
+                        splice(&once, partner.offset, partner.end, &theirs),
+                        *offset + widened,
+                    )
+                };
+                Some(Mutated {
+                    note,
+                    evidence: evidence.clone(),
+                    truth: Truth::Fails,
+                    rationale: format!(
+                        "the figures for {field} and {} are exchanged, so {field} is quoted as \
+                         {ours} where the evidence holds {stored}",
+                        partner.field
+                    ),
+                    offset: target,
+                })
+            }
+
+            "field_removed_from_evidence" => {
+                let mut trimmed = evidence.clone();
+                let mut segments = field.split('.').peekable();
+                let mut cursor = &mut trimmed;
+                while let Some(segment) = segments.next() {
+                    if segments.peek().is_none() {
+                        cursor.as_object_mut()?.remove(segment)?;
+                        break;
+                    }
+                    cursor = cursor.get_mut(segment)?;
+                }
+                Some(Mutated {
+                    note: note.clone(),
+                    evidence: trimmed,
+                    truth: Truth::Unsettleable,
+                    rationale: format!(
+                        "{field} is absent from the evidence, so nothing settles the claim"
+                    ),
+                    offset: *offset,
+                })
+            }
+
+            other => panic!("unknown mutation {other}"),
+        }
+    }
+
+    const MUTATIONS: &[(&str, &str)] = &[
+        ("control", "unchanged"),
+        ("value", "value_contradiction"),
+        ("boundary", "boundary_truncated"),
+        ("boundary", "boundary_last_place"),
+        ("sign", "sign_flipped"),
+        ("units", "scaled_by_a_hundred"),
+        ("units", "fraction_as_percent"),
+        ("grammar", "negated_true_claim"),
+        ("grammar", "negated_false_claim"),
+        ("grammar", "future_tense"),
+        ("relation", "comparator_true"),
+        ("relation", "comparator_false"),
+        ("bounds", "inclusive_bound_holds"),
+        ("bounds", "inclusive_bound_fails"),
+        ("evidence", "field_removed_from_evidence"),
+        ("value", "digits_transposed"),
+        ("attribution", "figures_swapped"),
+    ];
+
+    #[test]
+    #[ignore]
+    fn regenerate_the_challenge_set() {
+        let path = std::env::var("JEV_PROMPTS_PATH").expect("JEV_PROMPTS_PATH");
+        let raw = std::fs::read_to_string(path).expect("prompts");
+        let sources: Vec<JsonValue> = serde_json::from_str(&raw).expect("a JSON array");
+
+        // Anchors: figures the checker already reads as a plain equality it can
+        // settle. A mutation needs a foothold, and a figure it cannot reach
+        // unmutated would measure the attribution, not the change.
+        let mut anchors = Vec::new();
+        for source in &sources {
+            let (Some(report), Some(request)) = (source.get("report"), source.get("request"))
+            else {
+                continue;
+            };
+            let report_id = source.get("id").and_then(JsonValue::as_i64).unwrap_or(-1);
+            let prompt = crate::xai_decision::decision_prompt_user_payload(request);
+            let inputs = crate::jev_review::grading_inputs(report, &prompt);
+            for (index, candidate) in inputs.candidates.iter().enumerate() {
+                let Some(evidence) = inputs.evidence.get(index) else {
+                    continue;
+                };
+                let Some(note) = candidate.get("note").and_then(JsonValue::as_str) else {
+                    continue;
+                };
+                let note = note.to_lowercase();
+                let mut in_this_note: Vec<Anchor> = Vec::new();
+                for check in crate::jev_numeric::numeric_checks(&note, evidence) {
+                    let (Some(field), Some(_actual)) = (check.field, check.actual) else {
+                        continue;
+                    };
+                    if check.verdict != crate::jev_numeric::NumericVerdict::Matches
+                        || check.relation != crate::jev_numeric::RELATION_EQUALS
+                    {
+                        continue;
+                    }
+                    let Some(span) = crate::jev_numeric::figure_at(&note, check.offset) else {
+                        continue;
+                    };
+                    if span.percent {
+                        // A percented figure carries its own unit conversion,
+                        // and every mutation would have to respect it. Left
+                        // out rather than handled halfway.
+                        continue;
+                    }
+                    // The stored value, read from the evidence rather than from
+                    // the check, so the answer key does not come from the thing
+                    // under test.
+                    let Some(stored) = field
+                        .split('.')
+                        .try_fold(evidence, |cursor, segment| cursor.get(segment))
+                        .and_then(JsonValue::as_f64)
+                    else {
+                        continue;
+                    };
+                    in_this_note.push(Anchor {
+                        note: note.clone(),
+                        evidence: evidence.clone(),
+                        symbol: candidate
+                            .get("symbol")
+                            .and_then(JsonValue::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        report: report_id,
+                        field: field.to_string(),
+                        stored,
+                        offset: span.start,
+                        end: span.end,
+                        decimals: span.decimals,
+                        explicit_sign: span.explicit_sign,
+                        partner: None,
+                    });
+                }
+                // Each figure's partner is the first other figure in the same
+                // note naming a different field. Assigned after the note is
+                // read through, because the partner may come later in it.
+                let partners: Vec<Partner> = in_this_note
+                    .iter()
+                    .map(|anchor| Partner {
+                        field: anchor.field.clone(),
+                        stored: anchor.stored,
+                        offset: anchor.offset,
+                        end: anchor.end,
+                        decimals: anchor.decimals,
+                        explicit_sign: anchor.explicit_sign,
+                    })
+                    .collect();
+                for (index, anchor) in in_this_note.iter_mut().enumerate() {
+                    anchor.partner = partners
+                        .iter()
+                        .enumerate()
+                        .find(|(other, partner)| {
+                            *other != index
+                                && partner.field != anchor.field
+                                && (partner.stored - anchor.stored).abs() > f64::EPSILON
+                        })
+                        .map(|(_, partner)| partner.clone());
+                }
+                anchors.extend(in_this_note);
+            }
+        }
+        println!("anchors={}", anchors.len());
+        let mut fields = std::collections::BTreeMap::<&str, usize>::new();
+        for anchor in &anchors {
+            *fields.entry(anchor.field.as_str()).or_default() += 1;
+        }
+        println!("anchor_fields={fields:?}");
+
+        let mut cases: Vec<ChallengeCase> = Vec::new();
+        let mut taken = std::collections::BTreeMap::<&str, usize>::new();
+        // Each mutation draws from the whole anchor pool, starting at its own
+        // offset so the families do not all describe the same few reports.
+        // Assigning one mutation per anchor left sign flips and percentages at
+        // zero, because no qualifying anchor ever came up in their slot.
+        for (index, (family, mutation)) in MUTATIONS.iter().enumerate() {
+            for step in 0..anchors.len() {
+                if taken.get(mutation).copied().unwrap_or(0) >= PER_MUTATION {
+                    break;
+                }
+                let anchor = &anchors[(step * MUTATIONS.len() + index) % anchors.len()];
+                let Some(mutated) = mutate(anchor, mutation) else {
+                    continue;
+                };
+                let count = taken.entry(mutation).or_default();
+                *count += 1;
+                cases.push(ChallengeCase {
+                    id: format!("{mutation}-{:03}", count),
+                    family: (*family).to_string(),
+                    mutation: (*mutation).to_string(),
+                    truth: mutated.truth,
+                    rationale: mutated.rationale,
+                    symbol: anchor.symbol.clone(),
+                    source_report: anchor.report,
+                    note: mutated.note,
+                    evidence: mutated.evidence,
+                    target_offset: mutated.offset,
+                    target_field: anchor.field.clone(),
+                });
+            }
+        }
+        for (_, mutation) in MUTATIONS {
+            println!(
+                "mutation {mutation:32} {}",
+                taken.get(mutation).copied().unwrap_or(0)
+            );
+        }
+
+        let document = serde_json::json!({
+            "version": CHALLENGE_SET_VERSION,
+            "generated": "2026-09-22",
+            "source": "stored decision report notes and their decision-time evidence, lowercased",
+            "answer_key": "the truth of the claim after the change, decided by the change and \
+                           never by running the checker",
+            "cases": cases,
+        });
+        std::fs::write(
+            CHALLENGE_PATH,
+            serde_json::to_string_pretty(&document).expect("serialize"),
+        )
+        .expect("write");
+        println!("cases={} written to {CHALLENGE_PATH}", cases.len());
+        println!("{}", serde_json::to_string_pretty(&score(&cases)).unwrap());
+    }
+
+    pub(super) fn load() -> Vec<ChallengeCase> {
+        let raw = std::fs::read_to_string(CHALLENGE_PATH).expect("the frozen challenge set");
+        let document: JsonValue = serde_json::from_str(&raw).expect("json");
+        serde_json::from_value(document["cases"].clone()).expect("cases")
+    }
+}
+
+#[cfg(test)]
+mod frozen {
+    use super::*;
+
+    /// Abstentions recorded at `n8`. Not a target: a checker that abstains
+    /// less is better, one that abstains more has lost coverage, and the
+    /// assertion is one-sided so an improvement does not fail the build.
+    const ABSTENTIONS_AT_FREEZE: i64 = 55;
+
+    /// The whole set, scored on every build.
+    ///
+    /// The assertions are the three ways a seeded case can be got wrong, and
+    /// they are all at zero. `false_negative` is the one that matters: a
+    /// falsehood this set planted, recorded as agreement, is the failure every
+    /// adjudication round so far was unable to detect — every label in both
+    /// samples was `fair`, so a grader that never flags anything would have
+    /// scored identically.
+    #[test]
+    fn the_frozen_challenge_set_has_no_missed_falsehoods() {
+        let cases = super::generation::load();
+        assert!(cases.len() >= 200, "the set shrank: {}", cases.len());
+        let report = score(&cases);
+        let count = |key: &str| report["totals"][key].as_i64().unwrap_or(0);
+
+        assert_eq!(count("false_negative"), 0, "{report:#}");
+        assert_eq!(count("false_positive"), 0, "{report:#}");
+        assert_eq!(count("overreach"), 0, "{report:#}");
+        // A case whose figure the checker never reached measured nothing, and
+        // would quietly shrink the set while the other columns still read
+        // clean.
+        assert_eq!(count("not_checked"), 0, "{report:#}");
+        assert!(
+            count("abstained") <= ABSTENTIONS_AT_FREEZE,
+            "abstentions rose from {ABSTENTIONS_AT_FREEZE} to {}: {report:#}",
+            count("abstained")
+        );
+        assert_eq!(count("agreed") + count("abstained"), cases.len() as i64);
+    }
+
+    /// Every case must be one the answer key can actually settle, and the
+    /// three kinds must all be present. A set that had drifted to nothing but
+    /// true claims would pass every other assertion here.
+    #[test]
+    fn the_set_still_contains_all_three_kinds_of_claim() {
+        let cases = super::generation::load();
+        let kind = |truth: Truth| cases.iter().filter(|case| case.truth == truth).count();
+        assert!(kind(Truth::Fails) >= 100, "{}", kind(Truth::Fails));
+        assert!(kind(Truth::Holds) >= 50, "{}", kind(Truth::Holds));
+        assert!(
+            kind(Truth::Unsettleable) >= 20,
+            "{}",
+            kind(Truth::Unsettleable)
+        );
+    }
+}
