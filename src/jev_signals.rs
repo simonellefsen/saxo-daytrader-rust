@@ -755,6 +755,13 @@ pub(crate) fn report_grading_questions(candidate_count: usize) -> BTreeMap<Strin
                          compared and nothing is known about it. Do not re-check arithmetic, \
                          and do not treat an uncompared figure as either correct or wrong."
                     ),
+                    "what_each_check_asserts": "`relation` is what the note was read as \
+                                                claiming: `equals`, `above`, `below`, \
+                                                `at_least` or `at_most` was compared; \
+                                                `unsupported_construction` means the wording \
+                                                was outside the grammar and the figure was \
+                                                left alone; `not_read` means no field could be \
+                                                attributed to it.",
                     "what_counts": "Words that characterise rather than measure -- securely, \
                                     low, elevated, strong, leading, intact, steady -- and any \
                                     claim that a categorical field takes a particular value.",

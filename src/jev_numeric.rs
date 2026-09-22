@@ -26,6 +26,8 @@
 //! cannot reach a gate, a queue, an order, or a provider.
 
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
 /// Version of the comparison method: the parser, the field table, the unit
 /// handling and the tolerance policy together.
@@ -36,7 +38,7 @@ use serde_json::Value as JsonValue;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n5-2026-09-21";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n6-2026-09-22";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -267,14 +269,39 @@ const NON_FIELD_UNITS: &[&str] = &[
 const COMPARATOR_ABOVE: &[&str] = &["above", "over", "exceeds", "exceeding", "greater"];
 const COMPARATOR_BELOW: &[&str] = &["below", "under", "beneath", "less"];
 
-/// Words that reverse a comparison. Ignoring them accepted "RSI is not above
-/// 70" as satisfied by 71.049 -- a false statement recorded as agreement,
-/// which is the invisible direction to be wrong in.
+/// Words that reverse or suspend the claim. Ignoring them accepted "RSI is not
+/// above 70" as satisfied by 71.049 -- a false statement recorded as
+/// agreement, which is the invisible direction to be wrong in.
 const NEGATORS: &[&str] = &[
-    "not", "no", "never", "nor", "without", "isn't", "wasn't", "longer", "n't", "fails", "failing",
+    "not",
+    "no",
+    "never",
+    "nor",
+    "without",
+    "isn't",
+    "wasn't",
+    "longer",
+    "n't",
+    "fails",
+    "failing",
+    "false",
+    "untrue",
+    "incorrect",
+    "denies",
+    "denied",
+    "cannot",
+    "can't",
+    "doesn't",
+    "don't",
+    "neither",
+    "absent",
+    "lacks",
+    "lacking",
+    "except",
+    "excluding",
 ];
 
-/// Words that put the claim in another time. "RSI was above 70 last week" says
+/// Words that put the claim in the past. "RSI was above 70 last week" says
 /// nothing about the stored value.
 const TEMPORAL: &[&str] = &[
     "was",
@@ -292,8 +319,51 @@ const TEMPORAL: &[&str] = &[
     "once",
 ];
 
+/// Words that put the claim in the future, or make it conditional on something
+/// that has not happened. "RSI is above 70 tomorrow" is a forecast, and the
+/// stored value neither confirms nor contradicts it.
+const PROSPECTIVE: &[&str] = &[
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "shall",
+    "if",
+    "unless",
+    "when",
+    "whenever",
+    "assuming",
+    "suppose",
+    "expect",
+    "expects",
+    "expected",
+    "anticipate",
+    "anticipated",
+    "projected",
+    "projecting",
+    "forecast",
+    "forecasts",
+    "target",
+    "targets",
+    "targeting",
+    "tomorrow",
+    "next",
+    "upcoming",
+    "pending",
+    "soon",
+    "await",
+    "awaiting",
+    "hypothetically",
+];
+
 /// Words that leave the relation between figure and field unclear. "RSI is
 /// overbought at 70" neither asserts equality nor a comparison.
+///
+/// Local, not sentential: a hedge attaches to the figure beside it, so it is
+/// read from the gap between field and figure. "trading near 446 support with
+/// RSI at 71.05" hedges the 446 and not the 71.05.
 const HEDGES: &[&str] = &[
     "near",
     "around",
@@ -309,11 +379,137 @@ const HEDGES: &[&str] = &[
     "circa",
 ];
 
+/// Words that may stand between a field and its value without changing what is
+/// claimed: articles, copulas, prepositions of attribution.
+const CONNECTIVES: &[&str] = &[
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "at",
+    "of",
+    "with",
+    "to",
+    "in",
+    "on",
+    "and",
+    "currently",
+    "now",
+    "sits",
+    "sitting",
+    "stands",
+    "standing",
+    "reads",
+    "reading",
+    "remains",
+    "remaining",
+    "holds",
+    "holding",
+    "printing",
+    "prints",
+    "posting",
+    "posts",
+    "trading",
+    "trades",
+    "runs",
+    "running",
+    "shows",
+    "showing",
+    "still",
+    "just",
+    "only",
+];
+
+/// Adjectives of degree. They qualify how much, never whether: "long signal is
+/// strong at 0.66" claims the same value as "long signal at 0.66".
+///
+/// Sign words -- "positive", "negative" -- are deliberately absent. They can
+/// contradict the figure beside them, and this grammar does not read signs.
+const MAGNITUDE_WORDS: &[&str] = &[
+    "strong",
+    "strongly",
+    "weak",
+    "weakly",
+    "modest",
+    "modestly",
+    "mild",
+    "moderate",
+    "solid",
+    "firm",
+    "deep",
+    "slight",
+    "slightly",
+    "elevated",
+    "high",
+    "low",
+    "decent",
+    "healthy",
+    "extreme",
+    "extremely",
+    "very",
+];
+
+/// Nouns that continue a field's own name. Derived from the field table so a
+/// new `FieldSpec` extends the grammar with it, plus the generic measurement
+/// vocabulary notes wrap around a field name.
+static FIELD_WORDS: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
+    let mut set: BTreeSet<&'static str> = FIELDS
+        .iter()
+        .flat_map(|field| field.keywords.iter())
+        .flat_map(|keyword| keyword.split(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .collect();
+    set.extend([
+        "signal",
+        "signals",
+        "signed",
+        "long",
+        "short",
+        "bull",
+        "bear",
+        "bullish",
+        "bearish",
+        "prob",
+        "probability",
+        "state",
+        "count",
+        "level",
+        "levels",
+        "value",
+        "reading",
+        "regime",
+        "score",
+        "band",
+        "zone",
+        "trend",
+        "price",
+        "close",
+        "line",
+        "ratio",
+        "index",
+        "measure",
+        "metric",
+        "figure",
+        "continuation",
+        "momentum",
+        "strength",
+        "risk",
+    ]);
+    set
+});
+
 pub(crate) const RELATION_EQUALS: &str = "equals";
 pub(crate) const RELATION_ABOVE: &str = "above";
 pub(crate) const RELATION_BELOW: &str = "below";
-/// The construction is not one this grammar supports, so nothing is compared.
+pub(crate) const RELATION_AT_LEAST: &str = "at_least";
+pub(crate) const RELATION_AT_MOST: &str = "at_most";
+/// The construction is not one this grammar reads, so nothing is compared.
 pub(crate) const RELATION_UNSUPPORTED: &str = "unsupported_construction";
+/// The figure never reached the grammar: it was not a field value, or no field
+/// could be attributed to it. Distinct from `unsupported_construction`, where
+/// the field is known and the wording is what could not be read.
+pub(crate) const RELATION_NOT_READ: &str = "not_read";
 
 fn words(text: &str) -> Vec<&str> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '\''))
@@ -335,61 +531,179 @@ fn measures_something_else(text: &str, end: usize) -> bool {
     })
 }
 
-/// Reads a relational claim, but only where the field is named *before* the
-/// comparison word.
+/// The span of the clause holding the byte at `index`.
 ///
-/// "RSI is above 70" names the field, then compares: the claim is that rsi14
-/// exceeds 70, and 71.049 satisfies it. "above 446 EUR support" is the other
-/// order -- there 446 *is* the support level, and equality is the right
-/// reading. Getting this backwards turns every true "above" into a
-/// disagreement.
+/// Sentential operators -- negation, tense, conditionals -- scope over a whole
+/// clause, so reading them from the gap between field and figure misses every
+/// one that sits outside it. "It is false that RSI is above 70" puts the
+/// negation before the field; "RSI is above 70 tomorrow" puts the tense after
+/// the figure. Neither is visible in the gap.
+///
+/// A `.` between two digits is a decimal point, not a boundary.
+///
+/// A comma bounds a clause here. These notes are comma-spliced lists of
+/// independent observations -- "currently 9.9% above nearest support, awaiting
+/// a tighter entry" states a fact and then an intention -- so letting an
+/// operator cross a comma suspends figures it does not govern. The cost is the
+/// reverse case: "RSI was, at one point, above 70" hides its tense behind
+/// commas and reads as present.
+fn clause_bounds(text: &str, index: usize) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    // Walked by character, not by byte. A byte index stepped past a boundary
+    // can land inside a multi-byte character, and slicing there panics -- the
+    // Unicode minus in "-0.435" reached exactly that.
+    let is_boundary = |position: usize, character: char| match character {
+        // An em or en dash separates predications the way a semicolon does.
+        // The ASCII hyphen does not: it is inside "5-day" and "bull-state".
+        ';' | '!' | '?' | ',' | ':' | '\u{2014}' | '\u{2013}' => true,
+        '.' => {
+            let before_is_digit = position
+                .checked_sub(1)
+                .is_some_and(|previous| bytes[previous].is_ascii_digit());
+            let after_is_digit = bytes.get(position + 1).is_some_and(u8::is_ascii_digit);
+            !(before_is_digit && after_is_digit)
+        }
+        _ => false,
+    };
+    let (mut start, mut end) = (0, text.len());
+    for (position, character) in text.char_indices() {
+        if !is_boundary(position, character) {
+            continue;
+        }
+        if position < index {
+            start = position + character.len_utf8();
+        } else {
+            end = position;
+            break;
+        }
+    }
+    (start, end.max(start))
+}
+
+/// Whether the clause around the figure asserts something in the present,
+/// plainly. Anything negated, past or prospective is not a claim about the
+/// stored value at all, so no comparison is made.
+fn clause_asserts_plainly(text: &str, number_start: usize) -> bool {
+    let (start, end) = clause_bounds(text, number_start);
+    !words(&text[start..end]).iter().any(|word| {
+        NEGATORS.contains(word) || TEMPORAL.contains(word) || PROSPECTIVE.contains(word)
+    })
+}
+
+/// Reads a symbolic comparison immediately before the figure.
+///
+/// `words` drops punctuation, so "RSI >= 70" reached the grammar with an empty
+/// gap and was read as equality -- reporting a disagreement against 71.049,
+/// which satisfies it.
+fn symbolic_relation(text: &str, number_start: usize) -> Option<&'static str> {
+    let head = text[..number_start].trim_end_matches([' ', '\u{00a0}']);
+    for (token, relation) in [
+        (">=", RELATION_AT_LEAST),
+        ("=>", RELATION_AT_LEAST),
+        ("<=", RELATION_AT_MOST),
+        ("=<", RELATION_AT_MOST),
+        ("\u{2265}", RELATION_AT_LEAST),
+        ("\u{2264}", RELATION_AT_MOST),
+        (">", RELATION_ABOVE),
+        ("<", RELATION_BELOW),
+        ("=", RELATION_EQUALS),
+    ] {
+        if head.ends_with(token) {
+            return Some(relation);
+        }
+    }
+    None
+}
+
+/// Whether every word may stand between a field and its value without changing
+/// what is claimed.
+fn gap_is_plain(gap: &[&str]) -> bool {
+    gap.iter().all(|word| {
+        CONNECTIVES.contains(word) || MAGNITUDE_WORDS.contains(word) || FIELD_WORDS.contains(word)
+    })
+}
+
+/// Reads the relation a note asserts between a figure and a field, accepting
+/// only the constructions enumerated here and abstaining outside them.
+///
+/// The accepted forms, with the field named before the figure:
+///
+/// - `field <gap> figure` -- equality, where every word of the gap is a
+///   connective, a word of degree, or part of the field's own name.
+/// - `field <gap> <comparator> figure` -- `above` or `below`, where the
+///   comparator is the word immediately before the figure (allowing a trailing
+///   `than`) and the rest of the gap is plain.
+/// - `field <gap> <symbol> figure` -- `>`, `>=`, `<`, `<=`, `=` and their
+///   Unicode spellings, immediately before the figure.
+///
+/// And with the field named after the figure, `figure field` is equality:
+/// "above 446 EUR support" says 446 *is* the support level. Reading that
+/// relationally would ask whether 446 exceeds itself and call a correct note
+/// wrong.
+///
+/// Every form is additionally required to sit in a clause that asserts plainly
+/// -- no negation, no past tense, nothing prospective or conditional.
+///
+/// The known limitation is over-abstention, and it is the safe direction: a
+/// sentential operator anywhere in the clause suspends every figure in it,
+/// including figures it does not govern. `docs/jev-numeric-grammar.md` records
+/// what that costs on the stored corpus.
 fn relation_for(text: &str, field_end: Option<usize>, number_start: usize) -> &'static str {
+    if !clause_asserts_plainly(text, number_start) {
+        return RELATION_UNSUPPORTED;
+    }
+    let symbolic = symbolic_relation(text, number_start);
     let Some(field_end) = field_end else {
-        return RELATION_EQUALS;
+        return symbolic.unwrap_or(RELATION_EQUALS);
     };
     if field_end >= number_start {
         return RELATION_EQUALS;
     }
-    let between = words(&text[field_end..number_start]);
-    let is = |set: &[&str], word: &str| set.contains(&word);
+    let gap = words(&text[field_end..number_start]);
+    if let Some(relation) = symbolic {
+        return if gap_is_plain(&gap) {
+            relation
+        } else {
+            RELATION_UNSUPPORTED
+        };
+    }
 
-    // Anything that reverses or relocates the claim means this grammar cannot
-    // read it. Abstaining is the only safe outcome: assuming equality would
-    // manufacture a disagreement and assuming the comparison would accept a
-    // false statement.
-    if between
-        .iter()
-        .any(|word| is(NEGATORS, word) || is(TEMPORAL, word) || is(HEDGES, word))
-    {
+    let is_comparator =
+        |word: &&str| COMPARATOR_ABOVE.contains(word) || COMPARATOR_BELOW.contains(word);
+    let comparators = gap.iter().filter(|word| is_comparator(word)).count();
+    // "above or below 70" names two relations and asserts neither.
+    if comparators > 1 {
+        return RELATION_UNSUPPORTED;
+    }
+    if gap.iter().any(|word| HEDGES.contains(word)) {
         return RELATION_UNSUPPORTED;
     }
 
-    // The comparator has to be the last word before the figure. A comparator
-    // further back belongs to some other construction this grammar does not
-    // parse, so that abstains too.
-    let last = between.last().copied().unwrap_or_default();
-    let last = if last == "than" {
-        between
-            .len()
-            .checked_sub(2)
-            .and_then(|index| between.get(index).copied())
-            .unwrap_or_default()
+    let mut relation = RELATION_EQUALS;
+    let mut head = gap.as_slice();
+    if comparators == 1 {
+        // The comparator has to be the word immediately before the figure. One
+        // further back belongs to a construction this grammar does not read.
+        if head.last() == Some(&"than") {
+            head = &head[..head.len() - 1];
+        }
+        let Some((last, rest)) = head.split_last() else {
+            return RELATION_UNSUPPORTED;
+        };
+        relation = if COMPARATOR_ABOVE.contains(last) {
+            RELATION_ABOVE
+        } else if COMPARATOR_BELOW.contains(last) {
+            RELATION_BELOW
+        } else {
+            return RELATION_UNSUPPORTED;
+        };
+        head = rest;
+    }
+    if gap_is_plain(head) {
+        relation
     } else {
-        last
-    };
-    if is(COMPARATOR_ABOVE, last) {
-        return RELATION_ABOVE;
+        RELATION_UNSUPPORTED
     }
-    if is(COMPARATOR_BELOW, last) {
-        return RELATION_BELOW;
-    }
-    if between
-        .iter()
-        .any(|word| is(COMPARATOR_ABOVE, word) || is(COMPARATOR_BELOW, word))
-    {
-        return RELATION_UNSUPPORTED;
-    }
-    RELATION_EQUALS
 }
 
 /// Checks every numeric assertion in `note` against `evidence`.
@@ -697,6 +1011,13 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
             .find(|field| field.path == "daily_indicators.min_confluences");
         uncertain[index] = false;
         uncertain[index + 1] = false;
+        // The notation is the construction. Leaving the naming phrase of
+        // whatever lost the attribution in place would make the grammar read
+        // the words between *that* phrase and the figure -- "High conviction
+        // setup with 5/3" measured the gap from "conviction", found "setup",
+        // and abstained on a reading this rule had just settled.
+        phrase_end[index] = None;
+        phrase_end[index + 1] = None;
     }
     (assigned, uncertain, phrase_end)
 }
@@ -727,7 +1048,7 @@ fn check_one(
             quoted: found.value,
             field: None,
             actual: None,
-            relation: RELATION_EQUALS,
+            relation: RELATION_NOT_READ,
             verdict: NumericVerdict::NotAFieldValue,
             excerpt,
         };
@@ -737,7 +1058,7 @@ fn check_one(
             quoted: found.value,
             field: None,
             actual: None,
-            relation: RELATION_EQUALS,
+            relation: RELATION_NOT_READ,
             verdict: NumericVerdict::Unattributed,
             excerpt,
         };
@@ -747,7 +1068,7 @@ fn check_one(
             quoted: found.value,
             field: Some(field.path),
             actual: None,
-            relation: RELATION_EQUALS,
+            relation: RELATION_NOT_READ,
             verdict: NumericVerdict::UncertainAttribution,
             excerpt,
         };
@@ -808,13 +1129,19 @@ fn check_one(
             excerpt,
         };
     }
+    // An inclusive bound is satisfied at the boundary as well, and the
+    // boundary is what the note actually wrote -- so equality there is tested
+    // at the precision written, exactly as a bare equality claim is.
+    let at_boundary = quoted_from(written, found.decimals, stored, field.discrete);
     let verdict = match relation {
         RELATION_ABOVE if stored > written => NumericVerdict::Matches,
         RELATION_BELOW if stored < written => NumericVerdict::Matches,
-        RELATION_ABOVE | RELATION_BELOW => NumericVerdict::Differs,
-        _ if quoted_from(written, found.decimals, stored, field.discrete) => {
-            NumericVerdict::Matches
+        RELATION_AT_LEAST if stored > written || at_boundary => NumericVerdict::Matches,
+        RELATION_AT_MOST if stored < written || at_boundary => NumericVerdict::Matches,
+        RELATION_ABOVE | RELATION_BELOW | RELATION_AT_LEAST | RELATION_AT_MOST => {
+            NumericVerdict::Differs
         }
+        _ if at_boundary => NumericVerdict::Matches,
         _ if plausible_magnitude(comparable, actual) => NumericVerdict::Differs,
         _ => NumericVerdict::ImplausibleAttribution,
     };
@@ -1799,5 +2126,284 @@ mod heldout_regressions {
         let check = &numeric_checks("RSI is not above 70", &ev)[0];
         assert_eq!(check.verdict, NumericVerdict::UncertainAttribution);
         assert_eq!(summarize(std::slice::from_ref(check))["differs"], 0);
+    }
+}
+
+#[cfg(test)]
+mod grammar_regressions {
+    use super::*;
+    use serde_json::json;
+
+    fn rsi() -> JsonValue {
+        json!({"daily_indicators": {"rsi14": 71.04899226674894}})
+    }
+
+    fn reading(text: &str) -> (&'static str, NumericVerdict) {
+        let checks = numeric_checks(text, &rsi());
+        assert_eq!(checks.len(), 1, "{text:?} -> {checks:?}");
+        (checks[0].relation, checks[0].verdict)
+    }
+
+    /// Every construction a review found the previous parser reading wrongly.
+    ///
+    /// The first four are the ones that mattered: each returned a comparison
+    /// or an equality against a statement that asserts neither, and three of
+    /// the four returned agreement. A false `differs` gets investigated; a
+    /// false `matches` never does.
+    #[test]
+    fn the_constructions_the_word_list_misread_now_abstain() {
+        for text in [
+            // The negation sits before the field, so the gap between field and
+            // figure never saw it.
+            "It is false that RSI is above 70",
+            "RSI is not above 70",
+            "RSI is no longer above 70",
+            // The tense sits after the figure, likewise outside the gap.
+            "RSI is above 70 tomorrow",
+            "RSI was above 70 last week",
+            "RSI will be above 70 next week",
+            // Two relations asserted at once, of which the old parser took
+            // whichever came last.
+            "RSI is above or below 70",
+            // Not a comparison at all.
+            "RSI is overbought at 70",
+            // A comparator that is not the word before the figure belongs to
+            // some construction this grammar does not read.
+            "RSI above the level we watch of 70",
+            "RSI is near 70",
+        ] {
+            let (relation, verdict) = reading(text);
+            assert_eq!(relation, RELATION_UNSUPPORTED, "{text:?}");
+            assert_eq!(verdict, NumericVerdict::UncertainAttribution, "{text:?}");
+        }
+    }
+
+    /// Symbolic operators were discarded with the rest of the punctuation, so
+    /// "RSI >= 70" arrived with an empty gap and was read as an equality --
+    /// reporting a disagreement against 71.049, which satisfies it.
+    #[test]
+    fn symbolic_operators_are_read_rather_than_discarded() {
+        assert_eq!(
+            reading("RSI >= 70"),
+            (RELATION_AT_LEAST, NumericVerdict::Matches)
+        );
+        assert_eq!(
+            reading("RSI > 70"),
+            (RELATION_ABOVE, NumericVerdict::Matches)
+        );
+        assert_eq!(
+            reading("RSI <= 70"),
+            (RELATION_AT_MOST, NumericVerdict::Differs)
+        );
+        assert_eq!(
+            reading("RSI < 70"),
+            (RELATION_BELOW, NumericVerdict::Differs)
+        );
+        assert_eq!(
+            reading("RSI = 71.05"),
+            (RELATION_EQUALS, NumericVerdict::Matches)
+        );
+        assert_eq!(
+            reading("RSI \u{2265} 70"),
+            (RELATION_AT_LEAST, NumericVerdict::Matches)
+        );
+
+        // An inclusive bound is satisfied at the boundary, where a strict one
+        // is not. Folding `>=` into `above` would call a correct note wrong.
+        let exact = json!({"daily_indicators": {"rsi14": 70.0}});
+        assert_eq!(
+            numeric_checks("RSI >= 70", &exact)[0].verdict,
+            NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("RSI > 70", &exact)[0].verdict,
+            NumericVerdict::Differs
+        );
+    }
+
+    /// The readings the grammar must keep. Abstention is the safe direction,
+    /// but a grammar that abstains on everything measures nothing.
+    #[test]
+    fn the_plain_constructions_are_still_read() {
+        for (text, expected) in [
+            ("RSI 71.05", RELATION_EQUALS),
+            ("RSI at 71.05", RELATION_EQUALS),
+            ("RSI is currently 71.05", RELATION_EQUALS),
+            ("RSI reads a high 71.05", RELATION_EQUALS),
+            ("RSI is above 70", RELATION_ABOVE),
+            ("RSI greater than 70", RELATION_ABOVE),
+            ("RSI is below 80", RELATION_BELOW),
+        ] {
+            let (relation, verdict) = reading(text);
+            assert_eq!(relation, expected, "{text:?}");
+            assert_eq!(verdict, NumericVerdict::Matches, "{text:?}");
+        }
+    }
+
+    /// A sentential operator suspends its own clause, not the whole note.
+    ///
+    /// Scoping it to the sentence abstained on "currently 9.9% above nearest
+    /// support, awaiting a tighter entry" -- a stated fact followed by an
+    /// intention -- because `awaiting` is prospective.
+    #[test]
+    fn an_operator_in_a_neighbouring_clause_does_not_suspend_the_figure() {
+        let evidence = json!({
+            "daily_indicators": {
+                "rsi14": 71.04899226674894,
+                "support": {"nearest_support": 617.21, "downside_to_support_pct": 9.94},
+            }
+        });
+        let checks = numeric_checks(
+            "currently 9.9% above nearest support, awaiting a tighter entry",
+            &evidence,
+        );
+        assert_eq!(checks[0].verdict, NumericVerdict::Matches);
+
+        // A conditional in a later clause does not reach back over the
+        // semicolon to suspend a figure stated as fact.
+        let counted = json!({"daily_indicators": {"confluence_count": 5}});
+        let split = numeric_checks(
+            "Bullish setup with 5 confluences; monitor for a pullback entry if the regime holds",
+            &counted,
+        );
+        assert_eq!(split[0].relation, RELATION_EQUALS, "{split:?}");
+        assert_eq!(split[0].verdict, NumericVerdict::Matches, "{split:?}");
+
+        // And the limitation that buys it: an operator hidden behind commas
+        // no longer reaches the figure it governs. Recorded, not fixed.
+        let hidden = numeric_checks("RSI was, at one point, above 70", &evidence);
+        assert_eq!(hidden[0].relation, RELATION_UNSUPPORTED, "{hidden:?}");
+    }
+
+    /// The `N/M` notation settles both figures, so the naming phrase of
+    /// whatever lost the attribution must not then be measured against them.
+    /// "High conviction setup with 5/3 confluences" gave the 5 to
+    /// `conviction`, and the gap from *that* phrase held "setup".
+    #[test]
+    fn the_count_notation_is_read_whatever_phrase_preceded_it() {
+        let evidence = json!({
+            "daily_indicators": {"confluence_count": 5, "min_confluences": 3}
+        });
+        let checks = numeric_checks(
+            "High conviction setup with 5/3 confluences and a bullish trend.",
+            &evidence,
+        );
+        for check in checks.iter().take(2) {
+            assert_eq!(check.relation, RELATION_EQUALS, "{check:?}");
+            assert_eq!(check.verdict, NumericVerdict::Matches, "{check:?}");
+        }
+    }
+}
+
+/// Measurement harness for the comparison grammar, run against the stored
+/// corpus of candidate notes.
+///
+/// `#[ignore]`d because it needs a dump of production notes, which is not in
+/// the repository:
+///
+/// ```text
+/// psql -tAc "select jsonb_agg(a->>'notes') from decision_reports r,
+///   lateral jsonb_array_elements(r.report_json::jsonb->'selected_assets') a
+///   where r.status='completed' and a->>'notes' is not null" > notes.json
+/// JEV_NOTES_PATH=notes.json cargo test grammar_coverage -- --ignored --nocapture
+/// ```
+///
+/// It exists because the grammar abstains outside an enumerated set of
+/// constructions, and the size of that abstention is the thing to know about
+/// it. `docs/jev-numeric-grammar.md` records the figures this prints.
+#[cfg(test)]
+mod grammar_coverage {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// Why a figure this module attributed was still not compared.
+    fn abstention_cause(text: &str, phrase_end: Option<usize>, number_start: usize) -> String {
+        if !clause_asserts_plainly(text, number_start) {
+            let (start, end) = clause_bounds(text, number_start);
+            let token = words(&text[start..end])
+                .into_iter()
+                .find(|word| {
+                    NEGATORS.contains(word) || TEMPORAL.contains(word) || PROSPECTIVE.contains(word)
+                })
+                .unwrap_or("?");
+            return format!("clause:{token}");
+        }
+        let Some(field_end) = phrase_end else {
+            return "none".to_string();
+        };
+        if field_end >= number_start {
+            return "none".to_string();
+        }
+        let gap = words(&text[field_end..number_start]);
+        if let Some(hedge) = gap.iter().find(|word| HEDGES.contains(word)) {
+            return format!("hedge:{hedge}");
+        }
+        let comparators = gap
+            .iter()
+            .filter(|word| COMPARATOR_ABOVE.contains(word) || COMPARATOR_BELOW.contains(word))
+            .count();
+        if comparators > 1 {
+            return "two_comparators".to_string();
+        }
+        match gap.iter().find(|word| {
+            !(CONNECTIVES.contains(*word)
+                || MAGNITUDE_WORDS.contains(*word)
+                || FIELD_WORDS.contains(*word)
+                || COMPARATOR_ABOVE.contains(*word)
+                || COMPARATOR_BELOW.contains(*word))
+        }) {
+            Some(word) => format!("gap:{word}"),
+            None => "comparator_not_adjacent".to_string(),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn grammar_coverage_on_stored_notes() {
+        let path = std::env::var("JEV_NOTES_PATH").expect("JEV_NOTES_PATH");
+        let raw = std::fs::read_to_string(path).expect("notes");
+        let notes: Vec<String> = serde_json::from_str(&raw).expect("a JSON array of notes");
+        let mut relations: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut causes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut examples: BTreeMap<String, String> = BTreeMap::new();
+        let (mut figures, mut attributed) = (0usize, 0usize);
+        for note in &notes {
+            let lowered = note.to_lowercase();
+            let numbers = scan_numbers(&lowered);
+            let (fields, uncertain, phrase_end) = attribute_all(&lowered, &numbers);
+            for (index, found) in numbers.iter().enumerate() {
+                figures += 1;
+                if fields[index].is_none()
+                    || uncertain[index]
+                    || measures_something_else(&lowered, found.end)
+                {
+                    continue;
+                }
+                attributed += 1;
+                let relation = relation_for(&lowered, phrase_end[index], found.start);
+                *relations.entry(relation).or_default() += 1;
+                if relation == RELATION_UNSUPPORTED {
+                    let cause = abstention_cause(&lowered, phrase_end[index], found.start);
+                    let (start, end) = clause_bounds(&lowered, found.start);
+                    examples
+                        .entry(cause.clone())
+                        .or_insert_with(|| lowered[start..end].trim().to_string());
+                    *causes.entry(cause).or_default() += 1;
+                }
+            }
+        }
+        println!(
+            "notes={} figures={figures} attributed={attributed}",
+            notes.len()
+        );
+        println!("relations={relations:?}");
+        let mut ranked: Vec<_> = causes.into_iter().collect();
+        ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        for (cause, count) in &ranked {
+            println!(
+                "abstained {count:4}  {cause:28}  {}",
+                examples.get(cause).map_or("", String::as_str)
+            );
+        }
     }
 }

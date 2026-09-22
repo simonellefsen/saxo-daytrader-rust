@@ -99,7 +99,7 @@ fn grading_batch_limit(state: &AppState) -> usize {
 /// Unlike the editorial signals, a re-grade here carries no decision-time
 /// hazard: a grade is an opinion about a stored report, never a feature of a
 /// decision.
-const REPORT_GRADING_VERSION: &str = "v10";
+const REPORT_GRADING_VERSION: &str = "v11";
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
 /// One sequential worker in the singleton scheduler process. No Jev network
@@ -434,6 +434,11 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
                     "quoted": check.quoted,
                     "field": check.field,
                     "actual": check.actual,
+                    // What the note claimed about the figure, and the reason a
+                    // verdict of `uncertain_attribution` was reached: the
+                    // grammar refusing the wording is a different finding from
+                    // no field being attributable at all.
+                    "relation": check.relation,
                     "verdict": check.verdict.as_str(),
                     "excerpt": check.excerpt,
                 }))
@@ -448,6 +453,7 @@ fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
                     "quoted": check.quoted,
                     "field": check.field,
                     "actual": check.actual,
+                    "relation": check.relation,
                     "verdict": check.verdict.as_str(),
                 }))
                 .collect::<Vec<_>>(),
@@ -559,10 +565,16 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
                    closely than any rival, and abstains otherwise. An equality is tested against \
                    what rounding and truncating the stored value actually produce at the \
                    precision written; a discrete field requires a whole number and exact \
-                   equality. `above` and `below` are read only in a narrow grammar -- a \
-                   whole-word comparator immediately before the figure, with the field named \
-                   first -- and negated, past-tense, hedged or compound constructions abstain \
-                   rather than guess. `compared` plus `abstained` is every figure found.",
+                   equality. The comparison grammar is closed: it reads a figure only when its \
+                   clause asserts plainly -- nothing negated, past or prospective -- and the \
+                   words between the field and the figure are connectives, words of degree or \
+                   part of the field's own name, with at most one comparator and that \
+                   comparator immediately before the figure. Symbolic operators are read the \
+                   same way. Everything outside those forms is recorded \
+                   `unsupported_construction` and not compared; `not_read` means no field could \
+                   be attributed at all. `compared` plus `abstained` is every figure found. The \
+                   known cost is over-abstention, measured at 4.0% of attributed figures on the \
+                   stored corpus, and the known gap is an operator hidden behind commas.",
     })
 }
 
@@ -691,6 +703,7 @@ fn grade_payload(
     let mut unsupported = 0i64;
     let mut no_claim = 0i64;
     let mut unanswered = 0i64;
+    let mut sufficiency_answered = 0i64;
     let mut low_confidence = 0i64;
     let mut verdicts = Vec::new();
 
@@ -721,6 +734,9 @@ fn grade_payload(
             Some(crate::jev::Answer::Noul { noul }) => Some(*noul),
             _ => None,
         };
+        if sufficiency.is_some() {
+            sufficiency_answered += 1;
+        }
         if sufficiency.is_some_and(|value| value >= 0.5) {
             unsupported += 1;
         }
@@ -779,11 +795,18 @@ fn grade_payload(
         // verdict rather than competing with it.
         "evidence_sufficiency": {
             "asserts_absent_evidence": unsupported,
+            // Without these a count of zero says nothing: all answered and
+            // none above the threshold reads identically to none answered at
+            // all, and only one of those is a result.
+            "answered": sufficiency_answered,
+            "unanswered": inputs.candidates.len() as i64 - sufficiency_answered,
+            "judged_candidates": inputs.candidates.len() as i64,
             "threshold": 0.5,
             "meaning": "Counts candidates whose note states a value or condition for something \
                         the evidence does not contain. Independent of the wording verdict: a \
                         note can overstate what the evidence shows and also assert something \
-                        absent from it.",
+                        absent from it. `asserts_absent_evidence` is a count out of `answered`, \
+                        never out of `judged_candidates`.",
         },
         "confidence_flag": {
             "low_confidence_count": low_confidence,
@@ -1197,6 +1220,113 @@ mod tests {
                 .collect(),
             confidence: Some(confidence),
         }
+    }
+
+    /// Every figure's relation reaches both places it has to reach: the
+    /// stored measurement and the state the model is shown.
+    ///
+    /// The grammar computed the relation and the two payload builders dropped
+    /// it, so a correct `above` reading was indistinguishable in storage from
+    /// an equality -- 1,429 numeric checks across 167 stored v10 grades, none
+    /// of them carrying a relation. A parser test would have passed throughout.
+    #[test]
+    fn the_relation_is_serialized_into_storage_and_into_the_model_state() {
+        let report = json!({
+            "selected_assets": [{
+                "symbol": "EQNR:xosl",
+                "notes": "RSI is above 60 with 5 confluences and break risk near 0.061",
+            }],
+            "suggested_trades": [],
+        });
+        let prompt = json!({
+            "daily_indicators": {"signals": [indicator_signal("EQNR:xosl")]},
+        });
+        let inputs = grading_inputs(&report, &prompt);
+
+        let relation_of = |checks: &JsonValue, quoted: f64| -> String {
+            checks
+                .as_array()
+                .expect("checks")
+                .iter()
+                .find(|check| check["quoted"].as_f64() == Some(quoted))
+                .and_then(|check| check["relation"].as_str())
+                .unwrap_or_else(|| panic!("no relation for {quoted} in {checks}"))
+                .to_string()
+        };
+
+        let payload = grade_payload(&BTreeMap::new(), &[], &inputs);
+        let stored = &payload["numeric_checks"]["per_candidate"][0]["checks"];
+        assert_eq!(relation_of(stored, 60.0), "above");
+        assert_eq!(relation_of(stored, 5.0), "equals");
+        assert_eq!(relation_of(stored, 0.061), "unsupported_construction");
+
+        let shown = &inputs.candidates[0]["numeric_checks"];
+        assert_eq!(relation_of(shown, 60.0), "above");
+        assert_eq!(relation_of(shown, 5.0), "equals");
+        assert_eq!(relation_of(shown, 0.061), "unsupported_construction");
+
+        // And it survives the assembly of the state actually sent.
+        let state = jev_signals::report_grading_state(
+            &inputs.report,
+            &inputs.candidates,
+            &inputs.evidence,
+            inputs.policy.as_ref(),
+        );
+        assert_eq!(
+            relation_of(&state["candidates"][0]["numeric_checks"], 60.0),
+            "above",
+            "{state}"
+        );
+
+        // Every figure is in exactly one of the two totals.
+        let total = |key: &str| payload["numeric_checks"][key].as_i64().unwrap_or(-1);
+        assert_eq!(
+            total("compared") + total("abstained"),
+            stored.as_array().map_or(0, Vec::len) as i64
+        );
+    }
+
+    /// A count of flagged candidates with no denominator cannot distinguish
+    /// "all answered, none flagged" from "none answered".
+    #[test]
+    fn evidence_sufficiency_reports_how_many_candidates_answered() {
+        let report = json!({
+            "selected_assets": [
+                {"symbol": "EQNR:xosl", "notes": "5 confluences"},
+                {"symbol": "NOVO-B:xcse", "notes": "5 confluences"},
+            ],
+            "suggested_trades": [],
+        });
+        let prompt = json!({
+            "daily_indicators": {"signals": [
+                indicator_signal("EQNR:xosl"),
+                indicator_signal("NOVO-B:xcse"),
+            ]},
+        });
+        let inputs = grading_inputs(&report, &prompt);
+        assert_eq!(inputs.candidates.len(), 2);
+
+        let none = grade_payload(&BTreeMap::new(), &[], &inputs);
+        assert_eq!(none["evidence_sufficiency"]["asserts_absent_evidence"], 0);
+        assert_eq!(none["evidence_sufficiency"]["answered"], 0);
+        assert_eq!(none["evidence_sufficiency"]["unanswered"], 2);
+
+        let answered = grade_payload(
+            &BTreeMap::from([(
+                jev_signals::sufficiency_question_id(0),
+                Answer::Noul { noul: 0.1 },
+            )]),
+            &[],
+            &inputs,
+        );
+        // Still zero flagged, and now that means something different.
+        assert_eq!(
+            answered["evidence_sufficiency"]["asserts_absent_evidence"],
+            0
+        );
+        assert_eq!(answered["evidence_sufficiency"]["answered"], 1);
+        assert_eq!(answered["evidence_sufficiency"]["unanswered"], 1);
+        assert_eq!(answered["evidence_sufficiency"]["judged_candidates"], 2);
     }
 
     /// The two kinds of finding must not share a counter. A figure that
