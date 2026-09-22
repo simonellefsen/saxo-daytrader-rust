@@ -1,0 +1,733 @@
+{
+  "keys": [
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-00330db4ef",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-003a8b2011",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-00685249c2",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0086bbd152",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-0099d57d23",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-00a454ac55",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0102f990f0",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-0111090435",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-016172464d",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-018b31d4e0",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-018ecb083a",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-0194cdaf4a",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-01a623fcd5",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-01dd7169d8",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-01e8c84806",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-02169d3417",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0236144301",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-025f1c1377",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-0263728073",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0267efa8db",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-027a8f85d1",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-027b9cb33e",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-02dfbd9d1a",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-02f95c336b",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-03016be830",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0323e0c655",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-0328532750",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-0428c03685",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0448944027",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0497631828",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-049aa8b8ab",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-04c39295b4",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-04c4d0ec48",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-05376caf2b",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-054824c473",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0565735ecf",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0581eb7b4b",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.bull_prob",
+      "id": "ctl-05a94e6e25",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-05ac412156",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-061508aeda",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-06214a51b3",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-0626c2cdbd",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-064bff3ad6",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0683b7b3ba",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-0686447046",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-068d8988f6",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-069c9a123c",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-06a258831a",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-06ad547170",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-06be6f5a4e",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-06c39abfef",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-06da8cf7b1",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-06f98877cc",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-07061cefac",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-072404e14e",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-072d8ba6b7",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-0751604652",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-07c434e830",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-08aa87c48b",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0957f2919b",
+      "stratum": "matches",
+      "verdict": "matches"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-07a15e89cf",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.reward_risk",
+      "id": "ctl-1a24ea08b1",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.support.nearest_support",
+      "id": "ctl-1c1ea25787",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-3512020525",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-38f1b6b7c2",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-3e8bae330b",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.support.downside_to_support_pct",
+      "id": "ctl-7032962a9f",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-8d10925f13",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": "daily_indicators.min_confluences",
+      "id": "ctl-cdee722fb5",
+      "stratum": "differs",
+      "verdict": "differs"
+    },
+    {
+      "field": null,
+      "id": "ctl-0168b618c2",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-018e20fa1e",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-0651761478",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-078bf81b25",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-079ea8c27c",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-0859896ed5",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-095c5c972f",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-11732ee74f",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-14473e11f1",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-145a80c1f2",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-146ff42fd0",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-176daf14b5",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-19422fbe77",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-1b36b282ad",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-1d1dccdb0f",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-1de6568348",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-25d1fd81ee",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": null,
+      "id": "ctl-26e51b47ad",
+      "stratum": "unattributed",
+      "verdict": "unattributed"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-095c520bb7",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0cce338272",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0cea8161de",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-0e32c85ea2",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-106ac3da01",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-11d898b6d2",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-1e18480701",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "quiver.signal",
+      "id": "ctl-20bc01bc20",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-21a3a0839c",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "daily_indicators.rsi14",
+      "id": "ctl-2d6a7c73d7",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-3836f92581",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "daily_indicators.support.nearest_support",
+      "id": "ctl-388b1a5c2b",
+      "stratum": "uncertain_attribution",
+      "verdict": "uncertain_attribution"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-00123cabb0",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-03ee6c37b7",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0442c94c12",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0bfb442efd",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-0d6a2ea2b3",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-234baca985",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.signed_signal",
+      "id": "ctl-2350ae8d0a",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": "markov.bull_prob",
+      "id": "ctl-252891e215",
+      "stratum": "not_in_evidence",
+      "verdict": "not_in_evidence"
+    },
+    {
+      "field": null,
+      "id": "ctl-05df008819",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-1744918a7f",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-19f6e042e0",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-28b19099c9",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-564ac93188",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-57ba6cdaa8",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-64d27face3",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": null,
+      "id": "ctl-73aa406a68",
+      "stratum": "not_a_field_value",
+      "verdict": "not_a_field_value"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-35a9df8cf5",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    },
+    {
+      "field": "daily_indicators.confluence_count",
+      "id": "ctl-5d87985c58",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    },
+    {
+      "field": "daily_indicators.support.nearest_support",
+      "id": "ctl-90f6a00615",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-9499fc81ed",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    },
+    {
+      "field": "markov.conviction",
+      "id": "ctl-c6f0809f46",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    },
+    {
+      "field": "daily_indicators.support.break_risk",
+      "id": "ctl-eee0068521",
+      "stratum": "implausible_attribution",
+      "verdict": "implausible_attribution"
+    }
+  ],
+  "method_version": "n10-2026-09-22",
+  "version": "controls-v1-2026-09-22",
+  "warning": "Do not read this before labelling. It holds the checker's verdict and attributed field for every case in the instrument."
+}

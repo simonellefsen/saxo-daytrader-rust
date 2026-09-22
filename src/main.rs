@@ -24,6 +24,9 @@ mod jev;
 // test on every build and nothing in production reads it.
 #[cfg(test)]
 mod jev_challenge;
+// A labelling instrument, not a runtime path.
+#[cfg(test)]
+mod jev_controls;
 mod jev_numeric;
 mod jev_review;
 mod jev_signals;
