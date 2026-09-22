@@ -38,7 +38,7 @@ use std::sync::LazyLock;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n6-2026-09-22";
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n7-2026-09-22";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -1133,6 +1133,22 @@ fn check_one(
     // boundary is what the note actually wrote -- so equality there is tested
     // at the precision written, exactly as a bare equality claim is.
     let at_boundary = quoted_from(written, found.decimals, stored, field.discrete);
+    // A threshold an order of magnitude away from the field is not a claim
+    // about that field. The guard used to protect equality only, so "top held
+    // conviction position trading above 525 dkk" -- a price, given to
+    // `markov.conviction` -- was reported as a disagreement with 0.749 rather
+    // than as the misattribution it is. A relation does not make a wrong field
+    // right.
+    if !plausible_magnitude(comparable, actual) {
+        return NumericCheck {
+            quoted,
+            field: Some(field.path),
+            actual: Some(actual),
+            relation,
+            verdict: NumericVerdict::ImplausibleAttribution,
+            excerpt,
+        };
+    }
     let verdict = match relation {
         RELATION_ABOVE if stored > written => NumericVerdict::Matches,
         RELATION_BELOW if stored < written => NumericVerdict::Matches,
@@ -1142,8 +1158,7 @@ fn check_one(
             NumericVerdict::Differs
         }
         _ if at_boundary => NumericVerdict::Matches,
-        _ if plausible_magnitude(comparable, actual) => NumericVerdict::Differs,
-        _ => NumericVerdict::ImplausibleAttribution,
+        _ => NumericVerdict::Differs,
     };
     NumericCheck {
         quoted,
@@ -2273,6 +2288,31 @@ mod grammar_regressions {
         // no longer reaches the figure it governs. Recorded, not fixed.
         let hidden = numeric_checks("RSI was, at one point, above 70", &evidence);
         assert_eq!(hidden[0].relation, RELATION_UNSUPPORTED, "{hidden:?}");
+    }
+
+    /// A relation does not make a wrong field right.
+    ///
+    /// #313 CHEMM: "top held conviction position trading above 525 dkk with
+    /// +0.749 markov bull regime" gave the price to `markov.conviction` and,
+    /// because the magnitude guard protected equality only, reported a
+    /// disagreement between 525 and 0.749 instead of naming the
+    /// misattribution.
+    #[test]
+    fn a_threshold_an_order_of_magnitude_from_the_field_is_a_misattribution() {
+        let evidence = json!({"markov": {"conviction": 0.7490864992141724}});
+        let check = &numeric_checks(
+            "Top held conviction holding trading above 525 DKK with +0.749 Markov Bull regime",
+            &evidence,
+        )[0];
+        assert_eq!(check.field, Some("markov.conviction"));
+        assert_eq!(check.verdict, NumericVerdict::ImplausibleAttribution);
+
+        // A threshold beside its own field is still compared.
+        let rsi = json!({"daily_indicators": {"rsi14": 71.04899226674894}});
+        assert_eq!(
+            numeric_checks("RSI is above 70", &rsi)[0].verdict,
+            NumericVerdict::Matches
+        );
     }
 
     /// The `N/M` notation settles both figures, so the naming phrase of

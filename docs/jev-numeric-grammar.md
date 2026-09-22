@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n6-2026-09-22`**, grading version **`v11`**. Frozen as the
+Method version **`n7-2026-09-22`**, grading version **`v12`**. Frozen as the
 evaluation baseline: the limitations below are measured and recorded rather
 than fixed, and the method must not move during an evaluation run.
 
@@ -61,6 +61,9 @@ Against all 1,105 stored candidate notes (1,715 figures, 1,320 attributed):
 | compared as `above` | 13 |
 | abstained (`unsupported_construction`) | **53 — 4.0% of attributed** |
 
+Unchanged from `n6` to `n7`: the magnitude guard moves verdicts between
+`differs` and `implausible_attribution`, not between compared and abstained.
+
 Reproduce with the `#[ignore]`d harness in `src/jev_numeric.rs`:
 
 ```
@@ -76,6 +79,44 @@ mid-word — `gap:fication`, `gap:fied`, `gap:ed`, `gap:st`. **Over-abstention**
 sits in the gap ("markov edge (signed_signal 0.09)", "markov long bias 0.18")
 or because an operator elsewhere in the clause suspends it ("rsi above 75
 argues for waiting for a pullback **before** adding").
+
+## Attribution defects, named rather than fixed
+
+Recomputing the whole history at `n6` produced 24 disagreements across 163
+reports (1.25% of checks, against 1.21% at `n5` — the grammar neither created
+nor cleared them). Reading all 20 distinct ones, **most are this checker's
+attribution failures, not report errors.** They are listed here with their
+production examples so an independent evaluation can score them as what they
+are, instead of rediscovering them one at a time.
+
+| # | Defect | Production example | Effect |
+|---|---|---|---|
+| A | A field name written with an underscore does not match its keyword: `bull_prob` never matches "bull prob" | #101 AMD `markov bull_prob 0.72 / signed_signal 0.61` | 0.72 given to `signed_signal` (0.612) → false `differs` |
+| B | The `N/M` remap needs the word "confluences" adjacent, so a bare ratio is not recognised | #103 BAC `bullish 4/3, markov long 0.555` | the 3 given to `markov.signed_signal` → false `differs` |
+| C | "support" as a verb matches the support field | #256 ALV `the 453.0 EUR daily close support a controlled limit` | 453.0 given to `nearest_support` (434.6) → false `differs` |
+| D | `~` before a figure is not read as an approximation marker | #106 ARKK `rsi ~55` against 61.34 | compared as an exact equality |
+| E | A field named further away can still win when the near phrase is not in the field table | #158 BAC `markov long 0.576 and quiver bullish` | 0.576 given to `quiver.signal` (0.355) → false `differs` |
+| F | Attribution ignores clause boundaries; the 40-character window crosses them | seen in testing, not in the corpus | a field in the next clause can claim a figure |
+
+Fixed in `n7`, because it is one rule rather than six: a threshold an order of
+magnitude from its field is `implausible_attribution` whatever the relation.
+"top held conviction holding trading above 525 DKK with +0.749 Markov Bull
+regime" gave a price to `markov.conviction` and, because the magnitude guard
+protected equality only, reported a disagreement between 525 and 0.749 rather
+than naming the misattribution.
+
+The rest are **left in place deliberately.** Each is small and I could fix them
+now, which is exactly the pattern four review rounds have criticised: patch,
+declare success, have the next review find what the patch missed. They are
+frozen as part of the baseline so the evaluation measures the grader that
+exists.
+
+Of the 20, the ones that look like genuine report discrepancies rather than
+checker failures are #106 BAC (`rsi 58` against 67.76), #183 DDOG (`5
+confluences` against 4), #255 BMW (`6.0% downside-to-support` against 7.00),
+and #286 FLS (`593 DKK support` against 551.5, already independently
+confirmed). Four out of 1,914 checks. None has been adjudicated, and
+`agreement` is not `accuracy`.
 
 ## Known limitations, not fixed
 
