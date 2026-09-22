@@ -465,6 +465,41 @@ mod live {
     /// the corpus decide what the arm measures.
     const PER_FLIP_PHRASE: usize = 5;
 
+    /// What was actually running, not what was last committed.
+    ///
+    /// Both earlier runs recorded `983db1b` — the commit *before* the one
+    /// carrying the corrected harness and the new instruction. `GIT_SHA` was
+    /// read from `git rev-parse HEAD` while the tree was dirty, so it named
+    /// the checkout's base and not the code that ran. A provenance record that
+    /// cannot identify the experiment is decoration.
+    fn source_provenance(run_id: &str) -> JsonValue {
+        let git = |args: &[&str]| -> Option<String> {
+            let output = std::process::Command::new("git").args(args).output().ok()?;
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        };
+        let head = git(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+        let diff = git(&["diff", "HEAD"]).unwrap_or_default();
+        let changed = git(&["status", "--porcelain"]).unwrap_or_default();
+        if diff.is_empty() && changed.is_empty() {
+            return json!({"head": head, "working_tree": "clean"});
+        }
+        // The patch itself, beside the results, because a hash says two runs
+        // differed without saying how.
+        let patch_path = format!("docs/jev-wording-run-{run_id}.patch");
+        let _ = std::fs::write(&patch_path, &diff);
+        json!({
+            "head": head,
+            "working_tree": "dirty",
+            "diff_sha256": format!("{:x}", sha2::Sha256::digest(diff.as_bytes())),
+            "diff_bytes": diff.len(),
+            "diff_patch": patch_path,
+            "changed": changed.lines().collect::<Vec<_>>(),
+        })
+    }
+
     /// The frozen cases, and a fingerprint of the exact bytes they came from.
     ///
     /// Without it a later difference in the numbers cannot be attributed: the
@@ -778,6 +813,14 @@ mod live {
         };
 
         let (cases, set_fingerprint) = load();
+        // Unique per run, so repeating a version keeps both results instead of
+        // the second quietly replacing the first and taking the variance with
+        // it.
+        let run_id = format!(
+            "{}-{}",
+            crate::jev_review::report_grading_version(),
+            crate::jev_signals::now_rfc3339().replace([':', '-', '.'], "")
+        );
         let mut verdicts: BTreeMap<String, String> = BTreeMap::new();
         let mut sufficiencies: BTreeMap<String, f64> = BTreeMap::new();
         let mut probabilities: BTreeMap<String, JsonValue> = BTreeMap::new();
@@ -891,20 +934,31 @@ mod live {
             }));
         }
 
-        let questions_fingerprint = format!(
-            "{:x}",
-            sha2::Sha256::digest(
-                // Fingerprinted through the request builder, which is what the
-                // provider actually receives.
-                crate::jev::build_request(
-                    &json!(null),
-                    &cfg.model,
-                    &crate::jev_signals::report_grading_questions(3),
-                )
-                .to_string()
-                .as_bytes()
-            )
-        );
+        // One hash per candidate count actually used, not one representative
+        // request. Three candidates and five ask different question sets, and
+        // a single fingerprint of an arbitrary shape covers neither.
+        let mut questions_fingerprints: BTreeMap<String, String> = BTreeMap::new();
+        for count in cases
+            .iter()
+            .map(|entry| entry.candidates.len())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            questions_fingerprints.insert(
+                count.to_string(),
+                format!(
+                    "{:x}",
+                    sha2::Sha256::digest(
+                        crate::jev::build_request(
+                            &json!(null),
+                            &cfg.model,
+                            &crate::jev_signals::report_grading_questions(count),
+                        )
+                        .to_string()
+                        .as_bytes()
+                    )
+                ),
+            );
+        }
         let results = json!({
             "set": WORDING_SET_VERSION,
             "grading_version": crate::jev_review::report_grading_version(),
@@ -914,9 +968,10 @@ mod live {
             // Provenance. A later run that differs has to be attributable to
             // one of these rather than to all of them at once.
             "provenance": {
-                "source_commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unset".into()),
+                "run_id": run_id,
+                "source": source_provenance(&run_id),
                 "case_set_sha256": set_fingerprint,
-                "questions_sha256": questions_fingerprint,
+                "questions_sha256_by_candidate_count": questions_fingerprints,
                 "model_requested": cfg.model,
                 "model_resolved": resolved_models,
                 "numeric_method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
@@ -936,10 +991,7 @@ mod live {
         // Named by the grading version, so two runs that differ by an
         // instruction change sit side by side instead of one overwriting the
         // other and taking the comparison with it.
-        let path = format!(
-            "docs/jev-wording-results-{}.json",
-            crate::jev_review::report_grading_version()
-        );
+        let path = format!("docs/jev-wording-results-{run_id}.json");
         std::fs::write(
             &path,
             serde_json::to_string_pretty(&results).expect("serialize"),

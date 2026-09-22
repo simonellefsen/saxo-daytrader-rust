@@ -5,8 +5,9 @@ same model**, differing only in the question text:
 
 | run | grading version | results | billed |
 |---|---|---|---|
-| A | `v15` — the instruction as it stood | `jev-wording-results-v15.json` | USD 0.0277 |
-| B | `v16` — categorical fields named one by one | `jev-wording-results-v16.json` | USD 0.0294 |
+| A | `v15` — the instruction as it stood | `…results-v15-20260922T060840908Z.json` | USD 0.0277 |
+| B | `v16` — categorical fields named one by one | `…results-v16-20260922T061120995Z.json` | USD 0.0294 |
+| C | `v16` again, unchanged, for variance | `…results-v16-20260922T163422609Z.json` | USD 0.0294 |
 
 Both resolved to `typesafe/jev-1.13-20260917`; both read case set
 `a297026f…`; the question fingerprints differ (`f2ff7b9c…` → `7b25e46f…`).
@@ -39,14 +40,23 @@ measure.
 
 ## Results
 
-| arm | cases | A (`v15`) | B (`v16`) |
-|---|---|---|---|
-| `category_flip` | 30 | 21 detected | **28 detected** |
-| `stripped` | 12 | 12 | 12 |
-| `repeat` | 12 | 12 held | 12 held |
-| `paraphrase` | 7 | 6 held, **1 moved** | 7 held |
-| `invented_evidence` | 12 | 8 newly flagged, 4 inconclusive | 8 newly flagged, 4 inconclusive |
-| `control` | 12 | 11 `fair`, 1 `overstated` | 12 `fair` |
+| arm | cases | A (`v15`) | B (`v16`) | C (`v16` again) |
+|---|---|---|---|---|
+| `category_flip` | 30 | 21 detected | **28** | **27** |
+| `stripped` | 12 | 12 | 12 | 12 |
+| `repeat` | 12 | 12 held | 12 held | 11 held, **1 moved** |
+| `paraphrase` | 7 | 6 held, **1 moved** | 7 held | 7 held |
+| `invented_evidence` | 12 | 8 flagged, 4 inconclusive | 8, 4 | 9, 3 |
+| `control` | 12 | 11 `fair`, 1 `overstated` | 12 `fair` | 12 `fair` |
+
+**Run-to-run variance, from B against C — same version, same cases, same
+model:** 3 of 85 verdicts differ. Two of the three are the `control-009`
+family. The third, `category_flip-020`, went from `misdescribes_category` to
+`fair` **at a margin of 0.34** — a confident reversal rather than a coin
+landing the other way.
+
+So the honest statement of the headline is **27 to 28 of 30 on two runs**, not
+28.
 
 ## The Markov instruction, and what changed
 
@@ -75,19 +85,32 @@ markov context"`, both returned `fair`.
 ## One control moved, and it cannot be attributed
 
 `control-009` went `overstated` at `v15` to `fair` at `v16` — the only real note
-the grader had flagged. But its probabilities say it was never settled:
+the grader had ever flagged.
 
-| | verdict | selected | runner-up |
-|---|---|---|---|
-| `v15` control | `overstated` | 0.47 | 0.40 |
-| `v15` repeat | `overstated` | 0.56 | 0.33 |
-| `v15` paraphrase | `fair` | 0.44 | 0.42 |
-| `v16` all three | `fair` | 0.49–0.53 | 0.41–0.46 |
+| | verdict | selected | runner-up | margin |
+|---|---|---|---|---|
+| `v15` control | `overstated` | 0.47 | 0.40 | 0.07 |
+| `v15` repeat | `overstated` | 0.56 | 0.33 | **0.23** |
+| `v15` paraphrase | `fair` | 0.44 | 0.42 | 0.02 |
+| `v16` control | `fair` | 0.53 | 0.41 | **0.12** |
+| `v16` repeat | `fair` | 0.49 | 0.46 | 0.03 |
+| `v16` paraphrase | `fair` | 0.50 | 0.45 | 0.05 |
 
-A margin under 0.1 in every reading. The `v15` paraphrase flip and the `v16`
-move are the same borderline case sampled twice, not evidence that the new
-instruction suppresses flags on real notes. With one flagged control out of
-twelve there is nothing here to conclude either way.
+**Two of the six margins exceed 0.1**, so this is not uniformly a near-tie. An
+earlier version of this document said "a margin under 0.1 in every reading" with
+these numbers printed above it, and then called the move "sampling on a
+borderline case, not evidence the instruction suppresses flags". That was an
+explanation asserted as a finding.
+
+What the data supports: **the control changed verdict, and these observations
+cannot distinguish ordinary variation from an instruction-induced change.**
+Its label is unadjudicated, so neither verdict is known to be right.
+
+Run C does add one thing: `repeat-009` came back `overstated` again at `v16`,
+with the instruction unchanged. The 009 family therefore varies *within* a
+version, which is consistent with variation rather than with the instruction —
+but consistent with is not the same as established, and one more run does not
+make it so.
 
 ## Corrections to the first write-up
 
@@ -104,20 +127,34 @@ Five things the first version of this document got wrong or overstated.
 3. **Sufficiency was scored without its control.** Four of the twelve controls
    were already above 0.5 before anything was added, so those four prove nothing
    about the added claim. The honest figure is **8 newly crossed, 4
-   inconclusive**, not 12 of 12. The useful negative evidence is separate: all
-   twelve figures-only notes stayed below 0.5, the highest at 0.40.
+   inconclusive** (9 and 3 in run C), not 12 of 12. The useful negative evidence
+   is separate: all twelve figures-only notes stayed below 0.5 in every run,
+   the highest at **0.36, 0.47 and 0.39** across A, B and C. An earlier version
+   of this document gave 0.40, which was the maximum from a run made before the
+   case set was regenerated.
 4. **"These verdicts don't move between calls" was too strong.** What is
    supported is that nothing moved across 12 repeats and 7 paraphrases at `v16`,
    and that one paraphrase moved at `v15`.
 5. **The confidence medians are descriptive, not a review rule.** Two missed
    flips came back at 0.84 and 0.72, well inside the range of the caught ones.
    Selected probability and the margin over the runner-up are the numbers to
-   reason about; `control-009` is what that looks like in practice.
+   reason about — though `category_flip-020` reversed at a margin of 0.34, so
+   they are not a rule either.
+6. **Both earlier runs recorded the wrong source commit.** `983db1b` names the
+   checkout's base, not the code that ran: `GIT_SHA` was read from
+   `git rev-parse HEAD` while the tree was dirty, and the harness fixes and the
+   `v16` instruction were uncommitted at the time. Those two files now carry
+   the correction. Runs from here record the HEAD commit, whether the tree was
+   dirty, a hash of the diff **and the diff itself** beside the results, one
+   question hash per candidate count actually used, and a unique run id in the
+   filename so a repeat never replaces its predecessor.
 
 ## What this still does not establish
 
-- **One run per version.** Each number is a single sample of a probabilistic
-  answer, and the borderline control shows what that costs.
+- **Two runs of `v16` and one of `v15`.** The `v15` number has no variance
+  estimate at all, and two runs of `v16` give a range, not a distribution. The
+  seven additional detections are encouraging evidence for the instruction
+  change, not an estimate of its repeatable effect.
 - **Thirty flips, ten of them Markov.** The improvement is measured on the
   constructions that failed, which is the weakest possible generalisation.
 - **The controls have no ground truth.** Twelve `fair` at `v16` is consistent

@@ -1,9 +1,9 @@
 {
-  "billed_usd": 0.029413104,
+  "billed_usd": 0.027712986,
   "by_arm": {
     "category_flip": {
-      "correct": 28,
-      "missed": 2
+      "correct": 21,
+      "missed": 9
     },
     "control": {
       "observed": 12
@@ -13,7 +13,8 @@
       "inconclusive": 4
     },
     "paraphrase": {
-      "correct": 7
+      "correct": 6,
+      "unstable": 1
     },
     "repeat": {
       "correct": 12
@@ -28,16 +29,16 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.99,
+      "confidence": 0.92,
       "expect": "flagged",
       "id": "category_flip-001",
       "note": "High-conviction European tech watchlist candidate with 6 technical confluences, bearish trend bias, and low break risk (0.126).",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
+        "fair": 0.03,
+        "misdescribes_category": 0.94,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.03
       },
       "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.82,
@@ -47,54 +48,54 @@
       "arm": "control",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.85,
+      "confidence": 0.72,
       "expect": "observed",
       "id": "control-001",
       "note": "High-conviction European tech watchlist candidate with 6 technical confluences, bullish trend bias, and low break risk (0.126).",
       "outcome": "observed",
       "probabilities": {
-        "fair": 0.89,
-        "misdescribes_category": 0.01,
+        "fair": 0.79,
+        "misdescribes_category": 0.05,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.1
+        "overstated": 0.16
       },
       "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.3,
+      "sufficiency": 0.29,
       "verdict": "fair"
     },
     {
       "arm": "repeat",
-      "baseline_sufficiency": 0.3,
+      "baseline_sufficiency": 0.29,
       "baseline_verdict": "fair",
-      "confidence": 0.84,
+      "confidence": 0.72,
       "expect": "same_as_baseline",
       "id": "repeat-001",
       "note": "High-conviction European tech watchlist candidate with 6 technical confluences, bullish trend bias, and low break risk (0.126).",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.88,
-        "misdescribes_category": 0.02,
+        "fair": 0.8,
+        "misdescribes_category": 0.04,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.1
+        "overstated": 0.16
       },
       "rationale": "the same note asked a second time",
-      "sufficiency": 0.29,
+      "sufficiency": 0.31,
       "verdict": "fair"
     },
     {
       "arm": "invented_evidence",
-      "baseline_sufficiency": 0.3,
+      "baseline_sufficiency": 0.29,
       "baseline_verdict": "fair",
-      "confidence": 0.8,
+      "confidence": 0.73,
       "expect": "asserts_absent_evidence",
       "id": "invented_evidence-001",
       "note": "High-conviction European tech watchlist candidate with 6 technical confluences, bullish trend bias, and low break risk (0.126). Analyst consensus implies 18% upside to target.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.86,
-        "misdescribes_category": 0.02,
+        "fair": 0.8,
+        "misdescribes_category": 0.05,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.12
+        "overstated": 0.15
       },
       "rationale": "appends \"Analyst consensus implies 18% upside to target.\", which has no counterpart in the evidence",
       "sufficiency": 0.91,
@@ -102,56 +103,56 @@
     },
     {
       "arm": "paraphrase",
-      "baseline_sufficiency": 0.3,
+      "baseline_sufficiency": 0.29,
       "baseline_verdict": "fair",
-      "confidence": 0.9,
+      "confidence": 0.78,
       "expect": "same_as_baseline",
       "id": "paraphrase-001",
       "note": "High-conviction European tech watchlist name with 6 technical confluences, bullish trend bias, and low break risk (0.126).",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.93,
-        "misdescribes_category": 0.01,
+        "fair": 0.83,
+        "misdescribes_category": 0.03,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.06
+        "overstated": 0.14
       },
       "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
-      "sufficiency": 0.32,
+      "sufficiency": 0.3,
       "verdict": "fair"
     },
     {
       "arm": "stripped",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.66,
+      "confidence": 0.83,
       "expect": "no_qualitative_claim",
       "id": "stripped-001",
       "note": "6/3 confluences, rsi 55.5, markov signed signal 0.014.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.17,
-        "misdescribes_category": 0.02,
-        "no_qualitative_claim": 0.74,
-        "overstated": 0.07
+        "fair": 0.09,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.87,
+        "overstated": 0.03
       },
       "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.24,
+      "sufficiency": 0.2,
       "verdict": "no_qualitative_claim"
     },
     {
       "arm": "control",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.66,
+      "confidence": 0.49,
       "expect": "observed",
       "id": "control-002",
       "note": "Held Danish logistics leader advancing +1.63% intraday with +13.6% total return and broker-working stop at 153.55 DKK.",
       "outcome": "observed",
       "probabilities": {
-        "fair": 0.74,
-        "misdescribes_category": 0.01,
+        "fair": 0.61,
+        "misdescribes_category": 0.1,
         "no_qualitative_claim": 0.01,
-        "overstated": 0.24
+        "overstated": 0.28
       },
       "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
       "sufficiency": 0.93,
@@ -161,16 +162,16 @@
       "arm": "repeat",
       "baseline_sufficiency": 0.93,
       "baseline_verdict": "fair",
-      "confidence": 0.63,
+      "confidence": 0.44,
       "expect": "same_as_baseline",
       "id": "repeat-002",
       "note": "Held Danish logistics leader advancing +1.63% intraday with +13.6% total return and broker-working stop at 153.55 DKK.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.71,
-        "misdescribes_category": 0.02,
+        "fair": 0.58,
+        "misdescribes_category": 0.12,
         "no_qualitative_claim": 0.01,
-        "overstated": 0.26
+        "overstated": 0.29
       },
       "rationale": "the same note asked a second time",
       "sufficiency": 0.93,
@@ -180,16 +181,16 @@
       "arm": "invented_evidence",
       "baseline_sufficiency": 0.93,
       "baseline_verdict": "fair",
-      "confidence": 0.55,
+      "confidence": 0.39,
       "expect": "asserts_absent_evidence",
       "id": "invented_evidence-002",
       "note": "Held Danish logistics leader advancing +1.63% intraday with +13.6% total return and broker-working stop at 153.55 DKK. Insider ownership rose to 12% last quarter.",
       "outcome": "inconclusive",
       "probabilities": {
-        "fair": 0.66,
-        "misdescribes_category": 0.02,
+        "fair": 0.54,
+        "misdescribes_category": 0.1,
         "no_qualitative_claim": 0.01,
-        "overstated": 0.31
+        "overstated": 0.35
       },
       "rationale": "appends \"Insider ownership rose to 12% last quarter.\", which has no counterpart in the evidence",
       "sufficiency": 0.95,
@@ -199,186 +200,15 @@
       "arm": "stripped",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.71,
+      "confidence": 0.73,
       "expect": "no_qualitative_claim",
       "id": "stripped-002",
       "note": "5/3 confluences, rsi 62.5, markov signed signal 0.464.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.2,
+        "fair": 0.18,
         "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.78,
-        "overstated": 0.01
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.25,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.99,
-      "expect": "flagged",
-      "id": "category_flip-002",
-      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bearish trend bias; kept on priority near-term watchlist.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.0
-      },
-      "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.84,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.95,
-      "expect": "observed",
-      "id": "control-003",
-      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist.",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.96,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.43,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.43,
-      "baseline_verdict": "fair",
-      "confidence": 0.96,
-      "expect": "same_as_baseline",
-      "id": "repeat-003",
-      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.97,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.02
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.32,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.43,
-      "baseline_verdict": "fair",
-      "confidence": 0.92,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-003",
-      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist. The most recent earnings beat estimates by 9%.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.94,
-        "misdescribes_category": 0.02,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.04
-      },
-      "rationale": "appends \"The most recent earnings beat estimates by 9%.\", which has no counterpart in the evidence",
-      "sufficiency": 0.91,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.81,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-003",
-      "note": "6/3 confluences, rsi 55.5, markov signed signal 0.014.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.11,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.85,
-        "overstated": 0.03
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.25,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.77,
-      "expect": "observed",
-      "id": "control-004",
-      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK.",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.83,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.16
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.91,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.91,
-      "baseline_verdict": "fair",
-      "confidence": 0.71,
-      "expect": "same_as_baseline",
-      "id": "repeat-004",
-      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.78,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.21
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.9,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.91,
-      "baseline_verdict": "fair",
-      "confidence": 0.74,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-004",
-      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK. Short interest stands at 4.2% of float.",
-      "outcome": "inconclusive",
-      "probabilities": {
-        "fair": 0.8,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.19
-      },
-      "rationale": "appends \"Short interest stands at 4.2% of float.\", which has no counterpart in the evidence",
-      "sufficiency": 0.93,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.79,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-004",
-      "note": "5/3 confluences, rsi 62.5, markov signed signal 0.464.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.14,
-        "misdescribes_category": 0.0,
-        "no_qualitative_claim": 0.85,
+        "no_qualitative_claim": 0.8,
         "overstated": 0.01
       },
       "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
@@ -389,130 +219,16 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.34,
+      "confidence": 0.94,
       "expect": "flagged",
-      "id": "category_flip-003",
-      "note": "Strong Nordic candidate with 6 BUY confluences, high break risk (0.143), and solid reward/risk; monitored for next European session.",
+      "id": "category_flip-002",
+      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bearish trend bias; kept on priority near-term watchlist.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.36,
-        "misdescribes_category": 0.13,
+        "fair": 0.04,
+        "misdescribes_category": 0.95,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.51
-      },
-      "rationale": "\"low break risk\" replaced by \"high break risk\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.81,
-      "verdict": "overstated"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.29,
-      "expect": "observed",
-      "id": "control-005",
-      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.47,
-        "misdescribes_category": 0.17,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.36
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.8,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.8,
-      "baseline_verdict": "fair",
-      "confidence": 0.39,
-      "expect": "same_as_baseline",
-      "id": "repeat-005",
-      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.54,
-        "misdescribes_category": 0.15,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.31
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.76,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.8,
-      "baseline_verdict": "fair",
-      "confidence": 0.21,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-005",
-      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session. The sector rotation model ranks it first of forty.",
-      "outcome": "inconclusive",
-      "probabilities": {
-        "fair": 0.34,
-        "misdescribes_category": 0.25,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.41
-      },
-      "rationale": "appends \"The sector rotation model ranks it first of forty.\", which has no counterpart in the evidence",
-      "sufficiency": 0.92,
-      "verdict": "overstated"
-    },
-    {
-      "arm": "paraphrase",
-      "baseline_sufficiency": 0.8,
-      "baseline_verdict": "fair",
-      "confidence": 0.42,
-      "expect": "same_as_baseline",
-      "id": "paraphrase-005",
-      "note": "Strong Nordic name with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.57,
-        "misdescribes_category": 0.13,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.3
-      },
-      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
-      "sufficiency": 0.78,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.85,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-005",
-      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.1,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.88,
         "overstated": 0.01
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.21,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.99,
-      "expect": "flagged",
-      "id": "category_flip-004",
-      "note": "Top Nordic swing setup with 6 technical confluences, bearish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.0,
-        "misdescribes_category": 1.0,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.0
       },
       "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.86,
@@ -522,16 +238,16 @@
       "arm": "control",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.66,
+      "confidence": 0.94,
       "expect": "observed",
-      "id": "control-006",
-      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
+      "id": "control-003",
+      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist.",
       "outcome": "observed",
       "probabilities": {
-        "fair": 0.75,
-        "misdescribes_category": 0.08,
+        "fair": 0.95,
+        "misdescribes_category": 0.01,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.17
+        "overstated": 0.04
       },
       "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
       "sufficiency": 0.43,
@@ -541,276 +257,48 @@
       "arm": "repeat",
       "baseline_sufficiency": 0.43,
       "baseline_verdict": "fair",
-      "confidence": 0.74,
+      "confidence": 0.91,
       "expect": "same_as_baseline",
-      "id": "repeat-006",
-      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
+      "id": "repeat-003",
+      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.81,
-        "misdescribes_category": 0.05,
+        "fair": 0.93,
+        "misdescribes_category": 0.01,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.14
+        "overstated": 0.06
       },
       "rationale": "the same note asked a second time",
-      "sufficiency": 0.5,
+      "sufficiency": 0.33,
       "verdict": "fair"
     },
     {
       "arm": "invented_evidence",
       "baseline_sufficiency": 0.43,
       "baseline_verdict": "fair",
-      "confidence": 0.69,
+      "confidence": 0.94,
       "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-006",
-      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment. Analyst consensus implies 18% upside to target.",
+      "id": "invented_evidence-003",
+      "note": "Solid technical profile with 6 confluences, low break risk (0.126), and bullish trend bias; kept on priority near-term watchlist. The most recent earnings beat estimates by 9%.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.77,
-        "misdescribes_category": 0.07,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.16
-      },
-      "rationale": "appends \"Analyst consensus implies 18% upside to target.\", which has no counterpart in the evidence",
-      "sufficiency": 0.9,
-      "verdict": "fair"
-    },
-    {
-      "arm": "paraphrase",
-      "baseline_sufficiency": 0.43,
-      "baseline_verdict": "fair",
-      "confidence": 0.77,
-      "expect": "same_as_baseline",
-      "id": "paraphrase-006",
-      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). continues to be prime candidate for capital redeployment.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.83,
-        "misdescribes_category": 0.05,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.12
-      },
-      "rationale": "\"remains\" replaced by \"continues to be\", which changes no\n                                 characterisation",
-      "sufficiency": 0.51,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.76,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-006",
-      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.12,
-        "misdescribes_category": 0.03,
-        "no_qualitative_claim": 0.82,
-        "overstated": 0.03
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.34,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.98,
-      "expect": "flagged",
-      "id": "category_flip-005",
-      "note": "Finnish forestry leader showing 5 confluences, bearish moving average alignment, and low support break risk (0.245).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.0
-      },
-      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.87,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.77,
-      "expect": "observed",
-      "id": "control-007",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245).",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.82,
-        "misdescribes_category": 0.03,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.15
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.35,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.35,
-      "baseline_verdict": "fair",
-      "confidence": 0.78,
-      "expect": "same_as_baseline",
-      "id": "repeat-007",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.83,
-        "misdescribes_category": 0.03,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.14
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.44,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.35,
-      "baseline_verdict": "fair",
-      "confidence": 0.82,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-007",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245). Insider ownership rose to 12% last quarter.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.86,
-        "misdescribes_category": 0.02,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.12
-      },
-      "rationale": "appends \"Insider ownership rose to 12% last quarter.\", which has no counterpart in the evidence",
-      "sufficiency": 0.94,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.69,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-007",
-      "note": "5/3 confluences, rsi 69.7, markov signed signal 0.125.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.19,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.77,
-        "overstated": 0.03
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.22,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.98,
-      "expect": "flagged",
-      "id": "category_flip-006",
-      "note": "High-conviction European swing setup featuring 6 technical confluences, bearish trend bias, and low support break risk (0.143).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.98,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.01
-      },
-      "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.82,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.87,
-      "expect": "observed",
-      "id": "control-008",
-      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.91,
+        "fair": 0.95,
         "misdescribes_category": 0.01,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.08
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.2,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.2,
-      "baseline_verdict": "fair",
-      "confidence": 0.83,
-      "expect": "same_as_baseline",
-      "id": "repeat-008",
-      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.88,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.11
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.19,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.2,
-      "baseline_verdict": "fair",
-      "confidence": 0.81,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-008",
-      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143). The most recent earnings beat estimates by 9%.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.85,
-        "misdescribes_category": 0.03,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.12
+        "overstated": 0.04
       },
       "rationale": "appends \"The most recent earnings beat estimates by 9%.\", which has no counterpart in the evidence",
-      "sufficiency": 0.93,
-      "verdict": "fair"
-    },
-    {
-      "arm": "paraphrase",
-      "baseline_sufficiency": 0.2,
-      "baseline_verdict": "fair",
-      "confidence": 0.86,
-      "expect": "same_as_baseline",
-      "id": "paraphrase-008",
-      "note": "High-conviction European swing configuration featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.9,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.09
-      },
-      "rationale": "\"setup\" replaced by \"configuration\", which changes no\n                                 characterisation",
-      "sufficiency": 0.21,
+      "sufficiency": 0.92,
       "verdict": "fair"
     },
     {
       "arm": "stripped",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.89,
+      "confidence": 0.88,
       "expect": "no_qualitative_claim",
-      "id": "stripped-008",
-      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
+      "id": "stripped-003",
+      "note": "6/3 confluences, rsi 55.5, markov signed signal 0.014.",
       "outcome": "correct",
       "probabilities": {
         "fair": 0.07,
@@ -819,326 +307,193 @@
         "overstated": 0.01
       },
       "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.47,
+      "sufficiency": 0.22,
       "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.99,
-      "expect": "flagged",
-      "id": "category_flip-007",
-      "note": "Finnish forestry leader showing 5 confluences, bearish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.0,
-        "misdescribes_category": 0.99,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.01
-      },
-      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.87,
-      "verdict": "misdescribes_category"
     },
     {
       "arm": "control",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.37,
+      "confidence": 0.65,
       "expect": "observed",
-      "id": "control-009",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
+      "id": "control-004",
+      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK.",
       "outcome": "observed",
       "probabilities": {
-        "fair": 0.53,
-        "misdescribes_category": 0.06,
+        "fair": 0.74,
+        "misdescribes_category": 0.05,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.41
+        "overstated": 0.21
       },
       "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.56,
+      "sufficiency": 0.91,
       "verdict": "fair"
     },
     {
       "arm": "repeat",
-      "baseline_sufficiency": 0.56,
+      "baseline_sufficiency": 0.91,
       "baseline_verdict": "fair",
-      "confidence": 0.33,
+      "confidence": 0.65,
       "expect": "same_as_baseline",
-      "id": "repeat-009",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
+      "id": "repeat-004",
+      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.49,
-        "misdescribes_category": 0.05,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.46
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.49,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.56,
-      "baseline_verdict": "fair",
-      "confidence": 0.35,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-009",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist. Short interest stands at 4.2% of float.",
-      "outcome": "inconclusive",
-      "probabilities": {
-        "fair": 0.44,
+        "fair": 0.74,
         "misdescribes_category": 0.04,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.52
-      },
-      "rationale": "appends \"Short interest stands at 4.2% of float.\", which has no counterpart in the evidence",
-      "sufficiency": 0.94,
-      "verdict": "overstated"
-    },
-    {
-      "arm": "paraphrase",
-      "baseline_sufficiency": 0.56,
-      "baseline_verdict": "fair",
-      "confidence": 0.33,
-      "expect": "same_as_baseline",
-      "id": "paraphrase-009",
-      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong name on watchlist.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.5,
-        "misdescribes_category": 0.05,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.45
-      },
-      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
-      "sufficiency": 0.61,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.68,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-009",
-      "note": "5/3 confluences, rsi 69.7, markov signed signal 0.125.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.19,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.77,
-        "overstated": 0.03
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.28,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.4,
-      "expect": "flagged",
-      "id": "category_flip-008",
-      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 bear markov regime.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.39,
-        "misdescribes_category": 0.55,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.06
-      },
-      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.38,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.92,
-      "expect": "observed",
-      "id": "control-010",
-      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.93,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.06
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.31,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.31,
-      "baseline_verdict": "fair",
-      "confidence": 0.91,
-      "expect": "same_as_baseline",
-      "id": "repeat-010",
-      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.93,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.06
+        "overstated": 0.22
       },
       "rationale": "the same note asked a second time",
-      "sufficiency": 0.4,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.31,
-      "baseline_verdict": "fair",
-      "confidence": 0.9,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-010",
-      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime. The sector rotation model ranks it first of forty.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.92,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.07
-      },
-      "rationale": "appends \"The sector rotation model ranks it first of forty.\", which has no counterpart in the evidence",
-      "sufficiency": 0.68,
-      "verdict": "fair"
-    },
-    {
-      "arm": "paraphrase",
-      "baseline_sufficiency": 0.31,
-      "baseline_verdict": "fair",
-      "confidence": 0.95,
-      "expect": "same_as_baseline",
-      "id": "paraphrase-010",
-      "note": "Top US cybersecurity configuration with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.96,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "\"setup\" replaced by \"configuration\", which changes no\n                                 characterisation",
-      "sufficiency": 0.34,
-      "verdict": "fair"
-    },
-    {
-      "arm": "stripped",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.56,
-      "expect": "no_qualitative_claim",
-      "id": "stripped-010",
-      "note": "5/3 confluences, rsi 58.2, markov signed signal 0.821.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.32,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.66,
-        "overstated": 0.01
-      },
-      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.36,
-      "verdict": "no_qualitative_claim"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.62,
-      "expect": "flagged",
-      "id": "category_flip-009",
-      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 bear markov signal.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.27,
-        "misdescribes_category": 0.72,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.01
-      },
-      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.49,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "control",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.95,
-      "expect": "observed",
-      "id": "control-011",
-      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal.",
-      "outcome": "observed",
-      "probabilities": {
-        "fair": 0.96,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.42,
-      "verdict": "fair"
-    },
-    {
-      "arm": "repeat",
-      "baseline_sufficiency": 0.42,
-      "baseline_verdict": "fair",
-      "confidence": 0.95,
-      "expect": "same_as_baseline",
-      "id": "repeat-011",
-      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.96,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "the same note asked a second time",
-      "sufficiency": 0.36,
-      "verdict": "fair"
-    },
-    {
-      "arm": "invented_evidence",
-      "baseline_sufficiency": 0.42,
-      "baseline_verdict": "fair",
-      "confidence": 0.95,
-      "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-011",
-      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal. Analyst consensus implies 18% upside to target.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.96,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "appends \"Analyst consensus implies 18% upside to target.\", which has no counterpart in the evidence",
       "sufficiency": 0.92,
       "verdict": "fair"
     },
     {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.91,
+      "baseline_verdict": "fair",
+      "confidence": 0.6,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-004",
+      "note": "Held Danish logistics leader maintaining over 11% unrealized gain with 5 confluences and working stop at 153.55 DKK. Short interest stands at 4.2% of float.",
+      "outcome": "inconclusive",
+      "probabilities": {
+        "fair": 0.7,
+        "misdescribes_category": 0.05,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.25
+      },
+      "rationale": "appends \"Short interest stands at 4.2% of float.\", which has no counterpart in the evidence",
+      "sufficiency": 0.93,
+      "verdict": "fair"
+    },
+    {
       "arm": "stripped",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.72,
+      "confidence": 0.86,
       "expect": "no_qualitative_claim",
-      "id": "stripped-011",
-      "note": "5/3 confluences, rsi 69.3, markov signed signal 0.516.",
+      "id": "stripped-004",
+      "note": "5/3 confluences, rsi 62.5, markov signed signal 0.464.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.2,
+        "fair": 0.09,
         "misdescribes_category": 0.0,
-        "no_qualitative_claim": 0.79,
+        "no_qualitative_claim": 0.9,
+        "overstated": 0.01
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.31,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.41,
+      "expect": "flagged",
+      "id": "category_flip-003",
+      "note": "Strong Nordic candidate with 6 BUY confluences, high break risk (0.143), and solid reward/risk; monitored for next European session.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.34,
+        "misdescribes_category": 0.1,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.55
+      },
+      "rationale": "\"low break risk\" replaced by \"high break risk\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.8,
+      "verdict": "overstated"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.32,
+      "expect": "observed",
+      "id": "control-005",
+      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.49,
+        "misdescribes_category": 0.16,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.35
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.77,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.77,
+      "baseline_verdict": "fair",
+      "confidence": 0.38,
+      "expect": "same_as_baseline",
+      "id": "repeat-005",
+      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.53,
+        "misdescribes_category": 0.15,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.32
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.76,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.77,
+      "baseline_verdict": "fair",
+      "confidence": 0.22,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-005",
+      "note": "Strong Nordic candidate with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session. The sector rotation model ranks it first of forty.",
+      "outcome": "inconclusive",
+      "probabilities": {
+        "fair": 0.39,
+        "misdescribes_category": 0.19,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.42
+      },
+      "rationale": "appends \"The sector rotation model ranks it first of forty.\", which has no counterpart in the evidence",
+      "sufficiency": 0.92,
+      "verdict": "overstated"
+    },
+    {
+      "arm": "paraphrase",
+      "baseline_sufficiency": 0.77,
+      "baseline_verdict": "fair",
+      "confidence": 0.38,
+      "expect": "same_as_baseline",
+      "id": "paraphrase-005",
+      "note": "Strong Nordic name with 6 BUY confluences, low break risk (0.143), and solid reward/risk; monitored for next European session.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.54,
+        "misdescribes_category": 0.19,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.27
+      },
+      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
+      "sufficiency": 0.8,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.86,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-005",
+      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.09,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.89,
         "overstated": 0.01
       },
       "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
@@ -1149,134 +504,647 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.9,
+      "confidence": 0.92,
       "expect": "flagged",
-      "id": "category_flip-010",
-      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 bear markov regime.",
+      "id": "category_flip-004",
+      "note": "Top Nordic swing setup with 6 technical confluences, bearish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.07,
-        "misdescribes_category": 0.92,
+        "fair": 0.02,
+        "misdescribes_category": 0.94,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.01
+        "overstated": 0.04
       },
-      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.32,
+      "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.88,
       "verdict": "misdescribes_category"
     },
     {
       "arm": "control",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.91,
+      "confidence": 0.62,
       "expect": "observed",
-      "id": "control-012",
-      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "id": "control-006",
+      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
       "outcome": "observed",
       "probabilities": {
-        "fair": 0.94,
-        "misdescribes_category": 0.01,
+        "fair": 0.72,
+        "misdescribes_category": 0.05,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.05
+        "overstated": 0.23
       },
       "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
-      "sufficiency": 0.27,
+      "sufficiency": 0.49,
       "verdict": "fair"
     },
     {
       "arm": "repeat",
-      "baseline_sufficiency": 0.27,
+      "baseline_sufficiency": 0.49,
       "baseline_verdict": "fair",
-      "confidence": 0.91,
+      "confidence": 0.54,
       "expect": "same_as_baseline",
-      "id": "repeat-012",
-      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "id": "repeat-006",
+      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.94,
-        "misdescribes_category": 0.01,
+        "fair": 0.65,
+        "misdescribes_category": 0.08,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.05
+        "overstated": 0.27
       },
       "rationale": "the same note asked a second time",
-      "sufficiency": 0.22,
+      "sufficiency": 0.4,
       "verdict": "fair"
     },
     {
       "arm": "invented_evidence",
-      "baseline_sufficiency": 0.27,
+      "baseline_sufficiency": 0.49,
       "baseline_verdict": "fair",
-      "confidence": 0.92,
+      "confidence": 0.54,
       "expect": "asserts_absent_evidence",
-      "id": "invented_evidence-012",
-      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime. Insider ownership rose to 12% last quarter.",
+      "id": "invented_evidence-006",
+      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). Remains prime candidate for capital redeployment. Analyst consensus implies 18% upside to target.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.94,
-        "misdescribes_category": 0.01,
+        "fair": 0.65,
+        "misdescribes_category": 0.06,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.05
+        "overstated": 0.29
       },
-      "rationale": "appends \"Insider ownership rose to 12% last quarter.\", which has no counterpart in the evidence",
+      "rationale": "appends \"Analyst consensus implies 18% upside to target.\", which has no counterpart in the evidence",
       "sufficiency": 0.91,
       "verdict": "fair"
     },
     {
       "arm": "paraphrase",
-      "baseline_sufficiency": 0.27,
+      "baseline_sufficiency": 0.49,
       "baseline_verdict": "fair",
-      "confidence": 0.91,
+      "confidence": 0.56,
       "expect": "same_as_baseline",
-      "id": "paraphrase-012",
-      "note": "Top European energy name with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "id": "paraphrase-006",
+      "note": "Top Nordic swing setup with 6 technical confluences, bullish trend bias, 2.95 reward/risk ratio, and low break risk (0.143). continues to be prime candidate for capital redeployment.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.94,
-        "misdescribes_category": 0.01,
+        "fair": 0.67,
+        "misdescribes_category": 0.08,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.05
+        "overstated": 0.25
       },
-      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
-      "sufficiency": 0.32,
+      "rationale": "\"remains\" replaced by \"continues to be\", which changes no\n                                 characterisation",
+      "sufficiency": 0.45,
       "verdict": "fair"
     },
     {
       "arm": "stripped",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.68,
+      "confidence": 0.81,
       "expect": "no_qualitative_claim",
-      "id": "stripped-012",
-      "note": "5/3 confluences, rsi 66.6, markov signed signal 0.429.",
+      "id": "stripped-006",
+      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.22,
-        "misdescribes_category": 0.01,
-        "no_qualitative_claim": 0.76,
-        "overstated": 0.01
+        "fair": 0.09,
+        "misdescribes_category": 0.02,
+        "no_qualitative_claim": 0.85,
+        "overstated": 0.04
       },
       "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
-      "sufficiency": 0.23,
+      "sufficiency": 0.29,
       "verdict": "no_qualitative_claim"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.98,
+      "confidence": 0.82,
       "expect": "flagged",
-      "id": "category_flip-011",
-      "note": "Top technical and Markov setup: 6 BUY confluences, bearish trend bias, 2.96 reward/risk, low break risk (0.233), and +0.429 Bull regime conviction.",
+      "id": "category_flip-005",
+      "note": "Finnish forestry leader showing 5 confluences, bearish moving average alignment, and low support break risk (0.245).",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
+        "fair": 0.05,
+        "misdescribes_category": 0.87,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.08
+      },
+      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.86,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.62,
+      "expect": "observed",
+      "id": "control-007",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245).",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.72,
+        "misdescribes_category": 0.11,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.17
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.34,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.34,
+      "baseline_verdict": "fair",
+      "confidence": 0.64,
+      "expect": "same_as_baseline",
+      "id": "repeat-007",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245).",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.73,
+        "misdescribes_category": 0.1,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.17
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.4,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.34,
+      "baseline_verdict": "fair",
+      "confidence": 0.65,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-007",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and low support break risk (0.245). Insider ownership rose to 12% last quarter.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.74,
+        "misdescribes_category": 0.08,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.18
+      },
+      "rationale": "appends \"Insider ownership rose to 12% last quarter.\", which has no counterpart in the evidence",
+      "sufficiency": 0.94,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.72,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-007",
+      "note": "5/3 confluences, rsi 69.7, markov signed signal 0.125.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.18,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.79,
+        "overstated": 0.02
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.22,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.94,
+      "expect": "flagged",
+      "id": "category_flip-006",
+      "note": "High-conviction European swing setup featuring 6 technical confluences, bearish trend bias, and low support break risk (0.143).",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.02,
+        "misdescribes_category": 0.96,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.02
       },
       "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.53,
+      "sufficiency": 0.79,
       "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.81,
+      "expect": "observed",
+      "id": "control-008",
+      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.02,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.12
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.19,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.19,
+      "baseline_verdict": "fair",
+      "confidence": 0.81,
+      "expect": "same_as_baseline",
+      "id": "repeat-008",
+      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.04,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.1
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.19,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.19,
+      "baseline_verdict": "fair",
+      "confidence": 0.76,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-008",
+      "note": "High-conviction European swing setup featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143). The most recent earnings beat estimates by 9%.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.82,
+        "misdescribes_category": 0.05,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.13
+      },
+      "rationale": "appends \"The most recent earnings beat estimates by 9%.\", which has no counterpart in the evidence",
+      "sufficiency": 0.93,
+      "verdict": "fair"
+    },
+    {
+      "arm": "paraphrase",
+      "baseline_sufficiency": 0.19,
+      "baseline_verdict": "fair",
+      "confidence": 0.81,
+      "expect": "same_as_baseline",
+      "id": "paraphrase-008",
+      "note": "High-conviction European swing configuration featuring 6 technical confluences, bullish trend bias, and low support break risk (0.143).",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.03,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.11
+      },
+      "rationale": "\"setup\" replaced by \"configuration\", which changes no\n                                 characterisation",
+      "sufficiency": 0.22,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.94,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-008",
+      "note": "6/3 confluences, rsi 54.1, markov signed signal 0.014.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.03,
+        "misdescribes_category": 0.0,
+        "no_qualitative_claim": 0.96,
+        "overstated": 0.01
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.36,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.84,
+      "expect": "flagged",
+      "id": "category_flip-007",
+      "note": "Finnish forestry leader showing 5 confluences, bearish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.02,
+        "misdescribes_category": 0.88,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.1
+      },
+      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.88,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.3,
+      "expect": "observed",
+      "id": "control-009",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.4,
+        "misdescribes_category": 0.13,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.47
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.6,
+      "verdict": "overstated"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.6,
+      "baseline_verdict": "overstated",
+      "confidence": 0.41,
+      "expect": "same_as_baseline",
+      "id": "repeat-009",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.33,
+        "misdescribes_category": 0.11,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.56
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.56,
+      "verdict": "overstated"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.6,
+      "baseline_verdict": "overstated",
+      "confidence": 0.39,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-009",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong candidate on watchlist. Short interest stands at 4.2% of float.",
+      "outcome": "inconclusive",
+      "probabilities": {
+        "fair": 0.39,
+        "misdescribes_category": 0.06,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.55
+      },
+      "rationale": "appends \"Short interest stands at 4.2% of float.\", which has no counterpart in the evidence",
+      "sufficiency": 0.94,
+      "verdict": "overstated"
+    },
+    {
+      "arm": "paraphrase",
+      "baseline_sufficiency": 0.6,
+      "baseline_verdict": "overstated",
+      "confidence": 0.26,
+      "expect": "same_as_baseline",
+      "id": "paraphrase-009",
+      "note": "Finnish forestry leader showing 5 confluences, bullish moving average alignment, and +0.125 Markov regime; strong name on watchlist.",
+      "outcome": "unstable",
+      "probabilities": {
+        "fair": 0.44,
+        "misdescribes_category": 0.14,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.42
+      },
+      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
+      "sufficiency": 0.46,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.72,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-009",
+      "note": "5/3 confluences, rsi 69.7, markov signed signal 0.125.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.18,
+        "misdescribes_category": 0.02,
+        "no_qualitative_claim": 0.78,
+        "overstated": 0.02
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.27,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.56,
+      "expect": "flagged",
+      "id": "category_flip-008",
+      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 bear markov regime.",
+      "outcome": "missed",
+      "probabilities": {
+        "fair": 0.67,
+        "misdescribes_category": 0.24,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.09
+      },
+      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.41,
+      "verdict": "fair"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.83,
+      "expect": "observed",
+      "id": "control-010",
+      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.87,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.12
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.37,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.37,
+      "baseline_verdict": "fair",
+      "confidence": 0.81,
+      "expect": "same_as_baseline",
+      "id": "repeat-010",
+      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.13
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.41,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.37,
+      "baseline_verdict": "fair",
+      "confidence": 0.76,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-010",
+      "note": "Top US cybersecurity setup with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime. The sector rotation model ranks it first of forty.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.82,
+        "misdescribes_category": 0.03,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.15
+      },
+      "rationale": "appends \"The sector rotation model ranks it first of forty.\", which has no counterpart in the evidence",
+      "sufficiency": 0.76,
+      "verdict": "fair"
+    },
+    {
+      "arm": "paraphrase",
+      "baseline_sufficiency": 0.37,
+      "baseline_verdict": "fair",
+      "confidence": 0.88,
+      "expect": "same_as_baseline",
+      "id": "paraphrase-010",
+      "note": "Top US cybersecurity configuration with 5 technical confluences, low break risk (0.161), and leading +0.821 Bull Markov regime.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.91,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.08
+      },
+      "rationale": "\"setup\" replaced by \"configuration\", which changes no\n                                 characterisation",
+      "sufficiency": 0.29,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.76,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-010",
+      "note": "5/3 confluences, rsi 58.2, markov signed signal 0.821.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.17,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.8099999999999999,
+        "overstated": 0.01
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.34,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.45,
+      "expect": "flagged",
+      "id": "category_flip-009",
+      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 bear markov signal.",
+      "outcome": "missed",
+      "probabilities": {
+        "fair": 0.59,
+        "misdescribes_category": 0.32,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.09
+      },
+      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.45,
+      "verdict": "fair"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.85,
+      "expect": "observed",
+      "id": "control-011",
+      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal.",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.88,
+        "misdescribes_category": 0.04,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.08
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.37,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.37,
+      "baseline_verdict": "fair",
+      "confidence": 0.84,
+      "expect": "same_as_baseline",
+      "id": "repeat-011",
+      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.87,
+        "misdescribes_category": 0.05,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.08
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.41,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.37,
+      "baseline_verdict": "fair",
+      "confidence": 0.82,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-011",
+      "note": "Leading life sciences instrument provider showing 5 buy confluences, low break risk (0.180), and +0.516 Bull Markov signal. Analyst consensus implies 18% upside to target.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.87,
+        "misdescribes_category": 0.05,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.08
+      },
+      "rationale": "appends \"Analyst consensus implies 18% upside to target.\", which has no counterpart in the evidence",
+      "sufficiency": 0.92,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.65,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-011",
+      "note": "5/3 confluences, rsi 69.3, markov signed signal 0.516.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.22,
+        "misdescribes_category": 0.02,
+        "no_qualitative_claim": 0.73,
+        "overstated": 0.03
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.19,
+      "verdict": "no_qualitative_claim"
     },
     {
       "arm": "category_flip",
@@ -1284,14 +1152,147 @@
       "baseline_verdict": null,
       "confidence": 0.41,
       "expect": "flagged",
+      "id": "category_flip-010",
+      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 bear markov regime.",
+      "outcome": "missed",
+      "probabilities": {
+        "fair": 0.56,
+        "misdescribes_category": 0.29,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.15
+      },
+      "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.3,
+      "verdict": "fair"
+    },
+    {
+      "arm": "control",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.84,
+      "expect": "observed",
+      "id": "control-012",
+      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "outcome": "observed",
+      "probabilities": {
+        "fair": 0.88,
+        "misdescribes_category": 0.03,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.09
+      },
+      "rationale": "the note as written; no ground truth, recorded so the paired arms have something to agree with",
+      "sufficiency": 0.28,
+      "verdict": "fair"
+    },
+    {
+      "arm": "repeat",
+      "baseline_sufficiency": 0.28,
+      "baseline_verdict": "fair",
+      "confidence": 0.82,
+      "expect": "same_as_baseline",
+      "id": "repeat-012",
+      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.04,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.1
+      },
+      "rationale": "the same note asked a second time",
+      "sufficiency": 0.26,
+      "verdict": "fair"
+    },
+    {
+      "arm": "invented_evidence",
+      "baseline_sufficiency": 0.28,
+      "baseline_verdict": "fair",
+      "confidence": 0.79,
+      "expect": "asserts_absent_evidence",
+      "id": "invented_evidence-012",
+      "note": "Top European energy candidate with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime. Insider ownership rose to 12% last quarter.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.84,
+        "misdescribes_category": 0.04,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.12
+      },
+      "rationale": "appends \"Insider ownership rose to 12% last quarter.\", which has no counterpart in the evidence",
+      "sufficiency": 0.92,
+      "verdict": "fair"
+    },
+    {
+      "arm": "paraphrase",
+      "baseline_sufficiency": 0.28,
+      "baseline_verdict": "fair",
+      "confidence": 0.81,
+      "expect": "same_as_baseline",
+      "id": "paraphrase-012",
+      "note": "Top European energy name with 5 technical confluences, 0.061 support break risk, and fresh +0.429 Bull Markov regime.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.86,
+        "misdescribes_category": 0.03,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.11
+      },
+      "rationale": "\"candidate\" replaced by \"name\", which changes no\n                                 characterisation",
+      "sufficiency": 0.3,
+      "verdict": "fair"
+    },
+    {
+      "arm": "stripped",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.88,
+      "expect": "no_qualitative_claim",
+      "id": "stripped-012",
+      "note": "5/3 confluences, rsi 66.6, markov signed signal 0.429.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.08,
+        "misdescribes_category": 0.01,
+        "no_qualitative_claim": 0.9,
+        "overstated": 0.01
+      },
+      "rationale": "the note replaced by the evidence's own figures, with no word of characterisation in it",
+      "sufficiency": 0.31,
+      "verdict": "no_qualitative_claim"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.75,
+      "expect": "flagged",
+      "id": "category_flip-011",
+      "note": "Top technical and Markov setup: 6 BUY confluences, bearish trend bias, 2.96 reward/risk, low break risk (0.233), and +0.429 Bull regime conviction.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.16,
+        "misdescribes_category": 0.81,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.03
+      },
+      "rationale": "\"bullish trend\" replaced by \"bearish trend\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.58,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.48,
+      "expect": "flagged",
       "id": "category_flip-012",
       "note": "Held Norwegian E&P core showing steady +10.5% total return, high break risk (0.145), and active stop at 353.97 NOK.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.37,
-        "misdescribes_category": 0.07,
+        "fair": 0.21,
+        "misdescribes_category": 0.18,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.56
+        "overstated": 0.61
       },
       "rationale": "\"low break risk\" replaced by \"high break risk\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.93,
@@ -1301,16 +1302,16 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.52,
+      "confidence": 0.5,
       "expect": "flagged",
       "id": "category_flip-013",
       "note": "Held Norwegian E&P core showing steady +10.78% total return, high break risk (0.145), and active stop at 353.97 NOK.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.2,
-        "misdescribes_category": 0.15,
+        "fair": 0.19,
+        "misdescribes_category": 0.19,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.65
+        "overstated": 0.62
       },
       "rationale": "\"low break risk\" replaced by \"high break risk\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.94,
@@ -1320,35 +1321,35 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.62,
+      "confidence": 0.4,
       "expect": "flagged",
       "id": "category_flip-014",
       "note": "Newly initiated swing holding trading firmly with +0.300 bear markov regime and working stop order at 331.25 USD.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.18,
-        "misdescribes_category": 0.72,
+        "fair": 0.24,
+        "misdescribes_category": 0.55,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.1
+        "overstated": 0.21
       },
       "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.93,
+      "sufficiency": 0.92,
       "verdict": "misdescribes_category"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.61,
+      "confidence": 0.78,
       "expect": "flagged",
       "id": "category_flip-015",
       "note": "Top technical BUY setup with 5 confluences, bullish trend bias, low 0.205 break risk, and +0.300 bear markov signal.",
       "outcome": "missed",
       "probabilities": {
-        "fair": 0.71,
-        "misdescribes_category": 0.24,
+        "fair": 0.84,
+        "misdescribes_category": 0.03,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.05
+        "overstated": 0.13
       },
       "rationale": "\"bull markov\" replaced by \"bear markov\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.28,
@@ -1358,96 +1359,58 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.99,
+      "confidence": 0.93,
       "expect": "flagged",
       "id": "category_flip-016",
       "note": "Aquaculture leader with 5 technical confluences, 0.237 low support break risk, and bear-state markov regime (+0.293).",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.0,
-        "misdescribes_category": 1.0,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.0
-      },
-      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.53,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.92,
-      "expect": "flagged",
-      "id": "category_flip-017",
-      "note": "Strong technical foundation with 5 confluences, low break-risk projection of 0.022, and confirmed bear-state markov regime (+0.386).",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.06,
-        "misdescribes_category": 0.94,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.0
-      },
-      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.34,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.75,
-      "expect": "flagged",
-      "id": "category_flip-018",
-      "note": "Strong technical confluence (5/3) with low support break-risk (0.227) and fresh bear-state markov signal (+0.206). Actionable swing entry.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.16,
-        "misdescribes_category": 0.81,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.03
-      },
-      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.34,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.83,
-      "expect": "flagged",
-      "id": "category_flip-019",
-      "note": "Top actionable setup: 5/3 confluence, BUY technical sentiment, 0.249 low support-break risk, and +0.3589 bear-state markov regime.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.12,
-        "misdescribes_category": 0.87,
+        "fair": 0.04,
+        "misdescribes_category": 0.95,
         "no_qualitative_claim": 0.0,
         "overstated": 0.01
       },
       "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.26,
+      "sufficiency": 0.44,
       "verdict": "misdescribes_category"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.31,
+      "confidence": 0.5,
       "expect": "flagged",
-      "id": "category_flip-020",
-      "note": "Actionable software momentum entry: BUY technical sentiment, bearish 5/3 confluence structure, positive MACD, RSI near 60, and low modeled support-break risk.",
-      "outcome": "correct",
+      "id": "category_flip-017",
+      "note": "Strong technical foundation with 5 confluences, low break-risk projection of 0.022, and confirmed bear-state markov regime (+0.386).",
+      "outcome": "missed",
       "probabilities": {
-        "fair": 0.48,
-        "misdescribes_category": 0.48,
+        "fair": 0.63,
+        "misdescribes_category": 0.26,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.04
+        "overstated": 0.11
       },
-      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.34,
-      "verdict": "misdescribes_category"
+      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.37,
+      "verdict": "fair"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.33,
+      "expect": "flagged",
+      "id": "category_flip-018",
+      "note": "Strong technical confluence (5/3) with low support break-risk (0.227) and fresh bear-state markov signal (+0.206). Actionable swing entry.",
+      "outcome": "missed",
+      "probabilities": {
+        "fair": 0.5,
+        "misdescribes_category": 0.4,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.1
+      },
+      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.31,
+      "verdict": "fair"
     },
     {
       "arm": "category_flip",
@@ -1455,56 +1418,56 @@
       "baseline_verdict": null,
       "confidence": 0.49,
       "expect": "flagged",
-      "id": "category_flip-021",
-      "note": "Newly executed and fully stop-protected position. Bullish 5/3 daily structure and fresh +0.5052 bear-state markov context support holding rather than adding.",
+      "id": "category_flip-019",
+      "note": "Top actionable setup: 5/3 confluence, BUY technical sentiment, 0.249 low support-break risk, and +0.3589 bear-state markov regime.",
       "outcome": "missed",
       "probabilities": {
         "fair": 0.62,
-        "misdescribes_category": 0.34,
+        "misdescribes_category": 0.31,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.04
+        "overstated": 0.07
       },
       "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.79,
+      "sufficiency": 0.34,
       "verdict": "fair"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.97,
+      "confidence": 0.56,
       "expect": "flagged",
-      "id": "category_flip-022",
-      "note": "Deferred rather than advanced: daily structure remains bearish, but the current 206.1 DKK quote is near the 205.55 DKK modeled support area after intraday weakness. Require stabilization before reconsidering.",
-      "outcome": "correct",
+      "id": "category_flip-020",
+      "note": "Actionable software momentum entry: BUY technical sentiment, bearish 5/3 confluence structure, positive MACD, RSI near 60, and low modeled support-break risk.",
+      "outcome": "missed",
       "probabilities": {
-        "fair": 0.02,
-        "misdescribes_category": 0.97,
+        "fair": 0.67,
+        "misdescribes_category": 0.22,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.01
+        "overstated": 0.11
       },
       "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.83,
-      "verdict": "misdescribes_category"
+      "sufficiency": 0.33,
+      "verdict": "fair"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.96,
+      "confidence": 0.77,
       "expect": "flagged",
-      "id": "category_flip-023",
-      "note": "Actionable Copenhagen BUY: daily BUY sentiment, bearish 5/3 confluence, low modeled support-break risk, and price near but above clustered support. Sized conservatively in the drawdown soft band.",
-      "outcome": "correct",
+      "id": "category_flip-021",
+      "note": "Newly executed and fully stop-protected position. Bullish 5/3 daily structure and fresh +0.5052 bear-state markov context support holding rather than adding.",
+      "outcome": "missed",
       "probabilities": {
-        "fair": 0.03,
-        "misdescribes_category": 0.97,
+        "fair": 0.82,
+        "misdescribes_category": 0.09,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.09
       },
-      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.86,
-      "verdict": "misdescribes_category"
+      "rationale": "\"bull-state markov\" replaced by \"bear-state markov\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.76,
+      "verdict": "fair"
     },
     {
       "arm": "category_flip",
@@ -1512,46 +1475,8 @@
       "baseline_verdict": null,
       "confidence": 0.95,
       "expect": "flagged",
-      "id": "category_flip-024",
-      "note": "Newly executed and fully protected holding. Daily bearish technical context and +0.2331 Markov context support retention, but no add immediately after entry.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.02,
-        "misdescribes_category": 0.97,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.01
-      },
-      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.9,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.87,
-      "expect": "flagged",
-      "id": "category_flip-025",
-      "note": "Existing protected energy holding. bearish technical setup remains intact, but existing energy exposure limits further allocation.",
-      "outcome": "correct",
-      "probabilities": {
-        "fair": 0.05,
-        "misdescribes_category": 0.9,
-        "no_qualitative_claim": 0.0,
-        "overstated": 0.05
-      },
-      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.83,
-      "verdict": "misdescribes_category"
-    },
-    {
-      "arm": "category_flip",
-      "baseline_sufficiency": null,
-      "baseline_verdict": null,
-      "confidence": 0.94,
-      "expect": "flagged",
-      "id": "category_flip-026",
-      "note": "Existing protected holding. bearish daily trend and positive fresh Markov context support retention.",
+      "id": "category_flip-022",
+      "note": "Deferred rather than advanced: daily structure remains bearish, but the current 206.1 DKK quote is near the 205.55 DKK modeled support area after intraday weakness. Require stabilization before reconsidering.",
       "outcome": "correct",
       "probabilities": {
         "fair": 0.03,
@@ -1559,43 +1484,43 @@
         "no_qualitative_claim": 0.0,
         "overstated": 0.01
       },
-      "rationale": "\"bullish daily trend\" replaced by \"bearish daily trend\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.77,
+      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.83,
       "verdict": "misdescribes_category"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.99,
+      "confidence": 0.82,
       "expect": "flagged",
-      "id": "category_flip-027",
-      "note": "bearish technical candidate but deferred because selected orders consume the reduced risk budget.",
+      "id": "category_flip-023",
+      "note": "Actionable Copenhagen BUY: daily BUY sentiment, bearish 5/3 confluence, low modeled support-break risk, and price near but above clustered support. Sized conservatively in the drawdown soft band.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
+        "fair": 0.11,
+        "misdescribes_category": 0.87,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.02
       },
-      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.88,
+      "rationale": "\"bullish\" replaced by \"bearish\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.85,
       "verdict": "misdescribes_category"
     },
     {
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.99,
+      "confidence": 0.72,
       "expect": "flagged",
-      "id": "category_flip-028",
-      "note": "Retain without adding: bearish technical structure and low modeled support-break risk support the holding, but the 12.9% portfolio allocation is concentrated.",
+      "id": "category_flip-024",
+      "note": "Newly executed and fully protected holding. Daily bearish technical context and +0.2331 Markov context support retention, but no add immediately after entry.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.99,
+        "fair": 0.14,
+        "misdescribes_category": 0.79,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.07
       },
       "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.91,
@@ -1605,16 +1530,73 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.99,
+      "confidence": 0.46,
       "expect": "flagged",
-      "id": "category_flip-029",
-      "note": "Retain, do not add: low support-break risk and bearish technical trend, but allocation is already 12.9% of portfolio value.",
+      "id": "category_flip-025",
+      "note": "Existing protected energy holding. bearish technical setup remains intact, but existing energy exposure limits further allocation.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.0,
-        "misdescribes_category": 1.0,
+        "fair": 0.2,
+        "misdescribes_category": 0.6,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.0
+        "overstated": 0.2
+      },
+      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.83,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.73,
+      "expect": "flagged",
+      "id": "category_flip-026",
+      "note": "Existing protected holding. bearish daily trend and positive fresh Markov context support retention.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.15,
+        "misdescribes_category": 0.8,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.05
+      },
+      "rationale": "\"bullish daily trend\" replaced by \"bearish daily trend\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.79,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.96,
+      "expect": "flagged",
+      "id": "category_flip-027",
+      "note": "bearish technical candidate but deferred because selected orders consume the reduced risk budget.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.02,
+        "misdescribes_category": 0.97,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.01
+      },
+      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.88,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.89,
+      "expect": "flagged",
+      "id": "category_flip-028",
+      "note": "Retain without adding: bearish technical structure and low modeled support-break risk support the holding, but the 12.9% portfolio allocation is concentrated.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.06,
+        "misdescribes_category": 0.92,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.02
       },
       "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
       "sufficiency": 0.89,
@@ -1624,24 +1606,43 @@
       "arm": "category_flip",
       "baseline_sufficiency": null,
       "baseline_verdict": null,
-      "confidence": 0.8,
+      "confidence": 0.98,
+      "expect": "flagged",
+      "id": "category_flip-029",
+      "note": "Retain, do not add: low support-break risk and bearish technical trend, but allocation is already 12.9% of portfolio value.",
+      "outcome": "correct",
+      "probabilities": {
+        "fair": 0.01,
+        "misdescribes_category": 0.99,
+        "no_qualitative_claim": 0.0,
+        "overstated": 0.0
+      },
+      "rationale": "\"bullish technical\" replaced by \"bearish technical\"; every categorical field in this candidate's evidence reads the other way",
+      "sufficiency": 0.9,
+      "verdict": "misdescribes_category"
+    },
+    {
+      "arm": "category_flip",
+      "baseline_sufficiency": null,
+      "baseline_verdict": null,
+      "confidence": 0.53,
       "expect": "flagged",
       "id": "category_flip-030",
       "note": "high modeled support-break risk supports retention, but existing 12.9% allocation remains concentrated.",
       "outcome": "correct",
       "probabilities": {
-        "fair": 0.01,
-        "misdescribes_category": 0.85,
+        "fair": 0.02,
+        "misdescribes_category": 0.34,
         "no_qualitative_claim": 0.0,
-        "overstated": 0.14
+        "overstated": 0.64
       },
       "rationale": "\"low modeled support-break risk\" replaced by \"high modeled support-break risk\"; every categorical field in this candidate's evidence reads the other way",
-      "sufficiency": 0.89,
-      "verdict": "misdescribes_category"
+      "sufficiency": 0.9,
+      "verdict": "overstated"
     }
   ],
   "failures": [],
-  "grading_version": "v16",
+  "grading_version": "v15",
   "provenance": {
     "case_set_sha256": "a297026f648744a7cdcc9442f69b653b0f8c84195aec5f3e516e6e70942ba266",
     "max_questions_per_request": 24,
@@ -1651,10 +1652,16 @@
       "typesafe/jev-1.13-20260917"
     ],
     "numeric_method_version": "n10-2026-09-22",
-    "questions_sha256": "7b25e46f33a9276e6fc528d8c376054f7122c1236f6d7e78f45fea1fa2643594",
-    "source_commit": "983db1b31b6fb17f7e0bca45954129db8bdd4987"
+    "questions_sha256": "f2ff7b9cec9a00e3ef3a171ece12efeb8c012b245f82efdd8045beb0976be095",
+    "source_commit": "983db1b31b6fb17f7e0bca45954129db8bdd4987",
+    "correction": {
+      "recorded_source_commit_is_wrong": "983db1b names the checkout's base, not the code that ran. GIT_SHA was read from `git rev-parse HEAD` while the working tree was dirty; the harness fixes and, for v16, the instruction change were uncommitted and were later committed as f830778. The measurement stands; its provenance does not identify the executable.",
+      "corrected_at": "2026-09-22",
+      "runs_from_here": "carry a run id, the HEAD commit, whether the tree was dirty, a hash of the diff and the diff itself, and one question hash per candidate count actually used."
+    },
+    "run_id": "v15-20260922T060840908Z"
   },
   "reading": "`correct` means the seeded error was flagged, the figures-only note was called figures-only, the invented claim was marked unsupported, or a paired case held its verdict. `missed` is a seeded error called fair. `unstable` is a verdict that moved although the wording did not. `observed` carries no ground truth. One run, so every number here is a single sample of a probabilistic answer.",
-  "run_at": "2026-09-22T06:11:20.995Z",
+  "run_at": "2026-09-22T06:08:40.908Z",
   "set": "wording-v1-2026-09-22"
 }
