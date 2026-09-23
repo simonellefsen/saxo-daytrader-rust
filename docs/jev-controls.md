@@ -235,7 +235,30 @@ verdict **rejects the input**. The version before this reported a duplicate
 and then scored whichever label came last, so two files differing only in
 order gave different results under the same warning.
 
+## After the labels
+
+`controls-protocol-v4-2026-09-23` is frozen. The order from here:
+
+1. **The labeller gets the instrument and the rubric only.** Not the key, not
+   the earlier adjudication, not this repository's history of findings.
+2. **The labels are committed as delivered**, with `labelled_by` and
+   `labelled_at`, before anyone opens the key.
+3. **The score is computed once, on those labels,** and reported as it comes
+   out.
+4. **Disagreements are reconciled afterwards, in a separate file.** The
+   original labels are never edited. Where reconciliation changes a reading,
+   the reconciled figures are reported beside the original ones, not instead of
+   them.
+
+A change to the scorer after the labels are in is a new protocol version, and
+its result is reported beside v4's, not in place of it.
+
 ## What it will still not establish
+
+**This validates the measurement procedure, not the checker's accuracy.** The
+coverage guarantee is about sampling error only. Label error, extraction
+omissions (the frame above) and how the checker performs on future reports are
+all outside it.
 
 - **It measures the numeric checker only.** The wording grader and the
   sufficiency question are measured, thinly, elsewhere.
