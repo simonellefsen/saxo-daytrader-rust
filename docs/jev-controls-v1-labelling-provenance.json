@@ -1,0 +1,50 @@
+{
+  "instrument_version": "controls-v1-2026-09-22",
+  "scoring_protocol": "controls-protocol-v4-2026-09-23",
+  "source_commit": "94a3fb0fe307f1c39bbaff3f50464a6589b19714",
+  "instrument_sha256": "54326779c83ca5b71ae026ea1b2ede3e3b9ef5fd0240c351c31fc7ff26fbb7d2",
+  "review_setup_recorded_at": "2026-09-23T05:29:56Z",
+  "reviewer": "Fresh-context Codex AI subagent /root/blind_controls_labeller",
+  "delivered_labels_sha256": "febd9227d306da074b8ced2ca9519ea70af40e68366a14bd746b5aa42e587914",
+  "delivered_label_count": 121,
+  "structural_validation_completed_at": "2026-09-23T05:35:39Z",
+  "structural_checks_passed": [
+    "JSON syntax and expected version",
+    "Nonempty reviewer identity and UTC timestamp",
+    "Exactly 121 unique IDs matching the instrument in original order",
+    "Allowed verdict and exact per-label schema for every case",
+    "String field and nonempty explanation for every case",
+    "Instrument hash unchanged"
+  ],
+  "substantive_labels_modified_by_parent": false,
+  "scorer_run_during_labelling": false,
+  "reviewer_reported_no_prohibited_inputs_consulted": true,
+  "conversation_history_forwarded": false,
+  "permitted_review_inputs": [
+    "docs/jev-controls-v1.json",
+    "docs/jev-controls-v1-labels.json (empty output schema)",
+    "Labelling rubric supplied in the delegation prompt",
+    "/Users/lindau/.codex/RTK.md (shell convention only)"
+  ],
+  "prohibited_review_inputs": [
+    "Answer key",
+    "Checker and scorer implementations or tests",
+    "Prior findings, adjudications and comparison results",
+    "Repository history, wiki, memory and other documentation",
+    "External sources or provider calls"
+  ],
+  "rubric_clarification_supplied_before_labelling": "Insufficient or missing evidence is cannot_tell with an explanation, not zero or proof that a claim is false. This explicitly extends the rubric's stated ambiguous-reading example to unavailable evidence; retain this disclosure when interpreting the labels.",
+  "procedure": [
+    "Adjudicate all 121 highlighted figures using only their notes and supplied evidence.",
+    "Record a verdict, attributed field and case-specific reasoning for every case.",
+    "Parent validates schema, coverage and provenance without revising substantive labels.",
+    "Preserve delivered labels in a local commit before opening the key or scoring.",
+    "Any later reconciliation is separate; original labels are not overwritten."
+  ],
+  "limitations": [
+    "AI adjudication, not human ground truth or measured inter-rater agreement.",
+    "The parent reviewer has seen prior findings; they were not forwarded to the fresh-context labeller.",
+    "Blinding is a fresh-context and input-restriction procedure, not an operating-system access restriction.",
+    "The finite historical frame excludes claims not extracted by the checker; this review does not audit those omissions."
+  ]
+}
