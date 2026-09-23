@@ -1,11 +1,12 @@
 //! A blind labelling instrument for claims the checker did **not** flag.
 //!
 //! Everything measured so far reads in one direction. The seeded sets plant an
-//! error and ask whether it is caught; the adjudication reads the nine claims
-//! the checker flagged and asks whether it was right. Both measure precision.
-//! Neither can measure a miss, because a claim the checker never flagged never
-//! reaches anyone's desk — and 283 of the 1,445 distinct claims in the history,
-//! **19.6%**, were never compared at all.
+//! error and ask whether it is caught — detection of known errors, on examples
+//! I constructed. The adjudication reads the nine claims the checker flagged
+//! and asks whether it was right, which is precision. Neither can measure a
+//! miss, because a claim the checker never flagged never reaches anyone's desk
+//! — and 283 of the 1,445 distinct claims in the history, **19.6%**, were never
+//! compared at all.
 //!
 //! This module does not measure anything. It builds the thing a measurement
 //! needs and cannot produce for itself: a frozen, randomly drawn, **blind**
@@ -27,13 +28,26 @@
 //! missed error would sit, and sampling in proportion to their frequency would
 //! have drawn too few of the rarer classes to say anything about them.
 //!
-//! The nine already-adjudicated `differs` are included, unmarked. They are the
-//! attention check: a labelling pass that disagrees with the five confirmed
-//! contradictions is telling you something about the pass.
+//! The nine already-adjudicated `differs` are included, unmarked. A
+//! disagreement with them is a **reconciliation point, not a verdict on the
+//! labeller**: those five confirmations are supported triage by the party that
+//! wrote the checker, amended once already under review, and they are not gold
+//! labels. Where the two differ, the evidence settles it, not seniority.
+//!
+//! **The frame is the checker's, and that bounds what this can measure.** Cases
+//! reach it through `grading_inputs` and `numeric_checks`, so a candidate with
+//! no indicator snapshot, a candidate past the question budget, and any figure
+//! the scanner does not recognise cannot enter the sample. Across the history
+//! that is **279 of 1,116 selected candidates excluded outright** — 271 for a
+//! missing snapshot, 8 past the budget — and of the 837 that did reach the
+//! checker, 229 yielded no extracted claim. This is an audit of extracted
+//! claims from 608 notes. Extraction omissions need a whole-note audit, which
+//! is a different instrument.
 //!
 //! **I do not fill in the labels.** I wrote the checker; a label from me is the
-//! same circularity in a new file. The `labels` field is empty by construction
-//! and a test asserts it.
+//! same circularity in a new file. A name in `labelled_by` records authorship
+//! and establishes nothing about independence — that is the reader's judgement
+//! to make, and no test here can make it for them.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -79,29 +93,32 @@ pub(crate) struct ControlKey {
     pub field: Option<String>,
 }
 
-/// How one labelled case scores against the checker.
+/// How one labelled case scores on the **verdict** axis.
+///
+/// Attribution is a separate axis. Folding it in here let a verdict that agreed
+/// about a different field read as agreement, which is the error this whole
+/// exercise keeps finding in its own instruments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Both say the claim holds, and on the same field.
+    /// The checker compared and agreed; so did the labeller.
     Agreed,
     /// The checker compared and agreed; the labeller says the claim is wrong.
-    /// **The number this instrument exists to produce.**
+    /// **The quantity nothing built before this could reach.**
     FalseNegative,
     /// The checker flagged; the labeller says the claim holds.
     FalsePositive,
+    /// Both call the claim wrong.
+    AgreedOnError,
     /// The checker never compared, and the labeller says the claim is wrong —
-    /// an error it could not have caught.
+    /// an error it could not have caught. A coverage failure, not a judgement
+    /// failure, and counted apart from one. It still counts as a missed error
+    /// end to end.
     MissedByAbstention,
     /// The checker never compared, and there was nothing to catch.
     BenignAbstention,
-    /// Both call the claim wrong.
-    AgreedOnError,
-    /// Same verdict, different field: right answer through a different
-    /// attribution, which is not the same thing.
-    FieldDisagreement,
-    /// The labeller could not settle it.
+    /// The labeller could not settle it. Excluded from every rate, reported.
     Unsettled,
-    /// No label for this case.
+    /// No label for this case. **Not a pass.**
     Unlabelled,
 }
 
@@ -111,12 +128,48 @@ impl Outcome {
             Self::Agreed => "agreed",
             Self::FalseNegative => "false_negative",
             Self::FalsePositive => "false_positive",
+            Self::AgreedOnError => "agreed_on_error",
             Self::MissedByAbstention => "missed_by_abstention",
             Self::BenignAbstention => "benign_abstention",
-            Self::AgreedOnError => "agreed_on_error",
-            Self::FieldDisagreement => "field_disagreement",
             Self::Unsettled => "unsettled",
             Self::Unlabelled => "unlabelled",
+        }
+    }
+
+    /// Whether the labeller read the claim as wrong, however the checker
+    /// answered.
+    fn labeller_says_wrong(self) -> bool {
+        matches!(
+            self,
+            Self::FalseNegative | Self::AgreedOnError | Self::MissedByAbstention
+        )
+    }
+
+    /// Whether this case contributes to a rate. `unsettled` and `unlabelled`
+    /// do not.
+    fn counts(self) -> bool {
+        !matches!(self, Self::Unsettled | Self::Unlabelled)
+    }
+}
+
+/// Whether the two identified the same field. Never folded into the verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldAgreement {
+    Same,
+    Different,
+    /// The labeller left it blank. **Not agreement** — an unvalidated
+    /// attribution must not become a verified one by silence.
+    Unknown,
+    NotLabelled,
+}
+
+impl FieldAgreement {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Different => "different",
+            Self::Unknown => "unknown",
+            Self::NotLabelled => "not_labelled",
         }
     }
 }
@@ -125,74 +178,178 @@ fn compared(verdict: &str) -> bool {
     verdict == "matches" || verdict == "differs"
 }
 
-/// Scores one case. Written before any label exists, so it cannot be tuned to
-/// the labels it will meet.
+/// Scores the verdict axis. Written before any label exists, so it cannot be
+/// tuned to the labels it will meet.
 pub(crate) fn outcome_for(key: &ControlKey, label: Option<&ControlLabel>) -> Outcome {
     let Some(label) = label else {
         return Outcome::Unlabelled;
     };
-    match label.verdict.as_str() {
+    match label.verdict.trim() {
         "cannot_tell" => Outcome::Unsettled,
         "inconsistent" if key.verdict == "matches" => Outcome::FalseNegative,
         "inconsistent" if key.verdict == "differs" => Outcome::AgreedOnError,
         "inconsistent" => Outcome::MissedByAbstention,
         "consistent" if key.verdict == "differs" => Outcome::FalsePositive,
-        "consistent" if !compared(&key.verdict) => Outcome::BenignAbstention,
-        // Compared and agreed. The field still has to be the same one, or the
-        // checker reached the right answer about something else.
-        "consistent" => {
-            if label.field.is_empty() || key.field.as_deref() == Some(label.field.as_str()) {
-                Outcome::Agreed
-            } else {
-                Outcome::FieldDisagreement
-            }
-        }
+        "consistent" if compared(&key.verdict) => Outcome::Agreed,
+        "consistent" => Outcome::BenignAbstention,
         _ => Outcome::Unlabelled,
     }
 }
 
-/// The confusion table, by stratum and in total.
-pub(crate) fn score(keys: &[ControlKey], labels: &[ControlLabel]) -> JsonValue {
-    use std::collections::BTreeMap;
+/// Scores the attribution axis, independently of the verdict.
+pub(crate) fn field_agreement(key: &ControlKey, label: Option<&ControlLabel>) -> FieldAgreement {
+    let Some(label) = label else {
+        return FieldAgreement::NotLabelled;
+    };
+    let labelled = label.field.trim();
+    if labelled.is_empty() {
+        return FieldAgreement::Unknown;
+    }
+    if labelled == key.field.as_deref().unwrap_or("none") {
+        FieldAgreement::Same
+    } else {
+        FieldAgreement::Different
+    }
+}
 
-    let by_id: BTreeMap<&str, &ControlLabel> = labels
-        .iter()
-        .map(|label| (label.id.as_str(), label))
-        .collect();
-    let mut by_stratum: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
-    let mut totals: BTreeMap<&'static str, i64> = BTreeMap::new();
+/// The analysis plan, fixed here rather than chosen once the labels are in.
+///
+/// - A rate is computed over **labelled, settled** cases only. `cannot_tell`
+///   and `unlabelled` are excluded from every numerator and denominator, and
+///   reported beside the rate so their size is visible.
+/// - Rates are **per stratum**. The strata are sampled at wildly different
+///   rates — every `implausible_attribution` and six in a thousand `matches` —
+///   so a total across all 121 cases describes the sample and nothing else.
+/// - A population figure is a **weighted** estimate: each stratum's rate
+///   carries its population share. It is an estimate from small strata, not a
+///   measurement, and the counts behind it are printed so it can be checked.
+/// - Wrong claims among sampled `matches` estimate **the error proportion
+///   among claims the checker accepted** — not a conventional false-negative
+///   rate, which would need a denominator of all errors.
+/// - `missed_by_abstention` stays separately visible, and also counts toward
+///   **errors the system did not flag, end to end**.
+pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v2-2026-09-23";
+
+/// The confusion tables, both axes, by stratum and weighted.
+pub(crate) fn score(
+    keys: &[ControlKey],
+    labels: &[ControlLabel],
+    population: &std::collections::BTreeMap<String, i64>,
+) -> JsonValue {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // Duplicates are rejected rather than silently overwritten, and a label
+    // for a case that is not in the key is reported rather than dropped.
+    let known: BTreeSet<&str> = keys.iter().map(|key| key.id.as_str()).collect();
+    let mut by_id: BTreeMap<&str, &ControlLabel> = BTreeMap::new();
+    let (mut duplicates, mut unknown) = (Vec::new(), Vec::new());
+    for label in labels {
+        if !known.contains(label.id.as_str()) {
+            unknown.push(label.id.clone());
+            continue;
+        }
+        if by_id.insert(label.id.as_str(), label).is_some() {
+            duplicates.push(label.id.clone());
+        }
+    }
+
+    let mut verdicts: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut fields: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut verdict_totals: BTreeMap<&'static str, i64> = BTreeMap::new();
+    let mut field_totals: BTreeMap<&'static str, i64> = BTreeMap::new();
+    let mut settled: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
     for key in keys {
-        let outcome = outcome_for(key, by_id.get(key.id.as_str()).copied());
-        *by_stratum
+        let label = by_id.get(key.id.as_str()).copied();
+        let outcome = outcome_for(key, label);
+        let field = field_agreement(key, label);
+        *verdicts
             .entry(key.stratum.clone())
             .or_default()
             .entry(outcome.as_str())
             .or_default() += 1;
-        *totals.entry(outcome.as_str()).or_default() += 1;
+        *fields
+            .entry(key.stratum.clone())
+            .or_default()
+            .entry(field.as_str())
+            .or_default() += 1;
+        *verdict_totals.entry(outcome.as_str()).or_default() += 1;
+        *field_totals.entry(field.as_str()).or_default() += 1;
+        let row = settled.entry(key.stratum.clone()).or_insert((0, 0, 0));
+        if outcome.counts() {
+            row.0 += 1;
+            row.1 += i64::from(outcome.labeller_says_wrong());
+            row.2 += i64::from(matches!(
+                outcome,
+                Outcome::FalseNegative | Outcome::MissedByAbstention
+            ));
+        }
     }
-    let labelled: i64 = totals
-        .iter()
-        .filter(|(outcome, _)| **outcome != "unlabelled")
-        .map(|(_, count)| count)
-        .sum();
+
+    let mut rates = BTreeMap::new();
+    let (mut weight, mut wrong_mass, mut unflagged_mass) = (0.0f64, 0.0f64, 0.0f64);
+    for (stratum, (counted, wrong, unflagged)) in &settled {
+        let share = population.get(stratum).copied().unwrap_or(0) as f64;
+        let entry = if *counted == 0 {
+            json!({
+                "population": share,
+                "settled": 0,
+                "error_proportion": JsonValue::Null,
+                "note": "nothing settled in this stratum, so it contributes no estimate",
+            })
+        } else {
+            weight += share;
+            wrong_mass += share * (*wrong as f64 / *counted as f64);
+            unflagged_mass += share * (*unflagged as f64 / *counted as f64);
+            json!({
+                "population": share,
+                "settled": counted,
+                "labelled_wrong": wrong,
+                "not_flagged_and_wrong": unflagged,
+                "error_proportion": *wrong as f64 / *counted as f64,
+            })
+        };
+        rates.insert(stratum.clone(), entry);
+    }
+
     json!({
         "version": CONTROLS_VERSION,
+        "protocol": PROTOCOL_VERSION,
         "cases": keys.len(),
-        "labelled": labelled,
-        "totals": totals,
-        "by_stratum": by_stratum,
-        "reading": "`false_negative` is a claim the checker compared and agreed with that the \
-                    labeller reads as wrong -- the quantity nothing measured so far could \
-                    reach. `missed_by_abstention` is a wrong claim the checker never compared, \
-                    which is a coverage failure rather than a judgement failure and is counted \
-                    apart from it. `field_disagreement` is the same verdict about a different \
-                    field. An unlabelled case is not a pass.",
+        "labelled": verdict_totals
+            .iter()
+            .filter(|(outcome, _)| **outcome != "unlabelled")
+            .map(|(_, count)| count)
+            .sum::<i64>(),
+        "label_problems": {
+            "duplicate_ids": duplicates,
+            "unknown_ids": unknown,
+        },
+        "verdict_axis": {"by_stratum": verdicts, "totals": verdict_totals},
+        "attribution_axis": {"by_stratum": fields, "totals": field_totals},
+        "per_stratum": rates,
+        "weighted_estimates": if weight == 0.0 {
+            JsonValue::Null
+        } else {
+            json!({
+                "claims_the_labeller_reads_as_wrong": wrong_mass / weight,
+                "wrong_and_not_flagged_end_to_end": unflagged_mass / weight,
+                "population_covered": weight,
+                "caveat": "an estimate from strata of six to sixty cases, not a measurement",
+            })
+        },
+        "reading": "The two axes are separate on purpose. A verdict that agrees about a \
+                    different field is not agreement, and a blank field is `unknown` rather \
+                    than assumed to match. Totals across strata describe the sample, not the \
+                    population, because the strata are sampled at different rates; the \
+                    population figures are the weighted ones. `unsettled` and `unlabelled` \
+                    enter no rate, and an unlabelled case is not a pass.",
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn key(verdict: &str, field: Option<&str>) -> ControlKey {
         ControlKey {
@@ -251,26 +408,104 @@ mod tests {
         }
     }
 
-    /// Agreement on the verdict is not agreement, if the two are talking about
-    /// different fields.
+    /// The two axes are scored apart. A verdict that agrees about a different
+    /// field used to read as plain agreement, and a blank field used to read
+    /// as a match — an unvalidated attribution becoming a verified one by
+    /// silence.
     #[test]
-    fn the_same_verdict_about_a_different_field_is_not_agreement() {
+    fn attribution_is_scored_on_its_own_axis() {
+        let compared = key("matches", Some("daily_indicators.rsi14"));
+        let elsewhere = label("consistent", "markov.signed_signal");
+        assert_eq!(outcome_for(&compared, Some(&elsewhere)), Outcome::Agreed);
         assert_eq!(
-            outcome_for(
-                &key("matches", Some("daily_indicators.rsi14")),
-                Some(&label("consistent", "markov.signed_signal"))
-            ),
-            Outcome::FieldDisagreement
+            field_agreement(&compared, Some(&elsewhere)),
+            FieldAgreement::Different,
+            "the verdict agreed; the attribution did not"
         );
-        // A labeller who did not record a field is taken at their word on the
-        // verdict rather than being scored on something they did not answer.
+
+        let blank = label("consistent", "");
         assert_eq!(
-            outcome_for(
-                &key("matches", Some("daily_indicators.rsi14")),
-                Some(&label("consistent", ""))
-            ),
-            Outcome::Agreed
+            field_agreement(&compared, Some(&blank)),
+            FieldAgreement::Unknown,
+            "a blank field is unknown, never a match"
         );
+        assert_eq!(
+            field_agreement(
+                &compared,
+                Some(&label("consistent", "daily_indicators.rsi14"))
+            ),
+            FieldAgreement::Same
+        );
+
+        // A flagged claim both call wrong is still only agreement on the
+        // verdict until the fields are compared.
+        let flagged = key("differs", Some("daily_indicators.rsi14"));
+        let other_field = label("inconsistent", "daily_indicators.reward_risk");
+        assert_eq!(
+            outcome_for(&flagged, Some(&other_field)),
+            Outcome::AgreedOnError
+        );
+        assert_eq!(
+            field_agreement(&flagged, Some(&other_field)),
+            FieldAgreement::Different
+        );
+
+        // Where the checker attributed nothing, "none" is agreement.
+        let unattributed = key("unattributed", None);
+        assert_eq!(
+            field_agreement(&unattributed, Some(&label("consistent", "none"))),
+            FieldAgreement::Same
+        );
+    }
+
+    /// A duplicate label silently overwrote its predecessor, and a label for
+    /// a case not in the key vanished. Both are reported now.
+    #[test]
+    fn duplicate_and_unknown_labels_are_rejected_not_absorbed() {
+        let keys = vec![key("matches", None)];
+        let mut first = label("consistent", "");
+        first.id = "c".into();
+        let mut second = label("inconsistent", "");
+        second.id = "c".into();
+        let mut stray = label("consistent", "");
+        stray.id = "not-a-case".into();
+        let report = score(&keys, &[first, second, stray], &BTreeMap::new());
+        assert_eq!(report["label_problems"]["duplicate_ids"][0], "c");
+        assert_eq!(report["label_problems"]["unknown_ids"][0], "not-a-case");
+    }
+
+    /// Rates are per stratum and weighted by population, because the strata
+    /// are sampled at wildly different rates. A total across the sample
+    /// describes the sample.
+    #[test]
+    fn rates_are_per_stratum_and_weighted() {
+        let mut wrong = key("matches", None);
+        wrong.id = "a".into();
+        wrong.stratum = "matches".into();
+        let mut right = key("unattributed", None);
+        right.id = "b".into();
+        right.stratum = "unattributed".into();
+
+        let mut a = label("inconsistent", "");
+        a.id = "a".into();
+        let mut b = label("consistent", "");
+        b.id = "b".into();
+
+        let population = BTreeMap::from([
+            ("matches".to_string(), 1000i64),
+            ("unattributed".to_string(), 100i64),
+        ]);
+        let report = score(&[wrong, right], &[a, b], &population);
+        assert_eq!(report["per_stratum"]["matches"]["error_proportion"], 1.0);
+        assert_eq!(
+            report["per_stratum"]["unattributed"]["error_proportion"],
+            0.0
+        );
+        // 1000/1100 of the population sits in the stratum that came back wrong.
+        let weighted = report["weighted_estimates"]["claims_the_labeller_reads_as_wrong"]
+            .as_f64()
+            .expect("weighted");
+        assert!((weighted - 1000.0 / 1100.0).abs() < 1e-9, "{weighted}");
     }
 
     /// An unlabelled case is not a pass, and `cannot_tell` is its own result.
@@ -284,9 +519,9 @@ mod tests {
             outcome_for(&key("matches", None), Some(&label("cannot_tell", ""))),
             Outcome::Unsettled
         );
-        let report = score(&[key("matches", None)], &[]);
+        let report = score(&[key("matches", None)], &[], &BTreeMap::new());
         assert_eq!(report["labelled"], 0);
-        assert_eq!(report["totals"]["unlabelled"], 1);
+        assert_eq!(report["verdict_axis"]["totals"]["unlabelled"], 1);
     }
 
     #[test]
@@ -434,6 +669,9 @@ mod sampling {
 
         let mut cases = Vec::new();
         let mut keys = Vec::new();
+        // Carried into the key so the analysis can weight each stratum by its
+        // share of the population rather than by how many were drawn from it.
+        let mut population_by_stratum: BTreeMap<String, i64> = BTreeMap::new();
         for (stratum, want) in STRATA {
             let mut pool: Vec<&Claim> = claims
                 .values()
@@ -462,6 +700,10 @@ mod sampling {
                 });
                 let _ = nth;
             }
+            population_by_stratum.insert(
+                (*stratum).to_string(),
+                population.get(stratum).copied().unwrap_or(0) as i64,
+            );
             println!("stratum {stratum:24} drawn {drawn}");
         }
         // Shuffled by the same hash, so the strata do not arrive in blocks a
@@ -497,8 +739,11 @@ mod sampling {
             serde_json::to_string_pretty(&json!({
                 "version": CONTROLS_VERSION,
                 "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
-                "warning": "Do not read this before labelling. It holds the checker's verdict \
-                            and attributed field for every case in the instrument.",
+                "warning": "Do not read this before labelling, and do not read the earlier \
+                            adjudication either. It holds the checker's verdict and attributed \
+                            field for every case in the instrument.",
+                "protocol": PROTOCOL_VERSION,
+                "population": population_by_stratum,
                 "keys": keys,
             }))
             .expect("serialize"),
@@ -600,14 +845,82 @@ mod sampling {
             return;
         }
         let labels: Vec<ControlLabel> = load(LABELS_PATH, "labels");
-        let report = score(&keys, &labels);
+        let population = std::fs::read_to_string(KEY_PATH)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<JsonValue>(&raw).ok())
+            .and_then(|document| {
+                serde_json::from_value::<std::collections::BTreeMap<String, i64>>(
+                    document["population"].clone(),
+                )
+                .ok()
+            })
+            .unwrap_or_default();
+        let report = score(&keys, &labels, &population);
         let raw = std::fs::read_to_string(LABELS_PATH).unwrap_or_default();
         let document: JsonValue = serde_json::from_str(&raw).unwrap_or(JsonValue::Null);
         let by = document["labelled_by"].as_str().unwrap_or_default();
+        // A name records authorship. It does not establish independence, and
+        // nothing in this file can.
         assert!(
             !by.trim().is_empty() || labels.is_empty(),
             "labels arrived with nobody named as having made them: {report:#}"
         );
         println!("{}", serde_json::to_string_pretty(&report).expect("json"));
+    }
+}
+
+#[cfg(test)]
+mod frame_audit {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// What the sampling frame leaves out, counted rather than asserted.
+    #[test]
+    #[ignore]
+    fn measure_the_frame() {
+        let path = std::env::var("JEV_PROMPTS_PATH").expect("JEV_PROMPTS_PATH");
+        let raw = std::fs::read_to_string(path).expect("prompts");
+        let sources: Vec<JsonValue> = serde_json::from_str(&raw).expect("a JSON array");
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for entry in &sources {
+            let (Some(report), Some(request)) = (entry.get("report"), entry.get("request")) else {
+                continue;
+            };
+            let prompt = crate::xai_decision::decision_prompt_user_payload(request);
+            let inputs = crate::jev_review::grading_inputs(report, &prompt);
+            let selected = report
+                .get("selected_assets")
+                .and_then(JsonValue::as_array)
+                .map_or(0, Vec::len);
+            *counts.entry("selected_candidates").or_default() += selected;
+            *counts.entry("reached_grading").or_default() += inputs.candidates.len();
+            for reason in inputs
+                .coverage
+                .get("excluded")
+                .and_then(JsonValue::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let key = match reason.get("reason").and_then(JsonValue::as_str) {
+                    Some("no_indicator_snapshot_in_prompt") => "excluded_no_snapshot",
+                    Some("beyond_question_budget") => "excluded_beyond_budget",
+                    _ => "excluded_other",
+                };
+                *counts.entry(key).or_default() += 1;
+            }
+            for (index, candidate) in inputs.candidates.iter().enumerate() {
+                let (Some(note), Some(evidence)) = (
+                    candidate.get("note").and_then(JsonValue::as_str),
+                    inputs.evidence.get(index),
+                ) else {
+                    continue;
+                };
+                let lowered = note.to_lowercase();
+                *counts.entry("notes_with_a_claim").or_default() +=
+                    usize::from(!crate::jev_numeric::numeric_checks(&lowered, evidence).is_empty());
+                *counts.entry("notes_reaching_the_scanner").or_default() += 1;
+            }
+        }
+        println!("frame {counts:?}");
     }
 }

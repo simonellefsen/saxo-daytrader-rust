@@ -309,7 +309,7 @@ pub(crate) struct GradingInputs {
     pub(crate) report: JsonValue,
     pub(crate) candidates: Vec<JsonValue>,
     pub(crate) evidence: Vec<JsonValue>,
-    coverage: JsonValue,
+    pub(crate) coverage: JsonValue,
     /// Decision-time thresholds, as the report recorded them. `None` for
     /// reports written before the prompt carried them.
     pub(crate) policy: Option<JsonValue>,
