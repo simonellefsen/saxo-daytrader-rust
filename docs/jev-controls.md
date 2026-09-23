@@ -51,10 +51,9 @@ about the class. The strata:
 | `implausible_attribution` | 6 | 6 |
 | `differs` | 9 | 9 |
 
-Counts of a stratum are not estimates of the population. 60 of 1,153 `matches`
-bounds the false-negative rate loosely; it does not measure it precisely, and
-the arithmetic to go from one to the other is the labeller's to do, not mine to
-assert.
+Counts of a stratum are not estimates of the population. How to get from one to
+the other is fixed in the analysis plan below, before any label exists — and so
+is how little the best possible result would say.
 
 **The nine `differs` are in there, unmarked.** A disagreement with them is a
 **reconciliation point, not a verdict on the labeller.** Those five
@@ -114,23 +113,73 @@ reproduction. It is not one.
 
 ## The analysis plan, fixed before any label exists
 
-`controls-protocol-v2-2026-09-23`, in the scorer and in the key file.
+`controls-protocol-v3-2026-09-23`, in the scorer and in the key file; a test
+fails if the two disagree. v2 had two defects, both corrected here before any
+label arrived: it reported a duplicate label and then used whichever came last,
+and it extrapolated a settled-only rate to the whole stratum — so one settled
+label out of sixty spoke for 1,153 claims, and a stratum with nothing settled
+left the denominator, changing the population the estimate described.
 
-- **Rates are per stratum.** The strata are sampled at wildly different rates —
-  every `implausible_attribution`, six in a thousand `matches`. A total across
-  the 121 cases describes the sample and nothing else.
-- **Population figures are weighted**, each stratum's rate carrying its
-  population share, with the counts behind it printed. An estimate from strata
-  of six to sixty, not a measurement.
-- **`cannot_tell` and `unlabelled` enter no numerator and no denominator**, and
-  are reported beside every rate.
-- **Wrong claims among sampled `matches` estimate the error proportion among
-  claims the checker accepted.** That is not a conventional false-negative
-  rate, which would need a denominator of all errors — including the ones in
-  the strata this frame excludes.
-- **`missed_by_abstention` stays separately visible** — a coverage failure is
-  not a judgement failure — **and also counts toward errors the system did not
-  flag end to end.**
+**The input is valid or nothing is scored.** A duplicate id, a label for a case
+not in the key, or a verdict other than `consistent`, `inconsistent` or
+`cannot_tell` rejects the file. No rates, no tables — only the problems, listed
+as sets so the report is the same whatever order the file is in. Identical
+duplicates are rejected too: one rule, no judgement about which conflicts
+matter. An empty verdict is a case not yet labelled.
+
+**Two kinds of unresolved, kept apart.**
+
+| | means | effect |
+|---|---|---|
+| `unlabelled` | unfinished work | the population estimate is **withheld** until there are none |
+| `cannot_tell` | a finding — two readings are defensible | enters the interval **both ways** |
+
+**Rates among settled cases are conditional, and named so** —
+`among_settled_only`. They describe the settled cases and say nothing about the
+`cannot_tell` ones, which may be exactly the hard claims.
+
+**The population figure is an interval, and the headline is the one that
+assumes nothing about unresolved cases.**
+
+- Within each stratum, every `cannot_tell` is counted once as consistent and
+  once as wrong.
+- A stratum drawn from a larger population is widened at each end by a Wilson
+  score bound at 1 − 0.05/S, for S sampled strata. Five of the seven are
+  sampled, so z ≈ 2.576, and the weighted sum holds at about 95% jointly —
+  Bonferroni, and Wilson is itself an approximation. `differs` and
+  `implausible_attribution` are taken whole and carry no sampling error.
+- Strata are weighted by population share, and **every stratum stays in the
+  denominator**. One with nothing settled contributes its full width instead
+  of leaving.
+
+**A point estimate appears only under a stated assumption** — that the
+unresolved cases in each stratum resemble the settled ones. It is printed
+beside the interval, never instead of it, and not at all when some stratum has
+nothing settled for the assumption to extrapolate from.
+
+**Wrong claims among sampled `matches` estimate the error proportion among
+claims the checker accepted.** That is not a conventional false-negative rate,
+which would need a denominator of all errors — including the ones in the strata
+this frame excludes. **`missed_by_abstention` stays separately visible** — a
+coverage failure is not a judgement failure — **and also counts toward errors
+the system did not flag end to end.**
+
+### How little the best result would say
+
+Computed now, from the frozen strata, and pinned by a test. If every one of the
+121 labels came back `consistent` with nothing unresolved:
+
+| | interval |
+|---|---|
+| `matches` — error proportion among accepted claims | 0 to **10.0%** |
+| `unattributed` | 0 to 26.9% |
+| `uncertain_attribution` | 0 to 35.6% |
+| `not_in_evidence`, `not_a_field_value` | 0 to 45.3% each |
+| `differs`, `implausible_attribution` | exactly 0 — taken whole |
+| **population, weighted** | 0 to **14.4%** |
+
+A clean result bounds the error proportion; it cannot show that it is small.
+Every `cannot_tell` widens these.
 
 ## What the score will say
 
@@ -159,8 +208,10 @@ match — an unvalidated attribution becoming a verified one by silence.
 | `unknown` | the labeller left it blank — **not agreement** |
 | `not_labelled` | no label |
 
-Duplicate label ids and labels for cases not in the key are **reported, not
-absorbed**. A duplicate used to overwrite its predecessor silently.
+A duplicate label id, a label for a case not in the key, or an undefined
+verdict **rejects the input**. The version before this reported a duplicate
+and then scored whichever label came last, so two files differing only in
+order gave different results under the same warning.
 
 ## What it will still not establish
 

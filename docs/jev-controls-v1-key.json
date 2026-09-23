@@ -737,7 +737,7 @@
     "unattributed": 151,
     "uncertain_attribution": 48
   },
-  "protocol": "controls-protocol-v2-2026-09-23",
+  "protocol": "controls-protocol-v3-2026-09-23",
   "version": "controls-v1-2026-09-22",
   "warning": "Do not read this before labelling, and do not read the earlier adjudication either. It holds the checker's verdict and attributed field for every case in the instrument."
 }

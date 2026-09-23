@@ -144,12 +144,6 @@ impl Outcome {
             Self::FalseNegative | Self::AgreedOnError | Self::MissedByAbstention
         )
     }
-
-    /// Whether this case contributes to a rate. `unsettled` and `unlabelled`
-    /// do not.
-    fn counts(self) -> bool {
-        !matches!(self, Self::Unsettled | Self::Unlabelled)
-    }
 }
 
 /// Whether the two identified the same field. Never folded into the verdict.
@@ -214,23 +208,125 @@ pub(crate) fn field_agreement(key: &ControlKey, label: Option<&ControlLabel>) ->
 
 /// The analysis plan, fixed here rather than chosen once the labels are in.
 ///
-/// - A rate is computed over **labelled, settled** cases only. `cannot_tell`
-///   and `unlabelled` are excluded from every numerator and denominator, and
-///   reported beside the rate so their size is visible.
-/// - Rates are **per stratum**. The strata are sampled at wildly different
-///   rates — every `implausible_attribution` and six in a thousand `matches` —
-///   so a total across all 121 cases describes the sample and nothing else.
-/// - A population figure is a **weighted** estimate: each stratum's rate
-///   carries its population share. It is an estimate from small strata, not a
-///   measurement, and the counts behind it are printed so it can be checked.
-/// - Wrong claims among sampled `matches` estimate **the error proportion
-///   among claims the checker accepted** — not a conventional false-negative
-///   rate, which would need a denominator of all errors.
-/// - `missed_by_abstention` stays separately visible, and also counts toward
-///   **errors the system did not flag, end to end**.
-pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v2-2026-09-23";
+/// **Input.** A duplicate id, a label for a case not in the key, or a verdict
+/// other than `consistent`, `inconsistent` or `cannot_tell` rejects the whole
+/// file, and nothing is scored until it is corrected. Keeping one of two
+/// duplicates would let whichever came last decide the result, so identical
+/// duplicates are rejected too: one rule, no judgement about which conflicts
+/// matter. An empty verdict is a case not yet labelled.
+///
+/// **Two kinds of unresolved, kept apart.** `unlabelled` is unfinished work;
+/// `cannot_tell` is a finding. While any case is unlabelled the population
+/// estimate is withheld, because a stratum missing from it would change the
+/// population it describes.
+///
+/// **A rate among settled cases is conditional, and named so.** It says
+/// nothing about the `cannot_tell` cases, which may be exactly the hard ones.
+///
+/// **The population figure is an interval, and the one that assumes nothing
+/// about the unresolved cases is the headline.** Within a stratum, every
+/// `cannot_tell` is counted once as consistent and once as wrong. Where a
+/// stratum was sampled rather than taken whole, each end is widened by a
+/// Wilson score bound at `1 − 0.05/S`, for `S` sampled strata, so the weighted
+/// sum holds at about 95% jointly — Bonferroni, and Wilson is itself an
+/// approximation. A stratum taken whole has no sampling error. Strata are
+/// weighted by population share, and **every stratum stays in the
+/// denominator**: one with nothing settled contributes its full width instead
+/// of leaving the estimate.
+///
+/// **A point estimate appears only under a stated assumption** — that the
+/// unresolved cases in each stratum resemble the settled ones — beside the
+/// interval, never instead of it, and not at all when some stratum has nothing
+/// settled for the assumption to extrapolate from.
+///
+/// Wrong claims among sampled `matches` estimate **the error proportion among
+/// claims the checker accepted** — not a conventional false-negative rate,
+/// which would need a denominator of all errors. `missed_by_abstention` stays
+/// separately visible and also counts toward **errors the system did not flag,
+/// end to end**.
+pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v3-2026-09-23";
 
-/// The confusion tables, both axes, by stratum and weighted.
+/// The joint coverage the population interval is built for.
+const JOINT_LEVEL: f64 = 0.95;
+
+/// The only verdicts a label may carry. Anything else rejects the file.
+const LABEL_VERDICTS: [&str; 3] = ["consistent", "inconsistent", "cannot_tell"];
+
+/// The standard normal quantile, by Acklam's rational approximation (relative
+/// error under 1.2e-9). It only sets the width of the interval.
+fn normal_quantile(p: f64) -> f64 {
+    const A: [f64; 6] = [
+        -3.969683028665376e1,
+        2.209460984245205e2,
+        -2.759285104469687e2,
+        1.38357751867269e2,
+        -3.066479806614716e1,
+        2.506628277459239,
+    ];
+    const B: [f64; 5] = [
+        -5.447609879822406e1,
+        1.615858368580409e2,
+        -1.556989798598866e2,
+        6.680131188771972e1,
+        -1.328068155288572e1,
+    ];
+    const C: [f64; 6] = [
+        -7.784894002430293e-3,
+        -3.223964580411365e-1,
+        -2.400758277161838,
+        -2.549732539343734,
+        4.374664141464968,
+        2.938163982698783,
+    ];
+    const D: [f64; 4] = [
+        7.784695709041462e-3,
+        3.224671290700398e-1,
+        2.445134137142996,
+        3.754408661907416,
+    ];
+    const LOW: f64 = 0.02425;
+    let tail = |q: f64| {
+        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+    };
+    if p < LOW {
+        tail((-2.0 * p.ln()).sqrt())
+    } else if p > 1.0 - LOW {
+        -tail((-2.0 * (1.0 - p).ln()).sqrt())
+    } else {
+        let q = p - 0.5;
+        let r = q * q;
+        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
+    }
+}
+
+/// Wilson score bounds for `x` of `n` at quantile `z`.
+fn wilson(x: f64, n: f64, z: f64) -> (f64, f64) {
+    if n <= 0.0 {
+        return (0.0, 1.0);
+    }
+    let z2 = z * z;
+    let centre = (x + z2 / 2.0) / (n + z2);
+    let half = z / (n + z2) * (x * (n - x) / n + z2 / 4.0).sqrt();
+    ((centre - half).max(0.0), (centre + half).min(1.0))
+}
+
+/// One stratum's labels, counted.
+#[derive(Default)]
+struct Tally {
+    sampled: i64,
+    settled: i64,
+    cannot_tell: i64,
+    unlabelled: i64,
+    wrong: i64,
+    unflagged: i64,
+    /// `cannot_tell` cases that would go unflagged if they were wrong — every
+    /// one the checker did not itself flag.
+    unresolved_unflagged: i64,
+}
+
+/// The confusion tables, both axes, by stratum, and the population interval.
 pub(crate) fn score(
     keys: &[ControlKey],
     labels: &[ControlLabel],
@@ -238,111 +334,241 @@ pub(crate) fn score(
 ) -> JsonValue {
     use std::collections::{BTreeMap, BTreeSet};
 
-    // Duplicates are rejected rather than silently overwritten, and a label
-    // for a case that is not in the key is reported rather than dropped.
     let known: BTreeSet<&str> = keys.iter().map(|key| key.id.as_str()).collect();
-    let mut by_id: BTreeMap<&str, &ControlLabel> = BTreeMap::new();
-    let (mut duplicates, mut unknown) = (Vec::new(), Vec::new());
+    let mut grouped: BTreeMap<&str, Vec<&ControlLabel>> = BTreeMap::new();
+    let (mut unknown, mut unreadable) = (BTreeSet::new(), BTreeSet::new());
     for label in labels {
         if !known.contains(label.id.as_str()) {
-            unknown.push(label.id.clone());
+            unknown.insert(label.id.as_str());
             continue;
         }
-        if by_id.insert(label.id.as_str(), label).is_some() {
-            duplicates.push(label.id.clone());
+        let verdict = label.verdict.trim();
+        if !verdict.is_empty() && !LABEL_VERDICTS.contains(&verdict) {
+            unreadable.insert(label.id.as_str());
         }
+        grouped.entry(label.id.as_str()).or_default().push(label);
     }
+    let duplicates: BTreeSet<&str> = grouped
+        .iter()
+        .filter(|(_, labels)| labels.len() > 1)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut strata: BTreeSet<&str> = keys.iter().map(|key| key.stratum.as_str()).collect();
+    strata.extend(population.keys().map(String::as_str));
+    let without_population: Vec<&str> = strata
+        .iter()
+        .copied()
+        .filter(|stratum| population.get(*stratum).copied().unwrap_or(0) <= 0)
+        .collect();
+    if !duplicates.is_empty() || !unknown.is_empty() || !unreadable.is_empty() {
+        // Sets, so the report is the same whatever order the file was in.
+        return json!({
+            "version": CONTROLS_VERSION,
+            "protocol": PROTOCOL_VERSION,
+            "status": "rejected",
+            "label_problems": {
+                "duplicate_ids": duplicates,
+                "unknown_ids": unknown,
+                "unreadable_verdicts": unreadable,
+            },
+            "reading": "Rejected, and nothing is scored until the input is corrected. Keeping \
+                        one of two duplicate labels would let whichever came last decide the \
+                        result.",
+        });
+    }
+    let by_id: BTreeMap<&str, &ControlLabel> = grouped
+        .into_iter()
+        .map(|(id, labels)| (id, labels[0]))
+        .collect();
 
-    let mut verdicts: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
-    let mut fields: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut verdicts: BTreeMap<&str, BTreeMap<&'static str, i64>> = BTreeMap::new();
+    let mut fields: BTreeMap<&str, BTreeMap<&'static str, i64>> = BTreeMap::new();
     let mut verdict_totals: BTreeMap<&'static str, i64> = BTreeMap::new();
     let mut field_totals: BTreeMap<&'static str, i64> = BTreeMap::new();
-    let mut settled: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
+    let mut tallies: BTreeMap<&str, Tally> = strata
+        .iter()
+        .map(|stratum| (*stratum, Tally::default()))
+        .collect();
     for key in keys {
         let label = by_id.get(key.id.as_str()).copied();
         let outcome = outcome_for(key, label);
         let field = field_agreement(key, label);
         *verdicts
-            .entry(key.stratum.clone())
+            .entry(key.stratum.as_str())
             .or_default()
             .entry(outcome.as_str())
             .or_default() += 1;
         *fields
-            .entry(key.stratum.clone())
+            .entry(key.stratum.as_str())
             .or_default()
             .entry(field.as_str())
             .or_default() += 1;
         *verdict_totals.entry(outcome.as_str()).or_default() += 1;
         *field_totals.entry(field.as_str()).or_default() += 1;
-        let row = settled.entry(key.stratum.clone()).or_insert((0, 0, 0));
-        if outcome.counts() {
-            row.0 += 1;
-            row.1 += i64::from(outcome.labeller_says_wrong());
-            row.2 += i64::from(matches!(
-                outcome,
-                Outcome::FalseNegative | Outcome::MissedByAbstention
-            ));
+        let tally = tallies.entry(key.stratum.as_str()).or_default();
+        tally.sampled += 1;
+        match outcome {
+            Outcome::Unlabelled => tally.unlabelled += 1,
+            Outcome::Unsettled => {
+                tally.cannot_tell += 1;
+                tally.unresolved_unflagged += i64::from(key.verdict != "differs");
+            }
+            _ => {
+                tally.settled += 1;
+                tally.wrong += i64::from(outcome.labeller_says_wrong());
+                tally.unflagged += i64::from(matches!(
+                    outcome,
+                    Outcome::FalseNegative | Outcome::MissedByAbstention
+                ));
+            }
         }
     }
 
-    let mut rates = BTreeMap::new();
-    let (mut weight, mut wrong_mass, mut unflagged_mass) = (0.0f64, 0.0f64, 0.0f64);
-    for (stratum, (counted, wrong, unflagged)) in &settled {
-        let share = population.get(stratum).copied().unwrap_or(0) as f64;
-        let entry = if *counted == 0 {
-            json!({
-                "population": share,
-                "settled": 0,
-                "error_proportion": JsonValue::Null,
-                "note": "nothing settled in this stratum, so it contributes no estimate",
-            })
+    let size = |stratum: &str| population.get(stratum).copied().unwrap_or(0);
+    let census = |stratum: &str, tally: &Tally| {
+        tally.sampled > 0 && size(stratum) > 0 && tally.sampled >= size(stratum)
+    };
+    // Alpha is spent only where there is sampling error to cover.
+    let sampled_strata = tallies
+        .iter()
+        .filter(|(stratum, tally)| tally.sampled > 0 && !census(stratum, tally))
+        .count()
+        .max(1);
+    let z = normal_quantile(1.0 - (1.0 - JOINT_LEVEL) / (2.0 * sampled_strata as f64));
+    // The widest reading of one stratum: `low` counts every unresolved case
+    // as consistent, `high` counts it as wrong, and sampling widens both ends.
+    let bounds = |stratum: &str, tally: &Tally, low: i64, high: i64| -> (f64, f64) {
+        let n = tally.sampled as f64;
+        if tally.sampled == 0 {
+            (0.0, 1.0)
+        } else if census(stratum, tally) {
+            (low as f64 / n, high as f64 / n)
         } else {
-            weight += share;
-            wrong_mass += share * (*wrong as f64 / *counted as f64);
-            unflagged_mass += share * (*unflagged as f64 / *counted as f64);
-            json!({
-                "population": share,
-                "settled": counted,
-                "labelled_wrong": wrong,
-                "not_flagged_and_wrong": unflagged,
-                "error_proportion": *wrong as f64 / *counted as f64,
-            })
+            (wilson(low as f64, n, z).0, wilson(high as f64, n, z).1)
+        }
+    };
+    let conditional = |x: i64, of: i64| {
+        if of == 0 {
+            JsonValue::Null
+        } else {
+            json!(x as f64 / of as f64)
+        }
+    };
+
+    let mut per_stratum = BTreeMap::new();
+    for (stratum, tally) in &tallies {
+        let interval = |low: i64, high: i64| {
+            if tally.unlabelled > 0 {
+                JsonValue::Null
+            } else {
+                let (from, to) = bounds(stratum, tally, low, high);
+                json!([from, to])
+            }
         };
-        rates.insert(stratum.clone(), entry);
+        per_stratum.insert(
+            *stratum,
+            json!({
+                "population": size(stratum),
+                "sampled": tally.sampled,
+                "census": census(stratum, tally),
+                "settled": tally.settled,
+                "cannot_tell": tally.cannot_tell,
+                "unlabelled": tally.unlabelled,
+                "labelled_wrong": tally.wrong,
+                "not_flagged_and_wrong": tally.unflagged,
+                "among_settled_only": {
+                    "labelled_wrong": conditional(tally.wrong, tally.settled),
+                    "not_flagged_and_wrong": conditional(tally.unflagged, tally.settled),
+                },
+                "interval": {
+                    "labelled_wrong": interval(tally.wrong, tally.wrong + tally.cannot_tell),
+                    "not_flagged_and_wrong": interval(
+                        tally.unflagged,
+                        tally.unflagged + tally.unresolved_unflagged
+                    ),
+                },
+            }),
+        );
     }
+
+    let unlabelled: i64 = tallies.values().map(|tally| tally.unlabelled).sum();
+    let total: i64 = strata.iter().map(|stratum| size(stratum)).sum();
+    let nothing_settled: Vec<&str> = tallies
+        .iter()
+        .filter(|(_, tally)| tally.settled == 0)
+        .map(|(stratum, _)| *stratum)
+        .collect();
+    let estimate = |pick: &dyn Fn(&Tally) -> (i64, i64)| {
+        let (mut from, mut to, mut point) = (0.0, 0.0, Some(0.0));
+        for (stratum, tally) in &tallies {
+            let share = size(stratum) as f64 / total as f64;
+            let (wrong, unresolved) = pick(tally);
+            let (low, high) = bounds(stratum, tally, wrong, wrong + unresolved);
+            from += share * low;
+            to += share * high;
+            point = point
+                .filter(|_| tally.settled > 0)
+                .map(|sum| sum + share * wrong as f64 / tally.settled as f64);
+        }
+        json!({"interval": [from, to], "if_unresolved_resemble_settled": point})
+    };
+    let status = if unlabelled > 0 {
+        "labelling_incomplete"
+    } else {
+        "complete"
+    };
+    let withheld = if unlabelled > 0 {
+        Some(format!(
+            "{unlabelled} cases are unlabelled; unfinished work is not ambiguity"
+        ))
+    } else if !without_population.is_empty() || total == 0 {
+        Some(format!(
+            "the key gives no population for {without_population:?}"
+        ))
+    } else {
+        None
+    };
 
     json!({
         "version": CONTROLS_VERSION,
         "protocol": PROTOCOL_VERSION,
+        "status": status,
         "cases": keys.len(),
-        "labelled": verdict_totals
-            .iter()
-            .filter(|(outcome, _)| **outcome != "unlabelled")
-            .map(|(_, count)| count)
-            .sum::<i64>(),
+        "labelled": keys.len() as i64 - unlabelled,
         "label_problems": {
-            "duplicate_ids": duplicates,
-            "unknown_ids": unknown,
+            "duplicate_ids": [],
+            "unknown_ids": [],
+            "unreadable_verdicts": [],
         },
         "verdict_axis": {"by_stratum": verdicts, "totals": verdict_totals},
         "attribution_axis": {"by_stratum": fields, "totals": field_totals},
-        "per_stratum": rates,
-        "weighted_estimates": if weight == 0.0 {
+        "per_stratum": per_stratum,
+        "population_estimate_withheld_because": withheld,
+        "population_estimate": if withheld.is_some() {
             JsonValue::Null
         } else {
             json!({
-                "claims_the_labeller_reads_as_wrong": wrong_mass / weight,
-                "wrong_and_not_flagged_end_to_end": unflagged_mass / weight,
-                "population_covered": weight,
-                "caveat": "an estimate from strata of six to sixty cases, not a measurement",
+                "population": total,
+                "joint_level": JOINT_LEVEL,
+                "sampled_strata": sampled_strata,
+                "z": z,
+                "claims_the_labeller_reads_as_wrong":
+                    estimate(&|tally| (tally.wrong, tally.cannot_tell)),
+                "wrong_and_not_flagged_end_to_end":
+                    estimate(&|tally| (tally.unflagged, tally.unresolved_unflagged)),
+                "point_withheld_because_nothing_settled_in": nothing_settled,
+                "assumption_behind_the_point": "the unresolved cases in each stratum resemble \
+                                                the settled ones. The interval does not assume it.",
             })
         },
         "reading": "The two axes are separate on purpose. A verdict that agrees about a \
                     different field is not agreement, and a blank field is `unknown` rather \
-                    than assumed to match. Totals across strata describe the sample, not the \
-                    population, because the strata are sampled at different rates; the \
-                    population figures are the weighted ones. `unsettled` and `unlabelled` \
-                    enter no rate, and an unlabelled case is not a pass.",
+                    than assumed to match. A rate among settled cases says nothing about the \
+                    `cannot_tell` ones. The population figure is the interval, which counts \
+                    every unresolved case both ways, widens sampled strata by a Wilson bound \
+                    and keeps every stratum in the denominator; it is withheld while any case \
+                    is unlabelled. Totals across strata describe the sample, not the \
+                    population.",
     })
 }
 
@@ -458,54 +684,273 @@ mod tests {
         );
     }
 
-    /// A duplicate label silently overwrote its predecessor, and a label for
-    /// a case not in the key vanished. Both are reported now.
-    #[test]
-    fn duplicate_and_unknown_labels_are_rejected_not_absorbed() {
-        let keys = vec![key("matches", None)];
-        let mut first = label("consistent", "");
-        first.id = "c".into();
-        let mut second = label("inconsistent", "");
-        second.id = "c".into();
-        let mut stray = label("consistent", "");
-        stray.id = "not-a-case".into();
-        let report = score(&keys, &[first, second, stray], &BTreeMap::new());
-        assert_eq!(report["label_problems"]["duplicate_ids"][0], "c");
-        assert_eq!(report["label_problems"]["unknown_ids"][0], "not-a-case");
+    fn case(id: &str, stratum: &str) -> ControlKey {
+        ControlKey {
+            id: id.into(),
+            stratum: stratum.into(),
+            verdict: stratum.into(),
+            field: None,
+        }
     }
 
-    /// Rates are per stratum and weighted by population, because the strata
-    /// are sampled at wildly different rates. A total across the sample
-    /// describes the sample.
+    fn labelled(id: &str, verdict: &str) -> ControlLabel {
+        ControlLabel {
+            id: id.into(),
+            verdict: verdict.into(),
+            ..ControlLabel::default()
+        }
+    }
+
+    fn interval(report: &JsonValue, metric: &str) -> (f64, f64) {
+        let pair = &report["population_estimate"][metric]["interval"];
+        (
+            pair[0].as_f64().expect("from"),
+            pair[1].as_f64().expect("to"),
+        )
+    }
+
+    /// A duplicate was reported and then used anyway: the later label
+    /// overwrote the earlier, so two files differing only in order scored
+    /// differently under the same warning. Now the input is rejected, and the
+    /// rejection is the same whatever the order.
     #[test]
-    fn rates_are_per_stratum_and_weighted() {
-        let mut wrong = key("matches", None);
-        wrong.id = "a".into();
-        wrong.stratum = "matches".into();
-        let mut right = key("unattributed", None);
-        right.id = "b".into();
-        right.stratum = "unattributed".into();
+    fn duplicate_labels_reject_the_input_whatever_their_order() {
+        let keys = vec![case("c", "matches")];
+        let population = BTreeMap::from([("matches".to_string(), 10i64)]);
+        let first = labelled("c", "consistent");
+        let second = labelled("c", "inconsistent");
+        let forward = score(&keys, &[first.clone(), second.clone()], &population);
+        let reversed = score(&keys, &[second, first.clone()], &population);
+        assert_eq!(
+            forward, reversed,
+            "the order of the file decided the result"
+        );
+        assert_eq!(forward["status"], "rejected");
+        assert_eq!(forward["label_problems"]["duplicate_ids"][0], "c");
+        for withheld in [
+            "per_stratum",
+            "population_estimate",
+            "verdict_axis",
+            "attribution_axis",
+        ] {
+            assert!(
+                forward.get(withheld).is_none(),
+                "{withheld} published from rejected input"
+            );
+        }
+        // Agreeing duplicates are still duplicates: one rule, no judgement
+        // about which conflicts matter.
+        let agreeing = score(&keys, &[first.clone(), first], &population);
+        assert_eq!(agreeing["status"], "rejected");
+    }
 
-        let mut a = label("inconsistent", "");
-        a.id = "a".into();
-        let mut b = label("consistent", "");
-        b.id = "b".into();
+    /// A label for a case not in the key, or a verdict nobody defined, is a
+    /// mistake in the file, not a case to score around.
+    #[test]
+    fn unknown_ids_and_unreadable_verdicts_reject_the_input() {
+        let keys = vec![case("c", "matches")];
+        let population = BTreeMap::from([("matches".to_string(), 10i64)]);
+        let stray = score(
+            &keys,
+            &[
+                labelled("c", "consistent"),
+                labelled("not-a-case", "consistent"),
+            ],
+            &population,
+        );
+        assert_eq!(stray["status"], "rejected");
+        assert_eq!(stray["label_problems"]["unknown_ids"][0], "not-a-case");
+        let typo = score(&keys, &[labelled("c", "consistant")], &population);
+        assert_eq!(typo["status"], "rejected");
+        assert_eq!(typo["label_problems"]["unreadable_verdicts"][0], "c");
+    }
 
+    /// Rates are per stratum and conditional on the settled cases. The
+    /// population figure weights each stratum by its share, and one case per
+    /// stratum leaves it very wide.
+    #[test]
+    fn rates_are_per_stratum_and_the_population_figure_is_weighted() {
+        let keys = vec![case("a", "matches"), case("b", "unattributed")];
+        let labels = [labelled("a", "inconsistent"), labelled("b", "consistent")];
         let population = BTreeMap::from([
             ("matches".to_string(), 1000i64),
             ("unattributed".to_string(), 100i64),
         ]);
-        let report = score(&[wrong, right], &[a, b], &population);
-        assert_eq!(report["per_stratum"]["matches"]["error_proportion"], 1.0);
-        assert_eq!(
-            report["per_stratum"]["unattributed"]["error_proportion"],
-            0.0
-        );
-        // 1000/1100 of the population sits in the stratum that came back wrong.
-        let weighted = report["weighted_estimates"]["claims_the_labeller_reads_as_wrong"]
+        let report = score(&keys, &labels, &population);
+        assert_eq!(report["status"], "complete");
+        let settled_only = |stratum: &str| {
+            report["per_stratum"][stratum]["among_settled_only"]["labelled_wrong"].clone()
+        };
+        assert_eq!(settled_only("matches"), 1.0);
+        assert_eq!(settled_only("unattributed"), 0.0);
+        // 1000/1100 of the population sits in the stratum that came back
+        // wrong — under the assumption, and inside the interval.
+        let point = report["population_estimate"]["claims_the_labeller_reads_as_wrong"]
+            ["if_unresolved_resemble_settled"]
             .as_f64()
-            .expect("weighted");
-        assert!((weighted - 1000.0 / 1100.0).abs() < 1e-9, "{weighted}");
+            .expect("point");
+        assert!((point - 1000.0 / 1100.0).abs() < 1e-9, "{point}");
+        let (from, to) = interval(&report, "claims_the_labeller_reads_as_wrong");
+        assert!(from < point && point < to, "{from}..{to}");
+        assert!(to - from > 0.5, "one case a stratum gave {from}..{to}");
+    }
+
+    /// A stratum with nothing settled used to drop out of the weighted
+    /// denominator, so the estimate quietly described a different population.
+    /// It stays, at its full width.
+    #[test]
+    fn a_wholly_unresolved_stratum_widens_the_estimate_rather_than_leaving_it() {
+        // Both strata taken whole, so the width is the ambiguity alone.
+        let keys = vec![
+            case("a1", "matches"),
+            case("a2", "matches"),
+            case("b1", "unattributed"),
+            case("b2", "unattributed"),
+        ];
+        let labels = [
+            labelled("a1", "consistent"),
+            labelled("a2", "consistent"),
+            labelled("b1", "cannot_tell"),
+            labelled("b2", "cannot_tell"),
+        ];
+        let population = BTreeMap::from([
+            ("matches".to_string(), 2i64),
+            ("unattributed".to_string(), 2i64),
+        ]);
+        let report = score(&keys, &labels, &population);
+        assert_eq!(report["status"], "complete");
+        assert_eq!(
+            report["population_estimate"]["population"], 4,
+            "the unresolved stratum left the denominator"
+        );
+        assert_eq!(
+            report["per_stratum"]["unattributed"]["among_settled_only"]["labelled_wrong"],
+            JsonValue::Null
+        );
+        for metric in [
+            "claims_the_labeller_reads_as_wrong",
+            "wrong_and_not_flagged_end_to_end",
+        ] {
+            assert_eq!(interval(&report, metric), (0.0, 0.5), "{metric}");
+            assert_eq!(
+                report["population_estimate"][metric]["if_unresolved_resemble_settled"],
+                JsonValue::Null,
+                "nothing settled for the assumption to extrapolate from"
+            );
+        }
+        assert_eq!(
+            report["population_estimate"]["point_withheld_because_nothing_settled_in"][0],
+            "unattributed"
+        );
+    }
+
+    /// One settled label must not speak for a stratum whose other cases could
+    /// not be settled. The conditional rate says nothing is wrong; the
+    /// interval says the labels allow nearly anything.
+    #[test]
+    fn a_mostly_unresolved_stratum_is_not_carried_by_its_one_settled_label() {
+        let keys: Vec<ControlKey> = (0..10).map(|n| case(&format!("w{n}"), "matches")).collect();
+        let mut labels = vec![labelled("w0", "consistent")];
+        labels.extend((1..10).map(|n| labelled(&format!("w{n}"), "cannot_tell")));
+
+        // Taken whole: the width is the ambiguity alone.
+        let whole = score(
+            &keys,
+            &labels,
+            &BTreeMap::from([("matches".to_string(), 10i64)]),
+        );
+        let stratum = &whole["per_stratum"]["matches"];
+        assert_eq!(stratum["among_settled_only"]["labelled_wrong"], 0.0);
+        assert_eq!(stratum["cannot_tell"], 9);
+        assert_eq!(
+            interval(&whole, "claims_the_labeller_reads_as_wrong"),
+            (0.0, 0.9)
+        );
+
+        // Sampled, as the real `matches` is: sampling widens it further.
+        let sampled = score(
+            &keys,
+            &labels,
+            &BTreeMap::from([("matches".to_string(), 1153i64)]),
+        );
+        let (from, to) = interval(&sampled, "claims_the_labeller_reads_as_wrong");
+        assert!(from < 1e-12 && to > 0.9, "{from}..{to}");
+    }
+
+    /// Unfinished work is not ambiguity. While any case is unlabelled the
+    /// population figure is withheld; the counts and conditional rates still
+    /// show progress.
+    #[test]
+    fn incomplete_labelling_withholds_the_population_estimate() {
+        let keys = vec![
+            case("a", "matches"),
+            case("b", "matches"),
+            case("c", "matches"),
+        ];
+        let labels = [
+            labelled("a", "consistent"),
+            labelled("b", "cannot_tell"),
+            labelled("c", ""),
+        ];
+        let report = score(
+            &keys,
+            &labels,
+            &BTreeMap::from([("matches".to_string(), 100i64)]),
+        );
+        assert_eq!(report["status"], "labelling_incomplete");
+        assert_eq!(report["population_estimate"], JsonValue::Null);
+        let stratum = &report["per_stratum"]["matches"];
+        assert_eq!(
+            (
+                stratum["settled"].as_i64(),
+                stratum["cannot_tell"].as_i64(),
+                stratum["unlabelled"].as_i64()
+            ),
+            (Some(1), Some(1), Some(1))
+        );
+        assert_eq!(stratum["interval"]["labelled_wrong"], JsonValue::Null);
+        assert_eq!(stratum["among_settled_only"]["labelled_wrong"], 0.0);
+    }
+
+    /// A stratum taken whole has no sampling error. One drawn from a larger
+    /// population has it, even when every label came back clean.
+    #[test]
+    fn a_clean_sample_still_carries_sampling_error() {
+        let keys: Vec<ControlKey> = (0..60).map(|n| case(&format!("m{n}"), "matches")).collect();
+        let labels: Vec<ControlLabel> = (0..60)
+            .map(|n| labelled(&format!("m{n}"), "consistent"))
+            .collect();
+        let whole = score(
+            &keys,
+            &labels,
+            &BTreeMap::from([("matches".to_string(), 60i64)]),
+        );
+        assert_eq!(
+            interval(&whole, "claims_the_labeller_reads_as_wrong"),
+            (0.0, 0.0)
+        );
+        let drawn = score(
+            &keys,
+            &labels,
+            &BTreeMap::from([("matches".to_string(), 1153i64)]),
+        );
+        let (_, to) = interval(&drawn, "claims_the_labeller_reads_as_wrong");
+        // Nought of 60 at 95%: the Wilson upper bound is about 6%.
+        assert!((to - 0.0602).abs() < 1e-3, "{to}");
+    }
+
+    #[test]
+    fn the_quantile_is_the_normal_one() {
+        for (p, z) in [
+            (0.975, 1.959_963_984_5),
+            (1.0 - 0.05 / 14.0, 2.690_109_527_2),
+            (0.001, -3.090_232_306_2),
+            (0.5, 0.0),
+            (0.02, -2.053_748_910_6),
+        ] {
+            let got = normal_quantile(p);
+            assert!((got - z).abs() < 1e-8, "{p}: {got}");
+        }
     }
 
     /// An unlabelled case is not a pass, and `cannot_tell` is its own result.
@@ -812,6 +1257,49 @@ mod sampling {
         }
     }
 
+    /// The plan the key was issued under is the plan the scorer runs.
+    #[test]
+    fn the_key_carries_the_protocol_in_force() {
+        let Ok(raw) = std::fs::read_to_string(KEY_PATH) else {
+            return;
+        };
+        let document: JsonValue = serde_json::from_str(&raw).expect("json");
+        assert_eq!(document["protocol"], PROTOCOL_VERSION);
+    }
+
+    /// What the frozen sample can say at best, fixed before any label exists.
+    /// If every one of the 121 labels came back `consistent`, the population
+    /// interval would still run to about 14%, and `matches` alone to about
+    /// 10%. A clean result bounds the error proportion; it cannot show it is
+    /// small.
+    #[test]
+    fn the_best_this_sample_can_say() {
+        let keys: Vec<ControlKey> = load(KEY_PATH, "keys");
+        if keys.is_empty() {
+            return;
+        }
+        let raw = std::fs::read_to_string(KEY_PATH).expect("key");
+        let document: JsonValue = serde_json::from_str(&raw).expect("json");
+        let population: BTreeMap<String, i64> =
+            serde_json::from_value(document["population"].clone()).expect("population");
+        let clean: Vec<ControlLabel> = keys
+            .iter()
+            .map(|key| ControlLabel {
+                id: key.id.clone(),
+                verdict: "consistent".into(),
+                ..ControlLabel::default()
+            })
+            .collect();
+        let report = score(&keys, &clean, &population);
+        let whole =
+            &report["population_estimate"]["claims_the_labeller_reads_as_wrong"]["interval"];
+        let matches = &report["per_stratum"]["matches"]["interval"]["labelled_wrong"];
+        let upper = |pair: &JsonValue| pair[1].as_f64().expect("upper");
+        assert!((upper(whole) - 0.1439).abs() < 5e-4, "{whole}");
+        assert!((upper(matches) - 0.0996).abs() < 5e-4, "{matches}");
+        assert_eq!(report["population_estimate"]["sampled_strata"], 5);
+    }
+
     /// Every case must be answerable: the figure has to be where the case says
     /// it is, and the evidence has to be there to answer it from.
     #[test]
@@ -864,6 +1352,10 @@ mod sampling {
         assert!(
             !by.trim().is_empty() || labels.is_empty(),
             "labels arrived with nobody named as having made them: {report:#}"
+        );
+        assert_ne!(
+            report["status"], "rejected",
+            "the labels file is malformed and nothing was scored: {report:#}"
         );
         println!("{}", serde_json::to_string_pretty(&report).expect("json"));
     }
