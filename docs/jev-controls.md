@@ -7,7 +7,9 @@
 |---|---|
 | `jev-controls-v1.json` | the instrument — notes, figures, evidence. **No verdicts.** |
 | `jev-controls-v1-key.json` | the checker's verdict and attributed field. Do not read first. |
-| `jev-controls-v1-labels.json` | empty, waiting for a labeller who is not me |
+| `jev-controls-v1-labels.json` | 121 labels from a fresh-context AI reviewer, as delivered. Never edited. |
+| `jev-controls-v1-labelling-provenance.json` | who labelled, from what, under which rubric clarification |
+| `jev-controls-v1-results-v4.json` | the single scoring run under protocol v4, unedited, with hashes |
 
 ## Why this is not another measurement
 
@@ -252,6 +254,81 @@ order gave different results under the same warning.
 
 A change to the scorer after the labels are in is a new protocol version, and
 its result is reported beside v4's, not in place of it.
+
+## Results under protocol v4, as they came out
+
+Scored once, at `9304c1d` with a clean tree, on labels committed and pushed
+before the run; the hashes are in the results file. **The labels are an AI
+review, not human ground truth**, from one labeller. The labeller was given only
+the instrument and the rubric, plus one clarification disclosed in the
+provenance: *missing evidence is `cannot_tell`, not proof that a claim is
+false.*
+
+All 121 labelled; no duplicate, unknown or unreadable label. 77 `consistent`,
+7 `inconsistent`, 37 `cannot_tell`.
+
+| stratum | sampled | agreed | labelled wrong | `cannot_tell` | wrong claims in population |
+|---|---|---|---|---|---|
+| `matches` | 60 of 1,153 | 59 | **1** (false negative) | 0 | 1 to 132 |
+| `differs` | 9 of 9 | — | 6 (agreed on error) | 3 | 6 to 9 |
+| `uncertain_attribution` | 12 of 48 | 10 benign | 0 | 2 | 0 to 25 |
+| `implausible_attribution` | 6 of 6 | 5 benign | 0 | 1 | 0 to 1 |
+| `unattributed` | 18 of 151 | 2 benign | 0 | 16 | 0 to 149 |
+| `not_a_field_value` | 8 of 22 | 1 benign | 0 | 7 | 0 to 21 |
+| `not_in_evidence` | 8 of 56 | 0 | 0 | 8 | 0 to 56 |
+
+Sampled strata's ranges are at 99% each; strata taken whole are exact apart from
+`cannot_tell`. The population range holds at 95% or more.
+
+- **Error proportion among claims the checker accepted:** 1 of 60 sampled
+  labelled wrong. Population range **1 to 132 of 1,153 — 0.09% to 11.4%.**
+- **Claims labelled wrong, whole frame:** 7 to 393 of 1,445 — **0.5% to
+  27.2%.**
+- **Wrong and not flagged, end to end:** 1 to 384 of 1,445 — **0.07% to
+  26.6%.**
+- **No point estimate.** Nothing in `not_in_evidence` was settled, so the
+  assumption has nothing to extrapolate from, and the protocol withholds it.
+- **No false positive among settled flags.** Six of the nine flags were
+  labelled wrong, three `cannot_tell`, none `consistent`.
+
+**The width comes from `cannot_tell`, and almost all of it sits where the
+checker abstained:** 34 of the 37, including all 8 `not_in_evidence` and 16 of
+18 `unattributed`. The labeller and the checker largely agree that these claims
+cannot be checked against the evidence. Under the frozen protocol, an
+unresolved case still counts both ways. That is the rule as registered, and
+this result is reported under it, not re-scored under a kinder one.
+
+**The attribution axis:** 103 same, 13 different, 5 unknown. All 60 accepted
+claims name the same field on both sides. The 13 differences are all in cases
+the checker did not compare:
+
+- In 5 `implausible_attribution` cases, the labeller names a field other than
+  the one the checker rejected as implausible. The rejection was right; the
+  tentative attribution was not.
+- 4 claims about a "5-day" Markov horizon, which the labeller reads as
+  `markov.horizon_days` and the checker treats as not a field value.
+- 2 claims written as "R/R", which the labeller reads as `reward_risk` and the
+  checker does not attribute.
+- 2 `uncertain_attribution` cases where the two readings differ.
+
+These are coverage observations. The parser stays frozen at `n10`.
+
+### For reconciliation — listed, not resolved
+
+Reconciliation goes in a separate file, and the labels above stay as they are.
+
+1. **The one false negative is a question of convention.** Report #101, LMND,
+   "RSI 60" against `rsi14` 60.66. The checker accepts truncation by design,
+   because reports write "295" for 295.7. The labeller rounds, which gives 61.
+   The rubric's "at the precision the note used" does not say which applies.
+2. **FLS, report #286, "593 DKK support".** The labeller reads it as
+   inconsistent: `nearest_support` is 551.5, and 593 is the close. The earlier
+   adjudication, by the checker's author, left it ambiguous. The other eight
+   flags agree with that adjudication — five wrong, three denominators
+   unresolved.
+3. **The rubric clarification.** Missing evidence is `cannot_tell`, which
+   drives most of the width. It was disclosed before labelling and is part of
+   what these labels mean.
 
 ## What it will still not establish
 

@@ -1,0 +1,395 @@
+{
+  "what_this_is": "The single scoring run of the controls-v1 labels under the frozen protocol, as it came out. Nothing in the report was edited.",
+  "scored_at": "2026-09-23T05:39:43Z",
+  "scored_at_commit": "9304c1da0631c74e89abac1ef8b81ff67a0990f8",
+  "working_tree_dirty": false,
+  "command": "cargo test --bin saxo-rust jev_controls::sampling::the_labels_are_not_filled_in_by_the_author -- --nocapture",
+  "protocol": "controls-protocol-v4-2026-09-23",
+  "sha256": {
+    "instrument": "54326779c83ca5b71ae026ea1b2ede3e3b9ef5fd0240c351c31fc7ff26fbb7d2",
+    "key": "bd7d1f44ecdaf9ae881eb6cff3aea3f78b8f299d8a38038007a19391053f4601",
+    "labels": "febd9227d306da074b8ced2ca9519ea70af40e68366a14bd746b5aa42e587914"
+  },
+  "labels_provenance": "docs/jev-controls-v1-labelling-provenance.json",
+  "labelled_by": "Fresh-context Codex AI reviewer (blind evidence-only review; not human ground truth)",
+  "order_of_events": [
+    "94a3fb0: protocol v4 and the post-label procedure committed and pushed",
+    "9304c1d: labels committed as delivered by a fresh-context labeller who was not given the key; pushed before scoring",
+    "this run: scored once, on those labels"
+  ],
+  "report": {
+    "attribution_axis": {
+      "by_stratum": {
+        "differs": {
+          "same": 6,
+          "unknown": 3
+        },
+        "implausible_attribution": {
+          "different": 5,
+          "unknown": 1
+        },
+        "matches": {
+          "same": 60
+        },
+        "not_a_field_value": {
+          "different": 4,
+          "same": 4
+        },
+        "not_in_evidence": {
+          "same": 8
+        },
+        "unattributed": {
+          "different": 2,
+          "same": 15,
+          "unknown": 1
+        },
+        "uncertain_attribution": {
+          "different": 2,
+          "same": 10
+        }
+      },
+      "totals": {
+        "different": 13,
+        "same": 103,
+        "unknown": 5
+      }
+    },
+    "cases": 121,
+    "label_problems": {
+      "duplicate_ids": [],
+      "unknown_ids": [],
+      "unreadable_verdicts": []
+    },
+    "labelled": 121,
+    "per_stratum": {
+      "differs": {
+        "among_settled_only": {
+          "labelled_wrong": 1.0,
+          "not_flagged_and_wrong": 0.0
+        },
+        "cannot_tell": 3,
+        "census": true,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.6666666666666666,
+              1.0
+            ],
+            "wrong_in_population": [
+              6,
+              9
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              0.0
+            ],
+            "wrong_in_population": [
+              0,
+              0
+            ]
+          }
+        },
+        "labelled_wrong": 6,
+        "not_flagged_and_wrong": 0,
+        "population": 9,
+        "sampled": 9,
+        "settled": 6,
+        "unlabelled": 0
+      },
+      "implausible_attribution": {
+        "among_settled_only": {
+          "labelled_wrong": 0.0,
+          "not_flagged_and_wrong": 0.0
+        },
+        "cannot_tell": 1,
+        "census": true,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0,
+              0.16666666666666666
+            ],
+            "wrong_in_population": [
+              0,
+              1
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              0.16666666666666666
+            ],
+            "wrong_in_population": [
+              0,
+              1
+            ]
+          }
+        },
+        "labelled_wrong": 0,
+        "not_flagged_and_wrong": 0,
+        "population": 6,
+        "sampled": 6,
+        "settled": 5,
+        "unlabelled": 0
+      },
+      "matches": {
+        "among_settled_only": {
+          "labelled_wrong": 0.016666666666666666,
+          "not_flagged_and_wrong": 0.016666666666666666
+        },
+        "cannot_tell": 0,
+        "census": false,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0008673026886383347,
+              0.11448395490026018
+            ],
+            "wrong_in_population": [
+              1,
+              132
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0008673026886383347,
+              0.11448395490026018
+            ],
+            "wrong_in_population": [
+              1,
+              132
+            ]
+          }
+        },
+        "labelled_wrong": 1,
+        "not_flagged_and_wrong": 1,
+        "population": 1153,
+        "sampled": 60,
+        "settled": 60,
+        "unlabelled": 0
+      },
+      "not_a_field_value": {
+        "among_settled_only": {
+          "labelled_wrong": 0.0,
+          "not_flagged_and_wrong": 0.0
+        },
+        "cannot_tell": 7,
+        "census": false,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0,
+              0.9545454545454546
+            ],
+            "wrong_in_population": [
+              0,
+              21
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              0.9545454545454546
+            ],
+            "wrong_in_population": [
+              0,
+              21
+            ]
+          }
+        },
+        "labelled_wrong": 0,
+        "not_flagged_and_wrong": 0,
+        "population": 22,
+        "sampled": 8,
+        "settled": 1,
+        "unlabelled": 0
+      },
+      "not_in_evidence": {
+        "among_settled_only": {
+          "labelled_wrong": null,
+          "not_flagged_and_wrong": null
+        },
+        "cannot_tell": 8,
+        "census": false,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0,
+              1.0
+            ],
+            "wrong_in_population": [
+              0,
+              56
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              1.0
+            ],
+            "wrong_in_population": [
+              0,
+              56
+            ]
+          }
+        },
+        "labelled_wrong": 0,
+        "not_flagged_and_wrong": 0,
+        "population": 56,
+        "sampled": 8,
+        "settled": 0,
+        "unlabelled": 0
+      },
+      "unattributed": {
+        "among_settled_only": {
+          "labelled_wrong": 0.0,
+          "not_flagged_and_wrong": 0.0
+        },
+        "cannot_tell": 16,
+        "census": false,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0,
+              0.9867549668874173
+            ],
+            "wrong_in_population": [
+              0,
+              149
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              0.9867549668874173
+            ],
+            "wrong_in_population": [
+              0,
+              149
+            ]
+          }
+        },
+        "labelled_wrong": 0,
+        "not_flagged_and_wrong": 0,
+        "population": 151,
+        "sampled": 18,
+        "settled": 2,
+        "unlabelled": 0
+      },
+      "uncertain_attribution": {
+        "among_settled_only": {
+          "labelled_wrong": 0.0,
+          "not_flagged_and_wrong": 0.0
+        },
+        "cannot_tell": 2,
+        "census": false,
+        "interval": {
+          "labelled_wrong": {
+            "proportion": [
+              0.0,
+              0.5208333333333334
+            ],
+            "wrong_in_population": [
+              0,
+              25
+            ]
+          },
+          "not_flagged_and_wrong": {
+            "proportion": [
+              0.0,
+              0.5208333333333334
+            ],
+            "wrong_in_population": [
+              0,
+              25
+            ]
+          }
+        },
+        "labelled_wrong": 0,
+        "not_flagged_and_wrong": 0,
+        "population": 48,
+        "sampled": 12,
+        "settled": 10,
+        "unlabelled": 0
+      }
+    },
+    "population_estimate": {
+      "assumption_behind_the_point": "the unresolved cases in each stratum resemble the settled ones. The interval does not assume it.",
+      "claims_the_labeller_reads_as_wrong": {
+        "if_unresolved_resemble_settled": null,
+        "interval": [
+          0.004844290657439446,
+          0.27197231833910035
+        ],
+        "wrong_in_population": [
+          7,
+          393
+        ]
+      },
+      "joint_level": 0.95,
+      "method": "exact hypergeometric bounds per sampled stratum, Bonferroni across them; unresolved cases counted both ways",
+      "point_withheld_because_nothing_settled_in": [
+        "not_in_evidence"
+      ],
+      "population": 1445,
+      "sampled_strata": 5,
+      "tail_per_stratum": 0.0050000000000000044,
+      "wrong_and_not_flagged_end_to_end": {
+        "if_unresolved_resemble_settled": null,
+        "interval": [
+          0.0006920415224913495,
+          0.2657439446366782
+        ],
+        "wrong_in_population": [
+          1,
+          384
+        ]
+      }
+    },
+    "population_estimate_withheld_because": null,
+    "protocol": "controls-protocol-v4-2026-09-23",
+    "reading": "The two axes are separate on purpose. A verdict that agrees about a different field is not agreement, and a blank field is `unknown` rather than assumed to match. A rate among settled cases says nothing about the `cannot_tell` ones. The population figure is the interval, which counts every unresolved case both ways, widens sampled strata by an exact hypergeometric bound and keeps every stratum in the denominator; it is withheld while any case is unlabelled. Totals across strata describe the sample, not the population.",
+    "status": "complete",
+    "verdict_axis": {
+      "by_stratum": {
+        "differs": {
+          "agreed_on_error": 6,
+          "unsettled": 3
+        },
+        "implausible_attribution": {
+          "benign_abstention": 5,
+          "unsettled": 1
+        },
+        "matches": {
+          "agreed": 59,
+          "false_negative": 1
+        },
+        "not_a_field_value": {
+          "benign_abstention": 1,
+          "unsettled": 7
+        },
+        "not_in_evidence": {
+          "unsettled": 8
+        },
+        "unattributed": {
+          "benign_abstention": 2,
+          "unsettled": 16
+        },
+        "uncertain_attribution": {
+          "benign_abstention": 10,
+          "unsettled": 2
+        }
+      },
+      "totals": {
+        "agreed": 59,
+        "agreed_on_error": 6,
+        "benign_abstention": 18,
+        "false_negative": 1,
+        "unsettled": 37
+      }
+    },
+    "version": "controls-v1-2026-09-22"
+  }
+}
