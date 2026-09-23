@@ -225,14 +225,21 @@ pub(crate) fn field_agreement(key: &ControlKey, label: Option<&ControlLabel>) ->
 ///
 /// **The population figure is an interval, and the one that assumes nothing
 /// about the unresolved cases is the headline.** Within a stratum, every
-/// `cannot_tell` is counted once as consistent and once as wrong. Where a
-/// stratum was sampled rather than taken whole, each end is widened by a
-/// Wilson score bound at `1 − 0.05/S`, for `S` sampled strata, so the weighted
-/// sum holds at about 95% jointly — Bonferroni, and Wilson is itself an
-/// approximation. A stratum taken whole has no sampling error. Strata are
-/// weighted by population share, and **every stratum stays in the
-/// denominator**: one with nothing settled contributes its full width instead
-/// of leaving the estimate.
+/// `cannot_tell` is counted once as consistent and once as wrong. Sampling
+/// widens each end by an **exact hypergeometric bound** — the distribution of
+/// errors found when drawing without replacement from this fixed population —
+/// at `1 − 0.05/S` for `S` sampled strata. Each stratum's bound covers its true
+/// error count at least `1 − 0.05/S` of the time, whatever that count is, so
+/// the population sum covers at least 95% (Bonferroni). The guarantee assumes
+/// the hash-ordered draw behaves as a simple random sample within each stratum
+/// and that the labels are right; it says nothing about label error. A stratum
+/// taken whole is exact. Strata are weighted by population share, and **every
+/// stratum stays in the denominator**: one with nothing settled contributes its
+/// full width instead of leaving the estimate.
+///
+/// v3 used Wilson bounds here and called the result "about 95%". Two wrong
+/// claims among the 1,153 `matches` showed it covering 89.9%: Wilson's lower
+/// bound on one error in sixty sits above the true proportion.
 ///
 /// **A point estimate appears only under a stated assumption** — that the
 /// unresolved cases in each stratum resemble the settled ones — beside the
@@ -244,7 +251,7 @@ pub(crate) fn field_agreement(key: &ControlKey, label: Option<&ControlLabel>) ->
 /// which would need a denominator of all errors. `missed_by_abstention` stays
 /// separately visible and also counts toward **errors the system did not flag,
 /// end to end**.
-pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v3-2026-09-23";
+pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v4-2026-09-23";
 
 /// The joint coverage the population interval is built for.
 const JOINT_LEVEL: f64 = 0.95;
@@ -252,64 +259,65 @@ const JOINT_LEVEL: f64 = 0.95;
 /// The only verdicts a label may carry. Anything else rejects the file.
 const LABEL_VERDICTS: [&str; 3] = ["consistent", "inconsistent", "cannot_tell"];
 
-/// The standard normal quantile, by Acklam's rational approximation (relative
-/// error under 1.2e-9). It only sets the width of the interval.
-fn normal_quantile(p: f64) -> f64 {
-    const A: [f64; 6] = [
-        -3.969683028665376e1,
-        2.209460984245205e2,
-        -2.759285104469687e2,
-        1.38357751867269e2,
-        -3.066479806614716e1,
-        2.506628277459239,
-    ];
-    const B: [f64; 5] = [
-        -5.447609879822406e1,
-        1.615858368580409e2,
-        -1.556989798598866e2,
-        6.680131188771972e1,
-        -1.328068155288572e1,
-    ];
-    const C: [f64; 6] = [
-        -7.784894002430293e-3,
-        -3.223964580411365e-1,
-        -2.400758277161838,
-        -2.549732539343734,
-        4.374664141464968,
-        2.938163982698783,
-    ];
-    const D: [f64; 4] = [
-        7.784695709041462e-3,
-        3.224671290700398e-1,
-        2.445134137142996,
-        3.754408661907416,
-    ];
-    const LOW: f64 = 0.02425;
-    let tail = |q: f64| {
-        (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
-            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
-    };
-    if p < LOW {
-        tail((-2.0 * p.ln()).sqrt())
-    } else if p > 1.0 - LOW {
-        -tail((-2.0 * (1.0 - p).ln()).sqrt())
-    } else {
-        let q = p - 0.5;
-        let r = q * q;
-        (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
-            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
-    }
+/// Errors found in a sample drawn without replacement from a fixed population
+/// of claims: the hypergeometric distribution, computed exactly rather than
+/// approximated.
+struct Hypergeometric {
+    population: usize,
+    sample: usize,
+    ln_factorial: Vec<f64>,
 }
 
-/// Wilson score bounds for `x` of `n` at quantile `z`.
-fn wilson(x: f64, n: f64, z: f64) -> (f64, f64) {
-    if n <= 0.0 {
-        return (0.0, 1.0);
+impl Hypergeometric {
+    fn new(population: usize, sample: usize) -> Self {
+        let mut ln_factorial = vec![0.0; population + 1];
+        for k in 1..=population {
+            ln_factorial[k] = ln_factorial[k - 1] + (k as f64).ln();
+        }
+        Self {
+            population,
+            sample,
+            ln_factorial,
+        }
     }
-    let z2 = z * z;
-    let centre = (x + z2 / 2.0) / (n + z2);
-    let half = z / (n + z2) * (x * (n - x) / n + z2 / 4.0).sqrt();
-    ((centre - half).max(0.0), (centre + half).min(1.0))
+
+    fn ln_choose(&self, n: usize, k: usize) -> f64 {
+        self.ln_factorial[n] - self.ln_factorial[k] - self.ln_factorial[n - k]
+    }
+
+    /// The chance the sample finds `found` wrong when the population holds
+    /// `wrong`.
+    fn pmf(&self, wrong: usize, found: usize) -> f64 {
+        if found > wrong || found > self.sample || self.sample - found > self.population - wrong {
+            return 0.0;
+        }
+        (self.ln_choose(wrong, found)
+            + self.ln_choose(self.population - wrong, self.sample - found)
+            - self.ln_choose(self.population, self.sample))
+        .exp()
+    }
+
+    /// The fewest wrong claims the population can hold for which finding
+    /// `found` or more is not rarer than `tail`.
+    fn lower(&self, found: usize, tail: f64) -> usize {
+        (0..=self.population)
+            .find(|&wrong| {
+                (found..=self.sample)
+                    .map(|k| self.pmf(wrong, k))
+                    .sum::<f64>()
+                    > tail
+            })
+            .unwrap_or(self.population)
+    }
+
+    /// The most wrong claims the population can hold for which finding
+    /// `found` or fewer is not rarer than `tail`.
+    fn upper(&self, found: usize, tail: f64) -> usize {
+        (0..=self.population)
+            .rev()
+            .find(|&wrong| (0..=found).map(|k| self.pmf(wrong, k)).sum::<f64>() > tail)
+            .unwrap_or(0)
+    }
 }
 
 /// One stratum's labels, counted.
@@ -355,11 +363,6 @@ pub(crate) fn score(
         .collect();
     let mut strata: BTreeSet<&str> = keys.iter().map(|key| key.stratum.as_str()).collect();
     strata.extend(population.keys().map(String::as_str));
-    let without_population: Vec<&str> = strata
-        .iter()
-        .copied()
-        .filter(|stratum| population.get(*stratum).copied().unwrap_or(0) <= 0)
-        .collect();
     if !duplicates.is_empty() || !unknown.is_empty() || !unreadable.is_empty() {
         // Sets, so the report is the same whatever order the file was in.
         return json!({
@@ -425,27 +428,37 @@ pub(crate) fn score(
     }
 
     let size = |stratum: &str| population.get(stratum).copied().unwrap_or(0);
-    let census = |stratum: &str, tally: &Tally| {
-        tally.sampled > 0 && size(stratum) > 0 && tally.sampled >= size(stratum)
-    };
+    // A key whose population is smaller than its own sample cannot be
+    // weighted, and says so rather than being bounded as if it could.
+    let valid = |stratum: &str, tally: &Tally| size(stratum) > 0 && tally.sampled <= size(stratum);
+    let census = |stratum: &str, tally: &Tally| tally.sampled > 0 && tally.sampled == size(stratum);
+    let inconsistent: Vec<&str> = tallies
+        .iter()
+        .filter(|(stratum, tally)| !valid(stratum, tally))
+        .map(|(stratum, _)| *stratum)
+        .collect();
     // Alpha is spent only where there is sampling error to cover.
     let sampled_strata = tallies
         .iter()
-        .filter(|(stratum, tally)| tally.sampled > 0 && !census(stratum, tally))
+        .filter(|(stratum, tally)| {
+            valid(stratum, tally) && tally.sampled > 0 && !census(stratum, tally)
+        })
         .count()
         .max(1);
-    let z = normal_quantile(1.0 - (1.0 - JOINT_LEVEL) / (2.0 * sampled_strata as f64));
-    // The widest reading of one stratum: `low` counts every unresolved case
-    // as consistent, `high` counts it as wrong, and sampling widens both ends.
-    let bounds = |stratum: &str, tally: &Tally, low: i64, high: i64| -> (f64, f64) {
-        let n = tally.sampled as f64;
-        if tally.sampled == 0 {
-            (0.0, 1.0)
-        } else if census(stratum, tally) {
-            (low as f64 / n, high as f64 / n)
-        } else {
-            (wilson(low as f64, n, z).0, wilson(high as f64, n, z).1)
+    let tail = (1.0 - JOINT_LEVEL) / (2.0 * sampled_strata as f64);
+    // The widest reading of one stratum, as counts of wrong claims in its
+    // population: `low` counts every unresolved case as consistent, `high`
+    // counts it as wrong, and the exact sampling bound widens both ends. A
+    // stratum taken whole comes out exact; one not sampled at all, `0..=N`.
+    let bounds = |stratum: &str, tally: &Tally, low: i64, high: i64| -> Option<(i64, i64)> {
+        if !valid(stratum, tally) {
+            return None;
         }
+        let draw = Hypergeometric::new(size(stratum) as usize, tally.sampled as usize);
+        Some((
+            draw.lower(low as usize, tail) as i64,
+            draw.upper(high as usize, tail) as i64,
+        ))
     };
     let conditional = |x: i64, of: i64| {
         if of == 0 {
@@ -457,13 +470,15 @@ pub(crate) fn score(
 
     let mut per_stratum = BTreeMap::new();
     for (stratum, tally) in &tallies {
-        let interval = |low: i64, high: i64| {
-            if tally.unlabelled > 0 {
-                JsonValue::Null
-            } else {
-                let (from, to) = bounds(stratum, tally, low, high);
-                json!([from, to])
-            }
+        let interval = |low: i64, high: i64| match bounds(stratum, tally, low, high) {
+            Some((from, to)) if tally.unlabelled == 0 => json!({
+                "proportion": [
+                    from as f64 / size(stratum) as f64,
+                    to as f64 / size(stratum) as f64
+                ],
+                "wrong_in_population": [from, to],
+            }),
+            _ => JsonValue::Null,
         };
         per_stratum.insert(
             *stratum,
@@ -499,18 +514,23 @@ pub(crate) fn score(
         .map(|(stratum, _)| *stratum)
         .collect();
     let estimate = |pick: &dyn Fn(&Tally) -> (i64, i64)| {
-        let (mut from, mut to, mut point) = (0.0, 0.0, Some(0.0));
+        let (mut from, mut to, mut point) = (0i64, 0i64, Some(0.0));
         for (stratum, tally) in &tallies {
             let share = size(stratum) as f64 / total as f64;
             let (wrong, unresolved) = pick(tally);
-            let (low, high) = bounds(stratum, tally, wrong, wrong + unresolved);
-            from += share * low;
-            to += share * high;
+            let (low, high) =
+                bounds(stratum, tally, wrong, wrong + unresolved).unwrap_or((0, size(stratum)));
+            from += low;
+            to += high;
             point = point
                 .filter(|_| tally.settled > 0)
                 .map(|sum| sum + share * wrong as f64 / tally.settled as f64);
         }
-        json!({"interval": [from, to], "if_unresolved_resemble_settled": point})
+        json!({
+            "interval": [from as f64 / total as f64, to as f64 / total as f64],
+            "wrong_in_population": [from, to],
+            "if_unresolved_resemble_settled": point,
+        })
     };
     let status = if unlabelled > 0 {
         "labelling_incomplete"
@@ -521,9 +541,9 @@ pub(crate) fn score(
         Some(format!(
             "{unlabelled} cases are unlabelled; unfinished work is not ambiguity"
         ))
-    } else if !without_population.is_empty() || total == 0 {
+    } else if !inconsistent.is_empty() || total == 0 {
         Some(format!(
-            "the key gives no population for {without_population:?}"
+            "the key's population does not cover its own sample for {inconsistent:?}"
         ))
     } else {
         None
@@ -551,7 +571,9 @@ pub(crate) fn score(
                 "population": total,
                 "joint_level": JOINT_LEVEL,
                 "sampled_strata": sampled_strata,
-                "z": z,
+                "tail_per_stratum": tail,
+                "method": "exact hypergeometric bounds per sampled stratum, Bonferroni across \
+                           them; unresolved cases counted both ways",
                 "claims_the_labeller_reads_as_wrong":
                     estimate(&|tally| (tally.wrong, tally.cannot_tell)),
                 "wrong_and_not_flagged_end_to_end":
@@ -565,8 +587,8 @@ pub(crate) fn score(
                     different field is not agreement, and a blank field is `unknown` rather \
                     than assumed to match. A rate among settled cases says nothing about the \
                     `cannot_tell` ones. The population figure is the interval, which counts \
-                    every unresolved case both ways, widens sampled strata by a Wilson bound \
-                    and keeps every stratum in the denominator; it is withheld while any case \
+                    every unresolved case both ways, widens sampled strata by an exact \
+                    hypergeometric bound and keeps every stratum in the denominator; it is withheld while any case \
                     is unlabelled. Totals across strata describe the sample, not the \
                     population.",
     })
@@ -934,23 +956,100 @@ mod tests {
             &labels,
             &BTreeMap::from([("matches".to_string(), 1153i64)]),
         );
-        let (_, to) = interval(&drawn, "claims_the_labeller_reads_as_wrong");
-        // Nought of 60 at 95%: the Wilson upper bound is about 6%.
-        assert!((to - 0.0602).abs() < 1e-3, "{to}");
+        // Nought of 60 drawn from 1,153: up to 66 wrong claims are still
+        // not rarer than 2.5% to miss entirely.
+        assert_eq!(
+            drawn["population_estimate"]["claims_the_labeller_reads_as_wrong"]["wrong_in_population"],
+            json!([0, 66])
+        );
     }
 
+    /// The five sampled strata of `controls-v1`, as (population, drawn).
+    const SAMPLED_STRATA: [(usize, usize); 5] = [(1153, 60), (151, 18), (48, 12), (56, 8), (22, 8)];
+
+    /// The guarantee, enumerated rather than asserted. For every error count
+    /// each sampled stratum could hold, the exact bound covers it at least
+    /// `1 − 0.05/5` of the time; Bonferroni over the five then gives at least
+    /// 95% for the population sum. Testing the formula at a few points is how
+    /// v3's Wilson bounds under-covered unnoticed.
     #[test]
-    fn the_quantile_is_the_normal_one() {
-        for (p, z) in [
-            (0.975, 1.959_963_984_5),
-            (1.0 - 0.05 / 14.0, 2.690_109_527_2),
-            (0.001, -3.090_232_306_2),
-            (0.5, 0.0),
-            (0.02, -2.053_748_910_6),
-        ] {
-            let got = normal_quantile(p);
-            assert!((got - z).abs() < 1e-8, "{p}: {got}");
+    fn every_sampled_stratum_covers_whatever_its_true_error_count() {
+        let tail = (1.0 - JOINT_LEVEL) / (2.0 * SAMPLED_STRATA.len() as f64);
+        for (population, sample) in SAMPLED_STRATA {
+            let draw = Hypergeometric::new(population, sample);
+            let bounds: Vec<(usize, usize)> = (0..=sample)
+                .map(|found| (draw.lower(found, tail), draw.upper(found, tail)))
+                .collect();
+            let mut worst = (1.0f64, 0usize);
+            for wrong in 0..=population {
+                let covered: f64 = bounds
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (low, high))| *low <= wrong && wrong <= *high)
+                    .map(|(found, _)| draw.pmf(wrong, found))
+                    .sum();
+                if covered < worst.0 {
+                    worst = (covered, wrong);
+                }
+            }
+            println!(
+                "{sample} of {population}: worst coverage {:.5} at {} wrong",
+                worst.0, worst.1
+            );
+            assert!(
+                worst.0 >= 1.0 - 2.0 * tail - 1e-9,
+                "{sample} of {population}: covers {} when {} are wrong",
+                worst.0,
+                worst.1
+            );
         }
+    }
+
+    /// The case that showed v3 under-covering: two wrong claims among the
+    /// 1,153 `matches`, every other claim right, so 2 of 1,445 overall. A
+    /// sample finds one or both 10.1% of the time, and Wilson's lower bound
+    /// then sat above the truth, covering 89.9%. Enumerated exactly, through
+    /// the scorer.
+    #[test]
+    fn two_wrong_accepted_claims_are_covered() {
+        let frozen = [
+            ("matches", 1153i64, 60usize),
+            ("unattributed", 151, 18),
+            ("uncertain_attribution", 48, 12),
+            ("not_in_evidence", 56, 8),
+            ("not_a_field_value", 22, 8),
+            ("implausible_attribution", 6, 6),
+            ("differs", 9, 9),
+        ];
+        let population: BTreeMap<String, i64> = frozen
+            .iter()
+            .map(|(stratum, size, _)| (stratum.to_string(), *size))
+            .collect();
+        let keys: Vec<ControlKey> = frozen
+            .iter()
+            .flat_map(|(stratum, _, drawn)| {
+                (0..*drawn).map(move |n| case(&format!("{stratum}-{n}"), stratum))
+            })
+            .collect();
+        let draw = Hypergeometric::new(1153, 60);
+        let truth = 2.0 / 1445.0;
+        let mut covered = 0.0;
+        for found in 0..=2 {
+            let labels: Vec<ControlLabel> = keys
+                .iter()
+                .map(|key| {
+                    let wrong = (0..found).any(|n| key.id == format!("matches-{n}"));
+                    labelled(&key.id, if wrong { "inconsistent" } else { "consistent" })
+                })
+                .collect();
+            let report = score(&keys, &labels, &population);
+            let (from, to) = interval(&report, "claims_the_labeller_reads_as_wrong");
+            if from <= truth && truth <= to {
+                covered += draw.pmf(2, found);
+            }
+        }
+        println!("two wrong accepted claims: covered {covered:.5}");
+        assert!(covered >= 0.95, "covers {covered}");
     }
 
     /// An unlabelled case is not a pass, and `cannot_tell` is its own result.
@@ -1267,11 +1366,12 @@ mod sampling {
         assert_eq!(document["protocol"], PROTOCOL_VERSION);
     }
 
-    /// What the frozen sample can say at best, fixed before any label exists.
-    /// If every one of the 121 labels came back `consistent`, the population
-    /// interval would still run to about 14%, and `matches` alone to about
-    /// 10%. A clean result bounds the error proportion; it cannot show it is
-    /// small.
+    /// What this method would report from a perfect result, fixed before any
+    /// label exists. If every one of the 121 labels came back `consistent`,
+    /// the population interval would still run to 12.3%, and `matches` alone
+    /// to 8.2%. Those are outputs of this method — Bonferroni and exact
+    /// discreteness are both conservative — not a limit on what the sample
+    /// could establish.
     #[test]
     fn the_best_this_sample_can_say() {
         let keys: Vec<ControlKey> = load(KEY_PATH, "keys");
@@ -1291,13 +1391,16 @@ mod sampling {
             })
             .collect();
         let report = score(&keys, &clean, &population);
-        let whole =
-            &report["population_estimate"]["claims_the_labeller_reads_as_wrong"]["interval"];
-        let matches = &report["per_stratum"]["matches"]["interval"]["labelled_wrong"];
-        let upper = |pair: &JsonValue| pair[1].as_f64().expect("upper");
-        assert!((upper(whole) - 0.1439).abs() < 5e-4, "{whole}");
-        assert!((upper(matches) - 0.0996).abs() < 5e-4, "{matches}");
         assert_eq!(report["population_estimate"]["sampled_strata"], 5);
+        // 178 of 1,445 overall, 12.3%; 94 of 1,153 accepted claims, 8.2%.
+        assert_eq!(
+            report["population_estimate"]["claims_the_labeller_reads_as_wrong"]["wrong_in_population"],
+            json!([0, 178])
+        );
+        assert_eq!(
+            report["per_stratum"]["matches"]["interval"]["labelled_wrong"]["wrong_in_population"],
+            json!([0, 94])
+        );
     }
 
     /// Every case must be answerable: the figure has to be where the case says

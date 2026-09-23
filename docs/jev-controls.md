@@ -113,12 +113,15 @@ reproduction. It is not one.
 
 ## The analysis plan, fixed before any label exists
 
-`controls-protocol-v3-2026-09-23`, in the scorer and in the key file; a test
-fails if the two disagree. v2 had two defects, both corrected here before any
-label arrived: it reported a duplicate label and then used whichever came last,
-and it extrapolated a settled-only rate to the whole stratum — so one settled
-label out of sixty spoke for 1,153 claims, and a stratum with nothing settled
-left the denominator, changing the population the estimate described.
+`controls-protocol-v4-2026-09-23`, in the scorer and in the key file; a test
+fails if the two disagree. Every revision so far came from review, before any
+label arrived:
+
+| | defect | corrected in |
+|---|---|---|
+| v2 | a duplicate label was reported, then whichever came last was scored | v3 |
+| v2 | a settled-only rate was extrapolated to the whole stratum: one settled label of sixty spoke for 1,153 claims, and a stratum with nothing settled left the denominator | v3 |
+| v3 | Wilson bounds were called "about 95%". Two wrong claims among the 1,153 `matches` covered the truth only **89.9%** of the time | v4 |
 
 **The input is valid or nothing is scored.** A duplicate id, a label for a case
 not in the key, or a verdict other than `consistent`, `inconsistent` or
@@ -143,11 +146,21 @@ assumes nothing about unresolved cases.**
 
 - Within each stratum, every `cannot_tell` is counted once as consistent and
   once as wrong.
-- A stratum drawn from a larger population is widened at each end by a Wilson
-  score bound at 1 − 0.05/S, for S sampled strata. Five of the seven are
-  sampled, so z ≈ 2.576, and the weighted sum holds at about 95% jointly —
-  Bonferroni, and Wilson is itself an approximation. `differs` and
-  `implausible_attribution` are taken whole and carry no sampling error.
+- A stratum drawn from a larger population is widened at each end by an
+  **exact hypergeometric bound** — the distribution of errors found when
+  drawing without replacement from this fixed population — at 1 − 0.05/S for
+  S sampled strata. Five of the seven are sampled, so each stratum's bound is
+  at 99%, and each tail at 0.5%. `differs` and `implausible_attribution` are
+  taken whole and come out exact.
+- **Coverage is at least 95%, and is checked rather than asserted.** A test
+  enumerates every error count each of the five sampled strata could hold and
+  confirms the stratum's bound covers it at least 99% of the time; the worst
+  case is 99.01%. Bonferroni over the five then gives at least 95% for the
+  population sum. A second test runs the case that broke v3 — two wrong
+  `matches`, 2 of 1,445 overall — through the scorer: it now covers 99.7%.
+- The guarantee assumes the hash-ordered draw behaves as a simple random
+  sample within each stratum, and that the labels are right. It covers
+  sampling error only. Label error is outside it.
 - Strata are weighted by population share, and **every stratum stays in the
   denominator**. One with nothing settled contributes its full width instead
   of leaving.
@@ -164,19 +177,28 @@ this frame excludes. **`missed_by_abstention` stays separately visible** — a
 coverage failure is not a judgement failure — **and also counts toward errors
 the system did not flag end to end.**
 
-### How little the best result would say
+### What this method would report from a perfect result
 
 Computed now, from the frozen strata, and pinned by a test. If every one of the
 121 labels came back `consistent` with nothing unresolved:
 
-| | interval |
-|---|---|
-| `matches` — error proportion among accepted claims | 0 to **10.0%** |
-| `unattributed` | 0 to 26.9% |
-| `uncertain_attribution` | 0 to 35.6% |
-| `not_in_evidence`, `not_a_field_value` | 0 to 45.3% each |
-| `differs`, `implausible_attribution` | exactly 0 — taken whole |
-| **population, weighted** | 0 to **14.4%** |
+| | wrong claims in the population | interval |
+|---|---|---|
+| `matches` — error proportion among accepted claims | 0 to 94 of 1,153 | 0 to **8.2%** |
+| `unattributed` | 0 to 36 of 151 | 0 to 23.8% |
+| `uncertain_attribution` | 0 to 15 of 48 | 0 to 31.3% |
+| `not_in_evidence` | 0 to 25 of 56 | 0 to 44.6% |
+| `not_a_field_value` | 0 to 8 of 22 | 0 to 36.4% |
+| `differs`, `implausible_attribution` | exactly 0 | taken whole |
+| **population** | **0 to 178 of 1,445** | 0 to **12.3%** |
+
+These are what this pre-registered method would print, **not a limit on what
+the sample could establish**. Bonferroni and the discreteness of exact bounds
+are both conservative, and another valid method could be narrower. The method
+is fixed now so that the choice cannot be made after seeing the labels. An
+earlier version of this page gave 14.4% and 10.0% as "how little the best
+result would say"; those were outputs of the Wilson method, which did not
+cover.
 
 A clean result bounds the error proportion; it cannot show that it is small.
 Every `cannot_tell` widens these.
