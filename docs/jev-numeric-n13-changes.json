@@ -1,0 +1,315 @@
+{
+  "what_this_is": "n12 against n13 over every distinct claim in the controls frame, from two recorded runs of committed code with clean trees. Produced by jev_provenance::census_of_every_claim.",
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "n12": {
+    "commit": "1f664e5",
+    "method_version": "n12-2026-09-24",
+    "claims": 1445,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1219,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 46
+    }
+  },
+  "n13": {
+    "commit": "88ceb8e",
+    "method_version": "n13-2026-09-25",
+    "claims": 1476,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1248,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 48
+    }
+  },
+  "existing_claims_changed": 0,
+  "existing_claims_lost": 0,
+  "new_claims": [
+    {
+      "claim": "182|DANSKE:xcse|29",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "uncertain_attribution",
+      "relation": "unsupported_construction",
+      "actual": 5.0,
+      "excerpt": "bullish technical setup, but five-day markov signal is only 0.138 and doe"
+    },
+    {
+      "claim": "187|AAPL:xnas|110",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "with buy sentiment and 5/3 confluences; five-day markov signal is +0.533. bearish co"
+    },
+    {
+      "claim": "187|ASML:xnas|68",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "bullish technical context but a bearish five-day markov signal of -0.352. hold witho"
+    },
+    {
+      "claim": "189|AAPL:xnas|93",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "llish trend, 5/3 confluences, and +0.551 five-day markov signal. congressional data i"
+    },
+    {
+      "claim": "191|AAPL:xnas|77",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "5/3 technical confluences, and a 0.5533 five-day markov long signal. bearish congres"
+    },
+    {
+      "claim": "199|V:xnys|112",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "es, low support-break risk, and a +0.585 five-day markov signal. continue holding; no"
+    },
+    {
+      "claim": "201|AAPL:xnas|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five bullish technical confluences, low supp"
+    },
+    {
+      "claim": "201|AAPL:xnas|71",
+      "figure": "five",
+      "field": "markov.horizon_days",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "nces, low support-break risk, and strong five-day markov long signal; deferred solely"
+    },
+    {
+      "claim": "201|AMGN:xnas|22",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "existing holding with five bullish confluences, low support-break"
+    },
+    {
+      "claim": "203|ADBE:xnas|74",
+      "figure": "four",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 4.0,
+      "excerpt": "56834030151367, bullish technical trend, four confluences, and low support-break risk"
+    },
+    {
+      "claim": "203|CMG:xnys|61",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "gnal of 0.3670777380466461 combines with five bullish technical confluences and low s"
+    },
+    {
+      "claim": "203|COP:xnys|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five technical confluences, bullish trend, p"
+    },
+    {
+      "claim": "204|AKERBP:xosl|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy setup and bull-state mar"
+    },
+    {
+      "claim": "204|CARL-B:xcse|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy trend with low 0.239 sup"
+    },
+    {
+      "claim": "204|DB1GN:xetr|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy trend with low 0.226 sup"
+    },
+    {
+      "claim": "204|ENI:xmil|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy trend, low 0.215 support"
+    },
+    {
+      "claim": "205|BKNG:xnas|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy trend with low support-b"
+    },
+    {
+      "claim": "205|CRM:xnys|44",
+      "figure": "four",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 4.0,
+      "excerpt": "lish overweight technical structure with four confluences, low support-break risk, an"
+    },
+    {
+      "claim": "205|DDOG:xnas|67",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "d regime: buy technicals, bullish trend, five confluences, low support-break risk, an"
+    },
+    {
+      "claim": "205|KO:xnys|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy technical trend with low"
+    },
+    {
+      "claim": "206|GN:xcse|44",
+      "figure": "four",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 4.0,
+      "excerpt": "lish overweight technical structure with four confluences, low support-break risk, an"
+    },
+    {
+      "claim": "206|SIE:xetr|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy signal, bullish moving-a"
+    },
+    {
+      "claim": "206|UCG:xmil|0",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "five-confluence buy classification, bullish"
+    },
+    {
+      "claim": "207|AMZN:xnas|33",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "new diversified starter: bullish five-confluence technical setup and positive"
+    },
+    {
+      "claim": "207|KO:xnys|31",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "uncertain_attribution",
+      "relation": "unsupported_construction",
+      "actual": 5.0,
+      "excerpt": "new defensive starter: bullish five-confluence technical setup with very lo"
+    },
+    {
+      "claim": "213|NVDA:xnas|8",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "bullish five-confluence trend and low support-break"
+    },
+    {
+      "claim": "219|AVGO:xnas|0",
+      "figure": "six",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 6.0,
+      "excerpt": "six-confluence bullish trend and +0.540 bul"
+    },
+    {
+      "claim": "219|DE:xnys|7",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "strong five-confluence and +0.630 markov bull watch"
+    },
+    {
+      "claim": "221|AVGO:xnas|7",
+      "figure": "six",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 6.0,
+      "excerpt": "strong six-confluence bullish trend and +0.5413 bu"
+    },
+    {
+      "claim": "231|DIS:xnys|40",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "actionable diversified starter: bullish five-confluence technical setup, low support"
+    },
+    {
+      "claim": "232|JNJ:xnys|54",
+      "figure": "five",
+      "field": "daily_indicators.confluence_count",
+      "verdict": "matches",
+      "relation": "equals",
+      "actual": 5.0,
+      "excerpt": "ed healthcare starter candidate: bullish five-confluence daily structure and low supp"
+    }
+  ]
+}

@@ -1,9 +1,56 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n12-2026-09-24`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n13-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
-stands as scored. `n11` widened the evidence and `n12` added two names (both
-below); each change is measured claim by claim against the version before it.
+stands as scored. The whole-note audit is keyed to `n12`.
+- `n11` widened the evidence.
+- `n12` added two names.
+- `n13` reads numbers written as words.
+
+Each change is measured claim by claim against the version before it, below.
+
+## `n13`: numbers written as words
+
+Every omission the whole-note audit found in a note the checker read was a
+number written as a word: "five-day", "five-confluence", "Five bullish
+technical confluences". The scanner read digits only.
+
+Most number words in the notes are not field values, though. Of 80 in the
+1,116 notes, "one share" alone appears 27 times, beside "two weeks", "one
+position" and "zero buy budget". So a word becomes a figure only in two closed
+forms, both of whole-number fields:
+- **A confluence count:** the word, then up to two of `bullish`, `bearish`,
+  `technical` or `daily`, then `confluence(s)`, all in one clause.
+- **The Markov horizon**, by the `n12` horizon rule.
+
+Anything else is not scanned at all, so it adds no abstentions.
+
+"Zero bear probability" names a field, but a word states no precision for a
+probability, and compared at none it would accept anything under 0.5. It is
+left unread. A number word never contests a phrase in attribution. The count
+form uses up its own "confluences", so a neighbouring figure keeps its field.
+
+Measured over the frame in `jev-numeric-n13-changes.json`, from two recorded
+runs of committed code (`n12` at `1f664e5`, `n13` at `88ceb8e`):
+
+| | claims |
+|---|---|
+| existing claims changed or lost | **0** |
+| new: confluence count, `matches` | 23 |
+| new: horizon, `matches` | 6 |
+| new: `uncertain_attribution` | 2 |
+| new: `differs` | **0** |
+
+- **The two uncertain** are the grammar's documented over-abstention. "…and
+  does not justify…" puts a negation in the clause; "projected" is
+  prospective.
+- **All 31 new claims are field values.** No share count, week or budget was
+  read.
+- **Compared claims:** 1,228 of 1,445 at `n12`, 1,257 of 1,476 at `n13`. This
+  is coverage, not correctness.
+- **The whole-note audit's six word omissions**, in three notes the checker
+  read, are now all found, and all match. The audit shaped this fix, so that
+  is regression evidence, not a validation.
 
 ## `n12`: two names the checker did not know
 

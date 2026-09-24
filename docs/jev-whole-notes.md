@@ -297,6 +297,10 @@ read figures in, the count goes from 1 to 0.
 **Open, and not settled here:**
 - **Truncation**, as above.
 - **Numbers written as words**, the only omission in notes the checker read.
+  *Fixed since, 2026-09-25, in `n13` (`jev-numeric-grammar.md`):* all six are
+  now found, and all six match. This audit shaped that fix, so it is
+  regression evidence for `n13`, not a validation of it. The instrument stays
+  keyed to `n12`, and its result stands as scored.
 - **Notes excluded for lacking an indicator snapshot.** Their Markov figures
   could be checked; six were, by the labeller, and all six are consistent.
 - **Found but not compared.** Six claims were refused by the grammar or the
