@@ -48,7 +48,12 @@ use std::sync::LazyLock;
 /// `n12` reads two names `n11` missed: "R/R" as `reward_risk`, and the Markov
 /// horizon written as a duration ("5-day") as `markov.horizon_days`, which the
 /// gap grammar also sets aside where it qualifies a Markov field.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n12-2026-09-24";
+///
+/// `n13` reads numbers written as words, in two closed forms only: a
+/// confluence count ("five-confluence", "Five bullish technical confluences")
+/// and the Markov horizon ("five-day"). Every omission the whole-note audit
+/// found in a note the checker read was one of these.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n13-2026-09-25";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -631,7 +636,7 @@ fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
 fn without_markov_horizons(text: &str, from: usize, to: usize) -> String {
     let mut kept = String::new();
     let mut cursor = from;
-    for number in scan_numbers(text) {
+    for number in scan_figures(text) {
         if number.start < cursor || number.end > to {
             continue;
         }
@@ -843,7 +848,7 @@ pub(crate) struct FigureSpan {
 
 #[cfg(test)]
 pub(crate) fn figure_at(text: &str, offset: usize) -> Option<FigureSpan> {
-    scan_numbers(text)
+    scan_figures(text)
         .into_iter()
         .find(|found| found.start == offset)
         .map(|found| FigureSpan {
@@ -875,7 +880,7 @@ pub(crate) fn field_is_discrete(path: &str) -> bool {
 /// Checks every numeric assertion in `note` against `evidence`.
 pub(crate) fn numeric_checks(note: &str, evidence: &JsonValue) -> Vec<NumericCheck> {
     let lowered = note.to_lowercase();
-    let numbers = scan_numbers(&lowered);
+    let numbers = scan_figures(&lowered);
     let (fields, uncertain, phrase_end) = attribute_all(&lowered, &numbers);
     numbers
         .iter()
@@ -901,6 +906,121 @@ struct FoundNumber {
     explicit_sign: bool,
     start: usize,
     end: usize,
+    /// Written as a word -- "five" -- rather than in digits.
+    word: bool,
+}
+
+/// Every figure the checker reads: those written in digits, and those written
+/// as words in the two forms where a word states a field's value.
+fn scan_figures(text: &str) -> Vec<FoundNumber> {
+    let mut found = scan_numbers(text);
+    found.extend(number_words(text));
+    found.sort_by_key(|number| number.start);
+    found
+}
+
+/// Number words, and the whole value each one states.
+const NUMBER_WORDS: &[(&str, f64)] = &[
+    ("zero", 0.0),
+    ("one", 1.0),
+    ("two", 2.0),
+    ("three", 3.0),
+    ("four", 4.0),
+    ("five", 5.0),
+    ("six", 6.0),
+    ("seven", 7.0),
+    ("eight", 8.0),
+    ("nine", 9.0),
+    ("ten", 10.0),
+    ("eleven", 11.0),
+    ("twelve", 12.0),
+];
+
+/// Words that may stand between a number word and "confluences": "Five
+/// bullish technical confluences". A closed set, so "five names with
+/// confluences" is not read as a count.
+const COUNT_WORD_ADJECTIVES: &[&str] = &["bullish", "bearish", "technical", "daily"];
+
+/// Where the "confluence" a number word counts sits, if the word is written
+/// as a confluence count: "five-confluence", "four confluences", "Five bullish
+/// technical confluences" -- at most two of the adjectives between, all in
+/// one clause.
+fn word_count_phrase(text: &str, number: &FoundNumber) -> Option<(usize, usize)> {
+    let (_, clause_end) = clause_bounds(text, number.start);
+    let mut cursor = number.end;
+    let mut adjectives = 0;
+    loop {
+        let tail = text.get(cursor..clause_end)?;
+        let trimmed = tail.trim_start_matches(['-', ' ', '\u{2011}']);
+        let start = cursor + (tail.len() - trimmed.len());
+        let length = trimmed
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(trimmed.len());
+        if length == 0 {
+            // Punctuation or the clause's end: no field word follows.
+            return None;
+        }
+        let word = &trimmed[..length];
+        if word == "confluence" || word == "confluences" {
+            return Some((start, start + length));
+        }
+        if adjectives < 2 && COUNT_WORD_ADJECTIVES.contains(&word) {
+            adjectives += 1;
+            cursor = start + length;
+            continue;
+        }
+        return None;
+    }
+}
+
+/// Numbers written as words, kept only where a word states a field's value.
+///
+/// The scanner read digits alone, so "five-day Markov signal", "Five
+/// bullish technical confluences" and "five-confluence trend" were never
+/// checked. Those were every omission the whole-note audit found in a note the
+/// checker read. But most number words in the notes are not field values --
+/// "one share" alone appears 27 times, beside "two weeks", "one position",
+/// "zero buy budget" -- so a word is kept only in two closed forms, both of
+/// whole-number fields:
+///
+/// - a confluence count, as `word_count_phrase` reads it;
+/// - the Markov horizon, as `markov_horizon_unit_end` reads it.
+///
+/// Anything else is not a figure at all. "Zero bear probability" names a
+/// field, but a word states no precision for a probability, and compared at
+/// none it would accept anything under 0.5; it is left unread.
+fn number_words(text: &str) -> Vec<FoundNumber> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    for (word, value) in NUMBER_WORDS {
+        for (start, _) in text.match_indices(word) {
+            let end = start + word.len();
+            let alone = start
+                .checked_sub(1)
+                .is_none_or(|previous| !bytes[previous].is_ascii_alphanumeric())
+                && bytes
+                    .get(end)
+                    .is_none_or(|next| !next.is_ascii_alphanumeric());
+            if !alone {
+                continue;
+            }
+            let number = FoundNumber {
+                value: *value,
+                decimals: 0,
+                percent: false,
+                explicit_sign: false,
+                start,
+                end,
+                word: true,
+            };
+            if word_count_phrase(text, &number).is_some()
+                || markov_horizon_unit_end(text, &number).is_some()
+            {
+                found.push(number);
+            }
+        }
+    }
+    found
 }
 
 /// Finds signed decimal figures, hand-rolled because this crate carries no
@@ -983,6 +1103,7 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
                     explicit_sign,
                     start,
                     end,
+                    word: false,
                 });
             }
         }
@@ -1174,7 +1295,9 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
     // horizon claimed the phrase and the figure it named went unattributed.
     let eligible: Vec<bool> = numbers
         .iter()
-        .map(|number| !measures_something_else(text, number.end))
+        // A number word never contests a phrase: it is kept only where its
+        // own form already names the field.
+        .map(|number| !number.word && !measures_something_else(text, number.end))
         .collect();
 
     let searchable = with_separators_normalised(text);
@@ -1262,6 +1385,21 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
         if markov_horizon_unit_end(text, number).is_some() {
             assigned[index] = horizon;
             settled[index] = true;
+        }
+    }
+    // A count written as a word, and the "confluences" it names, which is
+    // used up by it so no other figure can claim it.
+    let count = FIELDS
+        .iter()
+        .find(|field| field.path == "daily_indicators.confluence_count");
+    for (index, number) in numbers.iter().enumerate() {
+        if !number.word || settled[index] {
+            continue;
+        }
+        if let Some(phrase) = word_count_phrase(text, number) {
+            assigned[index] = count;
+            settled[index] = true;
+            consumed.push(phrase);
         }
     }
     // The count-over-minimum notation, settled before anything else reads the
@@ -3188,5 +3326,174 @@ mod n12_attribution {
         let signal = check(note, 0.5597);
         assert_eq!(signal.field, Some("markov.signed_signal"));
         assert_eq!(signal.verdict, NumericVerdict::Matches);
+    }
+}
+
+/// `n13`: numbers written as words, read in two closed forms and nowhere else.
+#[cfg(test)]
+mod n13_number_words {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence(count: i64) -> JsonValue {
+        json!({
+            "daily_indicators": {"confluence_count": count, "min_confluences": 3,
+                                 "support": {"break_risk": 0.2146940568}},
+            "markov": {"signed_signal": 0.138, "horizon_days": 5, "bear_prob": 0.3},
+        })
+    }
+
+    fn checks(note: &str, count: i64) -> Vec<NumericCheck> {
+        numeric_checks(note, &evidence(count))
+    }
+
+    /// Where each whole number word sits in the lowercased note.
+    fn word_positions(note: &str) -> Vec<usize> {
+        let lowered = note.to_lowercase();
+        NUMBER_WORDS
+            .iter()
+            .flat_map(|(word, _)| {
+                lowered
+                    .match_indices(word)
+                    .map(|(start, _)| (start, start + word.len()))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|(start, end)| {
+                let bytes = lowered.as_bytes();
+                start
+                    .checked_sub(1)
+                    .is_none_or(|previous| !bytes[previous].is_ascii_alphanumeric())
+                    && bytes
+                        .get(*end)
+                        .is_none_or(|next| !next.is_ascii_alphanumeric())
+            })
+            .map(|(start, _)| start)
+            .collect()
+    }
+
+    /// Each phrasing the whole-note audit found omitted, and the other count
+    /// forms in the stored notes.
+    #[test]
+    fn a_count_written_as_a_word_is_read() {
+        for (note, count) in [
+            (
+                "Five-confluence BUY trend, low 0.215 support-break risk.",
+                5,
+            ),
+            (
+                "Five bullish technical confluences, low support-break risk",
+                5,
+            ),
+            ("Five technical confluences, bullish trend", 5),
+            (
+                "bullish technical trend, four confluences, and low support-break risk",
+                4,
+            ),
+            ("Six-confluence bullish trend and positive Markov", 6),
+            (
+                "BUY technicals, bullish trend, five confluences, low risk",
+                5,
+            ),
+        ] {
+            let at = word_positions(note)[0];
+            let word = checks(note, count)
+                .into_iter()
+                .find(|check| check.offset == at)
+                .unwrap_or_else(|| panic!("the count was not read in {note:?}"));
+            assert_eq!(
+                word.field,
+                Some("daily_indicators.confluence_count"),
+                "{note}"
+            );
+            assert_eq!(word.quoted, count as f64, "{note}");
+            assert_eq!(word.verdict, NumericVerdict::Matches, "{note}");
+        }
+    }
+
+    /// A count that is not the one in the evidence is flagged, like a digit.
+    #[test]
+    fn a_wrong_count_in_words_is_flagged() {
+        let found = checks("four confluences and a bullish trend", 5);
+        assert_eq!(found[0].field, Some("daily_indicators.confluence_count"));
+        assert_eq!(found[0].verdict, NumericVerdict::Differs);
+    }
+
+    /// The horizon written as a word, and the signal beside it still read.
+    #[test]
+    fn the_horizon_written_as_a_word_is_read() {
+        let found = checks(
+            "Bullish technical setup, but five-day Markov signal is only 0.138 and falling",
+            5,
+        );
+        let horizon = found
+            .iter()
+            .find(|check| check.quoted == 5.0)
+            .expect("horizon");
+        assert_eq!(horizon.field, Some("markov.horizon_days"));
+        assert_eq!(horizon.verdict, NumericVerdict::Matches);
+        let signal = found
+            .iter()
+            .find(|check| check.quoted == 0.138)
+            .expect("signal");
+        assert_eq!(signal.field, Some("markov.signed_signal"));
+        assert_eq!(signal.verdict, NumericVerdict::Matches);
+        // And set aside in a gap, as a digit horizon is.
+        let gap = checks(
+            "existing position; markov five-day signal is 0.138. hold",
+            5,
+        );
+        let signal = gap
+            .iter()
+            .find(|check| check.quoted == 0.138)
+            .expect("signal");
+        assert_eq!(signal.verdict, NumericVerdict::Matches);
+    }
+
+    /// The count uses up its own "confluence", so the figure beside it keeps
+    /// its field.
+    #[test]
+    fn the_counted_phrase_is_not_left_for_a_neighbour() {
+        let found = checks("Five-confluence BUY trend, low 0.215 support-break risk", 5);
+        let risk = found
+            .iter()
+            .find(|check| check.quoted == 0.215)
+            .expect("risk");
+        assert_eq!(risk.field, Some("daily_indicators.support.break_risk"));
+        assert_eq!(risk.verdict, NumericVerdict::Matches);
+    }
+
+    /// Every other use of a number word in the stored notes stays unread: not
+    /// an abstention, not a figure at all.
+    #[test]
+    fn number_words_that_are_not_field_values_are_not_figures() {
+        for note in [
+            "Markov is also positive, but one share is about 13289.31 DKK",
+            "Bearish Congress flow limits the order to four shares.",
+            "Restrained two-share entry limits momentum-extension risk",
+            "Not actionable today because one or two shares would breach the limit",
+            "avoid new exposure in the next two weeks.",
+            "budget only accommodates one position.",
+            "deferred by zero buy budget.",
+            "leaving near-zero buffer flexibility.",
+            "the strongest of the five names with confluences",
+        ] {
+            let words = word_positions(note);
+            assert!(!words.is_empty(), "{note}");
+            assert!(
+                checks(note, 5)
+                    .iter()
+                    .all(|check| !words.contains(&check.offset)),
+                "a number word was read in {note:?}"
+            );
+        }
+        // Inside another word, it is not a number word at all.
+        assert!(word_positions("someone noted a bullish trend").is_empty());
+    }
+
+    /// "Zero bear probability" names a field, but a word states no precision
+    /// for a probability; compared at none it would accept anything under 0.5.
+    #[test]
+    fn zero_for_a_probability_is_left_unread() {
+        assert!(checks("conviction with zero bear probability; high priority", 5).is_empty());
     }
 }
