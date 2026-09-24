@@ -28,6 +28,8 @@ mod jev_challenge;
 #[cfg(test)]
 mod jev_controls;
 mod jev_numeric;
+#[cfg(test)]
+mod jev_provenance;
 mod jev_review;
 mod jev_signals;
 // A regression and measurement asset, not a runtime path.
