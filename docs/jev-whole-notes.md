@@ -12,6 +12,7 @@ controls used. The key is at numeric method `n12-2026-09-24`. Seed
 | `jev-whole-notes-v1-labeller-notes.md` | the labeller's reasoning for every uncertain or contradicting claim |
 | `jev-whole-notes-v1-labelling-provenance.json` | who labelled, from what, with fingerprints |
 | `jev-whole-notes-v1-results.json` | the single scoring run, unedited, with fingerprints |
+| `jev-whole-notes-v1-reconciliation.json` | every disagreement, reconciled against the evidence, beside the labels |
 
 ## Why
 
@@ -238,6 +239,70 @@ unchanged by this audit.
   their Markov figures could be checked.
 - **Eleven figures were found but not compared,** for grammar and attribution
   reasons, and none of them was wrong.
+
+## Reconciliation
+
+`jev-whole-notes-v1-reconciliation.json`, 2026-09-25, **by the checker's
+author**: not independent. Every reading cites the evidence in its case. The
+rule is the controls' rule: the evidence settles a disagreement and the rubric
+settles how to read it. Where neither can, the reading stays as labelled.
+
+**No label changes, and the reconciled figures equal the scored ones.** Every
+value the labeller judged was checked against its evidence, and each reading
+holds. A test checks, on every build:
+- the delivered labels are byte-identical to the hashed file;
+- every entry quotes the label, and the checker's handling and figures,
+  exactly;
+- each of the 52 `cannot_tell` is classified exactly once;
+- the figures are what the frozen scorer gives.
+
+It is checked by breaking it: a misquoted label, a wrong handling, a wrong
+figure and a dropped classification each fail it.
+
+It covers 35 numeric claims — every one the checker did not simply accept
+against the same field:
+
+| point | claims | reconciled |
+|---|---|---|
+| never found (`omission`) | 17 | **the label stands in every case.** The 12 consistent ones agree with their evidence. Every omission in a note the checker read is a number written as a word. |
+| found, not compared | 11 | **the label stands.** The 9 consistent ones agree with their evidence. |
+| checker matched the figure; the label judges a broader claim `cannot_tell` | 3 | **no conflict.** The number agrees; what is undecidable is "strong", "fresh" or "favorable". |
+| ASML "break risk (0.400)" against 0.4006 | 1 | **the convention is unresolved; the label is kept.** Truncation gives 0.400 and rounding gives 0.401, as with LMND. |
+| FLS "593 DKK support", flagged | 1 | **label and checker agree.** The controls' blind labeller read it the same way. The 2026-09-22 adjudication is still not revised by the checker's author. |
+| FLS "consolidating near 593 DKK support" | 1 | **no conflict.** The flagged figure is judged in its own claim; this one is about consolidating. |
+| field focus: "low 0.122 modeled support-break risk" | 1 | **both agree with the evidence.** The label judges the "low" label; the checker compared the figure. |
+
+**Figures no claim covers.** All 11 are out of scope, and the labeller and the
+checker agree.
+
+**What the 52 `cannot_tell` are:**
+
+| reason | claims |
+|---|---|
+| a strength word with no threshold: strong, weak, mild, modest, solid, favorable, high-conviction | 21 |
+| missing evidence: the candidate had no indicator snapshot | 11 |
+| "fresh", with no report timestamp | 9 |
+| a claim the evidence has no field for: an intraday move, a broker or monitored quote, sector strength | 5 |
+| a comparison or pattern with no reference: "weaker", "extended", "consolidating" | 3 |
+| ambiguous wording: "OVERWEIGHT/BUY", "Overweight" | 3 |
+
+30 of the 52 are strength and freshness words. Defining them would be a rubric
+change for a future instrument, not a reading of this one.
+
+**Truncation, as a scenario, not a reconciled reading.** If the rubric accepted
+truncation as the checker does, only ASML moves. Unflagged numeric errors would
+be **0 to 376 of 1,116 notes** instead of 1 to 395. In the notes the checker
+read figures in, the count goes from 1 to 0.
+
+**Open, and not settled here:**
+- **Truncation**, as above.
+- **Numbers written as words**, the only omission in notes the checker read.
+- **Notes excluded for lacking an indicator snapshot.** Their Markov figures
+  could be checked; six were, by the labeller, and all six are consistent.
+- **Found but not compared.** Six claims were refused by the grammar or the
+  attribution margin. Five had no field: a percentage for a fraction-stored
+  risk, "distance to support", a DKK unit price, a monitored quote and an
+  intraday move. None of the eleven is wrong.
 
 ## What it will not establish
 

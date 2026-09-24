@@ -729,6 +729,7 @@ mod sampling {
     const INSTRUMENT_PATH: &str = "docs/jev-whole-notes-v1.json";
     const KEY_PATH: &str = "docs/jev-whole-notes-v1-key.json";
     const LABELS_PATH: &str = "docs/jev-whole-notes-v1-labels.json";
+    const RECONCILIATION_PATH: &str = "docs/jev-whole-notes-v1-reconciliation.json";
 
     /// How many notes to draw from each stratum. Weighted toward the notes
     /// the checker read, where an omission is a failure of extraction rather
@@ -884,6 +885,176 @@ mod sampling {
         );
         assert_ne!(report["status"], "rejected", "{report:#}");
         println!("{}", serde_json::to_string_pretty(&report).expect("json"));
+    }
+
+    /// The figures a reconciliation reports, small enough to write into the
+    /// file and check against the scorer.
+    fn headline(report: &JsonValue) -> JsonValue {
+        let mut strata = serde_json::Map::new();
+        for (stratum, detail) in report["per_stratum"].as_object().into_iter().flatten() {
+            let mut outcomes = serde_json::Map::new();
+            for outcome in OUTCOMES {
+                let row = &detail["outcomes"][outcome];
+                outcomes.insert(
+                    outcome.to_string(),
+                    json!([row["yes"], row["no"], row["unresolved"]]),
+                );
+            }
+            strata.insert(stratum.clone(), JsonValue::Object(outcomes));
+        }
+        let mut population = serde_json::Map::new();
+        for outcome in OUTCOMES {
+            population.insert(
+                outcome.to_string(),
+                report["population_estimate"]["outcomes"][outcome]["notes"].clone(),
+            );
+        }
+        json!({
+            "yes_no_unresolved_by_stratum": strata,
+            "notes_in_population": population,
+            "claims_described": report["claims_described"],
+        })
+    }
+
+    /// The labels with some readings put beside them -- on a copy, never on
+    /// the delivered file. A reading names a claim as `note-id#index`.
+    fn with_readings(labels: &[NoteLabel], readings: &[JsonValue]) -> Vec<NoteLabel> {
+        let mut copy = labels.to_vec();
+        for reading in readings {
+            let reference = reading["claim"].as_str().expect("claim");
+            let (id, index) = reference.split_once('#').expect("note-id#index");
+            let index: usize = index.parse().expect("index");
+            let claim = copy
+                .iter_mut()
+                .find(|label| label.id == id)
+                .and_then(|label| label.claims.get_mut(index))
+                .unwrap_or_else(|| panic!("a reading for {reference}, which has no claim"));
+            claim.verdict = reading["verdict"].as_str().expect("verdict").into();
+            claim.field = reading["field"].as_str().expect("field").into();
+        }
+        copy
+    }
+
+    /// The reconciliation sits beside the labels, not over them. It must leave
+    /// the delivered file byte for byte as it was, quote the labels and the
+    /// key faithfully, account for every `cannot_tell` exactly once, and
+    /// report the figures the frozen scorer actually gives.
+    #[test]
+    fn the_reconciliation_is_beside_the_labels_not_over_them() {
+        use sha2::Digest;
+        let (Some(reconciliation), Some((cases, keys, population, _)), Some(labels_document)) = (
+            document(RECONCILIATION_PATH),
+            frozen(),
+            document(LABELS_PATH),
+        ) else {
+            return;
+        };
+        let delivered = std::fs::read(LABELS_PATH).expect("labels");
+        assert_eq!(
+            reconciliation["reconciles"]["labels_sha256"],
+            format!("{:x}", sha2::Sha256::digest(&delivered)),
+            "the delivered labels were edited"
+        );
+        assert_eq!(reconciliation["protocol"], PROTOCOL_VERSION);
+        let labels: Vec<NoteLabel> =
+            serde_json::from_value(labels_document["labels"].clone()).expect("labels");
+        let notes: BTreeMap<&str, &NoteCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
+        let key_by_id: BTreeMap<&str, &NoteKey> =
+            keys.iter().map(|key| (key.id.as_str(), key)).collect();
+        let claim_at = |reference: &str| -> (&NoteCase, &NoteKey, &ClaimLabel) {
+            let (id, index) = reference.split_once('#').expect("note-id#index");
+            let label = labels
+                .iter()
+                .find(|label| label.id == id)
+                .expect("labelled");
+            let claim = &label.claims[index.parse::<usize>().expect("index")];
+            (notes[id], key_by_id[id], claim)
+        };
+
+        let entries = reconciliation["entries"].as_array().expect("entries");
+        for entry in entries {
+            let reference = entry["claim"].as_str().expect("claim");
+            let (case, key, claim) = claim_at(reference);
+            assert_eq!(
+                entry["quote"], claim.quote,
+                "{reference} misquotes the label"
+            );
+            assert_eq!(entry["kind"], claim.kind, "{reference}");
+            assert_eq!(entry["label"]["verdict"], claim.verdict, "{reference}");
+            assert_eq!(entry["label"]["field"], claim.field, "{reference}");
+            let span = quote_span(&case.note, &claim.quote).expect("span");
+            assert_eq!(
+                entry["checker"]["handling"],
+                handling(span, &key.extracted).as_str(),
+                "{reference} misquotes the key"
+            );
+            let figures: Vec<JsonValue> = key
+                .extracted
+                .iter()
+                .filter(|figure| span.0 <= figure.start && figure.end <= span.1)
+                .map(|figure| json!({"figure": figure.figure, "field": figure.field, "verdict": figure.verdict}))
+                .collect();
+            assert_eq!(entry["checker"]["figures"], json!(figures), "{reference}");
+            let changes = entry["reconciled"]["verdict"] != entry["label"]["verdict"]
+                || entry["reconciled"]["field"] != entry["label"]["field"];
+            assert_eq!(entry["changes_label"], changes, "{reference}");
+        }
+
+        let mut classified: Vec<&str> = reconciliation["cannot_tell_by_reason"]
+            .as_object()
+            .expect("reasons")
+            .values()
+            .flat_map(|refs| refs.as_array().expect("refs").iter())
+            .map(|reference| reference.as_str().expect("ref"))
+            .collect();
+        classified.sort_unstable();
+        let mut unresolved: Vec<String> = labels
+            .iter()
+            .flat_map(|label| {
+                label
+                    .claims
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, claim)| claim.verdict == "cannot_tell")
+                    .map(move |(index, _)| format!("{}#{index}", label.id))
+            })
+            .collect();
+        unresolved.sort_unstable();
+        assert_eq!(
+            classified, unresolved,
+            "each cannot_tell classified exactly once"
+        );
+
+        let reconciled: Vec<JsonValue> = entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "claim": entry["claim"],
+                    "verdict": entry["reconciled"]["verdict"],
+                    "field": entry["reconciled"]["field"],
+                })
+            })
+            .collect();
+        let computed = json!({
+            "as_labelled": headline(&score(&cases, &keys, &labels, &population)),
+            "reconciled": headline(&score(&cases, &keys, &with_readings(&labels, &reconciled), &population)),
+        });
+        println!("{}", serde_json::to_string_pretty(&computed).expect("json"));
+        let figures = &reconciliation["figures"];
+        assert_eq!(figures["as_labelled"], computed["as_labelled"]);
+        assert_eq!(figures["reconciled"], computed["reconciled"]);
+        for scenario in figures["scenarios"].as_array().expect("scenarios") {
+            let readings = scenario["readings"].as_array().expect("readings");
+            let under = headline(&score(
+                &cases,
+                &keys,
+                &with_readings(&labels, readings),
+                &population,
+            ));
+            println!("{}: {}", scenario["name"], under);
+            assert_eq!(scenario["figures"], under, "{}", scenario["name"]);
+        }
     }
 
     /// The guarantee, enumerated for these strata: every error count each

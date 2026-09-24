@@ -1,0 +1,1402 @@
+{
+  "version": "whole-notes-v1-2026-09-24",
+  "protocol": "whole-notes-protocol-v1-2026-09-24",
+  "what_this_is": "The reconciliation of the whole-note labels against the checker's key, beside the labels rather than over them. The delivered labels file is not edited; a test asserts its hash.",
+  "reconciles": {
+    "labels": "docs/jev-whole-notes-v1-labels.json",
+    "labels_sha256": "4324569c6035be09029b9eba2fcbb8d6b60e6795da987846cfb1f83633e2ee34",
+    "key_sha256": "ddf6bc5183f3349173669e36fd894b9e702f0ce2fb927bf89288cfcd47f2c0f5",
+    "instrument_sha256": "80b745fe1f93a51227785e8ba245137ae59653e47b49e72c015343e96cea4ba8",
+    "results": "docs/jev-whole-notes-v1-results.json"
+  },
+  "reconciled_by": "Claude, the author of the checker. Not independent: every reading cites the evidence in its case so someone who is can check it.",
+  "reconciled_at": "2026-09-25",
+  "rule": "Where the label and the checker differ -- in whether a claim was found, how it was judged, or which field it concerns -- the evidence settles it and the rubric settles how to read it. A reading neither can settle stays as labelled, unresolved. The reconciliation does not choose where the evidence does not.",
+  "scope": "Every numeric claim the checker did not simply accept as consistent against the same field: omitted, found but not compared, flagged, accepted but judged otherwise, or judged against a different field. Also every figure the checker found that no claim covers, and every cannot_tell. Qualitative claims are reconciled only through their cannot_tell reasons, because nothing here matches them to a checker.",
+  "outcome": "No label is changed. Every disputed reading either holds on the evidence, stays unresolved, or is one where label and checker already agree. So the reconciled figures equal the scored ones. The findings are about the checker's coverage, not about the labels.",
+  "entries": [
+    {
+      "claim": "note-01185aeda5#2",
+      "source_report": 159,
+      "symbol": "DANSKE:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "RSI above 75",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "75",
+            "field": "daily_indicators.rsi14",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.rsi14 is 75.67623002753598, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-02253ed75f#1",
+      "source_report": 70,
+      "symbol": "NVDA:xnas",
+      "stratum": "never_reached",
+      "quote": "2/3 confluences",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "label_stands",
+      "basis": "daily_indicators.confluence_count is absent. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label's cannot_tell stands for the reason classified below."
+    },
+    {
+      "claim": "note-0229ed7ee5#4",
+      "source_report": 199,
+      "symbol": "GILD:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "Markov is positive at +0.492",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "+0.492",
+            "field": "markov.signed_signal",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.49179863929748535, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-023dbe8f2a#2",
+      "source_report": 82,
+      "symbol": "PLTR:xnas",
+      "stratum": "never_reached",
+      "quote": "Markov signal 0.1777",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.17772204295245786, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-025544d2c3#3",
+      "source_report": 251,
+      "symbol": "ALV:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "low 0.122 modeled support-break risk",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk_label"
+      },
+      "checker": {
+        "handling": "accepted",
+        "figures": [
+          {
+            "figure": "0.122",
+            "field": "daily_indicators.support.break_risk",
+            "verdict": "matches"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk_label"
+      },
+      "changes_label": false,
+      "point": "field_focus",
+      "settled_by": "label_stands",
+      "basis": "The checker matched the figure against daily_indicators.support.break_risk; the label judges the claim's 'daily_indicators.support.break_risk_label' part. Both agree with the evidence."
+    },
+    {
+      "claim": "note-025544d2c3#5",
+      "source_report": 251,
+      "symbol": "ALV:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "fresh +0.1592 long Markov signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.run_date"
+      },
+      "checker": {
+        "handling": "accepted",
+        "figures": [
+          {
+            "figure": "+0.1592",
+            "field": "markov.signed_signal",
+            "verdict": "matches"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.run_date"
+      },
+      "changes_label": false,
+      "point": "figure_agrees_broader_claim_unresolved",
+      "settled_by": "label_stands",
+      "basis": "The checker matched the figure, and it agrees with the evidence. The label judges the whole quote, whose undecidable part is not the number (markov.run_date: strength or freshness, classified below). There is no conflict: the figure agrees, and the broader claim stays unresolved."
+    },
+    {
+      "claim": "note-025544d2c3#8",
+      "source_report": 251,
+      "symbol": "ALV:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "monitored 451.40 EUR quote",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "451.40",
+            "field": null,
+            "verdict": "unattributed"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "label_stands",
+      "basis": "The claim names no field the evidence carries. The checker found the figure but attributed no field to it (unattributed). The label stands."
+    },
+    {
+      "claim": "note-0272e291af#1",
+      "source_report": 112,
+      "symbol": "AAKI:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "Markov is positive at 0.1634",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "0.1634",
+            "field": "markov.signed_signal",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.16336487233638763, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-03572ec8bb#5",
+      "source_report": 253,
+      "symbol": "PLTR:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "RSI near 69",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "69",
+            "field": "daily_indicators.rsi14",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.rsi14 is 69.09787928136647, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-03ddcec5c3#0",
+      "source_report": 197,
+      "symbol": "BAC:xnys",
+      "stratum": "never_reached",
+      "quote": "+0.599 Markov",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.59898841381073, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-04ff16567a#0",
+      "source_report": 313,
+      "symbol": "DFDS:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "advancing +1.63% intraday",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "+1.63%",
+            "field": null,
+            "verdict": "unattributed"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "label_stands",
+      "basis": "The claim names no field the evidence carries. The checker found the figure but attributed no field to it (unattributed). The label stands."
+    },
+    {
+      "claim": "note-0660d18e35#2",
+      "source_report": 188,
+      "symbol": "CHEMM:xcse",
+      "stratum": "never_reached",
+      "quote": "signed signal 0.548",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.5481681823730469, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-067c63e2f6#1",
+      "source_report": 23,
+      "symbol": "NVDA:xnas",
+      "stratum": "never_reached",
+      "quote": "2 confluences",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "label_stands",
+      "basis": "daily_indicators.confluence_count is absent. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label's cannot_tell stands for the reason classified below."
+    },
+    {
+      "claim": "note-06948a6e2c#2",
+      "source_report": 255,
+      "symbol": "ALV:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "very low 3.7% support-break risk",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "3.7%",
+            "field": null,
+            "verdict": "unattributed"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.support.break_risk is 0.03693945758697362, which agrees with the claim. The checker found the figure but attributed no field to it (unattributed). The label stands."
+    },
+    {
+      "claim": "note-06948a6e2c#3",
+      "source_report": 255,
+      "symbol": "ALV:xetr",
+      "stratum": "reached_with_figures",
+      "quote": "4.1% distance to support",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.downside_to_support_pct"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "4.1%",
+            "field": null,
+            "verdict": "unattributed"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.downside_to_support_pct"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.support.downside_to_support_pct is 4.061810154525381, which agrees with the claim. The checker found the figure but attributed no field to it (unattributed). The label stands."
+    },
+    {
+      "claim": "note-06cd0a9232#0",
+      "source_report": 187,
+      "symbol": "DSV:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "Strong +0.659 Markov signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.conviction"
+      },
+      "checker": {
+        "handling": "accepted",
+        "figures": [
+          {
+            "figure": "+0.659",
+            "field": "markov.signed_signal",
+            "verdict": "matches"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.conviction"
+      },
+      "changes_label": false,
+      "point": "figure_agrees_broader_claim_unresolved",
+      "settled_by": "label_stands",
+      "basis": "The checker matched the figure, and it agrees with the evidence. The label judges the whole quote, whose undecidable part is not the number (markov.conviction: strength or freshness, classified below). There is no conflict: the figure agrees, and the broader claim stays unresolved."
+    },
+    {
+      "claim": "note-06d2a2a967#2",
+      "source_report": 226,
+      "symbol": "DEMANT:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "low 0.24 modeled support-break risk",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "0.24",
+            "field": "daily_indicators.support.break_risk",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.support.break_risk is 0.2360836192000538, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-06d2a2a967#3",
+      "source_report": 226,
+      "symbol": "DEMANT:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "+0.4583 Bull-state Markov signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "+0.4583",
+            "field": "markov.signed_signal",
+            "verdict": "uncertain_attribution"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.4582517445087433, which agrees with the claim. The checker found the figure but did not compare it: the wording or the attribution was refused (uncertain_attribution). The label stands."
+    },
+    {
+      "claim": "note-076ccc4ec7#1",
+      "source_report": 181,
+      "symbol": "AMAT:xnas",
+      "stratum": "never_reached",
+      "quote": "current 5-day signed signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.horizon_days is 5, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-076ccc4ec7#2",
+      "source_report": 181,
+      "symbol": "AMAT:xnas",
+      "stratum": "never_reached",
+      "quote": "5-day signed signal is only 0.095",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.09457716345787048, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0914a280e3#3",
+      "source_report": 286,
+      "symbol": "FLS:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "consolidating near 593 DKK support",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.trend_bias"
+      },
+      "checker": {
+        "handling": "flagged",
+        "figures": [
+          {
+            "figure": "593",
+            "field": "daily_indicators.support.nearest_support",
+            "verdict": "differs"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.trend_bias"
+      },
+      "changes_label": false,
+      "point": "broader_claim",
+      "settled_by": "label_stands",
+      "basis": "The flagged figure is judged in its own claim, '593 DKK support', where label and checker agree. This longer quote is judged for 'consolidating', a pattern over time that a single snapshot cannot establish. There is no conflict with the flag."
+    },
+    {
+      "claim": "note-0914a280e3#4",
+      "source_report": 286,
+      "symbol": "FLS:xcse",
+      "stratum": "reached_with_figures",
+      "quote": "593 DKK support",
+      "kind": "numeric",
+      "label": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "checker": {
+        "handling": "flagged",
+        "figures": [
+          {
+            "figure": "593",
+            "field": "daily_indicators.support.nearest_support",
+            "verdict": "differs"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "changes_label": false,
+      "point": "agreement_with_a_flag",
+      "settled_by": "label_and_key_agree",
+      "basis": "nearest_support is 551.5 and next_support 535.0; 593.0 is the daily close. The label reads '593 DKK support' as inconsistent and the checker flagged the figure: they agree. The controls' blind labeller read the same claim the same way, and the 2026-09-22 adjudication left it ambiguous. That adjudication is not revised here either: two AI labellers agreeing is not an independent human reading, and the checker's author should not settle it in the checker's favour."
+    },
+    {
+      "claim": "note-0975b93ee0#3",
+      "source_report": 284,
+      "symbol": "ASML:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "break risk (0.400)",
+      "kind": "numeric",
+      "label": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "checker": {
+        "handling": "accepted",
+        "figures": [
+          {
+            "figure": "0.400",
+            "field": "daily_indicators.support.break_risk",
+            "verdict": "matches"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "changes_label": false,
+      "point": "convention",
+      "settled_by": "unresolved_convention",
+      "basis": "break_risk is 0.4006035157009156 and the note writes 0.400. Rounding at three decimals gives 0.401; truncation gives 0.400. The rubric's 'at the precision written' does not say which convention to accept. The labeller rounded; the checker accepts truncation by design. Neither is an arithmetic error. The label is kept as delivered, and the truncation scenario below shows the figures under the other convention. It is the same disagreement as LMND in the controls."
+    },
+    {
+      "claim": "note-0a309f05a8#0",
+      "source_report": 213,
+      "symbol": "NVDA:xnas",
+      "stratum": "reached_without_figures",
+      "quote": "Bullish five-confluence trend",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.trend_bias"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.trend_bias"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.trend_bias is bullish, which agrees with the claim at the precision written. The number is written as a word, and the scanner reads digits only. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0a309f05a8#1",
+      "source_report": 213,
+      "symbol": "NVDA:xnas",
+      "stratum": "reached_without_figures",
+      "quote": "five-confluence",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.confluence_count is 5, which agrees with the claim at the precision written. The number is written as a word, and the scanner reads digits only. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0af8ce850c#1",
+      "source_report": 311,
+      "symbol": "MU:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "favorable 2.77 reward/risk",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.reward_risk"
+      },
+      "checker": {
+        "handling": "accepted",
+        "figures": [
+          {
+            "figure": "2.77",
+            "field": "daily_indicators.reward_risk",
+            "verdict": "matches"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.reward_risk"
+      },
+      "changes_label": false,
+      "point": "figure_agrees_broader_claim_unresolved",
+      "settled_by": "label_stands",
+      "basis": "The checker matched the figure, and it agrees with the evidence. The label judges the whole quote, whose undecidable part is not the number (daily_indicators.reward_risk: strength or freshness, classified below). There is no conflict: the figure agrees, and the broader claim stays unresolved."
+    },
+    {
+      "claim": "note-0c1ac9f313#2",
+      "source_report": 114,
+      "symbol": "ASML:xams",
+      "stratum": "never_reached",
+      "quote": "Markov long signal 0.4724",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.4723711013793946, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0c50b502e1#1",
+      "source_report": 30,
+      "symbol": "ADI:xnas",
+      "stratum": "never_reached",
+      "quote": "2/3 confluences",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "label_stands",
+      "basis": "daily_indicators.confluence_count is absent. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label's cannot_tell stands for the reason classified below."
+    },
+    {
+      "claim": "note-0c9577eb16#4",
+      "source_report": 274,
+      "symbol": "MELI:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "unit price of ~12,816 DKK",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.close_dkk"
+      },
+      "checker": {
+        "handling": "abstained",
+        "figures": [
+          {
+            "figure": "12,816",
+            "field": null,
+            "verdict": "unattributed"
+          }
+        ]
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.close_dkk"
+      },
+      "changes_label": false,
+      "point": "found_not_compared",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.close_dkk is 12816.26208114624, which agrees with the claim. The checker found the figure but attributed no field to it (unattributed). The label stands."
+    },
+    {
+      "claim": "note-0cd778ef4e#3",
+      "source_report": 187,
+      "symbol": "AAPL:xnas",
+      "stratum": "reached_with_figures",
+      "quote": "five-day Markov signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.horizon_days is 5, which agrees with the claim at the precision written. The number is written as a word, and the scanner reads digits only. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0e074632e0#1",
+      "source_report": 96,
+      "symbol": "DDOG:xnas",
+      "stratum": "never_reached",
+      "quote": "signed_signal 0.6436",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.signed_signal is 0.6435773372650146, which agrees with the claim at the precision written. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-0edf4ac9b0#1",
+      "source_report": 23,
+      "symbol": "AMD:xnas",
+      "stratum": "never_reached",
+      "quote": "2 confluences",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "label_stands",
+      "basis": "daily_indicators.confluence_count is absent. The note never reached the checker: its candidate had no indicator snapshot, or was past the question budget, so nothing in it was scanned. The label's cannot_tell stands for the reason classified below."
+    },
+    {
+      "claim": "note-10bc7c4231#0",
+      "source_report": 201,
+      "symbol": "AAPL:xnas",
+      "stratum": "reached_without_figures",
+      "quote": "Five bullish technical confluences",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "daily_indicators.confluence_count is 5, which agrees with the claim at the precision written. The number is written as a word, and the scanner reads digits only. The label stands: a correct claim the checker never saw."
+    },
+    {
+      "claim": "note-10bc7c4231#3",
+      "source_report": 201,
+      "symbol": "AAPL:xnas",
+      "stratum": "reached_without_figures",
+      "quote": "strong five-day Markov long signal",
+      "kind": "numeric",
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.conviction"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.conviction"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "label_stands",
+      "basis": "markov.conviction is 0.5639246702194214. The number is written as a word, and the scanner reads digits only. The label's cannot_tell stands for the reason classified below."
+    },
+    {
+      "claim": "note-10bc7c4231#4",
+      "source_report": 201,
+      "symbol": "AAPL:xnas",
+      "stratum": "reached_without_figures",
+      "quote": "five-day Markov",
+      "kind": "numeric",
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "checker": {
+        "handling": "omitted",
+        "figures": []
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "point": "omission",
+      "settled_by": "evidence",
+      "basis": "markov.horizon_days is 5, which agrees with the claim at the precision written. The number is written as a word, and the scanner reads digits only. The label stands: a correct claim the checker never saw."
+    }
+  ],
+  "cannot_tell_by_reason": {
+    "undefined_strength": [
+      "note-007460c2e3#0",
+      "note-01f2db338f#0",
+      "note-025fdb3ec8#0",
+      "note-030cb27210#0",
+      "note-044cc1ea49#2",
+      "note-054788d3fc#0",
+      "note-0600ff3bc2#4",
+      "note-067cd954dc#0",
+      "note-06cd0a9232#0",
+      "note-076ccc4ec7#0",
+      "note-089dd3e104#0",
+      "note-0902a212fa#1",
+      "note-0983e36f83#0",
+      "note-0af8ce850c#1",
+      "note-0c9577eb16#0",
+      "note-0e074632e0#0",
+      "note-10190baeae#0",
+      "note-10bc7c4231#3",
+      "note-124a001899#0",
+      "note-128a9f3e32#0",
+      "note-144466618e#1"
+    ],
+    "missing_evidence": [
+      "note-02253ed75f#0",
+      "note-02253ed75f#1",
+      "note-067c63e2f6#0",
+      "note-067c63e2f6#1",
+      "note-0850abc1c8#0",
+      "note-0bc54be301#1",
+      "note-0c50b502e1#0",
+      "note-0c50b502e1#1",
+      "note-0c50b502e1#2",
+      "note-0edf4ac9b0#0",
+      "note-0edf4ac9b0#1"
+    ],
+    "freshness_without_timestamp": [
+      "note-003d807e9e#2",
+      "note-023dbe8f2a#0",
+      "note-025544d2c3#5",
+      "note-03572ec8bb#6",
+      "note-054788d3fc#1",
+      "note-0660d18e35#0",
+      "note-0a309f05a8#3",
+      "note-0c1ac9f313#0",
+      "note-13de58803a#1"
+    ],
+    "no_field_for_the_claim": [
+      "note-025544d2c3#8",
+      "note-04ff16567a#0",
+      "note-06cd0a9232#3",
+      "note-0c50b502e1#3",
+      "note-10190baeae#2"
+    ],
+    "comparison_or_pattern_without_reference": [
+      "note-01b1b36be9#1",
+      "note-026dd3c07f#3",
+      "note-0914a280e3#3"
+    ],
+    "ambiguous_wording": [
+      "note-0bc54be301#0",
+      "note-0e87cf0328#0",
+      "note-0e87cf0328#1"
+    ]
+  },
+  "cannot_tell_reasons_mean": {
+    "undefined_strength": "A strength or quality word -- strong, weak, mild, modest, solid, favorable, high-conviction -- for which the evidence and the rubric give no threshold.",
+    "missing_evidence": "The field the claim needs is null in the evidence: the candidate had no indicator snapshot.",
+    "freshness_without_timestamp": "'Fresh' needs the report's time and an allowed age; a run_date alone gives neither.",
+    "no_field_for_the_claim": "The claim concerns something the evidence carries no field for: an intraday move, a broker or monitored quote, sector strength.",
+    "comparison_or_pattern_without_reference": "'Weaker', 'extended', 'consolidating': a comparison or a pattern over time that one snapshot cannot establish.",
+    "ambiguous_wording": "Two readings are both defensible, such as 'OVERWEIGHT/BUY' or 'Overweight' as sentiment or as portfolio weight."
+  },
+  "figures_no_claim_covers": {
+    "reading": "All eleven are out of scope by the rubric -- allocations, a limit reference, a position's profit, a share count, a total return, a stop and a budget. The labeller was right not to claim them, and the checker right not to compare them. Agreement, recorded.",
+    "figures": [
+      {
+        "note": "note-00c8887a26",
+        "source_report": 113,
+        "symbol": "BAC:xnys",
+        "figure": "5%",
+        "checker_verdict": "unattributed",
+        "context": "ed and existing weight is already above 5%."
+      },
+      {
+        "note": "note-01025af3a2",
+        "source_report": 175,
+        "symbol": "BAC:xnys",
+        "figure": "9%",
+        "checker_verdict": "unattributed",
+        "context": " is high and allocation is already near 9%, so watch rather than add."
+      },
+      {
+        "note": "note-025544d2c3",
+        "source_report": 251,
+        "symbol": "ALV:xetr",
+        "figure": "445.20",
+        "checker_verdict": "unattributed",
+        "context": "d 451.40 eur quote is above the earlier 445.20 eur limit reference, so wait "
+      },
+      {
+        "note": "note-02a54986b1",
+        "source_report": 103,
+        "symbol": "AMD:xnas",
+        "figure": "+5,402",
+        "checker_verdict": "unattributed",
+        "context": "bullish 4/3, markov 0.613, position +5,402 dkk. add on pullbacks."
+      },
+      {
+        "note": "note-0375467d41",
+        "source_report": 266,
+        "symbol": "DE:xnys",
+        "figure": "2",
+        "checker_verdict": "not_a_field_value",
+        "context": "w modeled support-break risk. the prior 2-share proposal did not execut"
+      },
+      {
+        "note": "note-04ff16567a",
+        "source_report": 313,
+        "symbol": "DFDS:xcse",
+        "figure": "+13.6%",
+        "checker_verdict": "unattributed",
+        "context": "s leader advancing +1.63% intraday with +13.6% total return and broker-worki"
+      },
+      {
+        "note": "note-04ff16567a",
+        "source_report": 313,
+        "symbol": "DFDS:xcse",
+        "figure": "153.55",
+        "checker_verdict": "unattributed",
+        "context": "total return and broker-working stop at 153.55 dkk."
+      },
+      {
+        "note": "note-08bf8d0862",
+        "source_report": 223,
+        "symbol": "AMGN:xnas",
+        "figure": "10%",
+        "checker_verdict": "unattributed",
+        "context": "holding, but the existing approximately 10% portfolio allocation excludes"
+      },
+      {
+        "note": "note-0902a212fa",
+        "source_report": 184,
+        "symbol": "DANSKE:xcse",
+        "figure": "5%",
+        "checker_verdict": "unattributed",
+        "context": "nt portfolio allocation is already near 5%."
+      },
+      {
+        "note": "note-0a2ca435b2",
+        "source_report": 181,
+        "symbol": "AMGN:xnas",
+        "figure": "5.6%",
+        "checker_verdict": "unattributed",
+        "context": "bullish congress-flow context. existing 5.6% allocation is sufficient pend"
+      },
+      {
+        "note": "note-0c9577eb16",
+        "source_report": 274,
+        "symbol": "MELI:xnas",
+        "figure": "7,579.89",
+        "checker_verdict": "unattributed",
+        "context": "~12,816 dkk exceeds available budget of 7,579.89 dkk."
+      }
+    ]
+  },
+  "open_questions": [
+    "Truncation. The checker accepts a figure that matches only by truncation. Here that decided one claim (ASML break risk 0.400), as it decided LMND in the controls, and the labeller, who rounded, reads it as wrong. The rubric does not settle which convention to accept. The scenario below shows the figures under truncation.",
+    "Numbers written as words. Every omission in a note the checker read -- 6 claims in 3 of 55 notes -- is a number written as a word ('five-day', 'five-confluence', 'Five bullish technical confluences'). The scanner reads digits only. None of the six is wrong.",
+    "Notes that never reach the checker. A candidate without an indicator snapshot is excluded from grading entirely. Six of the eleven numeric claims omitted in such notes are Markov figures whose evidence was supplied, and all six are consistent.",
+    "Found, not compared. Eleven claims, all consistent or cannot_tell. Six were refused by the grammar or the attribution margin (uncertain_attribution): 'above 75', 'near 69', 'positive at', 'Bull-state', 'modeled'. Five had no field attributed: a percentage for a risk stored as a fraction ('3.7%'), 'distance to support', which is not one of the field's names, a DKK unit price (close_dkk is not a checker field), a monitored quote and an intraday move.",
+    "Strength and freshness words. 30 of the 52 cannot_tell are an undefined strength word or 'fresh' without a timestamp. Defining them is a rubric change for a future instrument, not a reading of this one."
+  ],
+  "figures": {
+    "reading": "Computed by the frozen scorer and checked by a test on every build. No label changes, so the reconciled column equals the scored one.",
+    "as_labelled": {
+      "claims_described": {
+        "numeric|abstained|cannot_tell": 2,
+        "numeric|abstained|consistent": 9,
+        "numeric|accepted|cannot_tell": 3,
+        "numeric|accepted|consistent": 56,
+        "numeric|accepted|inconsistent": 1,
+        "numeric|flagged|cannot_tell": 1,
+        "numeric|flagged|inconsistent": 1,
+        "numeric|omitted|cannot_tell": 5,
+        "numeric|omitted|consistent": 12,
+        "qualitative|cannot_tell": 41,
+        "qualitative|consistent": 133
+      },
+      "notes_in_population": {
+        "omission": [
+          72,
+          408
+        ],
+        "qualitative_error": [
+          0,
+          726
+        ],
+        "unflagged_numeric_error": [
+          1,
+          395
+        ]
+      },
+      "yes_no_unresolved_by_stratum": {
+        "never_reached": {
+          "omission": [
+            10,
+            10,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            3,
+            17
+          ],
+          "unflagged_numeric_error": [
+            0,
+            16,
+            4
+          ]
+        },
+        "reached_with_figures": {
+          "omission": [
+            1,
+            39,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            30,
+            10
+          ],
+          "unflagged_numeric_error": [
+            1,
+            35,
+            4
+          ]
+        },
+        "reached_without_figures": {
+          "omission": [
+            2,
+            13,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            7,
+            8
+          ],
+          "unflagged_numeric_error": [
+            0,
+            14,
+            1
+          ]
+        }
+      }
+    },
+    "reconciled": {
+      "claims_described": {
+        "numeric|abstained|cannot_tell": 2,
+        "numeric|abstained|consistent": 9,
+        "numeric|accepted|cannot_tell": 3,
+        "numeric|accepted|consistent": 56,
+        "numeric|accepted|inconsistent": 1,
+        "numeric|flagged|cannot_tell": 1,
+        "numeric|flagged|inconsistent": 1,
+        "numeric|omitted|cannot_tell": 5,
+        "numeric|omitted|consistent": 12,
+        "qualitative|cannot_tell": 41,
+        "qualitative|consistent": 133
+      },
+      "notes_in_population": {
+        "omission": [
+          72,
+          408
+        ],
+        "qualitative_error": [
+          0,
+          726
+        ],
+        "unflagged_numeric_error": [
+          1,
+          395
+        ]
+      },
+      "yes_no_unresolved_by_stratum": {
+        "never_reached": {
+          "omission": [
+            10,
+            10,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            3,
+            17
+          ],
+          "unflagged_numeric_error": [
+            0,
+            16,
+            4
+          ]
+        },
+        "reached_with_figures": {
+          "omission": [
+            1,
+            39,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            30,
+            10
+          ],
+          "unflagged_numeric_error": [
+            1,
+            35,
+            4
+          ]
+        },
+        "reached_without_figures": {
+          "omission": [
+            2,
+            13,
+            0
+          ],
+          "qualitative_error": [
+            0,
+            7,
+            8
+          ],
+          "unflagged_numeric_error": [
+            0,
+            14,
+            1
+          ]
+        }
+      }
+    },
+    "scenarios": [
+      {
+        "name": "truncation_accepted",
+        "what_it_is": "Not a reconciled reading. The figures if the rubric accepted truncation as agreement, as the checker does. Only ASML's break risk moves.",
+        "readings": [
+          {
+            "claim": "note-0975b93ee0#3",
+            "verdict": "consistent",
+            "field": "daily_indicators.support.break_risk"
+          }
+        ],
+        "figures": {
+          "claims_described": {
+            "numeric|abstained|cannot_tell": 2,
+            "numeric|abstained|consistent": 9,
+            "numeric|accepted|cannot_tell": 3,
+            "numeric|accepted|consistent": 57,
+            "numeric|flagged|cannot_tell": 1,
+            "numeric|flagged|inconsistent": 1,
+            "numeric|omitted|cannot_tell": 5,
+            "numeric|omitted|consistent": 12,
+            "qualitative|cannot_tell": 41,
+            "qualitative|consistent": 133
+          },
+          "notes_in_population": {
+            "omission": [
+              72,
+              408
+            ],
+            "qualitative_error": [
+              0,
+              726
+            ],
+            "unflagged_numeric_error": [
+              0,
+              376
+            ]
+          },
+          "yes_no_unresolved_by_stratum": {
+            "never_reached": {
+              "omission": [
+                10,
+                10,
+                0
+              ],
+              "qualitative_error": [
+                0,
+                3,
+                17
+              ],
+              "unflagged_numeric_error": [
+                0,
+                16,
+                4
+              ]
+            },
+            "reached_with_figures": {
+              "omission": [
+                1,
+                39,
+                0
+              ],
+              "qualitative_error": [
+                0,
+                30,
+                10
+              ],
+              "unflagged_numeric_error": [
+                0,
+                36,
+                4
+              ]
+            },
+            "reached_without_figures": {
+              "omission": [
+                2,
+                13,
+                0
+              ],
+              "qualitative_error": [
+                0,
+                7,
+                8
+              ],
+              "unflagged_numeric_error": [
+                0,
+                14,
+                1
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}
