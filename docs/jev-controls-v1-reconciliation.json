@@ -1,0 +1,625 @@
+{
+  "version": "controls-v1-2026-09-22",
+  "protocol": "controls-protocol-v4-2026-09-23",
+  "what_this_is": "The reconciliation of the v4 labels against the checker's key, beside the labels rather than over them. The delivered labels file is not edited; a test asserts its hash.",
+  "reconciles": {
+    "labels": "docs/jev-controls-v1-labels.json",
+    "labels_sha256": "febd9227d306da074b8ced2ca9519ea70af40e68366a14bd746b5aa42e587914",
+    "key_sha256": "bd7d1f44ecdaf9ae881eb6cff3aea3f78b8f299d8a38038007a19391053f4601",
+    "instrument_sha256": "54326779c83ca5b71ae026ea1b2ede3e3b9ef5fd0240c351c31fc7ff26fbb7d2",
+    "results": "docs/jev-controls-v1-results-v4.json"
+  },
+  "reconciled_by": "Claude, the author of the checker. Not independent: every reading cites the evidence in its case so it can be checked by someone who is.",
+  "reconciled_at": "2026-09-24",
+  "rule": "Where the label and the checker differ, the evidence in the case settles it, and the rubric settles how to read it. A reading neither can settle stays unresolved. The reconciliation does not choose where the evidence does not.",
+  "scope": "Every disagreement between label and key on either axis, plus the one case where the label differs from the earlier adjudication. Agreements are not re-examined: two readings agreeing is not proof, but reconciliation is for disagreements.",
+  "outcome": "No label is changed, and the earlier adjudication is not revised. Each disputed reading either holds on the evidence, stays unresolved, or is one where label and checker already agree. So the reconciled figures equal the v4 figures. The findings are about the checker (see open_questions), not about the labels.",
+  "entries": [
+    {
+      "id": "ctl-016172464d",
+      "source_report": 101,
+      "symbol": "LMND:xnys",
+      "figure": "60",
+      "point": "false_negative",
+      "checker": {
+        "verdict": "matches",
+        "field": "daily_indicators.rsi14"
+      },
+      "label": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "reconciled": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.rsi14"
+      },
+      "changes_label": false,
+      "settled_by": "rubric",
+      "basis": "rsi14 is 60.66 and the note writes RSI at integer precision. Rounding gives 61; only truncation gives 60. The rubric asks whether the figure agrees 'at the precision the note used', and the ordinary reading of that is rounding, so the label stands. The checker accepts truncation by design, which is an open question below, not a reason to overturn the label. Across the sample this is the only one of the 60 accepted claims that matches by truncation alone: 38 match exactly, 20 by rounding, 1 is a threshold. The labeller applied rounding consistently."
+    },
+    {
+      "id": "ctl-3e8bae330b",
+      "source_report": 101,
+      "symbol": "AMD:xnas",
+      "figure": "5",
+      "point": "flag_left_unresolved",
+      "checker": {
+        "verdict": "differs",
+        "field": "daily_indicators.min_confluences"
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "changes_label": false,
+      "settled_by": "unresolved",
+      "basis": "'5/5 confluence': confluence_count 4, min_confluences 3, confluences null. Read as observed/required, the denominator 5 disagrees with 3. Read as criteria met out of criteria available, the total is not supplied. The numerator is separately wrong, 5 against 4, and flagged in its own case. Nothing in the case chooses between the readings, so the reconciliation does not choose for it. The checker's `differs` commits to the required-count reading of an ambiguous construction."
+    },
+    {
+      "id": "ctl-8d10925f13",
+      "source_report": 101,
+      "symbol": "ARM:xnas",
+      "figure": "4",
+      "point": "flag_left_unresolved",
+      "checker": {
+        "verdict": "differs",
+        "field": "daily_indicators.min_confluences"
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "changes_label": false,
+      "settled_by": "unresolved",
+      "basis": "'4/4 confluence': confluence_count 4, min_confluences 3, confluences null. The numerator agrees with the count. Read as observed/required, the denominator 4 disagrees with 3; read as a criteria total, it cannot be checked. Nothing in the case chooses between the readings, so the reconciliation does not choose for it. The checker's `differs` commits to the required-count reading of an ambiguous construction."
+    },
+    {
+      "id": "ctl-cdee722fb5",
+      "source_report": 101,
+      "symbol": "AMGN:xnas",
+      "figure": "5",
+      "point": "flag_left_unresolved",
+      "checker": {
+        "verdict": "differs",
+        "field": "daily_indicators.min_confluences"
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "changes_label": false,
+      "settled_by": "unresolved",
+      "basis": "'5/5 confluence': confluence_count 5, min_confluences 3, confluences null. The numerator agrees with the count. Read as observed/required, the denominator 5 disagrees with 3; read as a criteria total, it cannot be checked. Nothing in the case chooses between the readings, so the reconciliation does not choose for it. The checker's `differs` commits to the required-count reading of an ambiguous construction."
+    },
+    {
+      "id": "ctl-1c1ea25787",
+      "source_report": 286,
+      "symbol": "FLS:xcse",
+      "figure": "593",
+      "point": "adjudication",
+      "checker": {
+        "verdict": "differs",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "label": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "reconciled": {
+        "verdict": "inconsistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "changes_label": false,
+      "settled_by": "label_and_key_agree",
+      "basis": "The label and the checker agree, so the score is unaffected and the reconciliation does not re-examine it. The disagreement is with the earlier adjudication. 'consolidating near 593 DKK support': nearest_support is 551.5 and next_support 535.0, and 593.0 is exactly the daily close. The adjudication (2026-09-22, revised under review) held the price reading defensible and left this ambiguous. The blind label considered the close and rejected that reading: a close at 593 does not substantiate support at that price. Whether the price reading is defensible is a judgement about wording, and the evidence cannot settle it. The adjudication is not revised here. The checker's author upgrading their own checker's confirmed count, on the strength of one label that agrees with it, is the move this procedure exists to prevent."
+    },
+    {
+      "id": "ctl-c6f0809f46",
+      "source_report": 313,
+      "symbol": "CHEMM:xcse",
+      "figure": "525",
+      "point": "two_readings",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "markov.conviction"
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "changes_label": false,
+      "settled_by": "unresolved",
+      "basis": "'trading above 525 DKK' is a relation to price. The daily close, 510.0, fails it; the Markov close, 527.0, satisfies it. The evidence carries two closes from different moments, and the note does not say which it means. Unresolved. The checker tentatively attributed the figure to conviction (0.749), which was wrong, and it rejected that attribution itself."
+    },
+    {
+      "id": "ctl-1d1dccdb0f",
+      "source_report": 284,
+      "symbol": "NVDA:xnas",
+      "figure": "224",
+      "point": "two_readings",
+      "checker": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": ""
+      },
+      "changes_label": false,
+      "settled_by": "unresolved",
+      "basis": "'holding above 224 USD': the daily close, 225.73, satisfies it; the Markov close, 223.76, does not. The evidence carries two closes from different moments, and the note does not say which it means. Unresolved."
+    },
+    {
+      "id": "ctl-35a9df8cf5",
+      "source_report": 285,
+      "symbol": "SALM:xosl",
+      "figure": "5",
+      "point": "attribution",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'5 technical confluences': confluence_count is 5. The checker's tentative field was break_risk (0.237). The checker's tentative field was wrong, and its plausibility guard rejected it, so no verdict was produced."
+    },
+    {
+      "id": "ctl-5d87985c58",
+      "source_report": 285,
+      "symbol": "SALM:xosl",
+      "figure": "0.237",
+      "point": "attribution",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "daily_indicators.confluence_count"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'0.237 low support break risk': break_risk 0.2369 rounds to 0.237. The checker's tentative field was confluence_count (5). The checker's tentative field was wrong, and its plausibility guard rejected it, so no verdict was produced."
+    },
+    {
+      "id": "ctl-90f6a00615",
+      "source_report": 194,
+      "symbol": "DANSKE:xcse",
+      "figure": "0.486",
+      "point": "attribution",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.signed_signal"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'Markov long signal of 0.486': signed_signal 0.4863 rounds to 0.486. The word 'support' later in the clause drew the checker to nearest_support (364.2). The checker's tentative field was wrong, and its plausibility guard rejected it, so no verdict was produced."
+    },
+    {
+      "id": "ctl-9499fc81ed",
+      "source_report": 267,
+      "symbol": "DFDS:xcse",
+      "figure": "3",
+      "point": "attribution",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.min_confluences"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.min_confluences"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'5 confluences versus 3 required': min_confluences is 3. The checker's tentative field was break_risk (0.232). The checker's tentative field was wrong, and its plausibility guard rejected it, so no verdict was produced."
+    },
+    {
+      "id": "ctl-eee0068521",
+      "source_report": 296,
+      "symbol": "FORTUM:xhel",
+      "figure": "23.13",
+      "point": "attribution",
+      "checker": {
+        "verdict": "implausible_attribution",
+        "field": "daily_indicators.support.break_risk"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'strong base above 23.13 EUR': nearest_support is 23.135. That is 23.13 at two decimals under half-even or binary rounding, and 23.14 under decimal half-up, so the labeller's `consistent` is defensible at half a unit. The checker's tentative field was break_risk (0.229). The checker's tentative field was wrong, and its plausibility guard rejected it, so no verdict was produced."
+    },
+    {
+      "id": "ctl-05df008819",
+      "source_report": 180,
+      "symbol": "V:xnys",
+      "figure": "5",
+      "point": "attribution",
+      "checker": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'Markov 5-day signal' names markov.horizon_days. markov is null here, so the label's cannot_tell stands. The checker treats '5-day' as not a field value, so a claim about markov.horizon_days is never compared: a coverage gap, not a wrong verdict."
+    },
+    {
+      "id": "ctl-1744918a7f",
+      "source_report": 97,
+      "symbol": "NVDA:xnas",
+      "figure": "5",
+      "point": "attribution",
+      "checker": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'Markov 5-day signed_signal' names markov.horizon_days. markov is null here, so the label's cannot_tell stands. The checker treats '5-day' as not a field value, so a claim about markov.horizon_days is never compared: a coverage gap, not a wrong verdict."
+    },
+    {
+      "id": "ctl-57ba6cdaa8",
+      "source_report": 173,
+      "symbol": "ARM:xnas",
+      "figure": "5",
+      "point": "attribution",
+      "checker": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'signed_signal -0.5230 over 5 days': horizon_days is 5, so the claim is consistent and was checkable. The checker treats '5-day' as not a field value, so a claim about markov.horizon_days is never compared: a coverage gap, not a wrong verdict."
+    },
+    {
+      "id": "ctl-64d27face3",
+      "source_report": 95,
+      "symbol": "NVDA:xnas",
+      "figure": "5",
+      "point": "attribution",
+      "checker": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "markov.horizon_days"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'negative over the 5-day horizon' names markov.horizon_days. markov is null here, so the label's cannot_tell stands. The checker treats '5-day' as not a field value, so a claim about markov.horizon_days is never compared: a coverage gap, not a wrong verdict."
+    },
+    {
+      "id": "ctl-079ea8c27c",
+      "source_report": 106,
+      "symbol": "BAC:xnys",
+      "figure": "0.75",
+      "point": "attribution",
+      "checker": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.reward_risk"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.reward_risk"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'R/R 0.75': reward_risk 0.7499 rounds to 0.75. The checker does not read 'R/R' as reward_risk, so it never compared a claim it could have checked: a coverage gap."
+    },
+    {
+      "id": "ctl-1b36b282ad",
+      "source_report": 106,
+      "symbol": "AMAT:xnas",
+      "figure": "0.33",
+      "point": "attribution",
+      "checker": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.reward_risk"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.reward_risk"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'R/R 0.33': reward_risk 0.3310 rounds to 0.33. The checker does not read 'R/R' as reward_risk, so it never compared a claim it could have checked: a coverage gap."
+    },
+    {
+      "id": "ctl-20bc01bc20",
+      "source_report": 299,
+      "symbol": "CRM:xnys",
+      "figure": "238.72",
+      "point": "attribution",
+      "checker": {
+        "verdict": "uncertain_attribution",
+        "field": "quiver.signal"
+      },
+      "label": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "reconciled": {
+        "verdict": "cannot_tell",
+        "field": "none"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'stop at 238.72 USD' is a stop price. No order evidence is supplied, so the claim names none of the evidence fields and lies outside the evidence. The checker's tentative field was quiver.signal (0.158), which was wrong; it abstained."
+    },
+    {
+      "id": "ctl-388b1a5c2b",
+      "source_report": 295,
+      "symbol": "TSM:xnys",
+      "figure": "6",
+      "point": "attribution",
+      "checker": {
+        "verdict": "uncertain_attribution",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "label": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "reconciled": {
+        "verdict": "consistent",
+        "field": "daily_indicators.confluence_count"
+      },
+      "changes_label": false,
+      "settled_by": "evidence",
+      "basis": "'6 technical confluences': confluence_count is 6. The checker's tentative field was nearest_support (428.11), which was wrong; it abstained."
+    }
+  ],
+  "cannot_tell_by_reason": {
+    "evidence_absent": [
+      "ctl-05df008819",
+      "ctl-1744918a7f",
+      "ctl-64d27face3",
+      "ctl-00123cabb0",
+      "ctl-03ee6c37b7",
+      "ctl-0442c94c12",
+      "ctl-0bfb442efd",
+      "ctl-0d6a2ea2b3",
+      "ctl-234baca985",
+      "ctl-2350ae8d0a",
+      "ctl-252891e215",
+      "ctl-3836f92581"
+    ],
+    "listed_out_of_scope": [
+      "ctl-28b19099c9",
+      "ctl-564ac93188",
+      "ctl-0168b618c2",
+      "ctl-018e20fa1e",
+      "ctl-0651761478",
+      "ctl-0859896ed5",
+      "ctl-095c5c972f",
+      "ctl-11732ee74f",
+      "ctl-14473e11f1",
+      "ctl-145a80c1f2",
+      "ctl-146ff42fd0",
+      "ctl-19422fbe77",
+      "ctl-1de6568348",
+      "ctl-26e51b47ad"
+    ],
+    "order_state_not_supplied": [
+      "ctl-73aa406a68",
+      "ctl-078bf81b25",
+      "ctl-176daf14b5",
+      "ctl-20bc01bc20"
+    ],
+    "recommendation_not_fact": [
+      "ctl-19f6e042e0",
+      "ctl-25d1fd81ee"
+    ],
+    "two_readings": [
+      "ctl-3e8bae330b",
+      "ctl-8d10925f13",
+      "ctl-cdee722fb5",
+      "ctl-c6f0809f46",
+      "ctl-1d1dccdb0f"
+    ]
+  },
+  "cannot_tell_reasons_mean": {
+    "evidence_absent": "The claim names a real evidence field, but that field is null in what the report was given — Markov, in all twelve.",
+    "listed_out_of_scope": "Portfolio capital, holdings, unrealised profit or trading costs, which the rubric puts out of scope and the evidence deliberately omits.",
+    "order_state_not_supplied": "Stops, limit references and executions. The rubric does not list them, but no order state is in the evidence.",
+    "recommendation_not_fact": "A proposed holding period, which is advice rather than a claim about the evidence.",
+    "two_readings": "The wording supports two readings and the evidence does not choose between them."
+  },
+  "open_questions": [
+    "Truncation. The checker accepts a figure that matches only by truncation. In this sample that decided 1 of the 60 accepted claims, and the rubric reads that one as wrong. Changing it is a parser change, and the parser is frozen at n10. The scenario below shows what the figures would be under the other convention.",
+    "Coverage. 'R/R' is not attributed to reward_risk (2 checkable claims never compared), and an 'N-day' horizon is treated as not a field value (4 claims, 1 of them checkable). Not fixed; the parser is frozen.",
+    "Missing Markov evidence. All 12 evidence_absent cases, including all 8 sampled not_in_evidence claims, quote Markov figures while the candidate's evidence has markov null. Whether those figures came from elsewhere in the prompt or were invented cannot be answered from the instrument. It is the next thing worth measuring.",
+    "Scope. 20 of the 37 cannot_tell are claims about things outside the evidence. Under v4 they count both ways, which is most of the population range's width. Excluding them would be a new protocol, and would need the frame's out-of-scope share measured, not assumed from the sample."
+  ],
+  "figures": {
+    "reading": "Computed by the frozen v4 scorer and checked by a test on every build. The reconciled column changes no label, so it equals the v4 result.",
+    "as_labelled": {
+      "accepted_claims_wrong_in_population": [
+        1,
+        132
+      ],
+      "all_claims_wrong_in_population": [
+        7,
+        393
+      ],
+      "attribution_totals": {
+        "different": 13,
+        "same": 103,
+        "unknown": 5
+      },
+      "verdict_totals": {
+        "agreed": 59,
+        "agreed_on_error": 6,
+        "benign_abstention": 18,
+        "false_negative": 1,
+        "unsettled": 37
+      },
+      "wrong_and_not_flagged_in_population": [
+        1,
+        384
+      ]
+    },
+    "reconciled": {
+      "accepted_claims_wrong_in_population": [
+        1,
+        132
+      ],
+      "all_claims_wrong_in_population": [
+        7,
+        393
+      ],
+      "attribution_totals": {
+        "different": 13,
+        "same": 103,
+        "unknown": 5
+      },
+      "verdict_totals": {
+        "agreed": 59,
+        "agreed_on_error": 6,
+        "benign_abstention": 18,
+        "false_negative": 1,
+        "unsettled": 37
+      },
+      "wrong_and_not_flagged_in_population": [
+        1,
+        384
+      ]
+    },
+    "scenarios": [
+      {
+        "name": "truncation_accepted",
+        "what_it_is": "Not a reconciled reading. The v4 figures if the rubric accepted truncation as agreement, as the checker does. Only the LMND case moves.",
+        "readings": [
+          {
+            "id": "ctl-016172464d",
+            "verdict": "consistent",
+            "field": "daily_indicators.rsi14"
+          }
+        ],
+        "figures": {
+          "accepted_claims_wrong_in_population": [
+            0,
+            94
+          ],
+          "all_claims_wrong_in_population": [
+            6,
+            355
+          ],
+          "attribution_totals": {
+            "different": 13,
+            "same": 103,
+            "unknown": 5
+          },
+          "verdict_totals": {
+            "agreed": 60,
+            "agreed_on_error": 6,
+            "benign_abstention": 18,
+            "unsettled": 37
+          },
+          "wrong_and_not_flagged_in_population": [
+            0,
+            346
+          ]
+        }
+      }
+    ]
+  },
+  "adjudication_disagreements": [
+    {
+      "case": "ctl-1c1ea25787",
+      "report": 286,
+      "symbol": "FLS:xcse",
+      "adjudication": "ambiguous (2026-09-22)",
+      "blind_label": "inconsistent",
+      "status": "not revised",
+      "effect": "The adjudication stays at five confirmed and four unresolved; the blind label would make it six and three. An independent reader can settle it. The checker's author should not."
+    }
+  ]
+}

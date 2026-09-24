@@ -72,6 +72,11 @@ version recorded this as a contradiction while stating in the same paragraph
 that an independent adjudicator would likely overturn it. That is not applying
 rule 4; it is hedging while keeping the score.
 
+> *Added 2026-09-24, beside the above rather than instead of it:* the blind
+> controls label reads FLS as inconsistent, having considered the close and
+> rejected the price reading. This adjudication is not revised on the strength
+> of that label. See `jev-controls-v1-reconciliation.json`.
+
 ## What this establishes, and what was withdrawn
 
 **Precision is not established at 9 of 9.** Five of the nine flags are

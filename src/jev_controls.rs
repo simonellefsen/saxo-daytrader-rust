@@ -1108,6 +1108,7 @@ mod sampling {
     const INSTRUMENT_PATH: &str = "docs/jev-controls-v1.json";
     const KEY_PATH: &str = "docs/jev-controls-v1-key.json";
     const LABELS_PATH: &str = "docs/jev-controls-v1-labels.json";
+    const RECONCILIATION_PATH: &str = "docs/jev-controls-v1-reconciliation.json";
 
     /// How many to draw from each stratum.
     ///
@@ -1401,6 +1402,142 @@ mod sampling {
             report["per_stratum"]["matches"]["interval"]["labelled_wrong"]["wrong_in_population"],
             json!([0, 94])
         );
+    }
+
+    /// The figures a reconciliation reports, in a form small enough to write
+    /// into the file and check against the scorer.
+    fn headline(report: &JsonValue) -> JsonValue {
+        let estimate = &report["population_estimate"];
+        json!({
+            "verdict_totals": report["verdict_axis"]["totals"],
+            "attribution_totals": report["attribution_axis"]["totals"],
+            "accepted_claims_wrong_in_population":
+                report["per_stratum"]["matches"]["interval"]["labelled_wrong"]["wrong_in_population"],
+            "all_claims_wrong_in_population":
+                estimate["claims_the_labeller_reads_as_wrong"]["wrong_in_population"],
+            "wrong_and_not_flagged_in_population":
+                estimate["wrong_and_not_flagged_end_to_end"]["wrong_in_population"],
+        })
+    }
+
+    /// The labels with some readings put beside them — on a copy, never on
+    /// the delivered file.
+    fn with_readings(labels: &[ControlLabel], readings: &[JsonValue]) -> Vec<ControlLabel> {
+        let mut copy = labels.to_vec();
+        for reading in readings {
+            let id = reading["id"].as_str().expect("id");
+            let label = copy
+                .iter_mut()
+                .find(|label| label.id == id)
+                .unwrap_or_else(|| panic!("a reading for {id}, which has no label"));
+            label.verdict = reading["verdict"].as_str().expect("verdict").into();
+            label.field = reading["field"].as_str().expect("field").into();
+        }
+        copy
+    }
+
+    /// The reconciliation sits beside the labels, not over them. It must leave
+    /// the delivered file byte for byte as it was, quote the labels and the
+    /// key faithfully, account for every `cannot_tell` exactly once, and
+    /// report the figures the frozen scorer actually gives.
+    #[test]
+    fn the_reconciliation_is_beside_the_labels_not_over_them() {
+        let Ok(raw) = std::fs::read_to_string(RECONCILIATION_PATH) else {
+            return;
+        };
+        let reconciliation: JsonValue = serde_json::from_str(&raw).expect("json");
+        let delivered = std::fs::read(LABELS_PATH).expect("labels");
+        assert_eq!(
+            reconciliation["reconciles"]["labels_sha256"],
+            format!("{:x}", sha2::Sha256::digest(&delivered)),
+            "the delivered labels were edited"
+        );
+        assert_eq!(reconciliation["protocol"], PROTOCOL_VERSION);
+
+        let keys: Vec<ControlKey> = load(KEY_PATH, "keys");
+        let labels: Vec<ControlLabel> = load(LABELS_PATH, "labels");
+        let key_document: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(KEY_PATH).expect("key")).expect("json");
+        let population: BTreeMap<String, i64> =
+            serde_json::from_value(key_document["population"].clone()).expect("population");
+
+        let entries = reconciliation["entries"].as_array().expect("entries");
+        for entry in entries {
+            let id = entry["id"].as_str().expect("id");
+            let label = labels
+                .iter()
+                .find(|label| label.id == id)
+                .expect("labelled");
+            let key = keys.iter().find(|key| key.id == id).expect("keyed");
+            assert_eq!(
+                entry["label"]["verdict"], label.verdict,
+                "{id} misquotes the label"
+            );
+            assert_eq!(
+                entry["label"]["field"], label.field,
+                "{id} misquotes the label"
+            );
+            assert_eq!(
+                entry["checker"]["verdict"], key.verdict,
+                "{id} misquotes the key"
+            );
+            assert_eq!(
+                entry["checker"]["field"],
+                json!(key.field),
+                "{id} misquotes the key"
+            );
+            let changes = entry["reconciled"]["verdict"] != entry["label"]["verdict"]
+                || entry["reconciled"]["field"] != entry["label"]["field"];
+            assert_eq!(entry["changes_label"], changes, "{id}");
+        }
+
+        let mut classified: Vec<&str> = reconciliation["cannot_tell_by_reason"]
+            .as_object()
+            .expect("reasons")
+            .values()
+            .flat_map(|ids| ids.as_array().expect("ids").iter())
+            .map(|id| id.as_str().expect("id"))
+            .collect();
+        classified.sort_unstable();
+        let mut unresolved: Vec<&str> = labels
+            .iter()
+            .filter(|label| label.verdict == "cannot_tell")
+            .map(|label| label.id.as_str())
+            .collect();
+        unresolved.sort_unstable();
+        assert_eq!(
+            classified, unresolved,
+            "each cannot_tell classified exactly once"
+        );
+
+        let reconciled: Vec<JsonValue> = entries
+            .iter()
+            .map(|entry| {
+                json!({
+                    "id": entry["id"],
+                    "verdict": entry["reconciled"]["verdict"],
+                    "field": entry["reconciled"]["field"],
+                })
+            })
+            .collect();
+        let computed = json!({
+            "as_labelled": headline(&score(&keys, &labels, &population)),
+            "reconciled": headline(&score(&keys, &with_readings(&labels, &reconciled), &population)),
+        });
+        let figures = &reconciliation["figures"];
+        println!("{}", serde_json::to_string_pretty(&computed).expect("json"));
+        assert_eq!(figures["as_labelled"], computed["as_labelled"]);
+        assert_eq!(figures["reconciled"], computed["reconciled"]);
+        for scenario in figures["scenarios"].as_array().expect("scenarios") {
+            let readings = scenario["readings"].as_array().expect("readings");
+            let under = headline(&score(
+                &keys,
+                &with_readings(&labels, readings),
+                &population,
+            ));
+            println!("{}: {}", scenario["name"], under);
+            assert_eq!(scenario["figures"], under, "{}", scenario["name"]);
+        }
     }
 
     /// Every case must be answerable: the figure has to be where the case says
