@@ -1784,6 +1784,56 @@ async fn compact_markov_context_from_rows(
     }))
 }
 
+/// The Markov rows the prompt embedded under `markov_method.latest_run` for
+/// debugging, projected onto the compact list's field names.
+///
+/// Until 2026-08-03 the prompt carried up to 20 full signal rows there, and
+/// until 2026-09-03 the compact `signals` list was alphabetical and cut off
+/// around G. A symbol after the cut was quoted from these rows, and reading
+/// the list alone recorded 52 faithful quotes as `not_in_evidence`
+/// (docs/jev-markov-provenance.md). The rows are supplied by the runtime, not
+/// written by a model, so they are evidence. Shared by the grader and the
+/// completion audit so both read a prompt's Markov data the same way. An earlier report's metadata is
+/// not, and is never read here. A row that did not compute is not evidence
+/// either.
+pub(crate) fn embedded_prompt_signal_rows(
+    prompt: &JsonValue,
+) -> std::collections::HashMap<String, JsonValue> {
+    prompt
+        .pointer("/markov_method/latest_run/summary_json/signals")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
+        .filter_map(|row| {
+            let symbol = row.get("symbol")?.as_str()?;
+            let field = |key: &str| row.get(key).cloned().unwrap_or(JsonValue::Null);
+            let currency = symbol
+                .split_once(':')
+                .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
+            Some((
+                symbol.to_string(),
+                json!({
+                    "symbol": symbol,
+                    "run_date": field("run_date"),
+                    "state": field("current_state"),
+                    "close": field("current_close"),
+                    "currency": currency,
+                    // The prompt carried no conversion for these rows.
+                    "close_dkk": JsonValue::Null,
+                    "horizon_days": field("signal_horizon_days"),
+                    "bull_prob": field("bull_prob"),
+                    "bear_prob": field("bear_prob"),
+                    "sideways_prob": field("sideways_prob"),
+                    "signed_signal": field("signed_signal"),
+                    "direction": field("direction"),
+                    "conviction": field("conviction"),
+                }),
+            ))
+        })
+        .collect()
+}
+
 /// Strip the embedded per-signal payload out of a Markov run row before it
 /// reaches the decision prompt.
 ///

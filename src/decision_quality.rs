@@ -201,6 +201,8 @@ pub(crate) fn completion_quality_audit(
         "Server-owned execution-authority metadata is missing.",
     );
 
+    let provenance = metadata_provenance(&suggested_trades, decision_time_context);
+
     let warning_count = checks
         .iter()
         .filter(|check| check["status"] != "pass")
@@ -214,8 +216,306 @@ pub(crate) fn completion_quality_audit(
         "candidate_count": suggested_trades.len(),
         "admission": "observational_only",
         "checks": checks,
+        "metadata_provenance": provenance,
         "safety": "This audit records completion evidence only. It cannot approve a report, override Trading Manager gates, create a queue entry, or reach Saxo."
     })
+}
+
+/// Digits after the point at which a written figure identifies where it came
+/// from. Below this a match with another symbol is as likely to be chance as
+/// copying: a written `0.0` "matches" every signal under 0.05.
+const IDENTIFYING_DECIMALS: usize = 6;
+
+/// How far apart two full-precision figures may be and still be one number.
+/// A signal is stored single-precision in one place and double-precision in
+/// another, which moves the eighth significant digit: 0.5828422796683945
+/// against 0.5828422904014587 is the same signal.
+const SAME_NUMBER_RELATIVE: f64 = 1e-7;
+
+/// Where each suggested trade's metadata came from, traced through the
+/// decision-time evidence.
+///
+/// The provider writes `strategy_metadata` itself, and nothing checked that it
+/// describes the trade's own symbol. Report #259 attached DTE:xetr's Markov
+/// signal to its NESTE trade -- identical to 17 digits, where NESTE had no
+/// signal -- and #260 then quoted it as NESTE's. Report #195 wrote JPM's and
+/// JNJ's Quiver signals into their Markov metadata. The Trading Manager's gates
+/// look up their own signal by the order's symbol, so none of these reached a
+/// gate; but the metadata is what the report reasoned from.
+///
+/// Recorded beside the checks, not among them. The audit's status and checks
+/// reach Hermes' preflight, and whether this should is a separate decision.
+/// It is observational either way: it cannot block, approve or change a trade.
+fn metadata_provenance(trades: &[JsonValue], context: Option<&JsonValue>) -> JsonValue {
+    let Some(context) = context.filter(|context| context.is_object()) else {
+        return json!({"version": "v1", "status": "not_available"});
+    };
+    let listed: std::collections::HashMap<String, &JsonValue> = context
+        .pointer("/markov_method/signals")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| Some((canonical_symbol_key(row.get("symbol")?.as_str()?), row)))
+        .collect();
+    let embedded: std::collections::HashMap<String, JsonValue> =
+        crate::markov_method::embedded_prompt_signal_rows(context)
+            .into_iter()
+            .map(|(symbol, row)| (canonical_symbol_key(&symbol), row))
+            .collect();
+    let indicators = context
+        .pointer("/daily_indicators/signals")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut leaves = Vec::new();
+    numeric_leaves(context, "", None, &mut leaves);
+    let threshold = markov_gate_threshold(context);
+
+    let mut findings: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    let mut per_trade = Vec::new();
+    for trade in trades {
+        let symbol = text(trade, "symbol");
+        let key = canonical_symbol_key(&symbol);
+        let own_markov = listed.get(&key).copied().or_else(|| embedded.get(&key));
+        let own_indicator = decision_time_indicator_signal(trade, &indicators);
+        let markov = trade.pointer("/strategy_metadata/markov");
+        let signal = markov
+            .and_then(|markov| number(markov, "signed_signal"))
+            .map(|written| markov_signal_finding(&key, written, own_markov, threshold, &leaves));
+        if let Some(finding) = signal
+            .as_ref()
+            .and_then(|signal| signal["finding"].as_str())
+        {
+            *findings.entry(finding_label(finding)).or_default() += 1;
+        }
+        let disagreements = metadata_disagreements(trade, own_markov, own_indicator);
+        per_trade.push(json!({
+            "symbol": symbol,
+            "markov_signed_signal": signal,
+            "disagreements": disagreements,
+        }));
+    }
+    let cross = per_trade
+        .iter()
+        .filter(|trade| {
+            trade["markov_signed_signal"]["finding"]
+                .as_str()
+                .is_some_and(|finding| !SIGNAL_FINDINGS_THAT_PASS.contains(&finding))
+        })
+        .count();
+    let disagreeing = per_trade
+        .iter()
+        .filter(|trade| {
+            trade["disagreements"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty())
+        })
+        .count();
+    json!({
+        "version": "v1",
+        "status": if cross == 0 && disagreeing == 0 { "consistent" } else { "review" },
+        "trades_with_a_signal_from_elsewhere": cross,
+        "trades_with_disagreeing_metadata": disagreeing,
+        "signal_findings": findings,
+        "trades": per_trade,
+        "reading": "A Markov signal written at full precision identifies its source; one written \
+                    short can only be checked against the trade's own symbol. `own_symbol` is the \
+                    only finding that passes, apart from a `0` written for a symbol with no signal \
+                    at all, which the presence check forces the provider to write. Observational: \
+                    recorded beside the audit's checks, not among them.",
+    })
+}
+
+/// Findings for a trade's Markov signal that describe its own symbol, or
+/// describe nothing because there is nothing to describe.
+const SIGNAL_FINDINGS_THAT_PASS: &[&str] = &["own_symbol", "no_signal_placeholder"];
+
+fn finding_label(finding: &str) -> &'static str {
+    [
+        "own_symbol",
+        "no_signal_placeholder",
+        "disagrees_with_own_symbol",
+        "no_own_signal",
+        "gate_threshold_as_signal",
+        "own_symbol_other_markov_value",
+        "own_symbol_other_source",
+        "other_symbol_markov",
+        "other_symbol_other_source",
+        "carried_from_earlier_report",
+        "no_source",
+    ]
+    .into_iter()
+    .find(|label| *label == finding)
+    .unwrap_or("unclassified")
+}
+
+fn written_decimals(value: f64) -> usize {
+    let text = format!("{value}");
+    text.split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
+}
+
+/// Whether a written figure is the stored one: what rounding or truncating
+/// the stored value gives at the precision written, or -- for a long figure --
+/// the same number stored at the other precision.
+///
+/// Both, always. Report #304 wrote EQNR's 0.4292262494564056 as 0.429226: six
+/// decimals, rounded, and treating six decimals as a full-precision copy
+/// called its own signal a figure from nowhere.
+fn same_figure(written: f64, actual: f64) -> bool {
+    let decimals = written_decimals(written);
+    let scale = 10f64.powi(decimals.min(15) as i32);
+    let quoted = [(actual * scale).round(), (actual * scale).trunc()]
+        .iter()
+        .any(|candidate| (candidate / scale - written).abs() <= 1e-12 * written.abs().max(1.0));
+    let stored_elsewhere = decimals >= IDENTIFYING_DECIMALS
+        && (written - actual).abs() <= SAME_NUMBER_RELATIVE * actual.abs().max(1.0);
+    quoted || stored_elsewhere
+}
+
+/// The Markov gate's threshold as the decision-time context recorded it.
+fn markov_gate_threshold(context: &JsonValue) -> Option<f64> {
+    context
+        .pointer("/decision_time_gate_policy/markov_starter/min_signed_signal")
+        .or_else(|| context.pointer("/decision_policy/markov_gate/min_signed_signal"))
+        .and_then(JsonValue::as_f64)
+}
+
+/// Every number in the decision-time context, with its path and the symbol of
+/// the nearest enclosing object that names one.
+fn numeric_leaves<'a>(
+    value: &'a JsonValue,
+    path: &str,
+    symbol: Option<&'a str>,
+    out: &mut Vec<(String, Option<String>, f64)>,
+) {
+    match value {
+        JsonValue::Object(map) => {
+            let symbol = map.get("symbol").and_then(JsonValue::as_str).or(symbol);
+            for (key, child) in map {
+                numeric_leaves(child, &format!("{path}.{key}"), symbol, out);
+            }
+        }
+        JsonValue::Array(items) => {
+            for child in items {
+                numeric_leaves(child, &format!("{path}[]"), symbol, out);
+            }
+        }
+        JsonValue::Number(number) => {
+            if let Some(value) = number.as_f64() {
+                out.push((path.to_string(), symbol.map(canonical_symbol_key), value));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Where a trade's Markov signal came from.
+fn markov_signal_finding(
+    symbol: &str,
+    written: f64,
+    own: Option<&JsonValue>,
+    threshold: Option<f64>,
+    leaves: &[(String, Option<String>, f64)],
+) -> JsonValue {
+    let own_value = own.and_then(|row| number(row, "signed_signal"));
+    if own_value.is_some_and(|actual| same_figure(written, actual)) {
+        return json!({"written": written, "finding": "own_symbol"});
+    }
+    // Ten trades in reports #211-#253 wrote 0.15 for symbols the prompt gave
+    // no signal: the gate's minimum, written as though it were the signal the
+    // trade needed.
+    if threshold.is_some_and(|threshold| written != 0.0 && same_figure(written, threshold)) {
+        return json!({
+            "written": written,
+            "decision_time": own_value,
+            "finding": "gate_threshold_as_signal",
+            "threshold": threshold,
+        });
+    }
+    if written_decimals(written) < IDENTIFYING_DECIMALS {
+        let finding = match own_value {
+            Some(_) => "disagrees_with_own_symbol",
+            None if written == 0.0 => "no_signal_placeholder",
+            None => "no_own_signal",
+        };
+        return json!({"written": written, "decision_time": own_value, "finding": finding});
+    }
+    // Written at full precision, and not the trade's own signal: find the
+    // source. Runtime-supplied sources outrank the model's earlier output.
+    let mut sources: Vec<(u8, &'static str, &str, Option<&str>)> = leaves
+        .iter()
+        .filter(|(_, _, value)| same_figure(written, *value))
+        .map(|(path, leaf_symbol, _)| {
+            let same = leaf_symbol.as_deref() == Some(symbol);
+            let (rank, finding) = if path.starts_with(".earlier_same_scope_report") {
+                (4, "carried_from_earlier_report")
+            } else if same && path.contains("markov") {
+                (0, "own_symbol_other_markov_value")
+            } else if same {
+                (1, "own_symbol_other_source")
+            } else if path.contains("markov") {
+                (2, "other_symbol_markov")
+            } else {
+                (3, "other_symbol_other_source")
+            };
+            (rank, finding, path.as_str(), leaf_symbol.as_deref())
+        })
+        .collect();
+    sources.sort_by_key(|(rank, ..)| *rank);
+    let Some(&(best, finding, ..)) = sources.first() else {
+        return json!({"written": written, "decision_time": own_value, "finding": "no_source"});
+    };
+    let found_at: Vec<JsonValue> = sources
+        .iter()
+        .filter(|(rank, ..)| *rank == best)
+        .take(5)
+        .map(|(_, _, path, symbol)| json!({"path": path, "symbol": symbol}))
+        .collect();
+    json!({
+        "written": written,
+        "decision_time": own_value,
+        "finding": finding,
+        "found_at": found_at,
+    })
+}
+
+/// Metadata that disagrees with the trade's own symbol at decision time. Only
+/// the own symbol is compared: a state, a direction or a count of five is
+/// shared by too many symbols to say where it came from.
+fn metadata_disagreements(
+    trade: &JsonValue,
+    own_markov: Option<&JsonValue>,
+    own_indicator: Option<&JsonValue>,
+) -> Vec<JsonValue> {
+    let mut found = Vec::new();
+    let same_text = |left: &str, right: &str| left.eq_ignore_ascii_case(right);
+    if let (Some(markov), Some(own)) = (trade.pointer("/strategy_metadata/markov"), own_markov) {
+        for field in ["state", "direction", "run_date"] {
+            let (written, actual) = (text(markov, field), text(own, field));
+            if !written.is_empty() && !actual.is_empty() && !same_text(&written, &actual) {
+                found.push(json!({"field": format!("markov.{field}"), "written": written, "decision_time": actual}));
+            }
+        }
+    }
+    let technical = trade.pointer("/strategy_metadata/technical");
+    let reported_ok = technical.is_some_and(|technical| text(technical, "status") == "ok");
+    if let (Some(technical), Some(own), true) = (technical, own_indicator, reported_ok) {
+        for field in ["confluence_count", "min_confluences"] {
+            if let (Some(written), Some(actual)) = (number(technical, field), number(own, field))
+                && written != actual
+            {
+                found.push(json!({"field": format!("technical.{field}"), "written": written, "decision_time": actual}));
+            }
+        }
+        for field in ["sentiment", "trend_bias"] {
+            let (written, actual) = (text(technical, field), text(own, field));
+            if !written.is_empty() && !actual.is_empty() && !same_text(&written, &actual) {
+                found.push(json!({"field": format!("technical.{field}"), "written": written, "decision_time": actual}));
+            }
+        }
+    }
+    found
 }
 
 fn push_check(checks: &mut Vec<JsonValue>, key: &str, pass: bool, success: &str, failure: &str) {
@@ -432,5 +732,264 @@ mod tests {
             );
         }
         assert_eq!(audit["admission"], "observational_only");
+    }
+}
+
+/// Whether each trade's metadata describes its own symbol, from its own source.
+#[cfg(test)]
+mod metadata_provenance_tests {
+    use serde_json::{Value as JsonValue, json};
+
+    use super::{completion_quality_audit, metadata_provenance};
+
+    fn trade(symbol: &str, signed_signal: f64) -> JsonValue {
+        json!({
+            "symbol": symbol,
+            "strategy_metadata": {
+                "markov": {"signed_signal": signed_signal, "state": "Sideways", "direction": "long", "run_date": "2026-09-01"},
+                "technical": {"status": "ok", "confluence_count": 5, "min_confluences": 3, "sentiment": "BUY", "trend_bias": "bullish"},
+            },
+        })
+    }
+
+    fn markov(symbol: &str, signed_signal: f64) -> JsonValue {
+        json!({"symbol": symbol, "signed_signal": signed_signal, "conviction": signed_signal.abs(),
+               "state": "Sideways", "direction": "long", "run_date": "2026-09-01"})
+    }
+
+    fn indicator(symbol: &str, sentiment: &str) -> JsonValue {
+        json!({"symbol": symbol, "confluence_count": 5, "min_confluences": 3,
+               "sentiment": sentiment, "trend_bias": "bullish"})
+    }
+
+    fn context(markov_rows: Vec<JsonValue>, extra: JsonValue) -> JsonValue {
+        let mut context = json!({
+            "markov_method": {"signals": markov_rows},
+            "daily_indicators": {"signals": [indicator("NESTE:xhel", "BUY"), indicator("DTE:xetr", "BUY"), indicator("JPM:xnys", "BUY")]},
+        });
+        if let (Some(target), Some(fields)) = (context.as_object_mut(), extra.as_object()) {
+            for (key, value) in fields {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        context
+    }
+
+    fn finding(provenance: &JsonValue, index: usize) -> &str {
+        provenance["trades"][index]["markov_signed_signal"]["finding"]
+            .as_str()
+            .unwrap_or_default()
+    }
+
+    /// Report #259: DTE:xetr's signal on the NESTE trade, where NESTE had none.
+    #[test]
+    fn another_symbols_signal_is_named_as_its_source() {
+        let dte = 0.23313425481319427;
+        let context = context(vec![markov("DTE:xetr", dte)], json!({}));
+        let provenance = metadata_provenance(&[trade("NESTE:xhel", dte)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "other_symbol_markov");
+        assert_eq!(
+            provenance["trades"][0]["markov_signed_signal"]["found_at"][0]["symbol"],
+            "DTE:XETR"
+        );
+        assert_eq!(provenance["trades_with_a_signal_from_elsewhere"], 1);
+        assert_eq!(provenance["status"], "review");
+    }
+
+    /// Report #195: JPM's Quiver signal written as its Markov signal.
+    #[test]
+    fn the_right_symbol_from_the_wrong_source_is_named() {
+        let quiver = 0.24634137749671936;
+        let context = context(
+            vec![],
+            json!({"quiver_signals": {"signals": [{"symbol": "JPM:xnys", "signal": quiver}]}}),
+        );
+        let provenance = metadata_provenance(&[trade("JPM:xnys", quiver)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "own_symbol_other_source");
+        assert_eq!(
+            provenance["trades"][0]["markov_signed_signal"]["found_at"][0]["path"],
+            ".quiver_signals.signals[].signal"
+        );
+    }
+
+    /// The same signal stored single-precision in one place and double in
+    /// another is one number, not a disagreement.
+    #[test]
+    fn single_and_double_precision_copies_are_the_same_signal() {
+        let context = context(vec![markov("NESTE:xhel", 0.5828422904014587)], json!({}));
+        let provenance =
+            metadata_provenance(&[trade("NESTE:xhel", 0.5828422796683945)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "own_symbol");
+        assert_eq!(provenance["status"], "consistent");
+    }
+
+    /// A figure written short is checked against its own symbol only; a `0`
+    /// for a symbol with no signal is the placeholder the presence check
+    /// forces, not a source error.
+    #[test]
+    fn a_short_figure_is_never_attributed_to_another_symbol() {
+        let context = context(vec![markov("DTE:xetr", 0.0312)], json!({}));
+        let provenance = metadata_provenance(
+            &[trade("NESTE:xhel", 0.0), trade("JPM:xnys", 0.03)],
+            Some(&context),
+        );
+        assert_eq!(finding(&provenance, 0), "no_signal_placeholder");
+        assert_eq!(
+            finding(&provenance, 1),
+            "no_own_signal",
+            "not DTE's, though 0.03 would round from it"
+        );
+        assert_eq!(provenance["trades_with_a_signal_from_elsewhere"], 1);
+    }
+
+    /// A figure the model carried from its own earlier report ranks below any
+    /// runtime source, and is named as such.
+    #[test]
+    fn a_figure_found_only_in_an_earlier_report_is_named_as_carried() {
+        let carried = 0.23313425481319427;
+        let context = context(
+            vec![],
+            json!({"earlier_same_scope_report": {"report": {"suggested_trades": [
+                {"symbol": "NESTE:xhel", "strategy_metadata": {"markov": {"signed_signal": carried}}}
+            ]}}}),
+        );
+        let provenance = metadata_provenance(&[trade("NESTE:xhel", carried)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "carried_from_earlier_report");
+    }
+
+    /// Report #304 wrote EQNR's 0.4292262494564056 as 0.429226 -- six
+    /// decimals, rounded. That is its own signal, not a figure from nowhere.
+    #[test]
+    fn a_rounded_long_figure_is_still_its_own_signal() {
+        let context = context(vec![markov("NESTE:xhel", 0.4292262494564056)], json!({}));
+        let provenance = metadata_provenance(&[trade("NESTE:xhel", 0.429226)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "own_symbol");
+    }
+
+    /// The gate's minimum written as the signal, for a symbol the prompt gave
+    /// none.
+    #[test]
+    fn the_gate_threshold_written_as_a_signal_is_named() {
+        let context = context(
+            vec![markov("DTE:xetr", 0.4)],
+            json!({"decision_time_gate_policy": {"markov_starter": {"min_signed_signal": 0.15}}}),
+        );
+        let provenance = metadata_provenance(&[trade("NESTE:xhel", 0.15)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "gate_threshold_as_signal");
+        assert_eq!(
+            provenance["trades"][0]["markov_signed_signal"]["threshold"],
+            0.15
+        );
+        assert_eq!(provenance["trades_with_a_signal_from_elsewhere"], 1);
+    }
+
+    /// Report #185 wrote BUY where the indicator said OVERWEIGHT.
+    #[test]
+    fn metadata_that_disagrees_with_its_own_symbol_is_listed() {
+        let mut context = context(vec![markov("NESTE:xhel", 0.4)], json!({}));
+        context["daily_indicators"]["signals"][0]["sentiment"] = json!("OVERWEIGHT");
+        let provenance = metadata_provenance(&[trade("NESTE:xhel", 0.4)], Some(&context));
+        assert_eq!(finding(&provenance, 0), "own_symbol");
+        assert_eq!(
+            provenance["trades"][0]["disagreements"][0]["field"],
+            "technical.sentiment"
+        );
+        assert_eq!(provenance["trades_with_disagreeing_metadata"], 1);
+    }
+
+    /// The block over every stored report, measured rather than assumed.
+    ///
+    /// ```text
+    /// JEV_PROMPTS_PATH=all.json JEV_METADATA_OUT=out.json \
+    ///   cargo test --release across_the_stored_reports -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn across_the_stored_reports() {
+        let path = std::env::var("JEV_PROMPTS_PATH").expect("JEV_PROMPTS_PATH");
+        let sources: Vec<JsonValue> =
+            serde_json::from_slice(&std::fs::read(&path).expect("prompts")).expect("a JSON array");
+        let mut findings: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut disagreements: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut flagged = Vec::new();
+        let (mut reports, mut trades) = (0usize, 0usize);
+        for entry in &sources {
+            let (Some(report), Some(request)) = (entry.get("report"), entry.get("request")) else {
+                continue;
+            };
+            let context = crate::xai_decision::decision_prompt_user_payload(request);
+            if !context.is_object() {
+                continue;
+            }
+            let suggested = report
+                .get("suggested_trades")
+                .and_then(JsonValue::as_array)
+                .cloned()
+                .unwrap_or_default();
+            reports += 1;
+            trades += suggested.len();
+            let provenance = metadata_provenance(&suggested, Some(&context));
+            for trade in provenance["trades"].as_array().into_iter().flatten() {
+                if let Some(finding) = trade["markov_signed_signal"]["finding"].as_str() {
+                    *findings.entry(finding.to_string()).or_default() += 1;
+                    if !super::SIGNAL_FINDINGS_THAT_PASS.contains(&finding)
+                        || trade["disagreements"]
+                            .as_array()
+                            .is_some_and(|list| !list.is_empty())
+                    {
+                        flagged.push(json!({"report": entry["id"], "trade": trade}));
+                    }
+                } else if trade["disagreements"]
+                    .as_array()
+                    .is_some_and(|list| !list.is_empty())
+                {
+                    flagged.push(json!({"report": entry["id"], "trade": trade}));
+                }
+                for disagreement in trade["disagreements"].as_array().into_iter().flatten() {
+                    *disagreements
+                        .entry(
+                            disagreement["field"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
+                        )
+                        .or_default() += 1;
+                }
+            }
+        }
+        let result = json!({
+            "reports_with_a_context": reports,
+            "trades": trades,
+            "signal_findings": findings,
+            "disagreements_by_field": disagreements,
+            "flagged": flagged,
+        });
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "reports_with_a_context": reports, "trades": trades,
+            "signal_findings": result["signal_findings"], "disagreements_by_field": result["disagreements_by_field"],
+        })).expect("json"));
+        if let Ok(out) = std::env::var("JEV_METADATA_OUT") {
+            std::fs::write(out, serde_json::to_string_pretty(&result).expect("json"))
+                .expect("write");
+        }
+    }
+
+    /// Recorded beside the checks. The audit's checks, status and score --
+    /// which reach Hermes' preflight -- are exactly what they were.
+    #[test]
+    fn provenance_does_not_move_the_audit_status() {
+        let dte = 0.23313425481319427;
+        let suggested = vec![trade("NESTE:xhel", dte)];
+        let report = json!({"suggested_trades": suggested});
+        let context = context(vec![markov("DTE:xetr", dte)], json!({}));
+        let with = completion_quality_audit(&report, None, Some(&context));
+        let mut without_markov = context.clone();
+        without_markov["markov_method"]["signals"] = json!([markov("NESTE:xhel", dte)]);
+        let clean = completion_quality_audit(&report, None, Some(&without_markov));
+        assert_eq!(with["metadata_provenance"]["status"], "review");
+        assert_eq!(clean["metadata_provenance"]["status"], "consistent");
+        assert_eq!(with["checks"], clean["checks"]);
+        assert_eq!(with["status"], clean["status"]);
+        assert_eq!(with["score"], clean["score"]);
     }
 }
