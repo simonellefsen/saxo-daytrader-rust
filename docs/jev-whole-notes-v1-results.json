@@ -1,0 +1,197 @@
+{
+  "what_this_is": "The single scoring run of the whole-note labels under the frozen protocol, as it came out. Nothing in the report was edited.",
+  "scored_at": "2026-09-24T19:33:12Z",
+  "scored_at_commit": "71fd86019ff5db8244ef80aa082579ee04f6823a",
+  "working_tree_dirty": false,
+  "command": "cargo test --bin saxo-rust jev_whole_notes::sampling::the_labels_are_not_filled_in_by_the_author -- --nocapture",
+  "protocol": "whole-notes-protocol-v1-2026-09-24",
+  "sha256": {
+    "instrument": "80b745fe1f93a51227785e8ba245137ae59653e47b49e72c015343e96cea4ba8",
+    "key": "ddf6bc5183f3349173669e36fd894b9e702f0ce2fb927bf89288cfcd47f2c0f5",
+    "labels": "4324569c6035be09029b9eba2fcbb8d6b60e6795da987846cfb1f83633e2ee34",
+    "labeller_notes": "3d5005e271b3dc00a60f4f10ada353771f08bc7b4a91443c58001f222b044b2a"
+  },
+  "labels_provenance": "docs/jev-whole-notes-v1-labelling-provenance.json",
+  "labelled_by": "Fresh-context Codex AI reviewer (blind whole-note review; not human ground truth)",
+  "order_of_events": [
+    "243a1dc: instrument, key and protocol committed and pushed",
+    "71fd860: labels committed as delivered by a fresh-context labeller who was not given the key; pushed before scoring",
+    "this run: scored once, on those labels"
+  ],
+  "report": {
+    "claims_described": {
+      "numeric|abstained|cannot_tell": 2,
+      "numeric|abstained|consistent": 9,
+      "numeric|accepted|cannot_tell": 3,
+      "numeric|accepted|consistent": 56,
+      "numeric|accepted|inconsistent": 1,
+      "numeric|flagged|cannot_tell": 1,
+      "numeric|flagged|inconsistent": 1,
+      "numeric|omitted|cannot_tell": 5,
+      "numeric|omitted|consistent": 12,
+      "qualitative|cannot_tell": 41,
+      "qualitative|consistent": 133
+    },
+    "labelled": 75,
+    "notes": 75,
+    "per_stratum": {
+      "never_reached": {
+        "outcomes": {
+          "omission": {
+            "among_settled_only": 0.5,
+            "no": 10,
+            "notes_in_population": [
+              68,
+              211
+            ],
+            "unresolved": 0,
+            "yes": 10
+          },
+          "qualitative_error": {
+            "among_settled_only": 0.0,
+            "no": 3,
+            "notes_in_population": [
+              0,
+              272
+            ],
+            "unresolved": 17,
+            "yes": 0
+          },
+          "unflagged_numeric_error": {
+            "among_settled_only": 0.0,
+            "no": 16,
+            "notes_in_population": [
+              0,
+              132
+            ],
+            "unresolved": 4,
+            "yes": 0
+          }
+        },
+        "population": 279,
+        "sampled": 20,
+        "unlabelled": 0
+      },
+      "reached_with_figures": {
+        "outcomes": {
+          "omission": {
+            "among_settled_only": 0.025,
+            "no": 39,
+            "notes_in_population": [
+              1,
+              94
+            ],
+            "unresolved": 0,
+            "yes": 1
+          },
+          "qualitative_error": {
+            "among_settled_only": 0.0,
+            "no": 30,
+            "notes_in_population": [
+              0,
+              267
+            ],
+            "unresolved": 10,
+            "yes": 0
+          },
+          "unflagged_numeric_error": {
+            "among_settled_only": 0.027777777777777776,
+            "no": 35,
+            "notes_in_population": [
+              1,
+              179
+            ],
+            "unresolved": 4,
+            "yes": 1
+          }
+        },
+        "population": 608,
+        "sampled": 40,
+        "unlabelled": 0
+      },
+      "reached_without_figures": {
+        "outcomes": {
+          "omission": {
+            "among_settled_only": 0.13333333333333333,
+            "no": 13,
+            "notes_in_population": [
+              3,
+              103
+            ],
+            "unresolved": 0,
+            "yes": 2
+          },
+          "qualitative_error": {
+            "among_settled_only": 0.0,
+            "no": 7,
+            "notes_in_population": [
+              0,
+              187
+            ],
+            "unresolved": 8,
+            "yes": 0
+          },
+          "unflagged_numeric_error": {
+            "among_settled_only": 0.0,
+            "no": 14,
+            "notes_in_population": [
+              0,
+              84
+            ],
+            "unresolved": 1,
+            "yes": 0
+          }
+        },
+        "population": 229,
+        "sampled": 15,
+        "unlabelled": 0
+      }
+    },
+    "population_estimate": {
+      "joint_level": 0.95,
+      "outcomes": {
+        "omission": {
+          "notes": [
+            72,
+            408
+          ],
+          "share": [
+            0.06451612903225806,
+            0.3655913978494624
+          ]
+        },
+        "qualitative_error": {
+          "notes": [
+            0,
+            726
+          ],
+          "share": [
+            0.0,
+            0.6505376344086021
+          ]
+        },
+        "unflagged_numeric_error": {
+          "notes": [
+            1,
+            395
+          ],
+          "share": [
+            0.0008960573476702509,
+            0.3539426523297491
+          ]
+        }
+      },
+      "population": 1116,
+      "sampled_strata": 3,
+      "tail_per_stratum": 0.00833333333333334
+    },
+    "protocol": "whole-notes-protocol-v1-2026-09-24",
+    "reading": "Note-level outcomes, bounded exactly per stratum and summed over strata weighted by their note counts; unresolved notes count both ways, and nothing is estimated while a note is unlabelled. Claim counts describe the sample. `scanned_figures_no_claim_covers` are figures the scanner found that no labelled claim contains: out-of-scope quantities, or claims the labeller did not see.",
+    "scanned_figures_no_claim_covers": {
+      "not_a_field_value": 1,
+      "unattributed": 10
+    },
+    "status": "complete",
+    "version": "whole-notes-v1-2026-09-24"
+  }
+}

@@ -8,7 +8,10 @@ controls used. The key is at numeric method `n12-2026-09-24`. Seed
 |---|---|
 | `jev-whole-notes-v1.json` | the instrument: whole notes and their evidence. **No verdicts, no spans, no strata.** |
 | `jev-whole-notes-v1-key.json` | each note's stratum and every figure the checker extracted, with its verdict. Do not read first. |
-| `jev-whole-notes-v1-labels.json` | a template, one empty entry per note, waiting for a labeller who is not me |
+| `jev-whole-notes-v1-labels.json` | 75 labelled notes from a fresh-context AI reviewer, as delivered. Never edited. |
+| `jev-whole-notes-v1-labeller-notes.md` | the labeller's reasoning for every uncertain or contradicting claim |
+| `jev-whole-notes-v1-labelling-provenance.json` | who labelled, from what, with fingerprints |
+| `jev-whole-notes-v1-results.json` | the single scoring run, unedited, with fingerprints |
 
 ## Why
 
@@ -131,6 +134,110 @@ The same order as the controls:
 3. **Scored once**, and reported as it comes out.
 4. **Reconciled afterwards, in a separate file.** The original labels are
    never edited, and reconciled figures are reported beside the originals.
+
+## Results, as they came out
+
+Scored once, at `71fd860` with a clean tree. The labels were committed and
+pushed before the run. **The labels are one AI review, not human ground
+truth.** The labeller was given the instrument and its rubric only; its own
+reasoning file records the calls it had to make.
+
+- **The file was accepted.** All 75 notes are labelled, and none was rejected.
+- **264 claims were found:**
+  - **90 numeric:** 77 consistent, 11 `cannot_tell`, 2 inconsistent.
+  - **174 qualitative:** 133 consistent, 41 `cannot_tell`, 0 inconsistent.
+- **2 notes make no in-scope claim.**
+
+### Per note, by stratum
+
+| stratum | sampled | `omission` | `unflagged_numeric_error` | `qualitative_error` |
+|---|---|---|---|---|
+| `reached_with_figures` | 40 of 608 | 1 yes, 39 no | 1 yes, 35 no, 4 unresolved | 0 yes, 30 no, 10 unresolved |
+| `reached_without_figures` | 15 of 229 | 2 yes, 13 no | 0 yes, 14 no, 1 unresolved | 0 yes, 7 no, 8 unresolved |
+| `never_reached` | 20 of 279 | 10 yes, 10 no | 0 yes, 16 no, 4 unresolved | 0 yes, 3 no, 17 unresolved |
+
+### Population ranges, at 95% or more
+
+| outcome | notes of 1,116 | share |
+|---|---|---|
+| `omission` | 72 to 408 | 6.5% to 36.6% |
+| `unflagged_numeric_error` | 1 to 395 | 0.1% to 35.4% |
+| `qualitative_error` | 0 to 726 | 0% to 65.1% |
+
+These are wide, and it is clear what makes them so. `omission` is driven by
+`never_reached`, where the checker never ran: 68 to 211 of those 279 notes.
+The other two outcomes are driven by unresolved notes, which the protocol
+counts both ways. In the notes the checker read, `omission` is 1 to 94 of 608,
+and 3 to 103 of 229.
+
+### Claim by claim
+
+| numeric claims | consistent | `cannot_tell` | inconsistent |
+|---|---|---|---|
+| found and compared, all agreed (`accepted`) | 56 | 3 | **1** |
+| found and compared, one disagreed (`flagged`) | 0 | 1 | 1 |
+| found, not compared (`abstained`) | 9 | 2 | 0 |
+| **never found (`omitted`)** | 12 | 5 | 0 |
+
+**What the checker never found.** There are 17 omitted claims:
+- **11 are in notes that never reached the checker.** Six of them are Markov
+  figures whose evidence *was* supplied, and all six are consistent.
+  Candidates are excluded from grading when they lack an indicator snapshot,
+  so their Markov claims go unchecked even though they could be checked.
+- **The other 6 are in 3 of the 55 notes the checker read, and every one is a
+  number written as a word:** "five-day", "five-confluence", "Five bullish
+  technical confluences". The scanner reads digits only. None of the six is
+  wrong.
+
+**The two wrong numeric claims.**
+- **FLS, report #286, "593 DKK support"**, was flagged by the checker. The
+  labeller agrees it is wrong, reading 593 as the close, where the support is
+  551.5.
+- **ASML, report #284, "break risk (0.400)"**, against 0.4006, was accepted.
+  The checker accepts truncation, which gives 0.400; the labeller rounds, which
+  gives 0.401. It is the same convention disagreement as LMND in the controls,
+  not an unambiguous arithmetic error, and it is the only unflagged numeric
+  error in the sample.
+
+**Found, not compared.** 11 claims, all consistent or `cannot_tell`. Six were
+refused by the grammar: "positive at", "near", "above 75", "Bull-state".
+Five could not be attributed:
+- "3.7% support-break risk", where the percentage is not admitted for a field
+  stored as a fraction;
+- "4.1% distance to support", which is not one of the field's names;
+- a unit price in DKK;
+- a monitored quote and an intraday move, which have no field.
+
+**Figures the scanner found that no claim covers.** All 11 are out of scope:
+allocations, a limit reference, a position's profit, a share count, a total
+return, a stop and a budget. The labeller was right not to claim them, and the
+checker right not to compare them.
+
+**Qualitative claims.** None was read as wrong. The 41 `cannot_tell` are
+mostly strength words with no defined threshold ("strong", "weak", "mild"),
+freshness with no report timestamp, and missing evidence. The labeller's notes
+record each one.
+
+### For reconciliation — listed, not resolved
+
+1. **ASML "break risk (0.400)"** is truncation against rounding, as with LMND.
+2. **Strength and freshness words.** The rubric gives no threshold for
+   "strong" and no time for "fresh", so 41 qualitative claims are
+   `cannot_tell`. That is most of the width of `qualitative_error`.
+3. **Claim boundaries.** The labeller sometimes quoted overlapping spans for
+   independently checkable parts of one phrase. The note-level outcomes count
+   each note once, so this does not move them.
+
+### What it suggests, not yet acted on
+
+Three gaps, each measured here and none fixed. The parser and the grader are
+unchanged by this audit.
+- **Numbers written as words are never read.** Every omission in a note the
+  checker read was one.
+- **Candidates without an indicator snapshot are not graded at all,** though
+  their Markov figures could be checked.
+- **Eleven figures were found but not compared,** for grammar and attribution
+  reasons, and none of them was wrong.
 
 ## What it will not establish
 
