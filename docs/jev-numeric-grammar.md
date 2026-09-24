@@ -39,6 +39,12 @@ Compared claims go from 1,213 to **1,228 of 1,445 (85.0%)**.
 - **Still quantities:** the 14 remaining `not_a_field_value` are share counts,
   and holding periods like "1–3 month" and "2-week".
 
+**This is coverage, not correctness.** The frame's compared share rose from
+80.4% at `n10` to 85.0%. That is fifteen more claims compared, all agreeing,
+not evidence the checker is right more often. And the controls found both
+gaps, so they cannot validate the fix. Fresh examples that `n12` was not
+shaped by are needed for that.
+
 **What it can still get wrong.** A Markov clause that says "5-day signal" and
 means a lookback rather than the horizon would be compared against the horizon.
 No stored note does this. "Over N days" is read only straight after a quoted

@@ -34,8 +34,9 @@
         "field": "daily_indicators.rsi14"
       },
       "changes_label": false,
-      "settled_by": "rubric",
-      "basis": "rsi14 is 60.66 and the note writes RSI at integer precision. Rounding gives 61; only truncation gives 60. The rubric asks whether the figure agrees 'at the precision the note used', and the ordinary reading of that is rounding, so the label stands. The checker accepts truncation by design, which is an open question below, not a reason to overturn the label. Across the sample this is the only one of the 60 accepted claims that matches by truncation alone: 38 match exactly, 20 by rounding, 1 is a threshold. The labeller applied rounding consistently."
+      "settled_by": "unresolved_convention",
+      "basis": "rsi14 is 60.66 and the note writes RSI at integer precision. Rounding gives 61; truncation gives 60. The rubric asks whether the figure agrees 'at the precision the note used', and does not say whether rounding or truncation is the accepted convention. The labeller rounded; the checker accepts truncation by design. Neither reading is an arithmetic error. The reconciliation does not choose between the conventions, so the label is kept as delivered and the score is unchanged. The truncation scenario below shows the figures under the other convention. Across the sample this is the only one of the 60 accepted claims that matches by truncation alone: 38 match exactly, 20 by rounding, 1 is a threshold. So the labeller applied its convention consistently.",
+      "amended": "2026-09-24, after review: an earlier basis said the ordinary reading of the rubric is rounding. The rubric does not say that, so this is recorded as a disagreement over the acceptance convention. Only the wording changed. The verdict, the label and the figures did not."
     },
     {
       "id": "ctl-3e8bae330b",
@@ -513,7 +514,7 @@
     "two_readings": "The wording supports two readings and the evidence does not choose between them."
   },
   "open_questions": [
-    "Truncation. The checker accepts a figure that matches only by truncation. In this sample that decided 1 of the 60 accepted claims, and the rubric reads that one as wrong. Changing it is a parser change, and the parser is frozen at n10. The scenario below shows what the figures would be under the other convention.",
+    "Truncation. The checker accepts a figure that matches only by truncation. In this sample that decided 1 of the 60 accepted claims, and the labeller, who rounded, reads that one as wrong. The rubric does not settle which convention to accept. Changing the checker is a parser change. The scenario below shows the figures under truncation.",
     "Coverage. 'R/R' is not attributed to reward_risk (2 checkable claims never compared), and an 'N-day' horizon is treated as not a field value (4 claims, 1 of them checkable). Not fixed; the parser is frozen.",
     "Missing Markov evidence. All 12 evidence_absent cases, including all 8 sampled not_in_evidence claims, quote Markov figures while the candidate's evidence has markov null. Whether those figures came from elsewhere in the prompt or were invented cannot be answered from the instrument. It is the next thing worth measuring.",
     "Scope. 20 of the 37 cannot_tell are claims about things outside the evidence. Under v4 they count both ways, which is most of the population range's width. Excluding them would be a new protocol, and would need the frame's out-of-scope share measured, not assumed from the sample."

@@ -13,7 +13,7 @@ somewhere in the prompt or were invented.
 
 ## The answer
 
-**They were not invented.** Across the whole frame there are 54 claims the
+**They were in the prompt.** Across the whole frame there are 54 claims the
 checker attributes to a `markov.*` field while the evidence has no Markov
 block, spread over 34 reports. Every one of them is in the prompt the model was
 given, for the same symbol and under the same field:
@@ -30,7 +30,10 @@ given, for the same symbol and under the same field:
   the evidence list, and each has status `ok` with no error. Report #199's JPM
   row, for example, rests on 520 samples.
 
-The figures were faithful quotes of valid, current signals. The checker called
+Each figure is what a faithful quote of a valid, current signal would look
+like. That is strong evidence of where the figures came from. It does not show
+how the model arrived at them, and it is not a hallucination rate. The checker
+called
 them `not_in_evidence` because the **grading evidence reads only one of the two
 Markov lists the prompt carried.**
 
@@ -43,7 +46,10 @@ Markov lists the prompt carried.**
   last place and searched again. Of 428 perturbed figures, **3 (0.7%)** still
   landed on the same symbol and the same field; the real figures did so 54
   times out of 54. A looser test — any field in the same symbol's run rows —
-  catches 23 of 428 (5.4%).
+  catches 23 of 428 (5.4%). This supports the attribution; it does not rule
+  coincidence out for any single claim, and it says nothing about the model's
+  reasoning. An earlier summary of this result said coincidence was ruled
+  out. That was too strong.
 
 ## Why the evidence list left them out
 
@@ -94,8 +100,8 @@ wrong figure reached report text, but not the gate.
 ## What this changes
 
 - **For the census.** 53 of the 56 `not_in_evidence` claims in the frame are
-  these Markov figures. Fifty-two were faithful quotes of what the model was
-  shown, and one was a wrong-symbol copy.
+  these Markov figures. Fifty-two match what the model was shown for the same
+  symbol and field, and one was a wrong-symbol copy.
 - **For the controls.** The 9 sampled `evidence_absent` cases that quote a
   Markov value all trace to the embedded rows. The labeller's `cannot_tell` was
   correct for the evidence supplied. The v4 score is unchanged, and this is
@@ -169,7 +175,15 @@ move. Output in `jev-markov-n11-changes.json`, measured from a clean tree.
 - **The wording verdicts.** For those 93 candidates, the stored v16 wording and
   sufficiency answers were given without the Markov block. They are not
   re-asked: grading stays at v16, and a regrade would move the measured
-  baseline.
+  baseline. **Recovering the numeric evidence does not repair them.** They
+  remain historical measurements against incomplete evidence. In those
+  grades, the numeric half and the wording half were measured against
+  different evidence: the stored `evidence_sha256` history shows it, and
+  `markov_source` names the rows the numeric half read.
 - **Coverage is not correctness.** 51 more comparisons, all agreeing, say the
-  quotes were faithful to what the model was shown. They say nothing about
-  whether the reports that used them were right.
+  figures match what the model was shown. They say nothing about whether the
+  reports that used them were right.
+- **The controls are no longer independent of the checker.** They found the
+  gaps that `n11` and `n12` fix, so for `n11` and later they are development
+  and regression evidence. Validating `n12` needs examples it was not shaped
+  by.

@@ -350,7 +350,7 @@ It covers 20 entries — every disagreement on either axis, plus FLS:
 
 | point | cases | reconciled |
 |---|---|---|
-| false negative, LMND "RSI 60" against 60.66 | 1 | **the label stands.** The rubric reads precision as rounding, which gives 61. It is the only accepted claim in the sample that matches by truncation alone, so the labeller applied the rule consistently. |
+| false negative, LMND "RSI 60" against 60.66 | 1 | **label kept as delivered; the convention is unresolved.** Rounding gives 61 and truncation gives 60, and the rubric's "at the precision the note used" does not say which to accept. The labeller rounded; the checker accepts truncation by design. Neither is an arithmetic error, and the reconciliation does not choose between them. It is the only accepted claim in the sample that matches by truncation alone, so the labeller applied its convention consistently. |
 | flags left `cannot_tell` — the report #101 denominators | 3 | **unresolved.** Read as observed/required, each disagrees. Read as a criteria total, none can be checked, because `confluences` is null. |
 | wording with two readings — CHEMM 525, NVDA 224 | 2 | **unresolved.** Two closes from different moments; one satisfies each relation and one does not. |
 | checker and labeller named different fields | 13 | **the labeller's field holds in every case.** The checker never compared any of them. |
@@ -401,13 +401,17 @@ truncation as the checker does, only LMND moves. Accepted claims wrong would be
   sampled cases are now compared, and all six match. Three of them are the
   horizons the labeller could not check, because its evidence had no Markov
   block. The controls stay keyed to `n10`, so this is reported beside v4, not
-  folded into it.
+  folded into it. Because the controls found these gaps, from `n11` on
+  they are development and regression evidence for the checker, not an
+  independent validation of it.
 - **Missing Markov evidence.** Twelve claims quote Markov figures while the
   candidate's evidence has `markov` null — all 8 sampled `not_in_evidence`
   among them. Whether those figures came from elsewhere in the prompt or were
   invented cannot be answered from the instrument, and it is the next thing
   worth measuring.
-  *Measured since, 2026-09-24, in `jev-markov-provenance.md`:* not invented.
+  *Measured since, 2026-09-24, in `jev-markov-provenance.md`:* the figures
+  were in the prompt. That shows where they came from, not how the model used
+  them.
   52 of the 53 such `not_in_evidence` claims in the frame match, by rounding,
   the value the model was shown for the same symbol and field. They sat in
   debugging rows the evidence builder does not read, because the evidence list
