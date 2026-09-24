@@ -1,9 +1,50 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n11-2026-09-24`**, grading version **`v16`**. The grammar
-below is unchanged since `n10-2026-09-22`, the evaluation baseline: its
-limitations are measured and recorded rather than fixed, and it must not move
-during an evaluation run.
+Method version **`n12-2026-09-24`**, grading version **`v16`**. `n10-2026-09-22`
+was the evaluation baseline; the controls are keyed to it, and its v4 result
+stands as scored. `n11` widened the evidence and `n12` added two names (both
+below); each change is measured claim by claim against the version before it.
+
+## `n12`: two names the checker did not know
+
+Both were found by the controls reconciliation. They are measured over all
+1,445 claims in the frame in `jev-numeric-n12-changes.json`, from two recorded
+runs of committed code: `n11` at `427a44f`, `n12` at `3e88dfc`.
+
+- **"R/R" is `reward_risk`.** The separator rule turned "R/R" into "r r", which
+  no keyword spelled. The fix adds a general rule: an initialism — a keyword
+  made only of single letters — names a field only when it stands alone,
+  because "r r" also sits inside "higher rsi". Single letters never become gap
+  words.
+- **The Markov horizon, written as a duration, is `markov.horizon_days`.** A
+  figure followed by "day" stays a quantity everywhere else, and that
+  exclusion is load-bearing. The horizon is read by a closed rule instead: a
+  whole, unsigned `N-day` / `N day(s)` followed by `horizon`, `markov`,
+  `signal` or `signed`, or written `<figure> over N days`, in a clause that
+  names a Markov field. It is settled before attribution and uses no phrase.
+  The gap grammar sets aside only a horizon the checker itself read this way.
+
+| `n11` → `n12` | claims |
+|---|---|
+| `not_a_field_value` → `matches` (horizon) | 8 |
+| `unattributed` → `matches` (R/R) | 4 |
+| `uncertain_attribution` → `matches` (the Markov signal beside a horizon) | 2 |
+| `uncertain_attribution` → `matches` (R/R; was contested by `rsi`) | 1 |
+| to `differs`, or a `matches` lost | **0** |
+
+Compared claims go from 1,213 to **1,228 of 1,445 (85.0%)**.
+- **"R/R":** all 5 in the notes are now read.
+- **Horizons:** all 13 in the notes fit the rule. 8 are in the frame and match;
+  the other 5 sit in candidates that never reached the checker.
+- **Still quantities:** the 14 remaining `not_a_field_value` are share counts,
+  and holding periods like "1–3 month" and "2-week".
+
+**What it can still get wrong.** A Markov clause that says "5-day signal" and
+means a lookback rather than the horizon would be compared against the horizon.
+No stored note does this. "Over N days" is read only straight after a quoted
+figure, which is the narrowest form that covers the one stored case.
+
+## `n11`: the evidence
 
 `n11` changes what the evidence contains, not how anything is read. A symbol
 missing from the prompt's compact Markov list is now read from the full signal

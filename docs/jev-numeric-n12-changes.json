@@ -1,0 +1,260 @@
+{
+  "what_this_is": "n11 against n12 over every distinct claim in the controls frame, from two recorded runs of committed code with clean trees. Produced by jev_provenance::census_of_every_claim.",
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "n11": {
+    "commit": "427a44f",
+    "method_version": "n11-2026-09-24",
+    "claims": 1445,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1204,
+      "not_a_field_value": 22,
+      "not_in_evidence": 4,
+      "unattributed": 151,
+      "uncertain_attribution": 49
+    }
+  },
+  "n12": {
+    "commit": "3e88dfc",
+    "method_version": "n12-2026-09-24",
+    "claims": 1445,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1219,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 46
+    }
+  },
+  "claims_only_in_one": 0,
+  "changed": [
+    {
+      "claim": "106|ADI:xnas|59",
+      "figure": "0.14",
+      "was": {
+        "verdict": "uncertain_attribution",
+        "field": "daily_indicators.rsi14"
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "daily_indicators.reward_risk",
+        "relation": "equals",
+        "actual": 0.14337092234798923
+      },
+      "excerpt": "5 confluences, lowest semis rsi but r/r 0.14 — too weak for fresh capital today. med"
+    },
+    {
+      "claim": "106|AMAT:xnas|56",
+      "figure": "0.33",
+      "was": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "daily_indicators.reward_risk",
+        "relation": "equals",
+        "actual": 0.33095076127255585
+      },
+      "excerpt": "83, overweight daily, but rsi 76 and r/r 0.33 — most extended. defer fresh entry."
+    },
+    {
+      "claim": "106|AMD:xnas|58",
+      "figure": "0.32",
+      "was": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "daily_indicators.reward_risk",
+        "relation": "equals",
+        "actual": 0.31872204694039885
+      },
+      "excerpt": "arkov (0.615), overweight daily, but r/r 0.32 and rsi 61. watch for a pullback rather"
+    },
+    {
+      "claim": "106|ARM:xnas|58",
+      "figure": "0.19",
+      "was": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "daily_indicators.reward_risk",
+        "relation": "equals",
+        "actual": 0.18845641642864783
+      },
+      "excerpt": ".649), 5 confluences, but rsi 69 and r/r 0.19. wait for mean-reversion."
+    },
+    {
+      "claim": "106|BAC:xnys|80",
+      "figure": "0.75",
+      "was": {
+        "verdict": "unattributed",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "daily_indicators.reward_risk",
+        "relation": "equals",
+        "actual": 0.7499180385286995
+      },
+      "excerpt": "57 (bull), daily buy, 5 confluences, r/r 0.75, rsi 58. best non-etf risk-adjusted ent"
+    },
+    {
+      "claim": "160|ADI:xnas|130",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "histogram negative, rsi weak, and markov 5-day signal is short at -0.2776."
+    },
+    {
+      "claim": "160|ADI:xnas|155",
+      "figure": "-0.2776",
+      "was": {
+        "verdict": "uncertain_attribution",
+        "field": "markov.signed_signal"
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.signed_signal",
+        "relation": "equals",
+        "actual": -0.27762359380722046
+      },
+      "excerpt": "eak, and markov 5-day signal is short at -0.2776."
+    },
+    {
+      "claim": "173|ARM:xnas|116",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "is bear with signed_signal -0.5230 over 5 days; flattening reduces portfolio vola"
+    },
+    {
+      "claim": "180|AMGN:xnas|97",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "with bullish trend and 4/3 confluences; 5-day markov signal is 0.462. congress da"
+    },
+    {
+      "claim": "180|V:xnys|114",
+      "figure": "0.560",
+      "was": {
+        "verdict": "uncertain_attribution",
+        "field": "markov.signed_signal"
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.signed_signal",
+        "relation": "equals",
+        "actual": 0.5596567728803779
+      },
+      "excerpt": "nd bullish trend; markov 5-day signal is 0.560. high existing weight argues against ad"
+    },
+    {
+      "claim": "180|V:xnys|98",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "/3 confluences and bullish trend; markov 5-day signal is 0.560. high existing weig"
+    },
+    {
+      "claim": "185|DSV:xcse|39",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "bullish trend and exceptionally strong 5-day markov continuation signal of 0.659"
+    },
+    {
+      "claim": "198|ALV:xetr|122",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "es, low support-break risk, and positive 5-day markov signal."
+    },
+    {
+      "claim": "95|NVDA:xnas|77",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "bullish, but markov is negative over the 5-day horizon; hold existing exposure."
+    },
+    {
+      "claim": "97|NVDA:xnas|63",
+      "figure": "5",
+      "was": {
+        "verdict": "not_a_field_value",
+        "field": null
+      },
+      "now": {
+        "verdict": "matches",
+        "field": "markov.horizon_days",
+        "relation": "equals",
+        "actual": 5.0
+      },
+      "excerpt": "verweight with bullish trend, but markov 5-day signed_signal is negative; wait for"
+    }
+  ]
+}

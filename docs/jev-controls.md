@@ -397,6 +397,11 @@ truncation as the checker does, only LMND moves. Accepted claims wrong would be
 - **Truncation.** Whether the checker should keep accepting it is a parser
   change, and the parser is frozen at `n10`.
 - **Coverage gaps.** The "R/R" and "N-day" gaps above; not fixed.
+  *Fixed since, 2026-09-24, in `n12` (`jev-numeric-grammar.md`):* all six
+  sampled cases are now compared, and all six match. Three of them are the
+  horizons the labeller could not check, because its evidence had no Markov
+  block. The controls stay keyed to `n10`, so this is reported beside v4, not
+  folded into it.
 - **Missing Markov evidence.** Twelve claims quote Markov figures while the
   candidate's evidence has `markov` null — all 8 sampled `not_in_evidence`
   among them. Whether those figures came from elsewhere in the prompt or were
