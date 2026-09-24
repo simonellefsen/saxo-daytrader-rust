@@ -44,7 +44,11 @@ use std::sync::LazyLock;
 /// list is now read from the rows the prompt embedded under
 /// `markov_method.latest_run` (`jev_review::embedded_markov_rows`). The results
 /// change, so the version does too.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n11-2026-09-24";
+///
+/// `n12` reads two names `n11` missed: "R/R" as `reward_risk`, and the Markov
+/// horizon written as a duration ("5-day") as `markov.horizon_days`, which the
+/// gap grammar also sets aside where it qualifies a Markov field.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n12-2026-09-24";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -175,7 +179,10 @@ static FIELDS: &[FieldSpec] = &[
         path: "daily_indicators.reward_risk",
         discrete: false,
         signed: false,
-        keywords: &["reward risk"],
+        // "R/R 0.75" read as nothing: the separator rule makes it "r r", which
+        // no keyword spelled. An initialism names the field only standing
+        // alone -- "r r" also occurs inside "higher rsi".
+        keywords: &["reward risk", "r/r"],
         unit: Unit::AsQuoted,
     },
     FieldSpec {
@@ -225,6 +232,15 @@ static FIELDS: &[FieldSpec] = &[
         signed: false,
         keywords: &["bull probability", "bull prob"],
         unit: Unit::FractionOfOne,
+    },
+    FieldSpec {
+        path: "markov.horizon_days",
+        discrete: true,
+        signed: false,
+        // Reached only through `markov_horizon_unit_end`: a duration is a
+        // quantity everywhere else, and no phrase names this field on its own.
+        keywords: &[],
+        unit: Unit::AsQuoted,
     },
     FieldSpec {
         path: "markov.signed_signal",
@@ -474,7 +490,9 @@ static FIELD_WORDS: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
         .iter()
         .flat_map(|field| field.keywords.iter())
         .flat_map(|keyword| keyword.split(|c: char| !c.is_ascii_alphanumeric()))
-        .filter(|word| !word.is_empty())
+        // A single letter is part of an initialism ("r/r"), not a word that
+        // can continue a field's name in a gap.
+        .filter(|word| word.len() > 1)
         .collect();
     set.extend([
         "signal",
@@ -545,6 +563,86 @@ fn measures_something_else(text: &str, end: usize) -> bool {
                 .next()
                 .is_none_or(|c| !c.is_ascii_alphanumeric())
     })
+}
+
+/// Words that, straight after "N-day", say the days are the Markov signal's
+/// horizon: "5-day markov signal", "markov 5-day signal", "the 5-day horizon",
+/// "5-day signed signal".
+const HORIZON_FOLLOWERS: &[&str] = &["horizon", "markov", "signal", "signed"];
+
+/// Where the unit ends, if a figure is the Markov signal's horizon written as
+/// a duration.
+///
+/// Durations are otherwise not field values -- "20 sessions", "6 shares" --
+/// and that exclusion is load-bearing: in "5-day Markov continuation signal of
+/// 0.6590" it keeps the 5 from taking `markov` away from the signal. This reads
+/// the one duration the evidence carries, `markov.horizon_days`, in a closed
+/// set of forms, and only where the figure's own clause names a Markov field:
+///
+/// - `N-day` or `N day(s)` followed by `horizon`, `markov`, `signal` or
+///   `signed`;
+/// - `<figure> over N days`, the horizon of the figure just quoted.
+///
+/// A whole, unsigned number only. "50-day SMA" is followed by none of those
+/// words, so it stays a quantity. All thirteen durations in the stored notes
+/// are the Markov horizon, in seven phrasings; each is one of the forms above.
+fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
+    if number.decimals != 0 || number.percent || number.explicit_sign || number.value < 1.0 {
+        return None;
+    }
+    let tail = &text[number.end..];
+    let joined = tail.trim_start_matches(['-', ' ', '\u{2011}']);
+    let unit = ["days", "day"].into_iter().find(|unit| {
+        joined.starts_with(unit)
+            && joined[unit.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+    })?;
+    let unit_end = number.end + (tail.len() - joined.len()) + unit.len();
+    let (clause_start, clause_end) = clause_bounds(text, number.start);
+    let following = words(&text[unit_end.min(clause_end)..clause_end]);
+    let followed = following
+        .first()
+        .is_some_and(|word| HORIZON_FOLLOWERS.contains(word));
+    let preceding = words(&text[clause_start..number.start]);
+    let over_a_figure = preceding.len() >= 2
+        && preceding[preceding.len() - 1] == "over"
+        && preceding[preceding.len() - 2]
+            .chars()
+            .all(|c| c.is_ascii_digit());
+    let clause = with_separators_normalised(&text[clause_start..clause_end]);
+    let names_markov = FIELDS
+        .iter()
+        .zip(NORMALISED_KEYWORDS.iter())
+        .filter(|(field, _)| field.path.starts_with("markov."))
+        .flat_map(|(_, keywords)| keywords.iter())
+        .any(|keyword| clause.contains(keyword.as_str()));
+    ((followed || over_a_figure) && names_markov).then_some(unit_end)
+}
+
+/// The text between a field's name and its figure, with any Markov horizon
+/// the checker itself read taken out.
+///
+/// "markov 5-day signal is 0.560" names which signal: the horizon qualifies
+/// the field and claims nothing on its own. Left in, the 5 and the `day` made
+/// the gap unreadable and a correct figure went uncompared. Only a horizon
+/// `markov_horizon_unit_end` accepts is removed, so nothing else loosens.
+fn without_markov_horizons(text: &str, from: usize, to: usize) -> String {
+    let mut kept = String::new();
+    let mut cursor = from;
+    for number in scan_numbers(text) {
+        if number.start < cursor || number.end > to {
+            continue;
+        }
+        if let Some(unit_end) = markov_horizon_unit_end(text, &number).filter(|end| *end <= to) {
+            kept.push_str(&text[cursor..number.start]);
+            kept.push(' ');
+            cursor = unit_end;
+        }
+    }
+    kept.push_str(&text[cursor..to]);
+    kept
 }
 
 /// The span of the clause holding the byte at `index`.
@@ -681,7 +779,8 @@ fn relation_for(text: &str, field_end: Option<usize>, number_start: usize) -> &'
     if field_end >= number_start {
         return RELATION_EQUALS;
     }
-    let gap = words(&text[field_end..number_start]);
+    let between = without_markov_horizons(text, field_end, number_start);
+    let gap = words(&between);
     if let Some(relation) = symbolic {
         return if gap_is_plain(&gap) {
             relation
@@ -1018,6 +1117,23 @@ fn with_separators_normalised(text: &str) -> String {
     text.replace(['_', '-', '/'], " ")
 }
 
+/// A keyword made only of single letters, such as "r r" for "R/R".
+fn is_initialism(keyword: &str) -> bool {
+    keyword.split(' ').all(|token| token.len() == 1)
+}
+
+/// Whether the match at `start..end` is not part of a longer word.
+fn stands_alone(text: &str, start: usize, end: usize) -> bool {
+    let bytes = text.as_bytes();
+    let before = start
+        .checked_sub(1)
+        .is_none_or(|previous| !bytes[previous].is_ascii_alphanumeric());
+    let after = bytes
+        .get(end)
+        .is_none_or(|next| !next.is_ascii_alphanumeric());
+    before && after
+}
+
 /// The field table's keywords, separator-normalised once.
 static NORMALISED_KEYWORDS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
     FIELDS
@@ -1072,6 +1188,11 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
                 from = start + 1;
                 // A verb is not a name.
                 if used_as_a_verb(&searchable, end) {
+                    continue;
+                }
+                // An initialism is a name only standing alone: the "r r" of
+                // "r/r" also sits inside "higher rsi".
+                if is_initialism(keyword) && !stands_alone(&searchable, start, end) {
                     continue;
                 }
                 for (index, number) in numbers.iter().enumerate() {
@@ -1131,6 +1252,18 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
             .iter()
             .any(|(start, end)| span.0 < *end && *start < span.1)
     };
+    // The Markov horizon written as a duration, settled before anything reads
+    // the phrases and using none of them, so the signal it qualifies keeps its
+    // `markov`. These figures are already ineligible for phrases.
+    let horizon = FIELDS
+        .iter()
+        .find(|field| field.path == "markov.horizon_days");
+    for (index, number) in numbers.iter().enumerate() {
+        if markov_horizon_unit_end(text, number).is_some() {
+            assigned[index] = horizon;
+            settled[index] = true;
+        }
+    }
     // The count-over-minimum notation, settled before anything else reads the
     // phrases.
     //
@@ -1245,8 +1378,10 @@ fn check_one(
     let window = &text[window_start..window_end];
     let excerpt = window.trim().to_string();
 
-    // A quantity of something is not the value of a field.
-    if measures_something_else(text, found.end) {
+    // A quantity of something is not the value of a field -- except the one
+    // duration the evidence carries, which attribution has already named.
+    let horizon = field.is_some_and(|field| field.path == "markov.horizon_days");
+    if measures_something_else(text, found.end) && !horizon {
         return NumericCheck {
             quoted: found.value,
             field: None,
@@ -2197,7 +2332,10 @@ mod heldout_regressions {
             NumericVerdict::Matches
         );
 
-        // #185 DSV: the 5 in "5-day" is a horizon, not the signal.
+        // #185 DSV: the 5 in "5-day" is a horizon, not the signal. Since n12
+        // the horizon is read as what it is, `markov.horizon_days`, rather
+        // than left as a bare quantity; what this case protects is unchanged
+        // -- the 5 must not take `markov` away from the signal.
         let dsv = json!({"markov": {"signed_signal": 0.6590335965156555}});
         let checks = numeric_checks(
             "exceptionally strong 5-day Markov continuation signal of 0.6590",
@@ -2207,8 +2345,12 @@ mod heldout_regressions {
             .iter()
             .find(|check| check.quoted == 5.0)
             .expect("the horizon");
-        assert_eq!(horizon.verdict, NumericVerdict::NotAFieldValue);
-        assert!(horizon.field.is_none());
+        assert_eq!(horizon.field, Some("markov.horizon_days"));
+        assert_eq!(
+            horizon.verdict,
+            NumericVerdict::NotInEvidence,
+            "this evidence carries no horizon"
+        );
         let signal = checks
             .iter()
             .find(|check| (check.quoted - 0.659).abs() < 1e-9)
@@ -2933,5 +3075,118 @@ mod attribution_regressions {
                 "matches"
             )
         );
+    }
+}
+
+/// `n12`: the two names `n11` missed, and what they must not catch.
+#[cfg(test)]
+mod n12_attribution {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence() -> JsonValue {
+        json!({
+            "daily_indicators": {"reward_risk": 0.7499180385286995, "rsi14": 58.2, "confluence_count": 5},
+            "markov": {"signed_signal": 0.5596567728803779, "bull_prob": 0.61, "horizon_days": 5},
+        })
+    }
+
+    fn check(note: &str, quoted: f64) -> NumericCheck {
+        numeric_checks(note, &evidence())
+            .into_iter()
+            .find(|check| (check.quoted - quoted).abs() < 1e-9)
+            .unwrap_or_else(|| panic!("no figure {quoted} in {note:?}"))
+    }
+
+    /// Report #106 BAC. "R/R" read as nothing, because the separator rule
+    /// makes it "r r" and no keyword spelled that.
+    #[test]
+    fn r_slash_r_is_the_reward_risk() {
+        let note = "daily BUY, 5 confluences, R/R 0.75, RSI 58. Best non-ETF entry";
+        let reward = check(note, 0.75);
+        assert_eq!(reward.field, Some("daily_indicators.reward_risk"));
+        assert_eq!(reward.verdict, NumericVerdict::Matches);
+        assert_eq!(check(note, 58.0).field, Some("daily_indicators.rsi14"));
+    }
+
+    /// The "r r" of "r/r" also sits inside "higher rsi". An initialism names a
+    /// field only standing alone.
+    #[test]
+    fn an_initialism_inside_other_words_names_nothing() {
+        let evidence = json!({"daily_indicators": {"reward_risk": 62.0, "rsi14": 62.0}});
+        let checks = numeric_checks("momentum with higher rsi 62 today", &evidence);
+        assert_eq!(checks[0].field, Some("daily_indicators.rsi14"));
+        assert!(
+            !FIELD_WORDS.contains("r"),
+            "a single letter is not a gap word"
+        );
+    }
+
+    /// Every phrasing of the horizon in the stored notes, each read as
+    /// `markov.horizon_days` and compared.
+    #[test]
+    fn the_markov_horizon_is_read_in_each_stored_phrasing() {
+        for note in [
+            "strong 5-day markov long signal of 0.560 and rising",
+            "rsi weak, and markov 5-day signal is short at -0.2776",
+            "positive bull_prob dominance over 5-day horizon",
+            "bullish, but markov is negative over the 5-day horizon; hold",
+            "overweight, but markov 5-day signed_signal is negative; wait",
+            "regime is bear with signed_signal -0.5230 over 5 days; flatten",
+            "markov direction is mildly positive but current 5-day signed signal is only 0.095",
+        ] {
+            let horizon = check(note, 5.0);
+            assert_eq!(horizon.field, Some("markov.horizon_days"), "{note}");
+            assert_eq!(horizon.verdict, NumericVerdict::Matches, "{note}");
+        }
+    }
+
+    /// A horizon that is not the one in the evidence is a disagreement.
+    #[test]
+    fn a_wrong_horizon_is_flagged() {
+        let horizon = check("markov 10-day signal is 0.560", 10.0);
+        assert_eq!(horizon.field, Some("markov.horizon_days"));
+        assert_eq!(horizon.verdict, NumericVerdict::Differs);
+    }
+
+    /// Report #180, "Markov 5-day signal is 0.560", went uncompared under
+    /// `n11`: the grammar read the 5 and the `day` as words it did not know.
+    /// A horizon the checker itself read qualifies the field, and is set aside.
+    #[test]
+    fn a_horizon_between_a_markov_field_and_its_figure_is_not_a_gap() {
+        let signal = check(
+            "existing position. markov 5-day signal is 0.560. high weight",
+            0.56,
+        );
+        assert_eq!(signal.field, Some("markov.signed_signal"));
+        assert_eq!(signal.relation, RELATION_EQUALS);
+        assert_eq!(signal.verdict, NumericVerdict::Matches);
+    }
+
+    /// Durations that are not the Markov horizon stay quantities: no Markov
+    /// field in the clause, or a following word that is not one of the four.
+    #[test]
+    fn other_durations_stay_quantities() {
+        for (note, quoted) in [
+            ("price holding above the 50-day sma", 50.0),
+            ("held for 20 days without a stop", 20.0),
+            ("markov bull regime; 30-day high in sight", 30.0),
+            ("markov signal 0.56 after 3 days of consolidation", 3.0),
+        ] {
+            let quantity = check(note, quoted);
+            assert_eq!(quantity.verdict, NumericVerdict::NotAFieldValue, "{note}");
+            assert!(quantity.field.is_none(), "{note}");
+        }
+    }
+
+    /// The horizon is settled without using a phrase, so the signal beside it
+    /// keeps `markov` -- the reason durations were excluded in the first place.
+    #[test]
+    fn the_horizon_does_not_take_the_signals_name() {
+        let note = "exceptionally strong 5-day markov continuation signal of 0.5597";
+        assert_eq!(check(note, 5.0).field, Some("markov.horizon_days"));
+        let signal = check(note, 0.5597);
+        assert_eq!(signal.field, Some("markov.signed_signal"));
+        assert_eq!(signal.verdict, NumericVerdict::Matches);
     }
 }
