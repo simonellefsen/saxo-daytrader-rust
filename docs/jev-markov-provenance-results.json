@@ -1,0 +1,1376 @@
+{
+  "what_this_is": "Where the Markov figures quoted without Markov evidence came from, measured across the whole controls frame. Output of jev_provenance::where_the_missing_markov_figures_came_from, unedited under 'result'.",
+  "measured_at": "2026-09-24T05:07:58Z",
+  "measured_at_commit": "c80c6d91385b279741fa4f2af6c8fe4077efcba4",
+  "working_tree_dirty": false,
+  "dump": "the 233-report dump the controls sample was drawn from (2026-09-22)",
+  "command": "JEV_PROMPTS_PATH=all.json cargo test --release where_the_missing_markov_figures_came_from -- --ignored",
+  "result": {
+    "claims": [
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.50",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.4977133305597808,
+          0.4977133305597808,
+          0.4977133305597808
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 101,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.bull_prob",
+        "figure": "0.65",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].bull_prob",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].distribution.Bull"
+        ],
+        "matched_values": [
+          0.6524670949390939,
+          0.6524670949390939
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 101,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.03",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.028180795457391744,
+          0.028180795457391744,
+          -0.02581552126266007,
+          -0.035269971581938786,
+          0.032583294384723294,
+          0.03184878301398242,
+          0.027537694782663547,
+          -0.029594457385175965,
+          -0.0291571057059814,
+          -0.029904046206875146,
+          0.028180795457391744
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 101,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.43505904873452383,
+          -0.43505904873452383
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 103,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.028",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.028180795457391744,
+          0.028180795457391744,
+          0.027537694782663547,
+          0.028180795457391744
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 103,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.227",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.22690351713828008,
+          -0.22690351713828008
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 104,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.43505904873452383,
+          -0.43505904873452383
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 104,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.227",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.22690351713828008,
+          -0.22690351713828008
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 105,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.43505904873452383,
+          -0.43505904873452383
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 105,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.301",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.30116089475218566,
+          -0.30116089475218566
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 106,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NVDA:xnas",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.43505904873452383,
+          -0.43505904873452383
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 106,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.291",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.2912630481083859,
+          -0.2912630481083859
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 109,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NVDA:xnas",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.4563101531673962,
+          -0.4563101531673962
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 112,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2955",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.29546832391380096,
+          -0.29546832391380096
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 113,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NVDA:xnas",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.4563101531673962,
+          -0.4563101531673962
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 113,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4590",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.4589525992844218,
+          -0.4589525992844218
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 114,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2386",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.23864172915135456,
+          -0.23864172915135456
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 116,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.45692035679372983,
+          -0.45692035679372983
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 116,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.0282",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.028180795457391744,
+          0.028180795457391744,
+          0.028180795457391744
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 117,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.5982",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.598154717018097,
+          -0.598154717018097
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 150,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.45692035679372983,
+          -0.45692035679372983
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 150,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.308",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.3078319938773393,
+          -0.3078319938773393
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 151,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NVDA:xnas",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.24769927983199688,
+          -0.24769927983199688
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 154,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.45692035679372983,
+          -0.45692035679372983
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 154,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.316",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.3158696337047566,
+          -0.3158696337047566
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 155,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NVDA:xnas",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.530",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5302173754371217,
+          0.5302173754371217,
+          0.5302173754371217
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 155,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.24769927983199688,
+          -0.24769927983199688
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 156,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.45692035679372983,
+          -0.45692035679372983
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 156,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.501",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5007163301684096,
+          0.5007163301684096,
+          0.5007163301684096
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 158,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.533",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5333284721008837,
+          0.5333284721008837,
+          0.5333284721008837
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 158,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "uncertain_attribution"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.536",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5364006586276769,
+          0.5364006586276769,
+          0.5364006586276769
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 160,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.24769927983199688,
+          -0.24769927983199688
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 161,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.4563101531673962,
+          -0.4563101531673962
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 161,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.5000",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5000282832094504,
+          0.5000282832094504,
+          0.5000282832094504
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 164,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.500",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5000282832094504,
+          0.5000282832094504,
+          0.5000282832094504
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 165,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.542",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5424310317571712,
+          0.5424310317571712,
+          0.5424310317571712
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 165,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.5943",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.5942586242394319,
+          -0.5942586242394319
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 166,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.4616",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.4615711105678775,
+          -0.4615711105678775
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 166,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.596",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.5958602768967234,
+          -0.5958602768967234
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 168,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.464",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.464165993865712,
+          -0.464165993865712
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 168,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "ORSTED:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.500",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5000282832094504,
+          0.5000282832094504,
+          0.5000282832094504
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 169,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.548",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5483138129562937,
+          0.5483138129562937,
+          0.5483138129562937
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 169,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.50",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].raw_payload_json.recent_labels[].rolling_return",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5000282832094504,
+          0.5000282832094504,
+          0.507773027594248,
+          0.5000282832094504
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 171,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "LMND:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.55",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5512014576010256,
+          0.5512014576010256,
+          0.5512014576010256
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 171,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.599",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.5990428902197427,
+          -0.5990428902197427
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 172,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.5541",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5540540986074529,
+          0.5540540986074529,
+          0.5540540986074529
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 173,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "-0.2617",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          -0.2616790632374301,
+          -0.2616790632374301
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 174,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NNIT:xcse",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.557",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5568723399397386,
+          0.5568723399397386,
+          0.5568723399397386
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 175,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.560",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5596567728803779,
+          0.5596567728803779,
+          0.5596567728803779
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 180,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "0.560",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5596567728803779,
+          0.5596567728803779,
+          0.5596567728803779
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 181,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "+0.568",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5678129498611477,
+          0.5678129498611477,
+          0.5678129498611477
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 187,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "+0.577",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.5769323255186927,
+          0.5769323255186927,
+          0.5769323255186927
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 199,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "JPM:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "+0.585",
+        "matched_at": [
+          ".markov_method.latest_run.summary_json.signals[].conviction",
+          ".markov_method.latest_run.summary_json.signals[].forecasts_json[].signed_signal",
+          ".markov_method.latest_run.summary_json.signals[].signed_signal"
+        ],
+        "matched_values": [
+          0.584997588167207,
+          0.584997588167207,
+          0.584997588167207
+        ],
+        "place": "embedded_run_rows_same_symbol",
+        "prompt_embedded_run_rows": true,
+        "report": 199,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "V:xnys",
+        "verdict": "not_in_evidence"
+      },
+      {
+        "field": "markov.signed_signal",
+        "figure": "+0.2331",
+        "matched_at": [
+          ".earlier_same_scope_report.report.suggested_trades[].strategy_metadata.markov.signed_signal",
+          ".earlier_same_scope_report.report.symbol_sentiment[].rationale"
+        ],
+        "matched_values": [
+          0.23313425481319427,
+          0.2331
+        ],
+        "place": "earlier_report_same_symbol",
+        "prompt_embedded_run_rows": false,
+        "report": 260,
+        "rounds_to_it": true,
+        "same_field": true,
+        "sorts_after_the_evidence_list": true,
+        "symbol": "NESTE:xhel",
+        "verdict": "not_in_evidence"
+      }
+    ],
+    "coincidence_baseline": {
+      "by_place": {
+        "elsewhere_same_symbol": 1,
+        "embedded_run_rows_same_symbol": 23,
+        "nowhere": 263,
+        "other_symbols_only": 141
+      },
+      "figures": 428,
+      "same_symbol_and_same_field": 3,
+      "what": "each target figure moved 5, 7, 11 and 13 units either way in its last place"
+    },
+    "control": {
+      "by_place": {
+        "evidence_list_same_symbol": 340
+      },
+      "claims": 340,
+      "what": "markov claims with markov evidence present that the checker matched"
+    },
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "method_version": "n10-2026-09-22",
+    "places_in_priority_order": [
+      "evidence_list_same_symbol",
+      "embedded_run_rows_same_symbol",
+      "earlier_report_same_symbol",
+      "other_markov_block_same_symbol",
+      "elsewhere_same_symbol",
+      "system_text",
+      "other_symbols_only",
+      "nowhere"
+    ],
+    "reports_in_dump": 233,
+    "reports_with_targets": {
+      "101": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "103": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "104": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "105": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "106": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "109": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "112": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "113": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "114": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "116": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "117": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "150": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "151": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "154": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "155": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "156": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "158": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "160": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "161": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "164": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "165": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "166": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "168": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "169": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "171": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "172": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "173": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "174": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "175": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "180": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "181": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "187": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GS:xnys"
+      },
+      "199": {
+        "embedded_run_rows": true,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GSK:xlon"
+      },
+      "260": {
+        "embedded_run_rows": false,
+        "evidence_list_alphabetical": true,
+        "evidence_list_ends_at": "GSK:xlon"
+      }
+    },
+    "targets": {
+      "by_place": {
+        "earlier_report_same_symbol": 1,
+        "embedded_run_rows_same_symbol": 53
+      },
+      "claims": 54,
+      "prompt_embedded_run_rows": {
+        "embedded_run_rows_same_symbol": 53
+      },
+      "prompt_without_embedded_run_rows": {
+        "earlier_report_same_symbol": 1
+      },
+      "reports": 34,
+      "rounds_to_the_value_found": 54,
+      "same_symbol_and_same_field": 54,
+      "symbol_sorts_after_an_alphabetical_evidence_list": 54
+    }
+  }
+}

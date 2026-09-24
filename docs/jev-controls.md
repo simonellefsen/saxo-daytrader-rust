@@ -402,6 +402,12 @@ truncation as the checker does, only LMND moves. Accepted claims wrong would be
   among them. Whether those figures came from elsewhere in the prompt or were
   invented cannot be answered from the instrument, and it is the next thing
   worth measuring.
+  *Measured since, 2026-09-24, in `jev-markov-provenance.md`:* not invented.
+  52 of the 53 such `not_in_evidence` claims in the frame match, by rounding,
+  the value the model was shown for the same symbol and field. They sat in
+  debugging rows the evidence builder does not read, because the evidence list
+  was alphabetical and cut off around G. The other one, NESTE in report #260,
+  is DTE:xetr's signal, attached to NESTE by report #259 and copied forward.
 - **Scope.** Excluding the 20 claims outside the evidence would be a new
   protocol, and would need the frame's out-of-scope share measured, not
   assumed.
