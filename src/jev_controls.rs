@@ -254,7 +254,7 @@ pub(crate) fn field_agreement(key: &ControlKey, label: Option<&ControlLabel>) ->
 pub(crate) const PROTOCOL_VERSION: &str = "controls-protocol-v4-2026-09-23";
 
 /// The joint coverage the population interval is built for.
-const JOINT_LEVEL: f64 = 0.95;
+pub(crate) const JOINT_LEVEL: f64 = 0.95;
 
 /// The only verdicts a label may carry. Anything else rejects the file.
 const LABEL_VERDICTS: [&str; 3] = ["consistent", "inconsistent", "cannot_tell"];
@@ -262,14 +262,14 @@ const LABEL_VERDICTS: [&str; 3] = ["consistent", "inconsistent", "cannot_tell"];
 /// Errors found in a sample drawn without replacement from a fixed population
 /// of claims: the hypergeometric distribution, computed exactly rather than
 /// approximated.
-struct Hypergeometric {
+pub(crate) struct Hypergeometric {
     population: usize,
     sample: usize,
     ln_factorial: Vec<f64>,
 }
 
 impl Hypergeometric {
-    fn new(population: usize, sample: usize) -> Self {
+    pub(crate) fn new(population: usize, sample: usize) -> Self {
         let mut ln_factorial = vec![0.0; population + 1];
         for k in 1..=population {
             ln_factorial[k] = ln_factorial[k - 1] + (k as f64).ln();
@@ -287,7 +287,7 @@ impl Hypergeometric {
 
     /// The chance the sample finds `found` wrong when the population holds
     /// `wrong`.
-    fn pmf(&self, wrong: usize, found: usize) -> f64 {
+    pub(crate) fn pmf(&self, wrong: usize, found: usize) -> f64 {
         if found > wrong || found > self.sample || self.sample - found > self.population - wrong {
             return 0.0;
         }
@@ -299,7 +299,7 @@ impl Hypergeometric {
 
     /// The fewest wrong claims the population can hold for which finding
     /// `found` or more is not rarer than `tail`.
-    fn lower(&self, found: usize, tail: f64) -> usize {
+    pub(crate) fn lower(&self, found: usize, tail: f64) -> usize {
         (0..=self.population)
             .find(|&wrong| {
                 (found..=self.sample)
@@ -312,7 +312,7 @@ impl Hypergeometric {
 
     /// The most wrong claims the population can hold for which finding
     /// `found` or fewer is not rarer than `tail`.
-    fn upper(&self, found: usize, tail: f64) -> usize {
+    pub(crate) fn upper(&self, found: usize, tail: f64) -> usize {
         (0..=self.population)
             .rev()
             .find(|&wrong| (0..=found).map(|k| self.pmf(wrong, k)).sum::<f64>() > tail)

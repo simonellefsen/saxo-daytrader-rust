@@ -1,0 +1,1128 @@
+{
+  "keys": [
+    {
+      "extracted": [
+        {
+          "end": 43,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 42,
+          "verdict": "matches"
+        },
+        {
+          "end": 45,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 44,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-003d807e9e",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-007460c2e3",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-0083166719",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-00976bbfa4",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 29,
+          "field": "markov.signed_signal",
+          "figure": "-0.301",
+          "start": 23,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-00c256b186",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 41,
+          "field": "markov.signed_signal",
+          "figure": "0.5637",
+          "start": 35,
+          "verdict": "matches"
+        },
+        {
+          "end": 81,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 80,
+          "verdict": "matches"
+        },
+        {
+          "end": 83,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 82,
+          "verdict": "matches"
+        },
+        {
+          "end": 178,
+          "field": null,
+          "figure": "5%",
+          "start": 176,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-00c8887a26",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 20,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 19,
+          "verdict": "matches"
+        },
+        {
+          "end": 22,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 21,
+          "verdict": "matches"
+        },
+        {
+          "end": 65,
+          "field": "markov.signed_signal",
+          "figure": "0.579",
+          "start": 60,
+          "verdict": "matches"
+        },
+        {
+          "end": 112,
+          "field": null,
+          "figure": "9%",
+          "start": 110,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-01025af3a2",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 59,
+          "field": "daily_indicators.rsi14",
+          "figure": "75",
+          "start": 57,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "note-01185aeda5",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-01b1b36be9",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 36,
+          "field": "markov.signed_signal",
+          "figure": "0.09",
+          "start": 32,
+          "verdict": "matches"
+        },
+        {
+          "end": 45,
+          "field": "daily_indicators.rsi14",
+          "figure": "53",
+          "start": 43,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-01f2db338f",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 78,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 77,
+          "verdict": "matches"
+        },
+        {
+          "end": 80,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 79,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-020855203b",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-02253ed75f",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 82,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 81,
+          "verdict": "matches"
+        },
+        {
+          "end": 84,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 83,
+          "verdict": "matches"
+        },
+        {
+          "end": 126,
+          "field": "markov.signed_signal",
+          "figure": "+0.492",
+          "start": 120,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "note-0229ed7ee5",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-023dbe8f2a",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 52,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 51,
+          "verdict": "matches"
+        },
+        {
+          "end": 54,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 53,
+          "verdict": "matches"
+        },
+        {
+          "end": 75,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.122",
+          "start": 70,
+          "verdict": "matches"
+        },
+        {
+          "end": 121,
+          "field": "markov.signed_signal",
+          "figure": "+0.1592",
+          "start": 114,
+          "verdict": "matches"
+        },
+        {
+          "end": 162,
+          "field": null,
+          "figure": "451.40",
+          "start": 156,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 200,
+          "field": null,
+          "figure": "445.20",
+          "start": 194,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-025544d2c3",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-025fdb3ec8",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 70,
+          "field": "markov.signed_signal",
+          "figure": "0.5555",
+          "start": 64,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-026dd3c07f",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 62,
+          "field": "markov.signed_signal",
+          "figure": "0.1634",
+          "start": 56,
+          "verdict": "uncertain_attribution"
+        },
+        {
+          "end": 105,
+          "field": "daily_indicators.confluence_count",
+          "figure": "2",
+          "start": 104,
+          "verdict": "matches"
+        },
+        {
+          "end": 107,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 106,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0272e291af",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 9,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 8,
+          "verdict": "matches"
+        },
+        {
+          "end": 11,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 10,
+          "verdict": "matches"
+        },
+        {
+          "end": 25,
+          "field": "markov.signed_signal",
+          "figure": "0.613",
+          "start": 20,
+          "verdict": "matches"
+        },
+        {
+          "end": 42,
+          "field": null,
+          "figure": "+5,402",
+          "start": 36,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-02a54986b1",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-030cb27210",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 62,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 61,
+          "verdict": "matches"
+        },
+        {
+          "end": 64,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 63,
+          "verdict": "matches"
+        },
+        {
+          "end": 142,
+          "field": "daily_indicators.rsi14",
+          "figure": "69",
+          "start": 140,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "note-03572ec8bb",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 91,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 90,
+          "verdict": "matches"
+        },
+        {
+          "end": 93,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 92,
+          "verdict": "matches"
+        },
+        {
+          "end": 158,
+          "field": null,
+          "figure": "2",
+          "start": 157,
+          "verdict": "not_a_field_value"
+        }
+      ],
+      "id": "note-0375467d41",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-03ddcec5c3",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 48,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 47,
+          "verdict": "matches"
+        },
+        {
+          "end": 50,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 49,
+          "verdict": "matches"
+        },
+        {
+          "end": 96,
+          "field": "markov.signed_signal",
+          "figure": "0.5680",
+          "start": 90,
+          "verdict": "matches"
+        },
+        {
+          "end": 138,
+          "field": "daily_indicators.rsi14",
+          "figure": "70",
+          "start": 136,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-044cc1ea49",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 89,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 88,
+          "verdict": "matches"
+        },
+        {
+          "end": 91,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 90,
+          "verdict": "matches"
+        },
+        {
+          "end": 148,
+          "field": "markov.signed_signal",
+          "figure": "+0.5785",
+          "start": 141,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-04deb28195",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-04edfdf077",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 45,
+          "field": null,
+          "figure": "+1.63%",
+          "start": 39,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 66,
+          "field": null,
+          "figure": "+13.6%",
+          "start": 60,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 113,
+          "field": null,
+          "figure": "153.55",
+          "start": 107,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-04ff16567a",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-054788d3fc",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 44,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 43,
+          "verdict": "matches"
+        },
+        {
+          "end": 46,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 45,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-05688fd283",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 30,
+          "field": "daily_indicators.confluence_count",
+          "figure": "6",
+          "start": 29,
+          "verdict": "matches"
+        },
+        {
+          "end": 69,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.143",
+          "start": 64,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0600ff3bc2",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0660d18e35",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-067c63e2f6",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-067cd954dc",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 24,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 23,
+          "verdict": "matches"
+        },
+        {
+          "end": 26,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 25,
+          "verdict": "matches"
+        },
+        {
+          "end": 65,
+          "field": null,
+          "figure": "3.7%",
+          "start": 61,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 90,
+          "field": null,
+          "figure": "4.1%",
+          "start": 86,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 134,
+          "field": "markov.signed_signal",
+          "figure": "+0.1581",
+          "start": 127,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-06948a6e2c",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 13,
+          "field": "markov.signed_signal",
+          "figure": "+0.659",
+          "start": 7,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-06cd0a9232",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 9,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 8,
+          "verdict": "matches"
+        },
+        {
+          "end": 11,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 10,
+          "verdict": "matches"
+        },
+        {
+          "end": 45,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.24",
+          "start": 41,
+          "verdict": "uncertain_attribution"
+        },
+        {
+          "end": 84,
+          "field": "markov.signed_signal",
+          "figure": "+0.4583",
+          "start": 77,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "note-06d2a2a967",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 39,
+          "field": "markov.signed_signal",
+          "figure": "0.58",
+          "start": 35,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-06d724ddde",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-076ccc4ec7",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-0850abc1c8",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-089dd3e104",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 64,
+          "field": null,
+          "figure": "10%",
+          "start": 61,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-08bf8d0862",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 140,
+          "field": null,
+          "figure": "5%",
+          "start": 138,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-0902a212fa",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 30,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 29,
+          "verdict": "matches"
+        },
+        {
+          "end": 63,
+          "field": "markov.signed_signal",
+          "figure": "+0.391",
+          "start": 57,
+          "verdict": "matches"
+        },
+        {
+          "end": 107,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "593",
+          "start": 104,
+          "verdict": "differs"
+        }
+      ],
+      "id": "note-0914a280e3",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0919678ac5",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 41,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 40,
+          "verdict": "matches"
+        },
+        {
+          "end": 65,
+          "field": "markov.signed_signal",
+          "figure": "+0.3658",
+          "start": 58,
+          "verdict": "matches"
+        },
+        {
+          "end": 107,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.400",
+          "start": 102,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0975b93ee0",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0983e36f83",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-09de3cd565",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 30,
+          "field": "markov.signed_signal",
+          "figure": "0.462",
+          "start": 25,
+          "verdict": "matches"
+        },
+        {
+          "end": 109,
+          "field": null,
+          "figure": "5.6%",
+          "start": 105,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-0a2ca435b2",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0a309f05a8",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0a9038c786",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 61,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 60,
+          "verdict": "matches"
+        },
+        {
+          "end": 63,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 62,
+          "verdict": "matches"
+        },
+        {
+          "end": 105,
+          "field": "markov.signed_signal",
+          "figure": "0.4823",
+          "start": 99,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0acae0b38a",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 7,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 6,
+          "verdict": "matches"
+        },
+        {
+          "end": 48,
+          "field": "daily_indicators.reward_risk",
+          "figure": "2.77",
+          "start": 44,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0af8ce850c",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 45,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 44,
+          "verdict": "matches"
+        },
+        {
+          "end": 47,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 46,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0b15b77089",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0bc54be301",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-0c1ac9f313",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-0c50b502e1",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 28,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 27,
+          "verdict": "matches"
+        },
+        {
+          "end": 30,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 29,
+          "verdict": "matches"
+        },
+        {
+          "end": 54,
+          "field": "markov.signed_signal",
+          "figure": "+0.4347",
+          "start": 47,
+          "verdict": "matches"
+        },
+        {
+          "end": 100,
+          "field": null,
+          "figure": "12,816",
+          "start": 94,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 141,
+          "field": null,
+          "figure": "7,579.89",
+          "start": 133,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "note-0c9577eb16",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 94,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 93,
+          "verdict": "matches"
+        },
+        {
+          "end": 96,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 95,
+          "verdict": "matches"
+        },
+        {
+          "end": 142,
+          "field": "markov.signed_signal",
+          "figure": "+0.533",
+          "start": 136,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0cd778ef4e",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 64,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.071",
+          "start": 59,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0d1feb035b",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 31,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 30,
+          "verdict": "matches"
+        },
+        {
+          "end": 71,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.032",
+          "start": 66,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0d29c7fc9a",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 95,
+          "field": "daily_indicators.confluence_count",
+          "figure": "4",
+          "start": 94,
+          "verdict": "matches"
+        },
+        {
+          "end": 97,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 96,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0dbf931a8d",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 57,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 56,
+          "verdict": "matches"
+        },
+        {
+          "end": 59,
+          "field": "daily_indicators.min_confluences",
+          "figure": "3",
+          "start": 58,
+          "verdict": "matches"
+        },
+        {
+          "end": 89,
+          "field": "markov.signed_signal",
+          "figure": "+0.290",
+          "start": 83,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0e057a1d48",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0e074632e0",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 110,
+          "field": "markov.signed_signal",
+          "figure": "-0.4569",
+          "start": 103,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0e5ae715b9",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 47,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.083",
+          "start": 42,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0e817e3118",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 67,
+          "field": "markov.signed_signal",
+          "figure": "0.5828",
+          "start": 61,
+          "verdict": "matches"
+        }
+      ],
+      "id": "note-0e87cf0328",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-0edf4ac9b0",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-10190baeae",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-10bc7c4231",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-124a001899",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "note-128a9f3e32",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-12af227250",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-1332f5fcb0",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-13de58803a",
+      "stratum": "reached_without_figures"
+    },
+    {
+      "extracted": [],
+      "id": "note-144466618e",
+      "stratum": "reached_without_figures"
+    }
+  ],
+  "method_version": "n12-2026-09-24",
+  "population": {
+    "never_reached": 279,
+    "reached_with_figures": 608,
+    "reached_without_figures": 229
+  },
+  "protocol": "whole-notes-protocol-v1-2026-09-24",
+  "version": "whole-notes-v1-2026-09-24",
+  "warning": "Do not read this before labelling. It holds the stratum of every note and every figure the checker extracted, with its verdict."
+}

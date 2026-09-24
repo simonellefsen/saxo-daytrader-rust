@@ -32,6 +32,8 @@ mod jev_numeric;
 mod jev_provenance;
 mod jev_review;
 mod jev_signals;
+#[cfg(test)]
+mod jev_whole_notes;
 // A regression and measurement asset, not a runtime path.
 mod jev_store;
 #[cfg(test)]
