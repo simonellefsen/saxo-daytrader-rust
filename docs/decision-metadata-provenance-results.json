@@ -1,0 +1,252 @@
+{
+  "what_this_is": "The completion audit's metadata_provenance block over every stored report with a decision-time context. Output of decision_quality::metadata_provenance_tests::across_the_stored_reports, unedited under 'result'.",
+  "measured_at_commit": "35730e0f5ecaac5e82ab82cedeab79da9cd7d820",
+  "working_tree_dirty": false,
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "command": "JEV_PROMPTS_PATH=all.json cargo test --release across_the_stored_reports -- --ignored",
+  "result": {
+    "disagreements_by_field": {
+      "technical.sentiment": 2
+    },
+    "flagged": [
+      {
+        "report": 185,
+        "trade": {
+          "disagreements": [
+            {
+              "decision_time": "OVERWEIGHT",
+              "field": "technical.sentiment",
+              "written": "BUY"
+            }
+          ],
+          "markov_signed_signal": {
+            "finding": "own_symbol",
+            "written": 0.5481681823730469
+          },
+          "symbol": "CHEMM:xcse"
+        }
+      },
+      {
+        "report": 185,
+        "trade": {
+          "disagreements": [
+            {
+              "decision_time": "UNDERWEIGHT",
+              "field": "technical.sentiment",
+              "written": "SELL"
+            }
+          ],
+          "markov_signed_signal": {
+            "finding": "own_symbol",
+            "written": -0.10245919972658156
+          },
+          "symbol": "CSCO:xnas"
+        }
+      },
+      {
+        "report": 195,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "own_symbol_other_source",
+            "found_at": [
+              {
+                "path": ".quiver_signals.latest_run.summary_json.signals[].signal",
+                "symbol": "JPM:XNYS"
+              },
+              {
+                "path": ".quiver_signals.latest_run.summary_json.top_bullish[].signal",
+                "symbol": "JPM:XNYS"
+              },
+              {
+                "path": ".quiver_signals.signals[].signal",
+                "symbol": "JPM:XNYS"
+              }
+            ],
+            "written": 0.24634137749671936
+          },
+          "symbol": "JPM:xnys"
+        }
+      },
+      {
+        "report": 195,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "own_symbol_other_source",
+            "found_at": [
+              {
+                "path": ".quiver_signals.signals[].signal",
+                "symbol": "JNJ:XNYS"
+              }
+            ],
+            "written": 0.005452502053231001
+          },
+          "symbol": "JNJ:xnys"
+        }
+      },
+      {
+        "report": 211,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "no_own_signal",
+            "written": 0.15
+          },
+          "symbol": "NVDA:xnas"
+        }
+      },
+      {
+        "report": 218,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "no_own_signal",
+            "written": 0.15
+          },
+          "symbol": "SIE:xetr"
+        }
+      },
+      {
+        "report": 233,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "JNJ:xnys"
+        }
+      },
+      {
+        "report": 240,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "PLTR:xnas"
+        }
+      },
+      {
+        "report": 240,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "UBER:xnys"
+        }
+      },
+      {
+        "report": 241,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "PLTR:xnas"
+        }
+      },
+      {
+        "report": 241,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "UBER:xnys"
+        }
+      },
+      {
+        "report": 252,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "ORCL:xnys"
+        }
+      },
+      {
+        "report": 252,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "PLTR:xnas"
+        }
+      },
+      {
+        "report": 253,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "gate_threshold_as_signal",
+            "threshold": 0.15,
+            "written": 0.15
+          },
+          "symbol": "PLTR:xnas"
+        }
+      },
+      {
+        "report": 259,
+        "trade": {
+          "disagreements": [],
+          "markov_signed_signal": {
+            "decision_time": null,
+            "finding": "other_symbol_markov",
+            "found_at": [
+              {
+                "path": ".markov_method.signals[].conviction",
+                "symbol": "DTE:XETR"
+              },
+              {
+                "path": ".markov_method.signals[].signed_signal",
+                "symbol": "DTE:XETR"
+              }
+            ],
+            "written": 0.23313425481319427
+          },
+          "symbol": "NESTE:xhel"
+        }
+      }
+    ],
+    "reports_with_a_context": 226,
+    "signal_findings": {
+      "gate_threshold_as_signal": 8,
+      "no_own_signal": 2,
+      "no_signal_placeholder": 24,
+      "other_symbol_markov": 1,
+      "own_symbol": 287,
+      "own_symbol_other_source": 2
+    },
+    "trades": 350
+  }
+}
