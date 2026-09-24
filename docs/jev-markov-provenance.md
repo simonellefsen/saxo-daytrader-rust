@@ -115,3 +115,61 @@ wrong figure reached report text, but not the gate.
   such claim so far; that is too few to call the gap closed.
 - **Whether the model should have leaned on debugging rows** is a separate
   question from where the figures came from.
+
+## Since: the checker reads the embedded rows (`n11`)
+
+2026-09-24, `0cb1565`, at the operator's request. The grammar is unchanged;
+the evidence is wider. For a symbol missing from the compact list, the Markov
+evidence now comes from the embedded rows. The list still wins wherever both
+carry a symbol. Only rows with status `ok` are read, and a model's earlier
+report never is. `markov_source` records which list was used.
+
+**Like for like, exact.** An affected candidate had, under `n10`, the same
+evidence with `markov` null, so both sides are rebuilt from the same prompt.
+Every other candidate's evidence is byte-identical, and its verdicts cannot
+move. Output in `jev-markov-n11-changes.json`, measured from a clean tree.
+
+93 candidates in 50 reports now read the embedded rows. In them:
+
+| `n10` → `n11` | claims |
+|---|---|
+| `not_in_evidence` → **`matches`** | **51** |
+| `not_in_evidence` → `uncertain_attribution` | 1 |
+| `not_in_evidence` → `not_in_evidence` | 1 |
+| unchanged (`matches` 39, `unattributed` 14, `not_a_field_value` 3, `uncertain_attribution` 1) | 57 |
+| → `differs` | **0** |
+
+- **#180 V, "Markov 5-day signal is 0.560"**, becomes
+  `uncertain_attribution`. Under `n10` the missing evidence ended the check
+  before the grammar ran. With the evidence present, the frozen grammar
+  rejects "5-day" between the field and the figure. The stored value 0.5597
+  would have matched.
+- **#185 V, "0.5651"**, stays `not_in_evidence`. The checker attributes it to
+  `nearest_support`, not Markov, so it is an attribution miss, untouched here.
+- **#260 NESTE** is not among the 93: its prompt carried no embedded rows. It
+  stays `not_in_evidence`, as it should, because the figure was DTE's.
+
+**The frame, before and after:**
+
+| | `n10` | `n11` |
+|---|---|---|
+| compared (`matches` + `differs`) | 1,162 (80.4%) | **1,213 (83.9%)** |
+| `matches` | 1,153 | 1,204 |
+| `differs` | 9 | 9 |
+| `not_in_evidence` | 56 | **4** |
+| `uncertain_attribution` | 48 | 49 |
+| never compared | 283 (19.6%) | 232 (16.1%) |
+
+**What this does not change:**
+- **The controls.** The instrument and key are frozen at `n10`, and the v4
+  result stands as scored. Of the 8 sampled `not_in_evidence` claims, `n11`
+  would call 7 `matches` and 1 `uncertain_attribution`. The labeller marked
+  all 8 `cannot_tell`, correctly for the evidence it was given. That is
+  reported here, beside v4, not folded into it.
+- **The wording verdicts.** For those 93 candidates, the stored v16 wording and
+  sufficiency answers were given without the Markov block. They are not
+  re-asked: grading stays at v16, and a regrade would move the measured
+  baseline.
+- **Coverage is not correctness.** 51 more comparisons, all agreeing, say the
+  quotes were faithful to what the model was shown. They say nothing about
+  whether the reports that used them were right.

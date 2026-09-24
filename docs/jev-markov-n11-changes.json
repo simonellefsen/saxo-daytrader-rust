@@ -1,0 +1,501 @@
+{
+  "what_this_is": "What reading the embedded Markov rows as evidence (n11) changes against n10, claim by claim, over the controls frame. Output of jev_provenance::what_reading_the_embedded_rows_changes, unedited under 'result'.",
+  "measured_at": "2026-09-24T05:25:40Z",
+  "measured_at_commit": "0cb1565043d86f45a5a4530675f8fe834c3025b3",
+  "working_tree_dirty": false,
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "command": "JEV_PROMPTS_PATH=all.json cargo test --release what_reading_the_embedded_rows_changes -- --ignored",
+  "result": {
+    "candidates_reading_embedded_rows": 93,
+    "changed_or_still_unevidenced": [
+      {
+        "actual": 0.6524670949390939,
+        "field": "markov.bull_prob",
+        "figure": "0.65",
+        "now": "matches",
+        "report": 101,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.4977133305597808,
+        "field": "markov.signed_signal",
+        "figure": "0.50",
+        "now": "matches",
+        "report": 101,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.028180795457391744,
+        "field": "markov.signed_signal",
+        "figure": "0.03",
+        "now": "matches",
+        "report": 101,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.43505904873452383,
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "now": "matches",
+        "report": 103,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.028180795457391744,
+        "field": "markov.signed_signal",
+        "figure": "0.028",
+        "now": "matches",
+        "report": 103,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.22690351713828008,
+        "field": "markov.signed_signal",
+        "figure": "-0.227",
+        "now": "matches",
+        "report": 104,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.43505904873452383,
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "now": "matches",
+        "report": 104,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.22690351713828008,
+        "field": "markov.signed_signal",
+        "figure": "-0.227",
+        "now": "matches",
+        "report": 105,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.43505904873452383,
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "now": "matches",
+        "report": 105,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.30116089475218566,
+        "field": "markov.signed_signal",
+        "figure": "-0.301",
+        "now": "matches",
+        "report": 106,
+        "symbol": "NVDA:xnas",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.43505904873452383,
+        "field": "markov.signed_signal",
+        "figure": "-0.435",
+        "now": "matches",
+        "report": 106,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.2912630481083859,
+        "field": "markov.signed_signal",
+        "figure": "-0.291",
+        "now": "matches",
+        "report": 109,
+        "symbol": "NVDA:xnas",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.4563101531673962,
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "now": "matches",
+        "report": 112,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.29546832391380096,
+        "field": "markov.signed_signal",
+        "figure": "-0.2955",
+        "now": "matches",
+        "report": 113,
+        "symbol": "NVDA:xnas",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.4563101531673962,
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "now": "matches",
+        "report": 113,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.4589525992844218,
+        "field": "markov.signed_signal",
+        "figure": "-0.4590",
+        "now": "matches",
+        "report": 114,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.23864172915135456,
+        "field": "markov.signed_signal",
+        "figure": "-0.2386",
+        "now": "matches",
+        "report": 116,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.45692035679372983,
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "now": "matches",
+        "report": 116,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.028180795457391744,
+        "field": "markov.signed_signal",
+        "figure": "0.0282",
+        "now": "matches",
+        "report": 117,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.598154717018097,
+        "field": "markov.signed_signal",
+        "figure": "-0.5982",
+        "now": "matches",
+        "report": 150,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.45692035679372983,
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "now": "matches",
+        "report": 150,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.3078319938773393,
+        "field": "markov.signed_signal",
+        "figure": "-0.308",
+        "now": "matches",
+        "report": 151,
+        "symbol": "NVDA:xnas",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.24769927983199688,
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "now": "matches",
+        "report": 154,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.45692035679372983,
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "now": "matches",
+        "report": 154,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.3158696337047566,
+        "field": "markov.signed_signal",
+        "figure": "-0.316",
+        "now": "matches",
+        "report": 155,
+        "symbol": "NVDA:xnas",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5302173754371217,
+        "field": "markov.signed_signal",
+        "figure": "0.530",
+        "now": "matches",
+        "report": 155,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.24769927983199688,
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "now": "matches",
+        "report": 156,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.45692035679372983,
+        "field": "markov.signed_signal",
+        "figure": "-0.4569",
+        "now": "matches",
+        "report": 156,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5007163301684096,
+        "field": "markov.signed_signal",
+        "figure": "0.501",
+        "now": "matches",
+        "report": 158,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5364006586276769,
+        "field": "markov.signed_signal",
+        "figure": "0.536",
+        "now": "matches",
+        "report": 160,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.24769927983199688,
+        "field": "markov.signed_signal",
+        "figure": "-0.2477",
+        "now": "matches",
+        "report": 161,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.4563101531673962,
+        "field": "markov.signed_signal",
+        "figure": "-0.4563",
+        "now": "matches",
+        "report": 161,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5000282832094504,
+        "field": "markov.signed_signal",
+        "figure": "0.5000",
+        "now": "matches",
+        "report": 164,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5000282832094504,
+        "field": "markov.signed_signal",
+        "figure": "0.500",
+        "now": "matches",
+        "report": 165,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5424310317571712,
+        "field": "markov.signed_signal",
+        "figure": "0.542",
+        "now": "matches",
+        "report": 165,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.5942586242394319,
+        "field": "markov.signed_signal",
+        "figure": "-0.5943",
+        "now": "matches",
+        "report": 166,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.4615711105678775,
+        "field": "markov.signed_signal",
+        "figure": "-0.4616",
+        "now": "matches",
+        "report": 166,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.5958602768967234,
+        "field": "markov.signed_signal",
+        "figure": "-0.596",
+        "now": "matches",
+        "report": 168,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.464165993865712,
+        "field": "markov.signed_signal",
+        "figure": "-0.464",
+        "now": "matches",
+        "report": 168,
+        "symbol": "ORSTED:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5000282832094504,
+        "field": "markov.signed_signal",
+        "figure": "0.500",
+        "now": "matches",
+        "report": 169,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5483138129562937,
+        "field": "markov.signed_signal",
+        "figure": "0.548",
+        "now": "matches",
+        "report": 169,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5000282832094504,
+        "field": "markov.signed_signal",
+        "figure": "0.50",
+        "now": "matches",
+        "report": 171,
+        "symbol": "LMND:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5512014576010256,
+        "field": "markov.signed_signal",
+        "figure": "0.55",
+        "now": "matches",
+        "report": 171,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.5990428902197427,
+        "field": "markov.signed_signal",
+        "figure": "-0.599",
+        "now": "matches",
+        "report": 172,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5540540986074529,
+        "field": "markov.signed_signal",
+        "figure": "0.5541",
+        "now": "matches",
+        "report": 173,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": -0.2616790632374301,
+        "field": "markov.signed_signal",
+        "figure": "-0.2617",
+        "now": "matches",
+        "report": 174,
+        "symbol": "NNIT:xcse",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5568723399397386,
+        "field": "markov.signed_signal",
+        "figure": "0.557",
+        "now": "matches",
+        "report": 175,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5596567728803779,
+        "field": "markov.signed_signal",
+        "figure": "0.560",
+        "now": "uncertain_attribution",
+        "report": 180,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5596567728803779,
+        "field": "markov.signed_signal",
+        "figure": "0.560",
+        "now": "matches",
+        "report": 181,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": null,
+        "field": "daily_indicators.support.nearest_support",
+        "figure": "0.5651",
+        "now": "not_in_evidence",
+        "report": 185,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5678129498611477,
+        "field": "markov.signed_signal",
+        "figure": "+0.568",
+        "now": "matches",
+        "report": 187,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.5769323255186927,
+        "field": "markov.signed_signal",
+        "figure": "+0.577",
+        "now": "matches",
+        "report": 199,
+        "symbol": "JPM:xnys",
+        "was": "not_in_evidence"
+      },
+      {
+        "actual": 0.584997588167207,
+        "field": "markov.signed_signal",
+        "figure": "+0.585",
+        "now": "matches",
+        "report": 199,
+        "symbol": "V:xnys",
+        "was": "not_in_evidence"
+      }
+    ],
+    "method_version": "n11-2026-09-24",
+    "reports": 50,
+    "transitions": {
+      "matches -> matches": 39,
+      "not_a_field_value -> not_a_field_value": 3,
+      "not_in_evidence -> matches": 51,
+      "not_in_evidence -> not_in_evidence": 1,
+      "not_in_evidence -> uncertain_attribution": 1,
+      "unattributed -> unattributed": 14,
+      "uncertain_attribution -> uncertain_attribution": 1
+    }
+  }
+}
