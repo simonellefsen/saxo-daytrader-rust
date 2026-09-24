@@ -1,0 +1,58 @@
+{
+  "instrument_version": "whole-notes-v1-2026-09-24",
+  "scoring_protocol": "whole-notes-protocol-v1-2026-09-24",
+  "source_commit": "243a1dcff3132a5dcde87dd7923b739d2c9362e0",
+  "instrument_sha256": "80b745fe1f93a51227785e8ba245137ae59653e47b49e72c015343e96cea4ba8",
+  "review_setup_recorded_at": "2026-09-24T19:18:43Z",
+  "reviewer": "Fresh-context Codex AI subagent /root/blind_whole_note_labeller",
+  "conversation_history_forwarded": false,
+  "delivery": {
+    "labels_sha256": "4324569c6035be09029b9eba2fcbb8d6b60e6795da987846cfb1f83633e2ee34",
+    "labeller_notes_sha256": "3d5005e271b3dc00a60f4f10ada353771f08bc7b4a91443c58001f222b044b2a",
+    "notes_labelled": 75,
+    "claims_extracted": 264,
+    "zero_claim_notes": 2,
+    "structural_validation_recorded_at": "2026-09-24T19:28:11Z",
+    "structural_checks_passed": [
+      "Instrument version and SHA-256 unchanged",
+      "All 75 original case IDs present exactly once and in original order",
+      "All notes marked labelled, with valid claim fields and enums",
+      "Every claim quotation occurs exactly once in its source note",
+      "No duplicate claim quotations within a note",
+      "Reasoning file contains every uncertain or contradictory claim quotation and every zero-claim note ID",
+      "Nonempty reviewer identity and UTC labelling timestamp",
+      "git diff --check"
+    ],
+    "substantive_labels_modified_by_parent": false,
+    "scorer_run_during_labelling": false,
+    "answer_key_opened_during_labelling": false,
+    "reviewer_reported_no_prohibited_inputs_consulted": true,
+    "independence_scope": "Fresh conversation context and restricted substantive inputs; one AI reviewer, not human ground truth."
+  },
+  "substantive_input": "docs/jev-whole-notes-v1.json, including its embedded rubric",
+  "other_permitted_inputs": [
+    "docs/jev-whole-notes-v1-labels.json (empty output template)",
+    "/Users/lindau/.codex/RTK.md (shell convention only)"
+  ],
+  "prohibited_review_inputs": [
+    "Answer key and checker or scorer code/tests",
+    "Prior controls, labels, adjudications and provenance findings",
+    "Other documentation, repository history, wiki and memory",
+    "Parent task history or other agents' discussions",
+    "External sources and provider calls"
+  ],
+  "procedure": [
+    "Read all 75 whole notes and their supplied evidence.",
+    "Independently identify and adjudicate every in-scope numeric and qualitative claim using the instrument rubric.",
+    "Retain exact uniquely occurring quotations and mark every fully reviewed note labelled, including notes with no in-scope claims.",
+    "Record reasoning for uncertain or contradictory claims and zero-claim notes separately from the labels.",
+    "Parent validates structure and provenance, without revising substantive judgements.",
+    "Preserve the delivered labels and reasoning in a local commit before scoring or opening the key."
+  ],
+  "limitations": [
+    "Single AI adjudication, not human ground truth or measured inter-rater agreement.",
+    "The parent has seen prior findings; none were forwarded to this fresh-context labeller.",
+    "Blinding uses fresh context and input restrictions, not an operating-system access restriction.",
+    "The labeller may itself omit or misinterpret a claim; structural validation cannot establish extraction completeness or judgement accuracy."
+  ]
+}

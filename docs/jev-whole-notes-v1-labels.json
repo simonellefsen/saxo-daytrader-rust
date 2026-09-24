@@ -1,381 +1,2038 @@
 {
-  "labelled_at": "",
-  "labelled_by": "",
+  "labelled_at": "2026-09-24T19:27:00Z",
+  "labelled_by": "Fresh-context Codex AI reviewer (blind whole-note review; not human ground truth)",
   "labels": [
     {
-      "claims": [],
       "id": "note-003d807e9e",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish daily trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 technical confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "positive fresh Markov signal",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-007460c2e3",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "strong Markov long/Bull signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bull signal",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0083166719",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bearish technical trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "high projected support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "negative Markov regime",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-00976bbfa4",
-      "status": ""
+      "status": "labelled",
+      "claims": []
     },
     {
-      "claims": [],
       "id": "note-00c256b186",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bearish Markov",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov (-0.301)",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish daily",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-00c8887a26",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov long",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long 0.5637",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "technical OVERWEIGHT",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI is elevated",
+          "kind": "qualitative",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-01025af3a2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov signed_signal 0.579",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI is high",
+          "kind": "qualitative",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-01185aeda5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI above 75",
+          "kind": "numeric",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-01b1b36be9",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Constructive daily technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "weaker Markov signal",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-01f2db338f",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Weak Markov edge",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "signed_signal 0.09",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI 53",
+          "kind": "numeric",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "neutral-to-bullish",
+          "kind": "qualitative",
+          "field": "none",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-020855203b",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Daily setup remains bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low modeled support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-02253ed75f",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "2/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0229ed7ee5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish daily trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "OVERWEIGHT technical sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov is positive",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov is positive at +0.492",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-023dbe8f2a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Fresh long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov signal 0.1777",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "sideways state",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-025544d2c3",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "BUY technical sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 structure",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low 0.122 modeled support-break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.122 modeled support-break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "fresh +0.1592 long Markov signal",
+          "kind": "numeric",
+          "field": "markov.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "+0.1592 long Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "monitored 451.40 EUR quote",
+          "kind": "numeric",
+          "field": "none",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-025fdb3ec8",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "strong Markov bull regime",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov bull regime",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-026dd3c07f",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish continuation",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov signed_signal 0.5555",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "OVERWEIGHT technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "the move is extended",
+          "kind": "qualitative",
+          "field": "daily_indicators.close",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0272e291af",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov is positive",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov is positive at 0.1634",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "daily technicals are only HOLD",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "2/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-02a54986b1",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bullish 4/3",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov 0.613",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-030cb27210",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "daily technicals are missing from the supplied indicator set",
+          "kind": "qualitative",
+          "field": "daily_indicators",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-03572ec8bb",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "BUY daily sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "positive MACD histogram",
+          "kind": "qualitative",
+          "field": "daily_indicators.macd_histogram",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI near 69",
+          "kind": "numeric",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "fresh bullish Quiver context",
+          "kind": "qualitative",
+          "field": "quiver.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "bullish Quiver context",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0375467d41",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish BUY daily setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "BUY daily setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "very low modeled support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-03ddcec5c3",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.599 Markov",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov Bull signal",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bearish Quiver context",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-044cc1ea49",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "strong Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal 0.5680",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "RSI is above 70",
+          "kind": "numeric",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-04deb28195",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "BUY technical sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish bias",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low modeled support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.5785 Bull-state Markov context",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bull-state Markov context",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-04edfdf077",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bullish technical and Markov bank momentum",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "near-overbought RSI",
+          "kind": "qualitative",
+          "field": "daily_indicators.rsi14",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-04ff16567a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "advancing +1.63% intraday",
+          "kind": "numeric",
+          "field": "none",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-054788d3fc",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "strong fresh long Markov context",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "fresh long Markov context",
+          "kind": "qualitative",
+          "field": "markov.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "long Markov context",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-05688fd283",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "daily BUY",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0600ff3bc2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "6 BUY confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "BUY confluences",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.143)",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "solid reward/risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.reward_risk",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0660d18e35",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Fresh Bull Markov regime",
+          "kind": "qualitative",
+          "field": "markov.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Bull Markov regime",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "signed signal 0.548",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-067c63e2f6",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "2 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-067cd954dc",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Mild positive Markov",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "positive Markov",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-06948a6e2c",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 technical configuration",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "very low 3.7% support-break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4.1% distance to support",
+          "kind": "numeric",
+          "field": "daily_indicators.support.downside_to_support_pct",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.1581 long Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-06cd0a9232",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong +0.659 Markov signal",
+          "kind": "numeric",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "+0.659 Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish technical setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "broker price data materially conflicts with daily indicator price",
+          "kind": "qualitative",
+          "field": "daily_indicators.close",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-06d2a2a967",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 technical configuration",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low 0.24 modeled support-break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.4583 Bull-state Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bull-state Markov signal",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-06d724ddde",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "OVERWEIGHT technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long 0.58",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-076ccc4ec7",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov direction is mildly positive",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "current 5-day signed signal",
+          "kind": "numeric",
+          "field": "markov.horizon_days",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5-day signed signal is only 0.095",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Congress flow is bearish",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0850abc1c8",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish technical confluence potential",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-089dd3e104",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "technical data is not available in the current daily_indicators set",
+          "kind": "qualitative",
+          "field": "daily_indicators",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-08bf8d0862",
-      "status": ""
+      "status": "labelled",
+      "claims": []
     },
     {
-      "claims": [],
       "id": "note-0902a212fa",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "technically bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov signal is only modestly positive",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0914a280e3",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "4 technical confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.391 Bull Markov reading",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bull Markov reading",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "consolidating near 593 DKK support",
+          "kind": "numeric",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "593 DKK support",
+          "kind": "numeric",
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "inconsistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0919678ac5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bearish technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bearish technical and Markov conditions",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "high support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0975b93ee0",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.3658 Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "moderate break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.400)",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "inconsistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0983e36f83",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong positive Markov context",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "positive Markov context",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "neutral daily technical reading",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-09de3cd565",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bearish technical structure",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "high support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0a2ca435b2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "OVERWEIGHT technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.462 Markov long signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish Congress-flow context",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0a309f05a8",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish five-confluence trend",
+          "kind": "numeric",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "five-confluence",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Fresh bearish Quiver signal",
+          "kind": "qualitative",
+          "field": "quiver.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "bearish Quiver signal",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0a9038c786",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Near-term bearish regime",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0acae0b38a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "OVERWEIGHT technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal 0.4823",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0af8ce850c",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "favorable 2.77 reward/risk",
+          "kind": "numeric",
+          "field": "daily_indicators.reward_risk",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "2.77 reward/risk",
+          "kind": "numeric",
+          "field": "daily_indicators.reward_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0b15b77089",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 daily technical structure",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low modeled support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0bc54be301",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Overweight",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "neutral trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0c1ac9f313",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Fresh Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal 0.4724",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "daily technicals for the exact XAMS symbol are unavailable",
+          "kind": "qualitative",
+          "field": "daily_indicators",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0c50b502e1",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "2/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "MACD bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.macd_histogram",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "semiconductor strength",
+          "kind": "qualitative",
+          "field": "none",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0c9577eb16",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "High conviction setup",
+          "kind": "qualitative",
+          "field": "none",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.4347 Bull Markov signal",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bull Markov signal",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "unit price of ~12,816 DKK",
+          "kind": "numeric",
+          "field": "daily_indicators.close_dkk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0cd778ef4e",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Daily technicals are bullish",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "BUY sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "five-day Markov signal",
+          "kind": "numeric",
+          "field": "markov.horizon_days",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov signal is +0.533",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Bearish Congress flow",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0d1feb035b",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish BUY technical structure",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "BUY technical structure",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low 0.071 support-break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0d29c7fc9a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish industrial setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "exceptionally low 0.032 break risk",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0dbf931a8d",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish daily trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "OVERWEIGHT technical signal",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "4/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "positive Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0e057a1d48",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "technical BUY",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5/3 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov +0.290",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0e074632e0",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "High-conviction Markov",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "signed_signal 0.6436",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Daily technical indicators are missing",
+          "kind": "qualitative",
+          "field": "daily_indicators",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0e5ae715b9",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bearish daily trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "UNDERWEIGHT technical status",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov short signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov short signal of -0.4569",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0e817e3118",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "low break-risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break-risk (0.083)",
+          "kind": "numeric",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0e87cf0328",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong daily OVERWEIGHT/BUY context",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "daily OVERWEIGHT/BUY context",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov signed_signal 0.5828",
+          "kind": "numeric",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-0edf4ac9b0",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Bullish trend",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "2 confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "cannot_tell"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-10190baeae",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Very strong positive Markov context",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "positive Markov context",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "sharp intraday decline",
+          "kind": "qualitative",
+          "field": "none",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "below the daily support reference",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-10bc7c4231",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Five bullish technical confluences",
+          "kind": "numeric",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish technical",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "low support-break risk",
+          "kind": "qualitative",
+          "field": "daily_indicators.support.break_risk_label",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "strong five-day Markov long signal",
+          "kind": "numeric",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "five-day Markov",
+          "kind": "numeric",
+          "field": "markov.horizon_days",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-124a001899",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "weak sideways long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "sideways long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.state",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "long Markov signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-128a9f3e32",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Strong Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bullish technical setup",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-12af227250",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "daily UNDERWEIGHT sentiment",
+          "kind": "qualitative",
+          "field": "daily_indicators.sentiment",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "bearish trend_bias",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "positive Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov long signal",
+          "kind": "qualitative",
+          "field": "markov.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-1332f5fcb0",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "positive Markov context",
+          "kind": "qualitative",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-13de58803a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "constructive technically",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "fresh bearish Quiver conflict",
+          "kind": "qualitative",
+          "field": "quiver.run_date",
+          "verdict": "cannot_tell"
+        },
+        {
+          "quote": "bearish Quiver conflict",
+          "kind": "qualitative",
+          "field": "quiver.direction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "note-144466618e",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "bullish technicals",
+          "kind": "qualitative",
+          "field": "daily_indicators.trend_bias",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "Markov conviction is weak",
+          "kind": "qualitative",
+          "field": "markov.conviction",
+          "verdict": "cannot_tell"
+        }
+      ]
     }
   ],
   "version": "whole-notes-v1-2026-09-24"
