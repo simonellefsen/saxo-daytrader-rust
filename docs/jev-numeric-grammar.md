@@ -1,8 +1,17 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n10-2026-09-22`**, grading version **`v15`**. Frozen as the
-evaluation baseline: the limitations below are measured and recorded rather
-than fixed, and the method must not move during an evaluation run.
+Method version **`n11-2026-09-24`**, grading version **`v16`**. The grammar
+below is unchanged since `n10-2026-09-22`, the evaluation baseline: its
+limitations are measured and recorded rather than fixed, and it must not move
+during an evaluation run.
+
+`n11` changes what the evidence contains, not how anything is read. A symbol
+missing from the prompt's compact Markov list is now read from the full signal
+rows the prompt embedded under `markov_method.latest_run` until 2026-08-03.
+Each candidate's `markov_source` records which list its evidence came from.
+The effect, claim by claim, is in `jev-markov-provenance.md`. (An earlier
+version of this header said grading `v15`; it has been `v16` since the Markov
+state instruction was fixed.)
 
 ## Why it was rewritten
 

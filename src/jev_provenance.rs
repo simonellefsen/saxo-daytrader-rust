@@ -282,6 +282,92 @@ mod tests {
         assert_eq!(locate(figure, "V:xnys", &found, "").0, "other_symbols_only");
     }
 
+    /// What reading the embedded rows as evidence changes, claim by claim.
+    ///
+    /// Like for like and exact. A candidate whose Markov evidence now comes
+    /// from the embedded rows had, under `n10`, the same evidence with `markov`
+    /// null, so both are rebuilt here from the same prompt. Every other
+    /// candidate's evidence is byte-identical under both, and the parser did
+    /// not change, so its verdicts cannot move.
+    #[test]
+    #[ignore]
+    fn what_reading_the_embedded_rows_changes() {
+        let path = std::env::var("JEV_PROMPTS_PATH").expect("JEV_PROMPTS_PATH");
+        let sources: Vec<JsonValue> =
+            serde_json::from_slice(&std::fs::read(&path).expect("prompts")).expect("a JSON array");
+        let mut transitions: BTreeMap<String, usize> = BTreeMap::new();
+        let mut changed: BTreeMap<String, JsonValue> = BTreeMap::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let (mut candidates, mut reports) = (0usize, std::collections::BTreeSet::new());
+        for entry in &sources {
+            let (Some(report), Some(request)) = (entry.get("report"), entry.get("request")) else {
+                continue;
+            };
+            let report_id = entry.get("id").and_then(JsonValue::as_i64).unwrap_or(-1);
+            let prompt = crate::xai_decision::decision_prompt_user_payload(request);
+            let inputs = crate::jev_review::grading_inputs(report, &prompt);
+            for (index, candidate) in inputs.candidates.iter().enumerate() {
+                if inputs.numeric[index]["markov_source"] != "embedded_run_rows" {
+                    continue;
+                }
+                let (Some(note), Some(evidence)) = (
+                    candidate.get("note").and_then(JsonValue::as_str),
+                    inputs.evidence.get(index),
+                ) else {
+                    continue;
+                };
+                let symbol = candidate["symbol"].as_str().unwrap_or_default();
+                let lowered = note.to_lowercase();
+                let mut before = evidence.clone();
+                before["markov"] = JsonValue::Null;
+                let old = crate::jev_numeric::numeric_checks(&lowered, &before);
+                let new = crate::jev_numeric::numeric_checks(&lowered, evidence);
+                candidates += 1;
+                reports.insert(report_id);
+                for check in &new {
+                    let key = format!("{report_id}|{symbol}|{}", check.offset);
+                    if !seen.insert(key.clone()) {
+                        continue;
+                    }
+                    let was = old
+                        .iter()
+                        .find(|earlier| earlier.offset == check.offset)
+                        .map_or("absent", |earlier| earlier.verdict.as_str());
+                    let now = check.verdict.as_str();
+                    *transitions.entry(format!("{was} -> {now}")).or_default() += 1;
+                    if was != now || now == "not_in_evidence" {
+                        let written = crate::jev_numeric::figure_at(&lowered, check.offset)
+                            .map(|span| lowered[span.start..span.end].to_string());
+                        changed.insert(
+                            key,
+                            json!({
+                                "report": report_id,
+                                "symbol": symbol,
+                                "figure": written,
+                                "field": check.field,
+                                "actual": check.actual,
+                                "was": was,
+                                "now": now,
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        let result = json!({
+            "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+            "candidates_reading_embedded_rows": candidates,
+            "reports": reports.len(),
+            "transitions": transitions,
+            "changed_or_still_unevidenced": changed.values().collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&result).expect("json"));
+        if let Ok(out) = std::env::var("JEV_CHANGES_OUT") {
+            std::fs::write(out, serde_json::to_string_pretty(&result).expect("json"))
+                .expect("write result");
+        }
+    }
+
     /// The measurement. See the module comment.
     #[test]
     #[ignore]

@@ -38,7 +38,13 @@ use std::sync::LazyLock;
 /// different algorithms behind one label -- including two that the code had
 /// already stopped producing. Recomputing needs no provider call, so a bump
 /// here re-derives every stored measurement from the evidence already on disk.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n10-2026-09-22";
+///
+/// `n11` changes none of the parser, field table, units or tolerance. It widens
+/// what the evidence reads: a symbol missing from the prompt's compact Markov
+/// list is now read from the rows the prompt embedded under
+/// `markov_method.latest_run` (`jev_review::embedded_markov_rows`). The results
+/// change, so the version does too.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n11-2026-09-24";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {

@@ -314,7 +314,7 @@ pub(crate) struct GradingInputs {
     /// reports written before the prompt carried them.
     pub(crate) policy: Option<JsonValue>,
     /// Deterministic numeric findings, settled before any model call.
-    numeric: Vec<JsonValue>,
+    pub(crate) numeric: Vec<JsonValue>,
 }
 
 /// The thresholds in force when the report was written, from whichever shape
@@ -367,6 +367,53 @@ fn decision_time_policy(prompt: &JsonValue) -> Option<JsonValue> {
 /// today's tables. A candidate with no snapshot cannot be judged, and saying
 /// so is the point: report 306 listed five candidates and had indicators for
 /// four, and a grade that silently covered 4/5 read as if it covered all five.
+/// The Markov rows the prompt embedded under `markov_method.latest_run` for
+/// debugging, projected onto the compact list's field names.
+///
+/// Until 2026-08-03 the prompt carried up to 20 full signal rows there, and
+/// until 2026-09-03 the compact `signals` list was alphabetical and cut off
+/// around G. A symbol after the cut was quoted from these rows, and reading
+/// the list alone recorded 52 faithful quotes as `not_in_evidence`
+/// (docs/jev-markov-provenance.md). The rows are supplied by the runtime, not
+/// written by a model, so they are evidence. An earlier report's metadata is
+/// not, and is never read here. A row that did not compute is not evidence
+/// either.
+fn embedded_markov_rows(prompt: &JsonValue) -> std::collections::HashMap<String, JsonValue> {
+    prompt
+        .pointer("/markov_method/latest_run/summary_json/signals")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("status").and_then(JsonValue::as_str) == Some("ok"))
+        .filter_map(|row| {
+            let symbol = row.get("symbol")?.as_str()?;
+            let field = |key: &str| row.get(key).cloned().unwrap_or(JsonValue::Null);
+            let currency = symbol
+                .split_once(':')
+                .and_then(|(_, exchange)| crate::saxo_order::currency_for_exchange(exchange));
+            Some((
+                symbol.to_string(),
+                json!({
+                    "symbol": symbol,
+                    "run_date": field("run_date"),
+                    "state": field("current_state"),
+                    "close": field("current_close"),
+                    "currency": currency,
+                    // The prompt carried no conversion for these rows.
+                    "close_dkk": JsonValue::Null,
+                    "horizon_days": field("signal_horizon_days"),
+                    "bull_prob": field("bull_prob"),
+                    "bear_prob": field("bear_prob"),
+                    "sideways_prob": field("sideways_prob"),
+                    "signed_signal": field("signed_signal"),
+                    "direction": field("direction"),
+                    "conviction": field("conviction"),
+                }),
+            ))
+        })
+        .collect()
+}
+
 pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingInputs {
     let by_symbol = |block: &str| -> std::collections::HashMap<String, JsonValue> {
         prompt
@@ -384,7 +431,16 @@ pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingI
             .unwrap_or_default()
     };
     let indicators = by_symbol("daily_indicators");
-    let markov = by_symbol("markov_method");
+    let listed_markov = by_symbol("markov_method");
+    let embedded_markov = embedded_markov_rows(prompt);
+    // The compact list first; the embedded rows only for a symbol it left out.
+    let markov_for = |symbol: &str| -> (Option<&JsonValue>, Option<&'static str>) {
+        match (listed_markov.get(symbol), embedded_markov.get(symbol)) {
+            (Some(row), _) => (Some(row), Some("evidence_list")),
+            (None, Some(row)) => (Some(row), Some("embedded_run_rows")),
+            (None, None) => (None, None),
+        }
+    };
     let quiver = by_symbol("quiver_signals");
 
     let selected: Vec<&JsonValue> = report
@@ -416,10 +472,11 @@ pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingI
             .get("notes")
             .and_then(JsonValue::as_str)
             .unwrap_or_default();
+        let (markov, markov_source) = markov_for(symbol);
         let candidate_evidence = json!({
             "symbol": symbol,
             "daily_indicators": indicator,
-            "markov": markov.get(symbol),
+            "markov": markov,
             "quiver": quiver.get(symbol).map(|signal| json!({
                 "signal": signal.get("signal"),
                 "direction": signal.get("direction"),
@@ -433,6 +490,10 @@ pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingI
         let checks = crate::jev_numeric::numeric_checks(note, &candidate_evidence);
         numeric_summaries.push(json!({
             "symbol": symbol,
+            // Which of the prompt's two Markov lists the evidence came from,
+            // so a comparison made against an embedded row is never mistaken
+            // for one made against the list.
+            "markov_source": markov_source,
             "summary": crate::jev_numeric::summarize(&checks),
             "checks": checks
                 .iter()
@@ -467,7 +528,7 @@ pub(crate) fn grading_inputs(report: &JsonValue, prompt: &JsonValue) -> GradingI
         evidence.push(json!({
             "symbol": symbol,
             "daily_indicators": indicator,
-            "markov": markov.get(symbol),
+            "markov": markov,
             // The summary fields only. `top_events` carries named individuals
             // and is far larger than anything a note cites.
             "quiver": quiver.get(symbol).map(|signal| json!({
@@ -588,7 +649,10 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
                    underscores, hyphens and slashes read as spaces; a name followed by a \
                    determiner is a verb and names nothing; a name in a different sentence \
                    names nothing; and `N/M` is read as a count over its minimum from the \
-                   notation alone. Known limitations are listed in \
+                   notation alone. Markov evidence comes from the prompt's compact list and, \
+                   for a symbol absent from it, from the full signal rows the prompt embedded \
+                   under markov_method.latest_run until 2026-08-03 -- never from a report's own \
+                   output; `markov_source` names which. Known limitations are listed in \
                    docs/jev-numeric-grammar.md.",
     })
 }
@@ -1254,6 +1318,132 @@ mod tests {
         assert_eq!(
             inputs.coverage["excluded"].as_array().map(Vec::len),
             Some(0)
+        );
+    }
+
+    /// A full signal row as the prompt embedded it under
+    /// `markov_method.latest_run` until 2026-08-03: raw column names, and a
+    /// status of its own.
+    fn embedded_row(symbol: &str, signed_signal: f64, status: &str) -> JsonValue {
+        json!({
+            "symbol": symbol,
+            "status": status,
+            "run_date": "2026-07-29",
+            "current_state": "Bull",
+            "current_close": 344.71,
+            "signal_horizon_days": 5,
+            "bull_prob": 0.6159,
+            "bear_prob": 0.0389,
+            "sideways_prob": 0.3452,
+            "signed_signal": signed_signal,
+            "direction": if signed_signal >= 0.0 { "long" } else { "short" },
+            "conviction": signed_signal.abs(),
+            "raw_payload_json": {"recent_labels": []},
+        })
+    }
+
+    fn prompt_with_embedded_rows(listed: Vec<JsonValue>, embedded: Vec<JsonValue>) -> JsonValue {
+        json!({
+            "daily_indicators": {"signals": [indicator_signal("JPM:xnys")]},
+            "markov_method": {
+                "signals": listed,
+                "latest_run": {"status": "completed", "summary_json": {"signals": embedded}},
+            },
+        })
+    }
+
+    /// Report #199 quoted JPM at +0.577 from the rows the prompt embedded,
+    /// because the alphabetical list stopped before J. Reading the list alone
+    /// called a faithful quote `not_in_evidence`.
+    #[test]
+    fn a_symbol_the_list_left_out_is_read_from_the_embedded_rows() {
+        let report = json!({
+            "selected_assets": [{"symbol": "JPM:xnys", "notes": "BUY sentiment and +0.577 Markov signal."}],
+            "suggested_trades": [],
+        });
+        let prompt = prompt_with_embedded_rows(
+            vec![markov_signal("AAPL:xnas", 0.2, "Bull")],
+            vec![embedded_row("JPM:xnys", 0.5769323255186927, "ok")],
+        );
+        let inputs = grading_inputs(&report, &prompt);
+        let markov = &inputs.evidence[0]["markov"];
+        assert_eq!(markov["signed_signal"], 0.5769323255186927);
+        assert_eq!(
+            markov["state"], "Bull",
+            "projected onto the list's field names"
+        );
+        assert_eq!(markov["horizon_days"], 5);
+        assert_eq!(markov["currency"], "USD");
+        assert_eq!(inputs.numeric[0]["markov_source"], "embedded_run_rows");
+        let verdicts: Vec<&str> = inputs.numeric[0]["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .filter(|check| check["field"] == "markov.signed_signal")
+            .filter_map(|check| check["verdict"].as_str())
+            .collect();
+        assert_eq!(verdicts, vec!["matches"]);
+    }
+
+    /// Where both carry a symbol, the list is the evidence. The rows are only
+    /// ever the fallback.
+    #[test]
+    fn the_list_wins_where_both_carry_a_symbol() {
+        let report = json!({
+            "selected_assets": [{"symbol": "JPM:xnys", "notes": "+0.40 Markov signal"}],
+            "suggested_trades": [],
+        });
+        let prompt = prompt_with_embedded_rows(
+            vec![markov_signal("JPM:xnys", 0.40, "Bull")],
+            vec![embedded_row("JPM:xnys", 0.90, "ok")],
+        );
+        let inputs = grading_inputs(&report, &prompt);
+        assert_eq!(inputs.evidence[0]["markov"]["signed_signal"], 0.40);
+        assert_eq!(inputs.numeric[0]["markov_source"], "evidence_list");
+    }
+
+    /// A row that did not compute is not evidence, and a prompt without the
+    /// embedded rows is read exactly as before.
+    #[test]
+    fn a_failed_row_or_a_trimmed_prompt_supplies_nothing() {
+        let report = json!({
+            "selected_assets": [{"symbol": "JPM:xnys", "notes": "+0.577 Markov signal"}],
+            "suggested_trades": [],
+        });
+        let failed =
+            prompt_with_embedded_rows(vec![], vec![embedded_row("JPM:xnys", 0.577, "error")]);
+        let inputs = grading_inputs(&report, &failed);
+        assert!(inputs.evidence[0]["markov"].is_null());
+        assert!(inputs.numeric[0]["markov_source"].is_null());
+
+        let trimmed = json!({
+            "daily_indicators": {"signals": [indicator_signal("JPM:xnys")]},
+            "markov_method": {"signals": [], "latest_run": {"summary_json": {"status": "completed"}}},
+        });
+        assert!(grading_inputs(&report, &trimmed).evidence[0]["markov"].is_null());
+    }
+
+    /// Report #260 quoted NESTE at +0.2331, a figure found only in the
+    /// earlier report #259 -- which had attached DTE:xetr's signal to NESTE.
+    /// A model's earlier output is never evidence, however it is labelled.
+    #[test]
+    fn an_earlier_report_never_supplies_markov_evidence() {
+        let report = json!({
+            "selected_assets": [{"symbol": "JPM:xnys", "notes": "+0.2331 Markov signal"}],
+            "suggested_trades": [],
+        });
+        let mut prompt = prompt_with_embedded_rows(vec![], vec![]);
+        prompt["earlier_same_scope_report"] = json!({
+            "report": {"suggested_trades": [{
+                "symbol": "JPM:xnys",
+                "strategy_metadata": {"markov": {"signed_signal": 0.23313425481319427}},
+            }]},
+        });
+        let inputs = grading_inputs(&report, &prompt);
+        assert!(inputs.evidence[0]["markov"].is_null());
+        assert_eq!(
+            inputs.numeric[0]["checks"][0]["verdict"], "not_in_evidence",
+            "the figure stays unverified rather than borrowing the model's own echo"
         );
     }
 
