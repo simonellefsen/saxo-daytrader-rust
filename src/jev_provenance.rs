@@ -282,6 +282,77 @@ mod tests {
         assert_eq!(locate(figure, "V:xnys", &found, "").0, "other_symbols_only");
     }
 
+    /// Every distinct claim in the frame with the checker's reading of it, so
+    /// two method versions can be compared claim by claim from two recorded
+    /// runs rather than from memory.
+    ///
+    /// ```text
+    /// JEV_PROMPTS_PATH=all.json JEV_CENSUS_OUT=census.json \
+    ///   cargo test --release census_of_every_claim -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn census_of_every_claim() {
+        let path = std::env::var("JEV_PROMPTS_PATH").expect("JEV_PROMPTS_PATH");
+        let sources: Vec<JsonValue> =
+            serde_json::from_slice(&std::fs::read(&path).expect("prompts")).expect("a JSON array");
+        let mut claims: BTreeMap<String, JsonValue> = BTreeMap::new();
+        for entry in &sources {
+            let (Some(report), Some(request)) = (entry.get("report"), entry.get("request")) else {
+                continue;
+            };
+            let report_id = entry.get("id").and_then(JsonValue::as_i64).unwrap_or(-1);
+            let prompt = crate::xai_decision::decision_prompt_user_payload(request);
+            let inputs = crate::jev_review::grading_inputs(report, &prompt);
+            for (index, candidate) in inputs.candidates.iter().enumerate() {
+                let (Some(note), Some(evidence)) = (
+                    candidate.get("note").and_then(JsonValue::as_str),
+                    inputs.evidence.get(index),
+                ) else {
+                    continue;
+                };
+                let symbol = candidate["symbol"].as_str().unwrap_or_default();
+                let lowered = note.to_lowercase();
+                for check in crate::jev_numeric::numeric_checks(&lowered, evidence) {
+                    let written = crate::jev_numeric::figure_at(&lowered, check.offset)
+                        .map(|span| lowered[span.start..span.end].to_string());
+                    claims
+                        .entry(format!("{report_id}|{symbol}|{}", check.offset))
+                        .or_insert_with(|| {
+                            json!({
+                                "figure": written,
+                                "field": check.field,
+                                "actual": check.actual,
+                                "relation": check.relation,
+                                "verdict": check.verdict.as_str(),
+                                "excerpt": check.excerpt,
+                            })
+                        });
+                }
+            }
+        }
+        let mut verdicts: BTreeMap<String, usize> = BTreeMap::new();
+        for claim in claims.values() {
+            *verdicts
+                .entry(claim["verdict"].as_str().unwrap_or_default().to_string())
+                .or_default() += 1;
+        }
+        let result = json!({
+            "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
+            "claims": claims.len(),
+            "by_verdict": verdicts,
+            "by_claim": claims,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result["by_verdict"]).expect("json")
+        );
+        if let Ok(out) = std::env::var("JEV_CENSUS_OUT") {
+            std::fs::write(out, serde_json::to_string_pretty(&result).expect("json"))
+                .expect("write result");
+        }
+    }
+
     /// What reading the embedded rows as evidence changes, claim by claim.
     ///
     /// Like for like and exact. A candidate whose Markov evidence now comes
