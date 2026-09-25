@@ -1,0 +1,528 @@
+{
+  "what_this_is": "n14 against n15 over every distinct claim in the controls frame, from two recorded runs of committed code with clean trees, produced by jev_provenance::census_of_every_claim; and every regression case, read by both versions.",
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "n14": {
+    "commit": "dd4299c",
+    "method_version": "n14-2026-09-25",
+    "claims": 1476,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1247,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 49
+    }
+  },
+  "n15": {
+    "commit": "cc7b0a4",
+    "method_version": "n15-2026-09-25",
+    "claims": 1476,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1247,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 49
+    }
+  },
+  "claims_only_in_one": 0,
+  "changed": [],
+  "regression_cases": {
+    "status": "Regression cases, not validation evidence. Each was found by probing this checker, by review or by me, and the evidence is synthetic.",
+    "tests": "jev_numeric::n15_expressions. At n14 (c651a91) five of its seven tests fail and the two that pin unchanged behaviour pass.",
+    "cases": [
+      {
+        "note": "one hundred and five-day markov signal",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "a hundred and five-day markov signal",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "one hundred and 5-day markov signal",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "five point two confluences",
+        "evidence": {
+          "confluence_count": 2,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "2 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "five point two confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "2 daily_indicators.confluence_count differs"
+        ],
+        "n15": []
+      },
+      {
+        "note": "5 point 2 confluences",
+        "evidence": {
+          "confluence_count": 2,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 no field unattributed",
+          "2 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "5 hundred confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "twenty‑five-day markov signal",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "twenty‑five confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "twenty‐five confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "twenty five confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": []
+      },
+      {
+        "note": "five six confluences",
+        "evidence": {
+          "confluence_count": 6,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [],
+        "n15": []
+      },
+      {
+        "note": "five–six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five–six confluences",
+        "evidence": {
+          "confluence_count": 6,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count matches"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five – six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five-six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five‑six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five—six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "5–six confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 no field unattributed",
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ],
+        "n15": [
+          "5 no field unattributed",
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "five–6 confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "5—6 confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 no field unattributed",
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "5 no field unattributed",
+          "6 daily_indicators.confluence_count uncertain_attribution"
+        ]
+      },
+      {
+        "note": "under five-day markov horizon",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "under five-day markov horizon",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 6,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days differs"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "under 5-day markov horizon",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "below 5-day markov horizon",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "above five-day markov horizon",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "near five-day markov signal",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 markov.horizon_days matches"
+        ],
+        "n15": [
+          "5 markov.horizon_days uncertain_attribution"
+        ]
+      },
+      {
+        "note": "markov signal –0.523",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "0.523 markov.signed_signal differs"
+        ],
+        "n15": [
+          "0.523 markov.signed_signal uncertain_attribution"
+        ]
+      },
+      {
+        "note": "markov signal—0.523",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "0.523 markov.signed_signal differs"
+        ],
+        "n15": [
+          "0.523 markov.signed_signal uncertain_attribution"
+        ]
+      },
+      {
+        "note": "﹣0.523 markov signal",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "0.523 markov.signed_signal differs"
+        ],
+        "n15": [
+          "-0.523 markov.signed_signal matches"
+        ]
+      },
+      {
+        "note": "5 confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": [
+          "5 daily_indicators.confluence_count matches"
+        ]
+      },
+      {
+        "note": "5 confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches"
+        ],
+        "n15": [
+          "5 daily_indicators.confluence_count matches"
+        ]
+      },
+      {
+        "note": "4/3​ confluences",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "4 daily_indicators.confluence_count matches",
+          "3 daily_indicators.min_confluences not_in_evidence"
+        ],
+        "n15": [
+          "4 daily_indicators.confluence_count matches",
+          "3 daily_indicators.min_confluences not_in_evidence"
+        ]
+      },
+      {
+        "note": "4­/3 confluences",
+        "evidence": {
+          "confluence_count": 4,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "4 no field unattributed",
+          "3 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "4 daily_indicators.confluence_count matches",
+          "3 daily_indicators.min_confluences not_in_evidence"
+        ]
+      },
+      {
+        "note": "5‒6 confluences",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 no field unattributed",
+          "6 daily_indicators.confluence_count differs"
+        ],
+        "n15": [
+          "5 daily_indicators.confluence_count uncertain_attribution",
+          "-6 no field unattributed"
+        ]
+      },
+      {
+        "note": "twenty‑five confluences, markov signal -0.523",
+        "evidence": {
+          "confluence_count": 5,
+          "horizon_days": 5,
+          "signed_signal": -0.523
+        },
+        "n14": [
+          "5 daily_indicators.confluence_count matches",
+          "-0.523 markov.signed_signal matches"
+        ],
+        "n15": [
+          "-0.523 markov.signed_signal matches"
+        ]
+      }
+    ]
+  }
+}

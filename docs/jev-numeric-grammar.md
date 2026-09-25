@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n14-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n15-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -8,8 +8,77 @@ stands as scored. The whole-note audit is keyed to `n12`.
 - `n13` reads numbers written as words.
 - `n14` abstains on comparisons, ranges and compound numbers, where earlier
   versions guessed.
+- `n15` reads a numeric expression whole, and each dash and space in one
+  spelling.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n15`: the whole expression, in one spelling
+
+Review reproduced three faults that `n14` still had, all on synthetic notes:
+
+| note | evidence | `n14` |
+|---|---|---|
+| "one hundred and five-day Markov signal" | horizon 5 | the five matches |
+| "five point two confluences" | count 2 | the two matches |
+| "twenty‑five-day Markov signal", with a non-breaking hyphen | horizon 5 | the five matches |
+| "five–six confluences" | count 5 | the six differs, as an exact count |
+| "under five-day Markov horizon" | horizon 5 | matches |
+
+**`n14`'s compound guard looked only at a number word's neighbours.** An
+"and" or a "point" hid the rest of the number, and so did any hyphen but the
+ASCII one. **The range check read only digits across a dash**, and the en dash
+also ends a clause, so the five in "five–six" was never seen. **The horizon
+was exempt from every spatial lead-in.** This page described the exemption as
+"<figure> over N days"; the code exempted "under", "below", "above" and "near"
+as well.
+
+Now:
+- **One spelling first.** Before anything reads the note, every hyphen, the
+  minus sign and the figure dash become `-`; every horizontal space becomes a
+  space; the soft hyphen and zero-width characters are dropped. Each helper
+  had kept its own list of which characters it trimmed, and no two lists
+  agreed. Offsets and excerpts are still reported in the note as written.
+- **A numeric expression is read whole.** A numeral inside a longer one is not
+  a figure, in words or in digits, rather than read in part. Two tokens,
+  joined by spaces or a hyphen, form one number where English writes one:
+  - a tens word and a unit ("twenty-five");
+  - a numeral and a scale ("five hundred", "5 hundred", "hundred and five");
+  - a numeral either side of "point";
+  - a numeral and a fraction ("five and a half");
+  - two number words side by side.
+
+  A digit figure beside a number word is still two figures ("+0.551 five-day
+  markov signal"). So are two number words joined by a hyphen: "five-six" is
+  a range.
+- **A dash joins a range between words as well as digits**: a hyphen, an en
+  dash, or an em dash written tight. A spaced em dash still separates clauses:
+  "RSI weak — 5 confluences" reads the 5.
+- **Before a horizon, only "over" is read as an equality**, because there it
+  means across: "-0.5230 over 5 days", "dominance over 5-day horizon". Any
+  other spatial word abstains.
+- **An en or em dash touching a figure's first digit abstains.** "Markov
+  signal –0.523" is a minus sign the scanner does not read, or the far end of
+  a range. `n14` compared it as +0.523.
+
+Two more false alarms closed on the way, both on synthetic notes: a soft
+hyphen inside "4/3" and the small hyphen-minus in "﹣0.523".
+
+**Measured over the frame** in `jev-numeric-n15-changes.json` (`n14` at
+`dd4299c`, `n15` at `cc7b0a4`): **no claim changes**, and none is added or
+lost. All 1,476 claims read identically. Across the 1,100 distinct notes in
+the dump, the only characters outside ASCII are ten em dashes, each spaced
+between clauses, and one typographic apostrophe. No dash touches a digit. So
+the Unicode faults could not occur there, and no compound, range or horizon
+lead-in changed a reading either.
+
+**These are regression cases, not validation evidence.** The same file records
+all 36 cases as each version reads them. The tests in
+`jev_numeric::n15_expressions` fail at `n14`, apart from the two that pin what
+must not change, and pass at `n15`. They show the faults found so far are
+fixed. They cannot show that none remain: historical stability is not general
+correctness, and a checker tuned against its own probes has not been
+evaluated.
 
 ## `n14`: abstain where a figure is not an exact value
 
@@ -466,7 +535,10 @@ defective. None of it is adjudicated, and the question itself is uncalibrated.
    problem, not an attribution one, and not fixed.
 6. **Signs are not read.** "markov is positive at 0.1634" abstains rather than
    check the sign, because the grammar compares magnitudes written as quoted.
-7. **The whitelist is English and hand-built.** A new phrasing abstains until
+7. **Digits are ASCII, and number words stop at twelve.** A figure in other
+   digits is not read. A number word over twelve, "fifteen confluences", is
+   not read on its own, though it is recognised as part of a compound.
+8. **The whitelist is English and hand-built.** A new phrasing abstains until
    someone adds it, which is the intended failure direction but means coverage
    drifts as the report model's wording drifts. The harness above is how that
    is detected.
