@@ -68,7 +68,11 @@ use std::sync::LazyLock;
 /// is now reduced to one spelling of every dash and space first; a range
 /// joins number words across any dash; and of the spatial words, only
 /// "over", which before a horizon means across, is read as an equality there.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n15-2026-09-25";
+///
+/// `n16` matches a field's name only as a whole word. "support" was found
+/// inside "supported", and contested the count in "supported by 5
+/// confluences": the fresh evaluation's one concrete parser defect.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n16-2026-09-25";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -631,7 +635,11 @@ fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
         .zip(NORMALISED_KEYWORDS.iter())
         .filter(|(field, _)| field.path.starts_with("markov."))
         .flat_map(|(_, keywords)| keywords.iter())
-        .any(|keyword| clause.contains(keyword.as_str()));
+        .any(|keyword| {
+            clause
+                .match_indices(keyword.as_str())
+                .any(|(at, _)| names_a_field(&clause, at, at + keyword.len(), keyword))
+        });
     ((followed || over_a_figure(text, number)) && names_markov).then_some(unit_end)
 }
 
@@ -1717,6 +1725,30 @@ fn stands_alone(text: &str, start: usize, end: usize) -> bool {
     before && after
 }
 
+/// Whether a keyword matched at `start..end` is a whole name, rather than
+/// part of a longer word.
+///
+/// The search was a plain substring match, so "support" was found inside
+/// "supported" and contested the count in "supported by 5 confluences". That
+/// was the fresh evaluation's one concrete parser defect. A name now needs a
+/// non-alphanumeric character, or the text's edge, before it, and no letter
+/// after it. A digit may follow, because notes write the period onto the
+/// indicator: "rsi14". An initialism still needs a boundary on both sides:
+/// the "r r" of "r/r" also sits inside "higher rsi".
+fn names_a_field(text: &str, start: usize, end: usize, keyword: &str) -> bool {
+    if is_initialism(keyword) {
+        return stands_alone(text, start, end);
+    }
+    let bytes = text.as_bytes();
+    let before = start
+        .checked_sub(1)
+        .is_none_or(|previous| !bytes[previous].is_ascii_alphanumeric());
+    let after = bytes
+        .get(end)
+        .is_none_or(|next| !next.is_ascii_alphabetic());
+    before && after
+}
+
 /// The field table's keywords, separator-normalised once.
 static NORMALISED_KEYWORDS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
     FIELDS
@@ -1771,13 +1803,10 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
                 let start = from + offset;
                 let end = start + keyword.len();
                 from = start + 1;
-                // A verb is not a name.
-                if used_as_a_verb(&searchable, end) {
-                    continue;
-                }
-                // An initialism is a name only standing alone: the "r r" of
-                // "r/r" also sits inside "higher rsi".
-                if is_initialism(keyword) && !stands_alone(&searchable, start, end) {
+                // Part of a longer word is not a name, and nor is a verb.
+                if !names_a_field(&searchable, start, end, keyword)
+                    || used_as_a_verb(&searchable, end)
+                {
                     continue;
                 }
                 for (index, number) in numbers.iter().enumerate() {
@@ -4305,6 +4334,105 @@ mod n15_expressions {
         assert_eq!(
             verdicts("rsi weak \u{2014} 5 confluences", 5, 5),
             vec![(5.0, RELATION_EQUALS, "matches")]
+        );
+    }
+}
+
+/// `n16`: a field's name counts only as a whole word. Regression cases, not
+/// validation evidence: the defect was found by the fresh evaluation, which
+/// therefore cannot validate the fix.
+#[cfg(test)]
+mod n16_whole_names {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence() -> JsonValue {
+        json!({
+            "daily_indicators": {
+                "confluence_count": 5,
+                "rsi14": 61.34,
+                "reward_risk": 2.1,
+                "support": {"nearest_support": 446.0},
+            },
+            "markov": {"horizon_days": 5, "signed_signal": -0.523},
+        })
+    }
+
+    fn read(note: &str) -> Vec<(f64, Option<&'static str>, &'static str)> {
+        numeric_checks(note, &evidence())
+            .into_iter()
+            .map(|check| (check.quoted, check.field, check.verdict.as_str()))
+            .collect()
+    }
+
+    /// The fresh evaluation's case: "support" inside "supported" contested
+    /// the count, and the checker abstained.
+    #[test]
+    fn a_name_inside_a_longer_word_names_nothing() {
+        for note in [
+            "actionable technical buy supported by 5 confluences",
+            "unsupported by 5 confluences",
+            "supportive setup with 5 confluences",
+        ] {
+            assert_eq!(
+                read(note),
+                vec![(5.0, Some("daily_indicators.confluence_count"), "matches")],
+                "{note}"
+            );
+        }
+    }
+
+    /// The same rule where a clause must name a Markov field before a
+    /// duration is read as the horizon.
+    #[test]
+    fn a_markov_name_inside_a_longer_word_does_not_make_a_horizon() {
+        assert_eq!(
+            read("5-day signal from a markovian model"),
+            vec![(5.0, None, "not_a_field_value")]
+        );
+        assert_eq!(
+            read("5-day signal from the markov model"),
+            vec![(5.0, Some("markov.horizon_days"), "matches")]
+        );
+    }
+
+    /// What a whole-word rule must not lose: a period written onto the
+    /// indicator, a plural the table lists, a possessive, and an initialism.
+    #[test]
+    fn whole_names_are_still_read() {
+        // Still named; the gap grammar does not read the "14", as before.
+        assert_eq!(
+            read("rsi14 61.3"),
+            vec![(
+                61.3,
+                Some("daily_indicators.rsi14"),
+                "uncertain_attribution"
+            )]
+        );
+        assert_eq!(
+            read("5 technical confluences"),
+            vec![(5.0, Some("daily_indicators.confluence_count"), "matches")]
+        );
+        // Still named; the "'s" is outside the gap grammar, as before.
+        assert_eq!(
+            read("markov's signal -0.523"),
+            vec![(
+                -0.523,
+                Some("markov.signed_signal"),
+                "uncertain_attribution"
+            )]
+        );
+        assert_eq!(
+            read("r/r 2.1"),
+            vec![(2.1, Some("daily_indicators.reward_risk"), "matches")]
+        );
+        assert_eq!(
+            read("above 446 eur support"),
+            vec![(
+                446.0,
+                Some("daily_indicators.support.nearest_support"),
+                "matches"
+            )]
         );
     }
 }

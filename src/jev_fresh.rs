@@ -2057,15 +2057,23 @@ mod frozen {
                 && key.field.as_deref() == dispute["field"].as_str()
         };
         let coherent = |case: &SeededCase| context_problems(&case.evidence).is_empty();
-        let readings = seeded_readings(seeded);
-        let seeded_figures = json!({
-            "as_scored": seeded_totals(seeded, &readings, |_, _| true),
-            "coherent_context_only": seeded_totals(seeded, &readings, |case, _| coherent(case)),
-            "without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| !disputed(case, key)),
-            "coherent_without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| {
-                coherent(case) && !disputed(case, key)
-            }),
-        });
+        // The seeded readings are the checker's, and only the frozen method's
+        // are the ones this set measured. Under a later method they cannot be
+        // recomputed from this tree; check them out at `FROZEN_COMMIT`.
+        let frozen = crate::jev_numeric::NUMERIC_METHOD_VERSION == FROZEN_METHOD;
+        let seeded_figures = if frozen {
+            let readings = seeded_readings(seeded);
+            json!({
+                "as_scored": seeded_totals(seeded, &readings, |_, _| true),
+                "coherent_context_only": seeded_totals(seeded, &readings, |case, _| coherent(case)),
+                "without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| !disputed(case, key)),
+                "coherent_without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| {
+                    coherent(case) && !disputed(case, key)
+                }),
+            })
+        } else {
+            JsonValue::Null
+        };
 
         let mut by_mutation: BTreeMap<&str, (usize, usize, BTreeMap<&str, usize>)> =
             BTreeMap::new();
@@ -2191,12 +2199,19 @@ mod frozen {
             reconciliation_figures(&cases, &keys, &labels, &seeded_cases, &reconciliation);
         println!("{}", serde_json::to_string_pretty(&computed).expect("json"));
         assert_eq!(
-            computed["seeded"]["as_scored"], results["seeded"]["totals"],
-            "the per-figure reading reproduces the recorded run"
-        );
-        assert_eq!(
             computed["natural"]["as_labelled"], results["natural"]["headline"],
             "the natural headline reproduces the recorded run"
+        );
+        for part in ["natural", "context_by_mutation", "removed_yet_derivable"] {
+            assert_eq!(reconciliation["figures"][part], computed[part], "{part}");
+        }
+        if computed["seeded"].is_null() {
+            println!("The method has moved past {FROZEN_METHOD}: seeded figures not recomputed.");
+            return;
+        }
+        assert_eq!(
+            computed["seeded"]["as_scored"], results["seeded"]["totals"],
+            "the per-figure reading reproduces the recorded run"
         );
         assert_eq!(reconciliation["figures"], computed);
     }
