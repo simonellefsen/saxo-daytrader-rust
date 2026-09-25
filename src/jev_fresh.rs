@@ -1677,6 +1677,35 @@ mod frozen {
         )
     }
 
+    /// The seeded cases the labels generate, as they read back from a file.
+    ///
+    /// serde_json's default parser does not round-trip every float: it read
+    /// 0.46908117592334747 back as 0.4690811759233474. So cases compared
+    /// straight from memory never equal the committed ones, though the file is
+    /// exactly what was generated. Both sides are compared as read from text.
+    fn generated_as_stored(cases: &[NoteCase], labels: &[FreshLabel]) -> JsonValue {
+        let text = serde_json::to_string(&generate_seeded(cases, labels)).expect("serialize");
+        serde_json::from_str(&text).expect("parse")
+    }
+
+    /// Every key's truth, recomputed against the evidence as the file holds
+    /// it. A float read back one unit off cannot move a figure across a
+    /// rounding boundary without this failing.
+    fn keys_hold_as_stored(seeded: &[SeededCase]) -> Vec<String> {
+        let mut wrong = Vec::new();
+        for case in seeded {
+            for key in &case.keys {
+                let Some(field) = key.field.as_deref() else {
+                    continue;
+                };
+                if truth_of(&key.figure, field, &case.evidence) != key.truth {
+                    wrong.push(format!("{} {}", case.id, key.figure));
+                }
+            }
+        }
+        wrong
+    }
+
     fn frozen() -> Option<(Vec<NoteCase>, Vec<NoteKey>, JsonValue)> {
         let instrument = document(INSTRUMENT_PATH)?;
         let key = document(KEY_PATH)?;
@@ -1786,10 +1815,10 @@ mod frozen {
         else {
             return;
         };
-        assert_eq!(
-            seeded["cases"],
-            serde_json::to_value(generate_seeded(&cases, &labels)).expect("serialize")
-        );
+        assert_eq!(seeded["cases"], generated_as_stored(&cases, &labels));
+        let stored: Vec<SeededCase> =
+            serde_json::from_value(seeded["cases"].clone()).expect("seeded cases");
+        assert_eq!(keys_hold_as_stored(&stored), Vec::<String>::new());
     }
 
     #[test]
@@ -2034,8 +2063,13 @@ mod frozen {
             serde_json::from_value(seeded["cases"].clone()).expect("seeded cases");
         assert_eq!(
             seeded["cases"],
-            serde_json::to_value(generate_seeded(&cases, &labels)).expect("serialize"),
+            generated_as_stored(&cases, &labels),
             "the seeded cases are what the labels generate"
+        );
+        assert_eq!(
+            keys_hold_as_stored(&seeded_cases),
+            Vec::<String>::new(),
+            "every key holds against the evidence as stored"
         );
         let natural = score_natural(&cases, &keys, &labels);
         let seeded_score = score_seeded(&seeded_cases);
