@@ -1133,7 +1133,7 @@
   },
   "open_questions": [
     "Truncation. The checker accepts a figure that matches only by truncation. Here that decided one claim (ASML break risk 0.400), as it decided LMND in the controls, and the labeller, who rounded, reads it as wrong. The rubric does not settle which convention to accept. The scenario below shows the figures under truncation.",
-    "Numbers written as words. Every omission in a note the checker read -- 6 claims in 3 of 55 notes -- is a number written as a word ('five-day', 'five-confluence', 'Five bullish technical confluences'). The scanner reads digits only. None of the six is wrong.",
+    "Numbers written as words. Every omission in a note the checker read -- 6 claims in 3 of 55 notes -- is a number written as a word ('five-day', 'five-confluence', 'Five bullish technical confluences'). The scanner reads digits only. None of the six was labelled inconsistent: five are consistent and one is cannot_tell, so no confirmed wrong claim was found among them and one remains unresolved.",
     "Notes that never reach the checker. A candidate without an indicator snapshot is excluded from grading entirely. Six of the eleven numeric claims omitted in such notes are Markov figures whose evidence was supplied, and all six are consistent.",
     "Found, not compared. Eleven claims, all consistent or cannot_tell. Six were refused by the grammar or the attribution margin (uncertain_attribution): 'above 75', 'near 69', 'positive at', 'Bull-state', 'modeled'. Five had no field attributed: a percentage for a risk stored as a fraction ('3.7%'), 'distance to support', which is not one of the field's names, a DKK unit price (close_dkk is not a checker field), a monitored quote and an intraday move.",
     "Strength and freshness words. 30 of the 52 cannot_tell are an undefined strength word or 'fresh' without a timestamp. Defining them is a rubric change for a future instrument, not a reading of this one."
@@ -1398,5 +1398,11 @@
         }
       }
     ]
-  }
+  },
+  "amendments": [
+    {
+      "date": "2026-09-25",
+      "what": "The open question on numbers written as words said 'None of the six is wrong.' One of the six is cannot_tell, so this now says that none was labelled inconsistent and one remains unresolved. Only the wording changed; no reading, label or figure did."
+    }
+  ]
 }

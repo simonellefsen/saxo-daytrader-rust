@@ -1,0 +1,50 @@
+{
+  "what_this_is": "n13 against n14 over every distinct claim in the controls frame, from two recorded runs of committed code with clean trees. Produced by jev_provenance::census_of_every_claim.",
+  "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+  "n13": {
+    "commit": "88ceb8e",
+    "method_version": "n13-2026-09-25",
+    "claims": 1476,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1248,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 48
+    }
+  },
+  "n14": {
+    "commit": "dd4299c",
+    "method_version": "n14-2026-09-25",
+    "claims": 1476,
+    "by_verdict": {
+      "differs": 9,
+      "implausible_attribution": 6,
+      "matches": 1247,
+      "not_a_field_value": 14,
+      "not_in_evidence": 4,
+      "unattributed": 147,
+      "uncertain_attribution": 49
+    }
+  },
+  "claims_only_in_one": 0,
+  "changed": [
+    {
+      "claim": "167|AMAT:xnas|63",
+      "figure": "3",
+      "field": "daily_indicators.min_confluences",
+      "was": {
+        "verdict": "matches",
+        "relation": "equals"
+      },
+      "now": {
+        "verdict": "uncertain_attribution",
+        "relation": "unsupported_construction"
+      },
+      "excerpt": "nal, bullish daily technical trend and 3/3+ confluence profile, but already the la"
+    }
+  ],
+  "note": "n14's first draft, never pushed or deployed, changed six more claims wrongly: three horizons lost and three list figures read as ranges. The census caught both faults, and the version here is the corrected one."
+}

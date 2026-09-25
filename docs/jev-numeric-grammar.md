@@ -1,13 +1,58 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n13-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n14-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
 - `n12` added two names.
 - `n13` reads numbers written as words.
+- `n14` abstains on comparisons, ranges and compound numbers, where earlier
+  versions guessed.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n14`: abstain where a figure is not an exact value
+
+Review found two faults in `n13`, reproduced here before they were fixed. The
+first turned out to be older than `n13`.
+
+**A figure named ahead of its field was read as the field's exact value,
+whatever came before it.** "more than five confluences" matched a count of 5,
+and was flagged against 6. So did the digit form, "more than 5 confluences",
+from the grammar's first version; `n13` only extended the fault to words. So
+did "at least", "fewer than", "up to", "over" on a count, "about" and
+"roughly". Ranges collapsed to one exact count: "five to six", "5 to 6",
+"five or six", "between four and six". "5-6" even raised a false alarm on the
+5.
+
+Now:
+- **A quantity lead-in abstains**, for any field.
+- **A spatial lead-in** — above, below, over, under, near — abstains for a
+  count. For a level it stays an equality: "above 446 EUR support" and the FLS
+  "near 593 DKK support" name the level's position.
+- **The horizon's "<figure> over N days" is still read.** `n12` implements it,
+  and there "over" means across.
+- **A figure in a range or an open bound abstains:** "5 to 6", "5-6", "5 or
+  more", "5+". "And" marks a range only after "between".
+
+**The "five" inside "twenty-five" was read alone.** A number word joined to a
+tens word, another number word, or a continuation (hundred, thousand, point) is
+now not read at all, rather than read in part.
+
+Measured over the frame in `jev-numeric-n14-changes.json` (`n13` at `88ceb8e`,
+`n14` at `dd4299c`): **one claim changes**, and no claim is added or lost. It
+is "3/3+ confluence profile", whose "3+" is an open bound and now abstains.
+The faults were real but latent: none of the constructions occurs in the
+stored notes, apart from that one.
+
+**The census caught two faults in `n14`'s first draft**, which was never
+pushed or deployed:
+- It treated a digit figure before a number word as a compound. That lost
+  three correct horizons ("+0.551 five-day markov signal").
+- It took any "and" as a range. That abstained on three correct figures in
+  lists ("0.5555 and 4/3 confluences").
+
+Both are fixed, and both are now regression tests.
 
 ## `n13`: numbers written as words
 

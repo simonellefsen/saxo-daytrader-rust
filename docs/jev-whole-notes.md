@@ -187,8 +187,9 @@ and 3 to 103 of 229.
   so their Markov claims go unchecked even though they could be checked.
 - **The other 6 are in 3 of the 55 notes the checker read, and every one is a
   number written as a word:** "five-day", "five-confluence", "Five bullish
-  technical confluences". The scanner reads digits only. None of the six is
-  wrong.
+  technical confluences". The scanner reads digits only. None of the six was
+  labelled inconsistent: five are consistent and one is `cannot_tell`. So no
+  confirmed wrong claim was found among them, and one remains unresolved.
 
 **The two wrong numeric claims.**
 - **FLS, report #286, "593 DKK support"**, was flagged by the checker. The
@@ -238,7 +239,8 @@ unchanged by this audit.
 - **Candidates without an indicator snapshot are not graded at all,** though
   their Markov figures could be checked.
 - **Eleven figures were found but not compared,** for grammar and attribution
-  reasons, and none of them was wrong.
+  reasons. None was labelled inconsistent; nine are consistent, and two remain
+  unresolved as `cannot_tell`.
 
 ## Reconciliation
 
@@ -306,7 +308,14 @@ read figures in, the count goes from 1 to 0.
 - **Found but not compared.** Six claims were refused by the grammar or the
   attribution margin. Five had no field: a percentage for a fraction-stored
   risk, "distance to support", a DKK unit price, a monitored quote and an
-  intraday move. None of the eleven is wrong.
+  intraday move. None of the eleven was labelled inconsistent, and two are
+  `cannot_tell`.
+
+**A correction, 2026-09-25, after review.** An earlier summary of this audit
+said that none of these gaps hid a wrong claim. The evidence supports less:
+no confirmed wrong claim was found among the gaps, and some remain unresolved
+as `cannot_tell`. Three sentences on this page said the same thing too
+strongly and are corrected above.
 
 ## What it will not establish
 
