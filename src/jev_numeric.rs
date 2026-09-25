@@ -53,7 +53,14 @@ use std::sync::LazyLock;
 /// confluence count ("five-confluence", "Five bullish technical confluences")
 /// and the Markov horizon ("five-day"). Every omission the whole-note audit
 /// found in a note the checker read was one of these.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n13-2026-09-25";
+///
+/// `n14` abstains where `n13` guessed. A figure named ahead of its field was
+/// read as the field's exact value whatever came before it, so "more than 5
+/// confluences" matched a count of 5 and was flagged against 6 -- in digits
+/// since the grammar was written, and in words since `n13`. A quantity lead-in,
+/// a range, or an open bound now abstains; "twenty-five" is no longer read as
+/// five.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n14-2026-09-25";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -740,6 +747,132 @@ fn symbolic_relation(text: &str, number_start: usize) -> Option<&'static str> {
     None
 }
 
+/// Words that, immediately before a figure named ahead of its field, make it
+/// something other than the field's value: "more than 5 confluences", "at
+/// least five confluences", "about 5 confluences". The field named after the
+/// figure used to mean equality whatever came before it, so each of these was
+/// compared as an exact value -- false agreement at 5, a false alarm at 6.
+const QUANTITY_LEAD_INS: &[&str] = &[
+    "than",
+    "least",
+    "most",
+    "fewer",
+    "more",
+    "less",
+    "beyond",
+    "exceeding",
+    "exceeds",
+    "about",
+    "around",
+    "approximately",
+    "roughly",
+    "nearly",
+    "almost",
+    "circa",
+    "some",
+];
+
+/// Spatial words before a figure named ahead of its field. For a level they
+/// name its position -- "above 446 EUR support" says the support *is* 446, and
+/// "near 593 DKK support" is the FLS finding -- so for a level they stay an
+/// equality. A count has no position: "over 5 confluences" is a quantity.
+const SPATIAL_LEAD_INS: &[&str] = &["above", "below", "over", "under", "beneath", "near"];
+
+/// Words that follow a figure and make it an open bound: "5 or more".
+const OPEN_BOUND_FOLLOWERS: &[&str] =
+    &["more", "fewer", "less", "higher", "lower", "above", "below"];
+
+/// Tens words. "twenty-five" is not a five.
+const TENS_WORDS: &[&str] = &[
+    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+];
+
+/// Words that continue a number: "five hundred", "five point two".
+const NUMBER_CONTINUATIONS: &[&str] = &["hundred", "thousand", "million", "billion", "point"];
+
+fn is_number_token(word: &str) -> bool {
+    (!word.is_empty() && word.chars().all(|c| c.is_ascii_digit()))
+        || NUMBER_WORDS.iter().any(|(number, _)| *number == word)
+        || TENS_WORDS.contains(&word)
+}
+
+/// Whether a figure is one end of a range, or an open bound: "5 to 6",
+/// "5-6", "five or six", "between four and six", "5 or more", "5+". A range
+/// states no single value, so reading either end as exact is a guess.
+fn in_a_range(text: &str, found: &FoundNumber) -> bool {
+    let (clause_start, clause_end) = clause_bounds(text, found.start);
+    let clause_end = clause_end.max(found.end);
+    // Written joins: a hyphen or an en dash between two figures.
+    let after = text[found.end..].trim_start_matches(' ');
+    let joined_after = after
+        .strip_prefix('-')
+        .or_else(|| after.strip_prefix('\u{2013}'))
+        .map(|rest| rest.trim_start_matches(' '))
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    let before = text[..found.start].trim_end_matches(' ');
+    let joined_before = if found.explicit_sign {
+        // The scanner read "5-6" as 5 and -6; the "-" is the join.
+        before.ends_with(|c: char| c.is_ascii_digit())
+    } else {
+        before
+            .strip_suffix('-')
+            .or_else(|| before.strip_suffix('\u{2013}'))
+            .map(|rest| rest.trim_end_matches(' '))
+            .is_some_and(|rest| rest.ends_with(|c: char| c.is_ascii_digit()))
+    };
+    if joined_after || joined_before || after.starts_with('+') {
+        return true;
+    }
+    let following = words(&text[found.end.min(clause_end)..clause_end]);
+    let preceding = words(&text[clause_start.min(found.start)..found.start]);
+    let range_after = matches!(following.as_slice(), [join, next, ..]
+        if matches!(*join, "to" | "or") && (is_number_token(next) || OPEN_BOUND_FOLLOWERS.contains(next)));
+    let plus_after = following.first() == Some(&"plus");
+    // "and" joins a range only after "between": in "signed_signal 0.5555 and
+    // 4/3 confluences" it joins two fields' figures, not the ends of a range.
+    let range_before = matches!(preceding.as_slice(), [.., number, join]
+        if matches!(*join, "to" | "or") && is_number_token(number))
+        || matches!(preceding.as_slice(), [.., between, number, join]
+            if *between == "between" && *join == "and" && is_number_token(number));
+    range_after || plus_after || range_before
+}
+
+/// Whether a figure named ahead of its field is led in by a word this grammar
+/// does not read.
+fn led_in_unreadably(text: &str, found: &FoundNumber, field: &FieldSpec) -> bool {
+    let (clause_start, _) = clause_bounds(text, found.start);
+    let preceding = words(&text[clause_start.min(found.start)..found.start]);
+    let Some(last) = preceding.last() else {
+        return false;
+    };
+    let up_to = preceding.len() >= 2 && preceding[preceding.len() - 2] == "up" && *last == "to";
+    // "<figure> over N days" is the horizon form n12 reads explicitly: there
+    // "over" means across, not more than.
+    let spatial_matters = field.discrete && field.path != "markov.horizon_days";
+    QUANTITY_LEAD_INS.contains(last)
+        || up_to
+        || (spatial_matters && SPATIAL_LEAD_INS.contains(last))
+}
+
+/// The relation read for one figure: the grammar's reading, unless the figure
+/// sits in a range, or is named ahead of its field behind a lead-in the
+/// grammar does not read. Both are abstentions, not guesses.
+fn relation_of(
+    text: &str,
+    found: &FoundNumber,
+    field: &FieldSpec,
+    field_end: Option<usize>,
+) -> &'static str {
+    if in_a_range(text, found) {
+        return RELATION_UNSUPPORTED;
+    }
+    let named_after = field_end.is_none_or(|end| end >= found.start);
+    if named_after && led_in_unreadably(text, found, field) {
+        return RELATION_UNSUPPORTED;
+    }
+    relation_for(text, field_end, found.start)
+}
+
 /// Whether every word may stand between a field and its value without changing
 /// what is claimed.
 fn gap_is_plain(gap: &[&str]) -> bool {
@@ -1001,7 +1134,7 @@ fn number_words(text: &str) -> Vec<FoundNumber> {
                 && bytes
                     .get(end)
                     .is_none_or(|next| !next.is_ascii_alphanumeric());
-            if !alone {
+            if !alone || part_of_a_compound(text, start, end) {
                 continue;
             }
             let number = FoundNumber {
@@ -1021,6 +1154,34 @@ fn number_words(text: &str) -> Vec<FoundNumber> {
         }
     }
     found
+}
+
+/// Whether a number word is part of a longer number: "twenty-five", "twenty
+/// five", "five hundred", "five point two". Reading its last word alone read
+/// "twenty-five confluences" as five. A compound is not read at all, rather
+/// than read in part.
+fn part_of_a_compound(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].trim_end_matches([' ', '-']);
+    let previous = before
+        .rsplit(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    let joined_before = before.len() < start && !previous.is_empty();
+    let after = text[end..].trim_start_matches([' ', '-']);
+    let next = after
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    let joined_after = after.len() < text.len() - end && !next.is_empty();
+    // Words only: a digit figure before a number word is a different figure,
+    // as in "+0.551 five-day markov signal".
+    let number_word = |word: &str| {
+        TENS_WORDS.contains(&word)
+            || NUMBER_WORDS.iter().any(|(number, _)| *number == word)
+            || matches!(word, "hundred" | "thousand")
+    };
+    (joined_before && number_word(previous))
+        || (joined_after && NUMBER_CONTINUATIONS.contains(&next))
 }
 
 /// Finds signed decimal figures, hand-rolled because this crate carries no
@@ -1552,7 +1713,7 @@ fn check_one(
             offset: found.start,
         };
     }
-    let relation = relation_for(text, phrase_end, found.start);
+    let relation = relation_of(text, found, field, phrase_end);
 
     // A `%` quote of a value stored as a fraction of one is divided; otherwise
     // the figure is compared in the units it was written in.
@@ -3039,18 +3200,21 @@ mod grammar_coverage {
         let (mut figures, mut attributed) = (0usize, 0usize);
         for note in &notes {
             let lowered = note.to_lowercase();
-            let numbers = scan_numbers(&lowered);
+            let numbers = scan_figures(&lowered);
             let (fields, uncertain, phrase_end) = attribute_all(&lowered, &numbers);
             for (index, found) in numbers.iter().enumerate() {
                 figures += 1;
-                if fields[index].is_none()
-                    || uncertain[index]
-                    || measures_something_else(&lowered, found.end)
+                let Some(field) = fields[index] else {
+                    continue;
+                };
+                if uncertain[index]
+                    || (measures_something_else(&lowered, found.end)
+                        && field.path != "markov.horizon_days")
                 {
                     continue;
                 }
                 attributed += 1;
-                let relation = relation_for(&lowered, phrase_end[index], found.start);
+                let relation = relation_of(&lowered, found, field, phrase_end[index]);
                 *relations.entry(relation).or_default() += 1;
                 if relation == RELATION_UNSUPPORTED {
                     let cause = abstention_cause(&lowered, phrase_end[index], found.start);
@@ -3495,5 +3659,155 @@ mod n13_number_words {
     #[test]
     fn zero_for_a_probability_is_left_unread() {
         assert!(checks("conviction with zero bear probability; high priority", 5).is_empty());
+    }
+}
+
+/// `n14`: the boundary cases review found in `n13`, and their digit forms,
+/// which had the same fault from the start.
+#[cfg(test)]
+mod n14_boundaries {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence(count: i64) -> JsonValue {
+        json!({
+            "daily_indicators": {"confluence_count": count, "support": {"nearest_support": 446.0}},
+            "markov": {"horizon_days": 5, "signed_signal": -0.523},
+        })
+    }
+
+    /// The verdicts, in order, for every figure in the note.
+    fn verdicts(note: &str, count: i64) -> Vec<(f64, &'static str, &'static str)> {
+        numeric_checks(note, &evidence(count))
+            .into_iter()
+            .map(|check| (check.quoted, check.relation, check.verdict.as_str()))
+            .collect()
+    }
+
+    /// Review's cases: a comparison became an exact count, giving false
+    /// agreement at 5 and a false alarm at 6. Now each abstains, in words and
+    /// in digits, and so do the other quantity lead-ins.
+    #[test]
+    fn a_comparison_before_a_count_abstains() {
+        for note in [
+            "more than five confluences",
+            "at least five confluences",
+            "more than 5 confluences",
+            "at least 5 confluences",
+            "fewer than 5 confluences",
+            "up to 5 confluences",
+            "over 5 confluences",
+            "about five confluences",
+            "roughly 5 confluences",
+        ] {
+            for count in [5, 6] {
+                assert_eq!(
+                    verdicts(note, count),
+                    vec![(5.0, RELATION_UNSUPPORTED, "uncertain_attribution")],
+                    "{note} against {count}"
+                );
+            }
+        }
+    }
+
+    /// A range or an open bound states no single value; neither end is read
+    /// as exact.
+    #[test]
+    fn a_range_or_open_bound_is_not_an_exact_count() {
+        for note in [
+            "five to six confluences",
+            "5 to 6 confluences",
+            "5-6 confluences",
+            "five or six confluences",
+            "between four and six confluences",
+            "5 or more confluences",
+        ] {
+            assert!(
+                verdicts(note, 6)
+                    .iter()
+                    .all(|(_, _, verdict)| !matches!(*verdict, "matches" | "differs")),
+                "{note}: {:?}",
+                verdicts(note, 6)
+            );
+        }
+    }
+
+    /// Review's other case: the "five" of "twenty-five" was read alone. A
+    /// compound is not read at all, rather than read in part.
+    #[test]
+    fn a_compound_number_is_not_read_in_part() {
+        for note in [
+            "twenty-five confluences",
+            "twenty five confluences",
+            "twenty-five-day markov signal",
+            "five hundred confluences",
+        ] {
+            assert!(
+                verdicts(note, 5).is_empty(),
+                "{note}: {:?}",
+                verdicts(note, 5)
+            );
+        }
+    }
+
+    /// Found by the census, in n14's first draft: a digit figure before a
+    /// number word is not part of it, and "and" between two fields' figures is
+    /// not a range. Each of these was correct under n13 and must stay so.
+    #[test]
+    fn a_list_is_not_a_range_and_a_figure_is_not_a_compound() {
+        assert_eq!(
+            verdicts("and +0.551 five-day markov signal. hold", 5)
+                .iter()
+                .filter(|(quoted, ..)| *quoted == 5.0)
+                .count(),
+            1,
+            "the horizon after a digit figure is still read"
+        );
+        assert_eq!(
+            verdicts("markov signed_signal -0.523 and 4/3 confluences", 4)[1],
+            (4.0, RELATION_EQUALS, "matches")
+        );
+        assert_eq!(
+            verdicts("between 4 and 6 confluences", 6)
+                .iter()
+                .find(|(quoted, ..)| *quoted == 6.0)
+                .map(|(_, relation, _)| *relation),
+            Some(RELATION_UNSUPPORTED),
+            "after between, it is a range"
+        );
+    }
+
+    /// What must not change: a plain count, a level's position words, the
+    /// horizon's "over N days", and the N/M notation.
+    #[test]
+    fn plain_counts_levels_and_the_horizon_are_unchanged() {
+        assert_eq!(
+            verdicts("four confluences", 4),
+            vec![(4.0, RELATION_EQUALS, "matches")]
+        );
+        for note in [
+            "trading above 446 eur support",
+            "consolidating near 446 eur support",
+        ] {
+            assert_eq!(
+                verdicts(note, 5),
+                vec![(446.0, RELATION_EQUALS, "matches")],
+                "{note}"
+            );
+        }
+        assert_eq!(
+            verdicts(
+                "regime is bear with signed_signal -0.5230 over 5 days; flatten",
+                5
+            ),
+            vec![
+                (-0.523, RELATION_EQUALS, "matches"),
+                (5.0, RELATION_EQUALS, "matches"),
+            ]
+        );
+        assert_eq!(
+            verdicts("5/3 confluences", 5)[0],
+            (5.0, RELATION_EQUALS, "matches")
+        );
     }
 }
