@@ -13,6 +13,7 @@ The scorer refuses to run under any other.
 | `jev-fresh-v1-labelling-provenance.json` | who labelled, from what, with fingerprints |
 | `jev-fresh-v1-seeded.json` | 490 seeded cases, generated from the committed labels |
 | `jev-fresh-v1-results.json` | the single scoring run, unedited, with fingerprints |
+| `jev-fresh-v1-reconciliation.json` | the disagreements, and the seeded evidence's coherence, reconciled beside the labels |
 
 ## Why
 
@@ -279,6 +280,23 @@ to 5, and CHEMM's close. CHEMM's "502" was not repaired, because the key's
 arithmetic accepts truncation too. On that convention, the key and the checker
 agree with each other and not with the labeller.
 
+**Review added a qualification: many of these contexts are not coherent.** The
+Markov model computes the signed signal as bull less bear, and conviction as
+the signal's magnitude. Each seeded change moved one field alone:
+- **Kept true:** 37 of the 69 `both_moved` cases hold evidence the model could
+  not produce. 35 break the conviction link, 19 of which also break bull less
+  bear; nine carry a conviction above one or a signal outside ±1; two carry a
+  break risk above one.
+- **Made false:** the evidence-side changes have the same fault, in 72 of
+  138.
+
+So these are single-field arithmetic tests, not coherent market contexts.
+**66 of 71 is acceptance of single-field arithmetic, not acceptance of 71
+unambiguously correct notes.** Likewise the nine NOKIA outcomes follow the
+registered rules, but they are one disputed reading, not nine independent
+checker mistakes. Its evidence-side cases also hold competing values for one
+quantity. The reconciliation below separates these.
+
 ### What it shows, at its real strength
 
 - **No false alarm was found.** None on the 46 consistent claims the checker
@@ -287,19 +305,73 @@ agree with each other and not with the labeller.
 - **Seeded single-figure errors were flagged on the right field 329 of 349
   times.** The 490 cases come from 69 anchors, so they are nowhere near 490
   independent trials. They measure sensitivity to one changed figure in claims
-  the labeller found, not a natural error rate.
+  the labeller found, not a natural error rate. Many of them sit in evidence
+  the model could not produce.
 - **Natural errors are too rare here to measure detection:** 3 in 90 claims.
   One was caught, one was decided by the truncation convention, and one lies
   outside the fields the checker reads.
-- **Two defects in `n15`, recorded and not fixed:**
-  - a keyword matched inside a longer word ("supported" contests as
-    "support");
-  - an unresolved question about what a signed "conviction" figure names.
+- **One defect in `n15`, recorded and not fixed:** a keyword matched inside a
+  longer word ("supported" contests as "support"). A fix would be `n16`, which
+  this set cannot then validate.
+- **One open question, which is not a defect:** which field a signed
+  "conviction" figure names. It needs an independent adjudication, not an
+  automatic change to the checker.
 
-  A fix would be `n16`, which this set cannot then validate.
+## Reconciliation
 
-The results are scored and not yet reconciled. A reconciliation, if made, goes
-in a separate file beside the labels, never over them.
+`jev-fresh-v1-reconciliation.json`, prompted by review of the results. **No
+label, seeded case or recorded score is edited.** A test asserts their hashes,
+checks every entry against the labels, the key and the evidence, and recomputes
+every reconciled figure. It also shows the per-figure reading reproduces the
+recorded totals. I am not independent, since I wrote the checker, so every
+reading cites the evidence for someone who is.
+
+Three kinds of disagreement, kept apart:
+- **A rounding convention.** CHEMM's "502 DKK support" against 502.89 is
+  truncation to the checker and the key, and rounding to 503 to the labeller.
+  Left unresolved. It is a policy choice, and the author of the checker should
+  not settle it.
+- **A disputed attribution.** NOKIA's "negative Markov conviction (-0.124)":
+  the word names conviction, a magnitude, and the figure carries the signal's
+  sign. Left unresolved for an independent adjudicator.
+- **Internally inconsistent seeded evidence**, found by checking every case
+  against the model's own links and the fields' bounds.
+
+The seeded figures, as scored and reconciled. Each cell is correct of all, with
+the figures decided wrongly or on another field in brackets:
+
+| keyed figure | as scored | coherent evidence only | without the NOKIA anchor | both |
+|---|---|---|---|---|
+| changed, made false | 329 of 349 (6) | 259 of 277 (4) | 329 of 343 (0) | 259 of 273 (0) |
+| changed, kept or made true | 66 of 71 (1) | 30 of 34 (0) | 66 of 70 (0) | 30 of 34 (0) |
+| changed, unsettleable | 68 of 69 (1) | 68 of 69 (1) | 68 of 68 (0) | 68 of 68 (0) |
+| untouched neighbours | 391 of 420 (1) | 341 of 362 (1) | 391 of 419 (0) | 341 of 361 (0) |
+
+Everything else in those rows is an abstention.
+- **Without the disputed anchor, no seeded decision is wrong**, in any
+  context.
+- **Coherent evidence alone removes the one false alarm**, which was a
+  `both_moved` case whose evidence the model could not produce.
+- **The abstentions come from the same four figures in every column.** Their
+  counts fall only because incoherent cases are dropped.
+
+**"Unsettleable" overstates 35 of the 69 removals.** The model's links still
+determine the removed value: all 19 removed signed signals are bull less bear,
+and all 16 removed convictions are the signal's magnitude. Leaving them
+uncompared is still correct under the protocol, which asks whether the field is
+present, but a reader could settle them.
+
+**Natural scenarios.** Read CHEMM's "502" as truncation and the one accepted
+error goes. Read NOKIA's figure as conviction and the one wrong field goes. No
+false alarm appears under either.
+
+**For a future version**, as review recommended:
+- separate valid-context changes from deliberate evidence corruption, and
+  report them apart;
+- in the former, move linked fields together and keep every field inside its
+  bounds;
+- key a removed field as unsettleable only when nothing linked still
+  determines it.
 
 ## What this cannot establish
 

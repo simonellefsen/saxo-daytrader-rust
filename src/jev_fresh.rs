@@ -1146,6 +1146,159 @@ pub(crate) fn score_seeded(seeded: &[SeededCase]) -> JsonValue {
     })
 }
 
+/// Every keyed figure's outcome, case by case and in key order. The same
+/// reading `score_seeded` tallied, kept per figure so a reconciliation can
+/// partition it; the scorer itself is left as it ran. The reconciliation test
+/// asserts these reproduce the recorded totals exactly.
+pub(crate) fn seeded_readings(seeded: &[SeededCase]) -> Vec<Vec<&'static str>> {
+    seeded
+        .iter()
+        .map(|case| {
+            let checks = crate::jev_numeric::numeric_checks(&case.note, &case.evidence);
+            let spans: Vec<((usize, usize), &crate::jev_numeric::NumericCheck)> = checks
+                .iter()
+                .filter_map(|check| {
+                    let span = crate::jev_numeric::figure_at(&case.note, check.offset)?;
+                    Some(((span.start, span.end), check))
+                })
+                .collect();
+            case.keys
+                .iter()
+                .map(|key| {
+                    let hit = spans
+                        .iter()
+                        .find(|((start, end), _)| *start < key.end && key.start < *end)
+                        .map(|(_, check)| *check);
+                    seeded_outcome(
+                        key,
+                        hit.map(|check| check.verdict.as_str()),
+                        hit.and_then(|check| check.field),
+                    )
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The recorded run's `totals` table, over the keyed figures `keep` admits.
+pub(crate) fn seeded_totals(
+    seeded: &[SeededCase],
+    readings: &[Vec<&'static str>],
+    keep: impl Fn(&SeededCase, &SeededKey) -> bool,
+) -> JsonValue {
+    let mut totals: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+    for (case, outcomes) in seeded.iter().zip(readings) {
+        for (key, outcome) in case.keys.iter().zip(outcomes) {
+            if !keep(case, key) {
+                continue;
+            }
+            let which = if key.changed { "changed" } else { "untouched" };
+            *totals
+                .entry(format!("{which}|{}", key.truth))
+                .or_default()
+                .entry(outcome)
+                .or_default() += 1;
+        }
+    }
+    json!(totals)
+}
+
+/// What the Markov model builds into its evidence, and the bounds each field
+/// keeps, broken in `evidence`.
+///
+/// `markov_method` computes `signed_signal` as the bull probability less the
+/// bear, and `conviction` as its magnitude; the three probabilities sum to
+/// one, and `direction` is the sign. All four hold in every one of the 51
+/// notes' evidence. A seeded change that moves one of these fields alone
+/// leaves evidence the model could not have produced -- competing values for
+/// one quantity -- and a ratio of 1.37 can carry a probability-scaled field
+/// past one.
+///
+/// The support's distance and Quiver's direction are not checked: neither
+/// relation holds in every original note.
+pub(crate) fn context_problems(evidence: &JsonValue) -> Vec<&'static str> {
+    let markov = |field: &str| number_at(evidence, &format!("markov.{field}"));
+    let mut problems = Vec::new();
+    let signed = markov("signed_signal");
+    let conviction = markov("conviction");
+    let (bull, bear, sideways) = (
+        markov("bull_prob"),
+        markov("bear_prob"),
+        markov("sideways_prob"),
+    );
+    let close = |left: f64, right: f64| (left - right).abs() <= 1e-6;
+    if let (Some(signed), Some(conviction)) = (signed, conviction)
+        && !close(conviction, signed.abs())
+    {
+        problems.push("conviction_is_not_the_signals_magnitude");
+    }
+    if let (Some(signed), Some(bull), Some(bear)) = (signed, bull, bear)
+        && !close(signed, bull - bear)
+    {
+        problems.push("signal_is_not_bull_less_bear");
+    }
+    if let (Some(bull), Some(bear), Some(sideways)) = (bull, bear, sideways)
+        && !close(bull + bear + sideways, 1.0)
+    {
+        problems.push("probabilities_do_not_sum_to_one");
+    }
+    let direction = evidence
+        .get("markov")
+        .and_then(|markov| markov.get("direction"))
+        .and_then(JsonValue::as_str);
+    if let (Some(signed), Some(direction)) = (signed, direction) {
+        let sign = if signed > 1e-9 {
+            "long"
+        } else if signed < -1e-9 {
+            "short"
+        } else {
+            "flat"
+        };
+        if sign != direction {
+            problems.push("direction_is_not_the_signals_sign");
+        }
+    }
+    let outside =
+        |value: Option<f64>, low: f64, high: f64| value.is_some_and(|v| !(low..=high).contains(&v));
+    if [bull, bear, sideways]
+        .into_iter()
+        .any(|p| outside(p, 0.0, 1.0))
+    {
+        problems.push("probability_outside_0_to_1");
+    }
+    if outside(signed, -1.0, 1.0) {
+        problems.push("signal_outside_minus_1_to_1");
+    }
+    if outside(conviction, 0.0, 1.0) {
+        problems.push("conviction_outside_0_to_1");
+    }
+    if outside(
+        number_at(evidence, "daily_indicators.support.break_risk"),
+        0.0,
+        1.0,
+    ) {
+        problems.push("break_risk_outside_0_to_1");
+    }
+    if outside(number_at(evidence, "daily_indicators.rsi14"), 0.0, 100.0) {
+        problems.push("rsi_outside_0_to_100");
+    }
+    problems
+}
+
+/// Whether a field removed from `evidence` can still be read off the fields
+/// the model links to it: the signal as bull less bear, conviction as the
+/// signal's magnitude, one probability as one less the other two.
+pub(crate) fn derivable_after_removal(evidence: &JsonValue, field: &str) -> bool {
+    let has = |name: &str| number_at(evidence, &format!("markov.{name}")).is_some();
+    match field {
+        "markov.signed_signal" => has("bull_prob") && has("bear_prob"),
+        "markov.conviction" => has("signed_signal") || (has("bull_prob") && has("bear_prob")),
+        "markov.bull_prob" => has("bear_prob") && (has("sideways_prob") || has("signed_signal")),
+        "markov.bear_prob" => has("bull_prob") && (has("sideways_prob") || has("signed_signal")),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1603,6 +1756,37 @@ mod tests {
             "misattributed"
         );
     }
+
+    /// The model's own links, checked on evidence it produced and on
+    /// evidence a single-field change produced.
+    #[test]
+    fn a_single_field_change_can_leave_evidence_the_model_cannot_produce() {
+        let coherent = json!({
+            "markov": {"signed_signal": -0.124, "conviction": 0.124, "bull_prob": 0.2,
+                       "bear_prob": 0.324, "sideways_prob": 0.476, "direction": "short"},
+            "daily_indicators": {"rsi14": 44.0, "support": {"break_risk": 0.8}},
+        });
+        assert!(context_problems(&coherent).is_empty());
+        let mut moved = coherent.clone();
+        moved["markov"]["signed_signal"] = json!(-0.17);
+        assert_eq!(
+            context_problems(&moved),
+            vec![
+                "conviction_is_not_the_signals_magnitude",
+                "signal_is_not_bull_less_bear"
+            ]
+        );
+        let mut past_one = coherent.clone();
+        past_one["daily_indicators"]["support"]["break_risk"] = json!(0.8 * UP);
+        assert_eq!(
+            context_problems(&past_one),
+            vec!["break_risk_outside_0_to_1"]
+        );
+        let mut removed = coherent.clone();
+        set_number(&mut removed, "markov.signed_signal", None);
+        assert!(derivable_after_removal(&removed, "markov.signed_signal"));
+        assert!(!derivable_after_removal(&removed, "daily_indicators.rsi14"));
+    }
 }
 
 /// Builds the instrument, the key and an empty labels file from the frame;
@@ -1624,6 +1808,7 @@ mod frozen {
     const LABELS_PATH: &str = "docs/jev-fresh-v1-labels.json";
     const SEEDED_PATH: &str = "docs/jev-fresh-v1-seeded.json";
     const RESULTS_PATH: &str = "docs/jev-fresh-v1-results.json";
+    const RECONCILIATION_PATH: &str = "docs/jev-fresh-v1-reconciliation.json";
 
     /// The frame as counted when it was built.
     const FRAME_REPORTS: usize = 11;
@@ -1819,6 +2004,201 @@ mod frozen {
         let stored: Vec<SeededCase> =
             serde_json::from_value(seeded["cases"].clone()).expect("seeded cases");
         assert_eq!(keys_hold_as_stored(&stored), Vec::<String>::new());
+    }
+
+    /// The labels with a reconciliation's readings applied, in memory only.
+    fn with_readings(labels: &[FreshLabel], readings: &[JsonValue]) -> Vec<FreshLabel> {
+        let mut read = labels.to_vec();
+        for reading in readings {
+            let (id, index) = reading["claim"]
+                .as_str()
+                .and_then(|claim| claim.split_once('#'))
+                .expect("note-id#index");
+            let label = read
+                .iter_mut()
+                .find(|label| label.id == id)
+                .expect("labelled");
+            let claim = &mut label.claims[index.parse::<usize>().expect("index")];
+            if let Some(verdict) = reading["verdict"].as_str() {
+                claim.verdict = verdict.to_string();
+            }
+            if let Some(field) = reading["field"].as_str() {
+                claim.field = field.to_string();
+            }
+        }
+        read
+    }
+
+    /// Every figure a reconciliation reports, computed from the frozen
+    /// inputs. Nothing in it is typed by hand.
+    fn reconciliation_figures(
+        cases: &[NoteCase],
+        keys: &[NoteKey],
+        labels: &[FreshLabel],
+        seeded: &[SeededCase],
+        reconciliation: &JsonValue,
+    ) -> JsonValue {
+        let mut natural = serde_json::Map::new();
+        natural.insert(
+            "as_labelled".to_string(),
+            score_natural(cases, keys, labels)["headline"].clone(),
+        );
+        for scenario in reconciliation["scenarios"].as_array().into_iter().flatten() {
+            let readings = scenario["readings"].as_array().expect("readings");
+            natural.insert(
+                scenario["name"].as_str().expect("name").to_string(),
+                score_natural(cases, keys, &with_readings(labels, readings))["headline"].clone(),
+            );
+        }
+
+        let dispute = &reconciliation["disputed_attribution"]["anchor"];
+        let disputed = |case: &SeededCase, key: &SeededKey| {
+            case.from_note == dispute["note"].as_str().unwrap_or_default()
+                && key.field.as_deref() == dispute["field"].as_str()
+        };
+        let coherent = |case: &SeededCase| context_problems(&case.evidence).is_empty();
+        let readings = seeded_readings(seeded);
+        let seeded_figures = json!({
+            "as_scored": seeded_totals(seeded, &readings, |_, _| true),
+            "coherent_context_only": seeded_totals(seeded, &readings, |case, _| coherent(case)),
+            "without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| !disputed(case, key)),
+            "coherent_without_the_disputed_anchor": seeded_totals(seeded, &readings, |case, key| {
+                coherent(case) && !disputed(case, key)
+            }),
+        });
+
+        let mut by_mutation: BTreeMap<&str, (usize, usize, BTreeMap<&str, usize>)> =
+            BTreeMap::new();
+        let mut derivable: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for case in seeded {
+            let problems = context_problems(&case.evidence);
+            let entry = by_mutation.entry(case.mutation.as_str()).or_default();
+            entry.0 += 1;
+            if problems.is_empty() {
+                entry.1 += 1;
+            }
+            for problem in problems {
+                *entry.2.entry(problem).or_default() += 1;
+            }
+            if case.mutation == "evidence_removed" {
+                for key in case.keys.iter().filter(|key| key.changed) {
+                    let field = key.field.clone().unwrap_or_default();
+                    let tally = derivable.entry(field.clone()).or_default();
+                    tally.1 += 1;
+                    if derivable_after_removal(&case.evidence, &field) {
+                        tally.0 += 1;
+                    }
+                }
+            }
+        }
+        let context: serde_json::Map<String, JsonValue> = by_mutation
+            .into_iter()
+            .map(|(mutation, (cases, coherent, problems))| {
+                (
+                    mutation.to_string(),
+                    json!({"cases": cases, "coherent": coherent, "problems": problems}),
+                )
+            })
+            .collect();
+        let removed: serde_json::Map<String, JsonValue> = derivable
+            .into_iter()
+            .map(|(field, (derivable, of))| (field, json!([derivable, of])))
+            .collect();
+        json!({
+            "natural": natural,
+            "seeded": seeded_figures,
+            "context_by_mutation": context,
+            "removed_yet_derivable": removed,
+        })
+    }
+
+    /// The reconciliation sits beside the delivered labels, the seeded cases
+    /// and the recorded score, and edits none of them. Every entry quotes the
+    /// labels and the key as they are, and every figure is recomputed here.
+    #[test]
+    fn the_reconciliation_is_beside_the_labels_not_over_them() {
+        let (
+            Some(reconciliation),
+            Some((cases, keys, _)),
+            Some((labels, _)),
+            Some(seeded),
+            Some(results),
+        ) = (
+            document(RECONCILIATION_PATH),
+            frozen(),
+            labels(),
+            document(SEEDED_PATH),
+            document(RESULTS_PATH),
+        )
+        else {
+            return;
+        };
+        for (field, path) in [
+            ("labels_sha256", LABELS_PATH),
+            ("seeded_sha256", SEEDED_PATH),
+            ("results_sha256", RESULTS_PATH),
+            ("instrument_sha256", INSTRUMENT_PATH),
+            ("key_sha256", KEY_PATH),
+        ] {
+            assert_eq!(
+                reconciliation["reconciles"][field],
+                sha256_of(path),
+                "{path} was edited"
+            );
+        }
+        let notes: BTreeMap<&str, &NoteCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
+        let key_by_id: BTreeMap<&str, &NoteKey> =
+            keys.iter().map(|key| (key.id.as_str(), key)).collect();
+        for entry in reconciliation["claims"].as_array().expect("claims") {
+            let reference = entry["claim"].as_str().expect("claim");
+            let (id, index) = reference.split_once('#').expect("note-id#index");
+            let label = labels
+                .iter()
+                .find(|label| label.id == id)
+                .expect("labelled");
+            let claim = &label.claims[index.parse::<usize>().expect("index")];
+            assert_eq!(
+                entry["quote"], claim.quote,
+                "{reference} misquotes the label"
+            );
+            assert_eq!(entry["figure"], claim.figure, "{reference}");
+            assert_eq!(entry["label"]["field"], claim.field, "{reference}");
+            assert_eq!(entry["label"]["verdict"], claim.verdict, "{reference}");
+            let span = figure_span(&notes[id].note, claim).expect("span");
+            let (read, hit) = reading(span, &key_by_id[id].extracted);
+            assert_eq!(
+                entry["checker"]["reading"],
+                read.as_str(),
+                "{reference} misquotes the key"
+            );
+            assert_eq!(
+                entry["checker"]["field"],
+                json!(hit.and_then(|figure| figure.field.clone())),
+                "{reference}"
+            );
+            for (path, value) in entry["evidence"].as_object().expect("evidence") {
+                assert_eq!(
+                    number_at(&notes[id].evidence, path),
+                    value.as_f64(),
+                    "{reference} misquotes the evidence at {path}"
+                );
+            }
+        }
+        let seeded_cases: Vec<SeededCase> =
+            serde_json::from_value(seeded["cases"].clone()).expect("seeded cases");
+        let computed =
+            reconciliation_figures(&cases, &keys, &labels, &seeded_cases, &reconciliation);
+        println!("{}", serde_json::to_string_pretty(&computed).expect("json"));
+        assert_eq!(
+            computed["seeded"]["as_scored"], results["seeded"]["totals"],
+            "the per-figure reading reproduces the recorded run"
+        );
+        assert_eq!(
+            computed["natural"]["as_labelled"], results["natural"]["headline"],
+            "the natural headline reproduces the recorded run"
+        );
+        assert_eq!(reconciliation["figures"], computed);
     }
 
     #[test]

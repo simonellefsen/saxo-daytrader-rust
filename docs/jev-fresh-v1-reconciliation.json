@@ -1,0 +1,855 @@
+{
+  "version": "fresh-v1-2026-09-25",
+  "protocol": "fresh-protocol-v1-2026-09-25",
+  "what_this_is": "The reconciliation of the fresh evaluation, beside the delivered labels, the seeded cases and the recorded score rather than over them. None of the three is edited; a test asserts their hashes, and recomputes every figure below from them.",
+  "prompted_by": "Review of the scored results (ddc7781, write-up 0573ff7): the seeded 'kept true' controls include evidence the Markov model could not produce, and the nine NOKIA outcomes are one disputed reading.",
+  "reconciles": {
+    "labels": "docs/jev-fresh-v1-labels.json",
+    "labels_sha256": "703008eaeb7b3e778a92104584d8c8cc4fb98e261f5355d232047a4df4b38ef3",
+    "seeded_sha256": "4214603bc806fbc32c63d427a69d34a96161c032783d4dd260672e0b98cac84b",
+    "results": "docs/jev-fresh-v1-results.json",
+    "results_sha256": "9be5e6d1e497e15fc0173b019deb6a6ca56cd621a153350875d254f713df38c5",
+    "instrument_sha256": "40466f79a64c2c8ced015e3e732a0d43493262318737771be815c37e4a21d177",
+    "key_sha256": "9a043bc8739ae10e92bcd73a14670cc3f848ad13cb4e77e84d24344c1dc8629b"
+  },
+  "reconciled_by": "Claude, the author of the checker. Not independent: every reading cites the evidence so someone who is can check it, and no label is changed.",
+  "reconciled_at": "2026-09-25",
+  "rule": "Nothing delivered or scored is edited. Readings sit beside the labels; reconciled figures sit beside the recorded ones and are computed, not typed. Three kinds of disagreement are kept apart: a rounding convention, a disputed attribution, and seeded evidence that is internally inconsistent.",
+  "claims": [
+    {
+      "claim": "fresh-7e5e21362e#2",
+      "report": 321,
+      "symbol": "CHEMM:xcse",
+      "category": "rounding_convention",
+      "quote": "502 DKK support",
+      "figure": "502",
+      "label": {
+        "field": "daily_indicators.support.nearest_support",
+        "verdict": "inconsistent"
+      },
+      "checker": {
+        "reading": "accepted",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "evidence": {
+        "daily_indicators.support.nearest_support": 502.89
+      },
+      "reading": "unresolved_convention",
+      "explanation": "Truncating 502.89 gives 502; rounding gives 503. The checker accepts truncation, and so does the seeded key's own arithmetic, which is why this claim was not repaired. The labeller rounds. It is the third case the convention decides, after LMND in the controls and ASML in the whole-note audit. A convention is a policy choice, and the author of the checker should not settle it by reconciling it; the label stands."
+    },
+    {
+      "claim": "fresh-e2f6a33d7a#1",
+      "report": 360,
+      "symbol": "NOKIA:xhel",
+      "category": "disputed_attribution",
+      "quote": "negative Markov conviction (-0.124)",
+      "figure": "-0.124",
+      "label": {
+        "field": "markov.signed_signal",
+        "verdict": "consistent"
+      },
+      "checker": {
+        "reading": "accepted",
+        "field": "markov.conviction"
+      },
+      "evidence": {
+        "markov.signed_signal": -0.1242300420999527,
+        "markov.conviction": 0.1242300420999527
+      },
+      "reading": "unresolved_attribution",
+      "explanation": "The note's word is conviction, which the model defines as the signal's magnitude; its figure carries the signal's sign. The labeller reads markov.signed_signal and the checker reads markov.conviction, by keyword, comparing magnitudes. The two fields hold -0.1242 and 0.1242, so both readings accept the note as written. Which field it names needs an independent adjudication, not an automatic change to the checker."
+    },
+    {
+      "claim": "fresh-7e5e21362e#1",
+      "report": 321,
+      "symbol": "CHEMM:xcse",
+      "category": "outside_the_checkers_fields",
+      "quote": "consolidation at 515.5 DKK",
+      "figure": "515.5",
+      "label": {
+        "field": "daily_indicators.close",
+        "verdict": "inconsistent"
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "daily_indicators.close": 515.0,
+        "markov.close": 516.0
+      },
+      "reading": "label_stands",
+      "explanation": "Not a dispute. The labeller reads 515.5 against a daily close of 515.0 and a Markov close of 516.0. The checker does not read any close, so the error went unflagged: a coverage gap, not a disagreement about the claim."
+    },
+    {
+      "claim": "fresh-4f5fd8c0bf#0",
+      "report": 361,
+      "symbol": "NSIS-B:xcse",
+      "category": "parser_defect",
+      "quote": "5 confluences",
+      "figure": "5",
+      "label": {
+        "field": "daily_indicators.confluence_count",
+        "verdict": "consistent"
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": "daily_indicators.confluence_count"
+      },
+      "evidence": {
+        "daily_indicators.confluence_count": 5
+      },
+      "reading": "label_stands",
+      "explanation": "Not a dispute. \"supported by 5 confluences\": the keyword \"support\" is matched inside \"supported\", contests the count, and the checker abstains. Replacing \"supported\" with \"backed\" makes it compare and match. A concrete parser defect in n15, recorded and not fixed."
+    },
+    {
+      "claim": "fresh-f5dcb1c5fa#0",
+      "report": 362,
+      "symbol": "TSM:xnys",
+      "category": "attribution_margin",
+      "quote": "5 confluences",
+      "figure": "5",
+      "label": {
+        "field": "daily_indicators.confluence_count",
+        "verdict": "consistent"
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": "daily_indicators.confluence_count"
+      },
+      "evidence": {
+        "daily_indicators.confluence_count": 5
+      },
+      "reading": "label_stands",
+      "explanation": "Not a dispute. \"above support with 5 confluences\": a genuine \"support\" six characters from the figure contests it within the attribution margin, and the checker abstains as designed. Over-abstention, the intended failure direction."
+    },
+    {
+      "claim": "fresh-e950b8c436#0",
+      "report": 358,
+      "symbol": "UBER:xnys",
+      "category": "outside_the_grammar",
+      "quote": "congressional net buying (+0.711)",
+      "figure": "+0.711",
+      "label": {
+        "field": "quiver.signal",
+        "verdict": "consistent"
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": "quiver.signal"
+      },
+      "evidence": {
+        "quiver.signal": 0.7113513946533203
+      },
+      "reading": "label_stands",
+      "explanation": "Not a dispute. \"congressional net buying (+0.711)\": the words between the field's name and the figure are outside the gap grammar, so the relation is unsupported and the checker abstains. \"congressional (+0.711)\" compares and matches."
+    },
+    {
+      "claim": "fresh-e950b8c436#2",
+      "report": 358,
+      "symbol": "UBER:xnys",
+      "category": "not_a_checkable_figure",
+      "quote": "near-zero Markov conviction",
+      "figure": "zero",
+      "label": {
+        "field": "none",
+        "verdict": "consistent"
+      },
+      "checker": {
+        "reading": "omitted",
+        "field": null
+      },
+      "evidence": {
+        "markov.conviction": 0.006368707865476608
+      },
+      "reading": "label_stands",
+      "explanation": "Not a dispute. \"near-zero\" names no field value the checker reads; the labeller gave it no field. Recorded as an omission only because the protocol counts every labelled figure."
+    }
+  ],
+  "disputed_attribution": {
+    "anchor": {
+      "note": "fresh-e2f6a33d7a",
+      "field": "markov.signed_signal",
+      "claim": "fresh-e2f6a33d7a#1"
+    },
+    "reading": "All nine wrong or wrong-field seeded outcomes, and the one natural wrong_field, come from this one anchor. Each seeded change moved or removed the field the labeller named, markov.signed_signal, and the checker compared the one it named, markov.conviction. The evidence-side changes also left conviction and the probabilities at their old values, so those cases hold competing evidence for one quantity. The nine follow the registered scoring rules, but they are one disputed interpretation, not nine independent checker mistakes, and they do not settle which field the note names."
+  },
+  "incoherent_synthetic_evidence": {
+    "reading": "The Markov model computes signed_signal as bull_prob less bear_prob and conviction as its magnitude; the probabilities sum to one and direction is the sign. All four hold in the evidence of every one of the 51 notes. The seeded changes moved one field at a time, so evidence_value_up, evidence_value_down and both_moved on a Markov field left evidence the model cannot produce, and a ratio of 1.37 carried some convictions, one signal and two break risks past their bounds. Those cases remain valid single-field arithmetic tests: the key is the truth of the written figure against the stored field. They are not coherent market contexts, so both_moved's 66 of 71 is acceptance of single-field arithmetic, not of 71 unambiguously correct notes. The support's distance and Quiver's direction are not checked, because neither relation holds in every original note.",
+    "checks": "jev_fresh::context_problems"
+  },
+  "removed_yet_derivable": {
+    "reading": "evidence_removed deletes one field and keys the figure unsettleable. Where the model's links still determine the removed value -- the signal as bull less bear, conviction as the signal's magnitude -- a reader could settle it from the remaining evidence. The checker leaving it uncompared is still correct under the protocol, which asks whether the field is present; the key's word 'unsettleable' overstates it for these cases.",
+    "checks": "jev_fresh::derivable_after_removal"
+  },
+  "scenarios": [
+    {
+      "name": "truncation_read_as_consistent",
+      "readings": [
+        {
+          "claim": "fresh-7e5e21362e#2",
+          "verdict": "consistent"
+        }
+      ]
+    },
+    {
+      "name": "nokia_read_as_conviction",
+      "readings": [
+        {
+          "claim": "fresh-e2f6a33d7a#1",
+          "field": "markov.conviction"
+        }
+      ]
+    },
+    {
+      "name": "both",
+      "readings": [
+        {
+          "claim": "fresh-7e5e21362e#2",
+          "verdict": "consistent"
+        },
+        {
+          "claim": "fresh-e2f6a33d7a#1",
+          "field": "markov.conviction"
+        }
+      ]
+    }
+  ],
+  "figures": {
+    "context_by_mutation": {
+      "both_moved": {
+        "cases": 69,
+        "coherent": 32,
+        "problems": {
+          "break_risk_outside_0_to_1": 2,
+          "conviction_is_not_the_signals_magnitude": 35,
+          "conviction_outside_0_to_1": 8,
+          "signal_is_not_bull_less_bear": 19,
+          "signal_outside_minus_1_to_1": 1
+        }
+      },
+      "evidence_removed": {
+        "cases": 69,
+        "coherent": 69,
+        "problems": {}
+      },
+      "evidence_value_down": {
+        "cases": 69,
+        "coherent": 34,
+        "problems": {
+          "conviction_is_not_the_signals_magnitude": 35,
+          "signal_is_not_bull_less_bear": 19
+        }
+      },
+      "evidence_value_up": {
+        "cases": 69,
+        "coherent": 32,
+        "problems": {
+          "break_risk_outside_0_to_1": 2,
+          "conviction_is_not_the_signals_magnitude": 35,
+          "conviction_outside_0_to_1": 8,
+          "signal_is_not_bull_less_bear": 19,
+          "signal_outside_minus_1_to_1": 1
+        }
+      },
+      "note_value_down": {
+        "cases": 69,
+        "coherent": 69,
+        "problems": {}
+      },
+      "note_value_up": {
+        "cases": 69,
+        "coherent": 69,
+        "problems": {}
+      },
+      "other_symbol_value": {
+        "cases": 52,
+        "coherent": 52,
+        "problems": {}
+      },
+      "out_of_scope_stop_inserted": {
+        "cases": 1,
+        "coherent": 1,
+        "problems": {}
+      },
+      "repaired": {
+        "cases": 2,
+        "coherent": 2,
+        "problems": {}
+      },
+      "sign_flipped": {
+        "cases": 21,
+        "coherent": 21,
+        "problems": {}
+      }
+    },
+    "natural": {
+      "as_labelled": {
+        "every_note": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              68
+            ],
+            "inconsistent_accepted": [
+              1,
+              2
+            ],
+            "inconsistent_flagged": [
+              1,
+              3
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                13
+              ],
+              "of": 51
+            },
+            "wrong_field": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            }
+          }
+        },
+        "notes_the_checker_read": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              46
+            ],
+            "inconsistent_accepted": [
+              1,
+              2
+            ],
+            "inconsistent_flagged": [
+              1,
+              3
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                4
+              ],
+              "of": 28
+            },
+            "wrong_field": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            }
+          }
+        }
+      },
+      "both": {
+        "every_note": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              69
+            ],
+            "inconsistent_accepted": [
+              0,
+              1
+            ],
+            "inconsistent_flagged": [
+              1,
+              2
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                13
+              ],
+              "of": 51
+            },
+            "wrong_field": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            }
+          }
+        },
+        "notes_the_checker_read": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              47
+            ],
+            "inconsistent_accepted": [
+              0,
+              1
+            ],
+            "inconsistent_flagged": [
+              1,
+              2
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                4
+              ],
+              "of": 28
+            },
+            "wrong_field": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            }
+          }
+        }
+      },
+      "nokia_read_as_conviction": {
+        "every_note": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              68
+            ],
+            "inconsistent_accepted": [
+              1,
+              2
+            ],
+            "inconsistent_flagged": [
+              1,
+              3
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                13
+              ],
+              "of": 51
+            },
+            "wrong_field": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            }
+          }
+        },
+        "notes_the_checker_read": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              46
+            ],
+            "inconsistent_accepted": [
+              1,
+              2
+            ],
+            "inconsistent_flagged": [
+              1,
+              3
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                4
+              ],
+              "of": 28
+            },
+            "wrong_field": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            }
+          }
+        }
+      },
+      "truncation_read_as_consistent": {
+        "every_note": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              69
+            ],
+            "inconsistent_accepted": [
+              0,
+              1
+            ],
+            "inconsistent_flagged": [
+              1,
+              2
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 51
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                13
+              ],
+              "of": 51
+            },
+            "wrong_field": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 51
+            }
+          }
+        },
+        "notes_the_checker_read": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              47
+            ],
+            "inconsistent_accepted": [
+              0,
+              1
+            ],
+            "inconsistent_flagged": [
+              1,
+              2
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 28
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            },
+            "unflagged_error": {
+              "notes": [
+                1,
+                4
+              ],
+              "of": 28
+            },
+            "wrong_field": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 28
+            }
+          }
+        }
+      }
+    },
+    "removed_yet_derivable": {
+      "daily_indicators.confluence_count": [
+        0,
+        17
+      ],
+      "daily_indicators.support.break_risk": [
+        0,
+        14
+      ],
+      "daily_indicators.support.nearest_support": [
+        0,
+        1
+      ],
+      "markov.conviction": [
+        16,
+        16
+      ],
+      "markov.signed_signal": [
+        19,
+        19
+      ],
+      "quiver.signal": [
+        0,
+        2
+      ]
+    },
+    "seeded": {
+      "as_scored": {
+        "changed|fails": {
+          "abstained": 14,
+          "correct": 329,
+          "error_accepted": 3,
+          "flagged_wrong_field": 3
+        },
+        "changed|holds": {
+          "abstained": 4,
+          "correct": 66,
+          "false_alarm": 1
+        },
+        "changed|out_of_scope": {
+          "correct": 1
+        },
+        "changed|unsettleable": {
+          "correct": 68,
+          "decided_without_evidence": 1
+        },
+        "untouched|holds": {
+          "abstained": 28,
+          "correct": 391,
+          "right_verdict_wrong_field": 1
+        }
+      },
+      "coherent_context_only": {
+        "changed|fails": {
+          "abstained": 14,
+          "correct": 259,
+          "error_accepted": 1,
+          "flagged_wrong_field": 3
+        },
+        "changed|holds": {
+          "abstained": 4,
+          "correct": 30
+        },
+        "changed|out_of_scope": {
+          "correct": 1
+        },
+        "changed|unsettleable": {
+          "correct": 68,
+          "decided_without_evidence": 1
+        },
+        "untouched|holds": {
+          "abstained": 20,
+          "correct": 341,
+          "right_verdict_wrong_field": 1
+        }
+      },
+      "coherent_without_the_disputed_anchor": {
+        "changed|fails": {
+          "abstained": 14,
+          "correct": 259
+        },
+        "changed|holds": {
+          "abstained": 4,
+          "correct": 30
+        },
+        "changed|out_of_scope": {
+          "correct": 1
+        },
+        "changed|unsettleable": {
+          "correct": 68
+        },
+        "untouched|holds": {
+          "abstained": 20,
+          "correct": 341
+        }
+      },
+      "without_the_disputed_anchor": {
+        "changed|fails": {
+          "abstained": 14,
+          "correct": 329
+        },
+        "changed|holds": {
+          "abstained": 4,
+          "correct": 66
+        },
+        "changed|out_of_scope": {
+          "correct": 1
+        },
+        "changed|unsettleable": {
+          "correct": 68
+        },
+        "untouched|holds": {
+          "abstained": 28,
+          "correct": 391
+        }
+      }
+    }
+  },
+  "open_questions": [
+    "Truncation: whether a figure written short by truncation is consistent. It has now decided one case in each of the controls, the whole-note audit and this set.",
+    "Signed conviction: whether \"negative Markov conviction (-0.124)\" names markov.conviction or markov.signed_signal. Needs an independent adjudicator.",
+    "Whether the parser defect -- a keyword matched inside a longer word -- should be fixed as n16. A fix would be validated by a later fresh set, not this one."
+  ],
+  "for_a_future_version": [
+    "Separate valid-context mutations from deliberate evidence-corruption tests, and report them apart.",
+    "In valid-context mutations, move linked fields together (signed_signal, conviction, the probabilities and direction) and keep every field inside its domain; reject any case context_problems flags.",
+    "Keep single-field evidence corruption as its own labelled family, whose question is only whether the checker reads the field it names.",
+    "Key a removed field as unsettleable only when no linked field still determines it."
+  ],
+  "amendments": [
+    {
+      "date": "2026-09-25",
+      "what": "docs/jev-fresh-evaluation.md: the seeded results now carry review's qualification. The kept-true controls are single-field arithmetic tests, 37 of 69 of them in evidence the model could not produce, and the nine NOKIA outcomes are one disputed reading. The signed-conviction question is moved from the n15 defects to an open question. A reconciliation section is added. The recorded figures and the labels are unchanged."
+    }
+  ]
+}
