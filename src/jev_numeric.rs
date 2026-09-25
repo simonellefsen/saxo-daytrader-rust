@@ -60,7 +60,15 @@ use std::sync::LazyLock;
 /// since the grammar was written, and in words since `n13`. A quantity lead-in,
 /// a range, or an open bound now abstains; "twenty-five" is no longer read as
 /// five.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n14-2026-09-25";
+///
+/// `n15` reads the whole numeric expression before any part of it. `n14`
+/// checked a number word's immediate neighbours, so "one hundred and five-day"
+/// and "five point two confluences" still read a five and a two, and a
+/// non-breaking hyphen in "twenty-five" hid the compound altogether. The text
+/// is now reduced to one spelling of every dash and space first; a range
+/// joins number words across any dash; and of the spatial words, only
+/// "over", which before a horizon means across, is read as an equality there.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n15-2026-09-25";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -567,7 +575,7 @@ fn words(text: &str) -> Vec<&str> {
 ///
 /// Looks at what immediately follows: "5-day", "6 shares", "20 sessions".
 fn measures_something_else(text: &str, end: usize) -> bool {
-    let tail = text[end..].trim_start_matches(['-', ' ', '\u{2011}']);
+    let tail = text[end..].trim_start_matches(['-', ' ']);
     NON_FIELD_UNITS.iter().any(|unit| {
         tail.starts_with(unit)
             && tail[unit.len()..]
@@ -603,7 +611,7 @@ fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
         return None;
     }
     let tail = &text[number.end..];
-    let joined = tail.trim_start_matches(['-', ' ', '\u{2011}']);
+    let joined = tail.trim_start_matches(['-', ' ']);
     let unit = ["days", "day"].into_iter().find(|unit| {
         joined.starts_with(unit)
             && joined[unit.len()..]
@@ -617,12 +625,6 @@ fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
     let followed = following
         .first()
         .is_some_and(|word| HORIZON_FOLLOWERS.contains(word));
-    let preceding = words(&text[clause_start..number.start]);
-    let over_a_figure = preceding.len() >= 2
-        && preceding[preceding.len() - 1] == "over"
-        && preceding[preceding.len() - 2]
-            .chars()
-            .all(|c| c.is_ascii_digit());
     let clause = with_separators_normalised(&text[clause_start..clause_end]);
     let names_markov = FIELDS
         .iter()
@@ -630,7 +632,16 @@ fn markov_horizon_unit_end(text: &str, number: &FoundNumber) -> Option<usize> {
         .filter(|(field, _)| field.path.starts_with("markov."))
         .flat_map(|(_, keywords)| keywords.iter())
         .any(|keyword| clause.contains(keyword.as_str()));
-    ((followed || over_a_figure) && names_markov).then_some(unit_end)
+    ((followed || over_a_figure(text, number)) && names_markov).then_some(unit_end)
+}
+
+/// Whether a figure is the N of "<figure> over N days": the horizon of the
+/// figure just quoted, where "over" means across.
+fn over_a_figure(text: &str, number: &FoundNumber) -> bool {
+    let (clause_start, _) = clause_bounds(text, number.start);
+    let preceding = words(&text[clause_start.min(number.start)..number.start]);
+    matches!(preceding.as_slice(), [.., figure, over]
+        if *over == "over" && figure.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// The text between a field's name and its figure, with any Markov horizon
@@ -722,7 +733,7 @@ fn clause_asserts_plainly(text: &str, number_start: usize) -> bool {
 /// gap and was read as equality -- reporting a disagreement against 71.049,
 /// which satisfies it.
 fn symbolic_relation(text: &str, number_start: usize) -> Option<&'static str> {
-    let head = text[..number_start].trim_end_matches([' ', '\u{00a0}']);
+    let head = text[..number_start].trim_end_matches(' ');
     for (token, relation) in [
         (">=", RELATION_AT_LEAST),
         ("=>", RELATION_AT_LEAST),
@@ -782,59 +793,101 @@ const SPATIAL_LEAD_INS: &[&str] = &["above", "below", "over", "under", "beneath"
 const OPEN_BOUND_FOLLOWERS: &[&str] =
     &["more", "fewer", "less", "higher", "lower", "above", "below"];
 
-/// Tens words. "twenty-five" is not a five.
-const TENS_WORDS: &[&str] = &[
-    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
-];
+/// Whether a word is a numeral: digits, or a number word from zero to ninety.
+fn is_numeral_word(word: &str) -> bool {
+    matches!(
+        numeral_kind(word),
+        Numeral::Figure | Numeral::Unit | Numeral::Teen | Numeral::Tens
+    )
+}
 
-/// Words that continue a number: "five hundred", "five point two".
-const NUMBER_CONTINUATIONS: &[&str] = &["hundred", "thousand", "million", "billion", "point"];
+/// Whether `text` begins with a numeral, in digits or in a word.
+fn starts_with_numeral(text: &str) -> bool {
+    text.starts_with(|c: char| c.is_ascii_digit())
+        || words(text)
+            .first()
+            .is_some_and(|word| text.starts_with(word) && is_numeral_word(word))
+}
 
-fn is_number_token(word: &str) -> bool {
-    (!word.is_empty() && word.chars().all(|c| c.is_ascii_digit()))
-        || NUMBER_WORDS.iter().any(|(number, _)| *number == word)
-        || TENS_WORDS.contains(&word)
+/// Whether `text` ends with a numeral, in digits or in a word.
+fn ends_with_numeral(text: &str) -> bool {
+    text.ends_with(|c: char| c.is_ascii_digit())
+        || words(text)
+            .last()
+            .is_some_and(|word| text.ends_with(word) && is_numeral_word(word))
+}
+
+/// What follows a dash that could join two ends of a range, if one starts
+/// `text`: a hyphen or an en dash, spaced or not, or an em dash written
+/// tight. A spaced em dash separates clauses -- "RSI 60 — 5 confluences" --
+/// and joins nothing.
+fn past_a_joining_dash(text: &str) -> Option<&str> {
+    if let Some(rest) = text.strip_prefix('\u{2014}') {
+        return Some(rest);
+    }
+    let spaced = text.trim_start_matches(' ');
+    spaced
+        .strip_prefix('-')
+        .or_else(|| spaced.strip_prefix('\u{2013}'))
+        .map(|rest| rest.trim_start_matches(' '))
+}
+
+/// The mirror of `past_a_joining_dash`, for what precedes a figure.
+fn before_a_joining_dash(text: &str) -> Option<&str> {
+    if let Some(rest) = text.strip_suffix('\u{2014}') {
+        return Some(rest);
+    }
+    let spaced = text.trim_end_matches(' ');
+    spaced
+        .strip_suffix('-')
+        .or_else(|| spaced.strip_suffix('\u{2013}'))
+        .map(|rest| rest.trim_end_matches(' '))
 }
 
 /// Whether a figure is one end of a range, or an open bound: "5 to 6",
-/// "5-6", "five or six", "between four and six", "5 or more", "5+". A range
-/// states no single value, so reading either end as exact is a guess.
+/// "5-6", "five or six", "five–six", "between four and six", "5 or more",
+/// "5+". A range states no single value, so reading either end as exact is a
+/// guess.
+///
+/// A dash joins numerals written in words as well as in digits. `n14` read
+/// only a digit across it, and the en dash is also a clause boundary, so in
+/// "five–six confluences" the five was never seen and the six was compared as
+/// an exact count.
 fn in_a_range(text: &str, found: &FoundNumber) -> bool {
     let (clause_start, clause_end) = clause_bounds(text, found.start);
     let clause_end = clause_end.max(found.end);
-    // Written joins: a hyphen or an en dash between two figures.
-    let after = text[found.end..].trim_start_matches(' ');
-    let joined_after = after
-        .strip_prefix('-')
-        .or_else(|| after.strip_prefix('\u{2013}'))
-        .map(|rest| rest.trim_start_matches(' '))
-        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
-    let before = text[..found.start].trim_end_matches(' ');
+    let after = &text[found.end..];
+    let joined_after = past_a_joining_dash(after).is_some_and(starts_with_numeral);
+    let before = &text[..found.start];
     let joined_before = if found.explicit_sign {
         // The scanner read "5-6" as 5 and -6; the "-" is the join.
-        before.ends_with(|c: char| c.is_ascii_digit())
+        ends_with_numeral(before.trim_end_matches(' '))
     } else {
-        before
-            .strip_suffix('-')
-            .or_else(|| before.strip_suffix('\u{2013}'))
-            .map(|rest| rest.trim_end_matches(' '))
-            .is_some_and(|rest| rest.ends_with(|c: char| c.is_ascii_digit()))
+        before_a_joining_dash(before).is_some_and(ends_with_numeral)
     };
-    if joined_after || joined_before || after.starts_with('+') {
+    if joined_after || joined_before || after.trim_start_matches(' ').starts_with('+') {
         return true;
     }
     let following = words(&text[found.end.min(clause_end)..clause_end]);
     let preceding = words(&text[clause_start.min(found.start)..found.start]);
     let range_after = matches!(following.as_slice(), [join, next, ..]
-        if matches!(*join, "to" | "or") && (is_number_token(next) || OPEN_BOUND_FOLLOWERS.contains(next)));
+        if matches!(*join, "to" | "or") && (is_numeral_word(next) || OPEN_BOUND_FOLLOWERS.contains(next)));
     let plus_after = following.first() == Some(&"plus");
     // "and" joins a range only after "between": in "signed_signal 0.5555 and
     // 4/3 confluences" it joins two fields' figures, not the ends of a range.
     let range_before = matches!(preceding.as_slice(), [.., number, join]
-        if matches!(*join, "to" | "or") && is_number_token(number))
+        if matches!(*join, "to" | "or") && is_numeral_word(number))
         || matches!(preceding.as_slice(), [.., between, number, join]
-            if *between == "between" && *join == "and" && is_number_token(number));
+            if *between == "between" && *join == "and" && is_numeral_word(number));
     range_after || plus_after || range_before
+}
+
+/// Whether an en or em dash touches the figure's first digit: "–0.435". It
+/// is the far end of a range or a minus sign, and neither is read as the
+/// figure's value. The scanner reads only `-` as a sign, so this figure
+/// arrived unsigned.
+fn touched_by_a_dash(text: &str, found: &FoundNumber) -> bool {
+    !found.word && !found.explicit_sign && text[..found.start].ends_with(['\u{2013}', '\u{2014}'])
 }
 
 /// Whether a figure named ahead of its field is led in by a word this grammar
@@ -846,24 +899,28 @@ fn led_in_unreadably(text: &str, found: &FoundNumber, field: &FieldSpec) -> bool
         return false;
     };
     let up_to = preceding.len() >= 2 && preceding[preceding.len() - 2] == "up" && *last == "to";
-    // "<figure> over N days" is the horizon form n12 reads explicitly: there
-    // "over" means across, not more than.
-    let spatial_matters = field.discrete && field.path != "markov.horizon_days";
+    // Before a horizon, "over" means across, not more than: "-0.5230 over 5
+    // days", "dominance over 5-day horizon". That word only. `n14` exempted
+    // the horizon from every spatial word, so "under five-day Markov horizon"
+    // matched a five-day horizon.
+    let across = field.path == "markov.horizon_days" && *last == "over";
+    let spatial_matters = field.discrete && !across;
     QUANTITY_LEAD_INS.contains(last)
         || up_to
         || (spatial_matters && SPATIAL_LEAD_INS.contains(last))
 }
 
 /// The relation read for one figure: the grammar's reading, unless the figure
-/// sits in a range, or is named ahead of its field behind a lead-in the
-/// grammar does not read. Both are abstentions, not guesses.
+/// sits in a range, carries a sign it cannot read, or is named ahead of its
+/// field behind a lead-in the grammar does not read. Each is an abstention,
+/// not a guess.
 fn relation_of(
     text: &str,
     found: &FoundNumber,
     field: &FieldSpec,
     field_end: Option<usize>,
 ) -> &'static str {
-    if in_a_range(text, found) {
+    if in_a_range(text, found) || touched_by_a_dash(text, found) {
         return RELATION_UNSUPPORTED;
     }
     let named_after = field_end.is_none_or(|end| end >= found.start);
@@ -981,16 +1038,17 @@ pub(crate) struct FigureSpan {
 
 #[cfg(test)]
 pub(crate) fn figure_at(text: &str, offset: usize) -> Option<FigureSpan> {
-    scan_figures(text)
-        .into_iter()
-        .find(|found| found.start == offset)
-        .map(|found| FigureSpan {
-            start: found.start,
-            end: found.end,
+    let canonical = Canonical::of(text);
+    scan_figures(&canonical.text).into_iter().find_map(|found| {
+        let (start, end) = canonical.in_note(found.start, found.end);
+        (start == offset).then_some(FigureSpan {
+            start,
+            end,
             decimals: found.decimals,
             percent: found.percent,
             explicit_sign: found.explicit_sign,
         })
+    })
 }
 
 /// The clause around a byte offset, for a challenge case that negates or
@@ -1013,22 +1071,125 @@ pub(crate) fn field_is_discrete(path: &str) -> bool {
 /// Checks every numeric assertion in `note` against `evidence`.
 pub(crate) fn numeric_checks(note: &str, evidence: &JsonValue) -> Vec<NumericCheck> {
     let lowered = note.to_lowercase();
-    let numbers = scan_figures(&lowered);
-    let (fields, uncertain, phrase_end) = attribute_all(&lowered, &numbers);
+    let canonical = Canonical::of(&lowered);
+    let text = canonical.text.as_str();
+    let numbers = scan_figures(text);
+    let (fields, uncertain, phrase_end) = attribute_all(text, &numbers);
     numbers
         .iter()
         .enumerate()
         .map(|(index, found)| {
+            let (start, end) = canonical.in_note(found.start, found.end);
+            let placement = Placement {
+                offset: start,
+                excerpt: excerpt_around(&lowered, start, end),
+            };
             check_one(
-                &lowered,
+                text,
                 found,
-                fields[index],
-                uncertain[index],
-                phrase_end[index],
+                (fields[index], uncertain[index], phrase_end[index]),
                 evidence,
+                placement,
             )
         })
         .collect()
+}
+
+/// The note as the grammar reads it, with one spelling for every character
+/// the notes write in several, and where each byte came from.
+///
+/// Review found a construction read two ways by spelling alone:
+/// "twenty-five-day Markov signal" was a compound, and with a non-breaking
+/// hyphen it was a five. Each helper kept its own list of the characters it
+/// trimmed -- one knew the non-breaking hyphen, one the non-breaking space,
+/// one the Unicode minus -- and no two lists agreed. Reducing the text once,
+/// before anything reads it, gives every rule the same spelling.
+///
+/// The en and em dashes keep their own spellings. They bound clauses, and a
+/// hyphen does not: it sits inside "5-day" and "bull-state".
+struct Canonical {
+    text: String,
+    /// For each byte of `text`, the span of the note's character it came from.
+    origin: Vec<(usize, usize)>,
+    note_len: usize,
+}
+
+impl Canonical {
+    fn of(note: &str) -> Self {
+        let mut text = String::with_capacity(note.len());
+        let mut origin = Vec::with_capacity(note.len());
+        for (start, character) in note.char_indices() {
+            let Some(written) = canonical_char(character) else {
+                continue;
+            };
+            let before = text.len();
+            text.push(written);
+            let span = (start, start + character.len_utf8());
+            origin.extend(std::iter::repeat_n(span, text.len() - before));
+        }
+        Self {
+            text,
+            origin,
+            note_len: note.len(),
+        }
+    }
+
+    /// Where `start..end` of the canonical text sits in the note. Offsets are
+    /// reported in the note, so a figure is found in the text a reader has.
+    fn in_note(&self, start: usize, end: usize) -> (usize, usize) {
+        let from = self.origin.get(start).map_or(self.note_len, |span| span.0);
+        let to = end
+            .checked_sub(1)
+            .filter(|last| *last >= start)
+            .and_then(|last| self.origin.get(last))
+            .map_or(from, |span| span.1);
+        (from, to.max(from))
+    }
+}
+
+/// The one spelling the grammar reads a character in, or `None` for a
+/// character that writes nothing.
+fn canonical_char(character: char) -> Option<char> {
+    Some(match character {
+        // Hyphens, the minus sign and the figure dash: one short stroke.
+        '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2212}' | '\u{fe63}' | '\u{ff0d}' => '-',
+        // The horizontal bar is written as an em dash.
+        '\u{2015}' => '\u{2014}',
+        // Every other horizontal space.
+        '\t'
+        | '\u{00a0}'
+        | '\u{1680}'
+        | '\u{2000}'..='\u{200a}'
+        | '\u{202f}'
+        | '\u{205f}'
+        | '\u{3000}' => ' ',
+        // The typographic apostrophe.
+        '\u{2019}' | '\u{02bc}' => '\'',
+        // A soft hyphen, the zero-width characters, the word joiner and the
+        // byte-order mark write nothing.
+        '\u{00ad}' | '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}' => return None,
+        other => other,
+    })
+}
+
+/// The note's words around a figure, for adjudication.
+fn excerpt_around(text: &str, start: usize, end: usize) -> String {
+    let window_start = text[..start]
+        .char_indices()
+        .rev()
+        .nth(CONTEXT_CHARS)
+        .map_or(0, |(offset, _)| offset);
+    let window_end = text[end..]
+        .char_indices()
+        .nth(CONTEXT_CHARS)
+        .map_or(text.len(), |(offset, _)| end + offset);
+    text[window_start..window_end].trim().to_string()
+}
+
+/// Where a check's figure sits in the note, as a reader has it.
+struct Placement {
+    offset: usize,
+    excerpt: String,
 }
 
 struct FoundNumber {
@@ -1044,10 +1205,23 @@ struct FoundNumber {
 }
 
 /// Every figure the checker reads: those written in digits, and those written
-/// as words in the two forms where a word states a field's value.
+/// as words in the two forms where a word states a field's value -- each only
+/// where it is a whole numeric expression by itself.
 fn scan_figures(text: &str) -> Vec<FoundNumber> {
-    let mut found = scan_numbers(text);
-    found.extend(number_words(text));
+    let digits = scan_numbers(text);
+    let tokens = numeral_tokens(text, &digits);
+    let compound = in_a_compound(text, &tokens);
+    let inside: BTreeSet<usize> = tokens
+        .iter()
+        .zip(&compound)
+        .filter(|(_, inside)| **inside)
+        .map(|(token, _)| token.start)
+        .collect();
+    let mut found: Vec<FoundNumber> = digits
+        .into_iter()
+        .filter(|number| !inside.contains(&number.start))
+        .collect();
+    found.extend(number_words(text, &tokens, &compound));
     found.sort_by_key(|number| number.start);
     found
 }
@@ -1084,7 +1258,7 @@ fn word_count_phrase(text: &str, number: &FoundNumber) -> Option<(usize, usize)>
     let mut adjectives = 0;
     loop {
         let tail = text.get(cursor..clause_end)?;
-        let trimmed = tail.trim_start_matches(['-', ' ', '\u{2011}']);
+        let trimmed = tail.trim_start_matches(['-', ' ']);
         let start = cursor + (tail.len() - trimmed.len());
         let length = trimmed
             .find(|c: char| !c.is_ascii_alphanumeric())
@@ -1122,66 +1296,199 @@ fn word_count_phrase(text: &str, number: &FoundNumber) -> Option<(usize, usize)>
 /// Anything else is not a figure at all. "Zero bear probability" names a
 /// field, but a word states no precision for a probability, and compared at
 /// none it would accept anything under 0.5; it is left unread.
-fn number_words(text: &str) -> Vec<FoundNumber> {
-    let bytes = text.as_bytes();
-    let mut found = Vec::new();
-    for (word, value) in NUMBER_WORDS {
-        for (start, _) in text.match_indices(word) {
-            let end = start + word.len();
-            let alone = start
-                .checked_sub(1)
-                .is_none_or(|previous| !bytes[previous].is_ascii_alphanumeric())
-                && bytes
-                    .get(end)
-                    .is_none_or(|next| !next.is_ascii_alphanumeric());
-            if !alone || part_of_a_compound(text, start, end) {
-                continue;
-            }
+fn number_words(text: &str, tokens: &[Token], compound: &[bool]) -> Vec<FoundNumber> {
+    tokens
+        .iter()
+        .zip(compound)
+        .filter(|(token, inside)| !**inside && token.kind != Numeral::Figure)
+        .filter_map(|(token, _)| {
+            let word = &text[token.start..token.end];
+            let (_, value) = NUMBER_WORDS.iter().find(|(number, _)| *number == word)?;
             let number = FoundNumber {
                 value: *value,
                 decimals: 0,
                 percent: false,
                 explicit_sign: false,
-                start,
-                end,
+                start: token.start,
+                end: token.end,
                 word: true,
             };
-            if word_count_phrase(text, &number).is_some()
-                || markov_horizon_unit_end(text, &number).is_some()
-            {
-                found.push(number);
-            }
-        }
-    }
-    found
+            (word_count_phrase(text, &number).is_some()
+                || markov_horizon_unit_end(text, &number).is_some())
+            .then_some(number)
+        })
+        .collect()
 }
 
-/// Whether a number word is part of a longer number: "twenty-five", "twenty
-/// five", "five hundred", "five point two". Reading its last word alone read
-/// "twenty-five confluences" as five. A compound is not read at all, rather
-/// than read in part.
-fn part_of_a_compound(text: &str, start: usize, end: usize) -> bool {
-    let before = text[..start].trim_end_matches([' ', '-']);
-    let previous = before
-        .rsplit(|c: char| !c.is_ascii_alphanumeric())
-        .next()
-        .unwrap_or_default();
-    let joined_before = before.len() < start && !previous.is_empty();
-    let after = text[end..].trim_start_matches([' ', '-']);
-    let next = after
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .next()
-        .unwrap_or_default();
-    let joined_after = after.len() < text.len() - end && !next.is_empty();
-    // Words only: a digit figure before a number word is a different figure,
-    // as in "+0.551 five-day markov signal".
-    let number_word = |word: &str| {
-        TENS_WORDS.contains(&word)
-            || NUMBER_WORDS.iter().any(|(number, _)| *number == word)
-            || matches!(word, "hundred" | "thousand")
+/// The part a word or a digit figure can play in a number.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Numeral {
+    /// A figure written in digits.
+    Figure,
+    /// "zero" to "nine".
+    Unit,
+    /// "ten" to "nineteen".
+    Teen,
+    /// "twenty" to "ninety".
+    Tens,
+    /// "hundred", "thousand", "million", "billion", "dozen".
+    Scale,
+    /// "point", as in "five point two".
+    Point,
+    /// "and", as in "one hundred and five" and "five and a half".
+    And,
+    /// "a", as in "a hundred" and "and a half".
+    A,
+    /// "half", "quarter", "third".
+    Fraction,
+    /// Any other word.
+    Other,
+}
+
+fn numeral_kind(word: &str) -> Numeral {
+    match word {
+        "zero" | "one" | "two" | "three" | "four" | "five" | "six" | "seven" | "eight" | "nine" => {
+            Numeral::Unit
+        }
+        "ten" | "eleven" | "twelve" | "thirteen" | "fourteen" | "fifteen" | "sixteen"
+        | "seventeen" | "eighteen" | "nineteen" => Numeral::Teen,
+        "twenty" | "thirty" | "forty" | "fifty" | "sixty" | "seventy" | "eighty" | "ninety" => {
+            Numeral::Tens
+        }
+        "hundred" | "hundreds" | "thousand" | "thousands" | "million" | "millions" | "billion"
+        | "billions" | "dozen" | "dozens" => Numeral::Scale,
+        "point" => Numeral::Point,
+        "and" => Numeral::And,
+        "a" => Numeral::A,
+        "half" | "halves" | "quarter" | "quarters" | "third" | "thirds" => Numeral::Fraction,
+        _ if !word.is_empty() && word.chars().all(|c| c.is_ascii_digit()) => Numeral::Figure,
+        _ => Numeral::Other,
+    }
+}
+
+/// A word, or a figure in digits, and the part it can play in a number.
+struct Token {
+    start: usize,
+    end: usize,
+    kind: Numeral,
+}
+
+/// The text as a run of words and digit figures, in order.
+fn numeral_tokens(text: &str, figures: &[FoundNumber]) -> Vec<Token> {
+    let bytes = text.as_bytes();
+    let mut figures = figures.iter().peekable();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        while figures.next_if(|figure| figure.start < index).is_some() {}
+        if let Some(figure) = figures.next_if(|figure| figure.start == index) {
+            tokens.push(Token {
+                start: figure.start,
+                end: figure.end,
+                kind: Numeral::Figure,
+            });
+            index = figure.end;
+            continue;
+        }
+        if bytes[index].is_ascii_alphanumeric() {
+            let end = text[index..]
+                .find(|c: char| !c.is_ascii_alphanumeric())
+                .map_or(text.len(), |length| index + length);
+            tokens.push(Token {
+                start: index,
+                end,
+                kind: numeral_kind(&text[index..end]),
+            });
+            index = end;
+            continue;
+        }
+        index += text[index..].chars().next().map_or(1, char::len_utf8);
+    }
+    tokens
+}
+
+/// Whether the text between two tokens can join them into one number:
+/// spaces, and at most one hyphen.
+fn joins(between: &str) -> bool {
+    !between.is_empty()
+        && between.chars().all(|c| c == ' ' || c == '-')
+        && between.matches('-').count() <= 1
+}
+
+/// Whether each token is a numeral inside a longer numeric expression.
+///
+/// `n14` looked only at a number word's neighbours, so "one hundred and
+/// five-day" read a five past the "and", and "five point two confluences" a
+/// two past the "point". This reads the expression instead. Two tokens joined
+/// by spaces or a hyphen belong to one number when English writes one number
+/// that way:
+///
+/// - a tens word and a unit: "twenty-five";
+/// - a numeral and a scale, or a scale and a numeral: "five hundred", "5
+///   hundred", "a hundred", "hundred and five";
+/// - numerals either side of "point": "five point two", "point two five";
+/// - a numeral and a fraction: "five and a half", "two thirds";
+/// - two number words side by side, "five six", which is no single figure.
+///
+/// A numeral inside an expression is not a figure at all, in words or in
+/// digits, rather than read in part. A digit figure beside a number word is
+/// two figures, as in "+0.551 five-day markov signal"; so are two number
+/// words joined by a hyphen, "five-six", which is a range `in_a_range` reads.
+fn in_a_compound(text: &str, tokens: &[Token]) -> Vec<bool> {
+    use Numeral::{A, And, Figure, Fraction, Point, Scale, Teen, Tens, Unit};
+    let numeral = |kind: Numeral| matches!(kind, Figure | Unit | Teen | Tens);
+    let worded = |kind: Numeral| matches!(kind, Unit | Teen | Tens);
+    let between = |index: usize| &text[tokens[index].end..tokens[index + 1].start];
+    let joined: Vec<bool> = (0..tokens.len().saturating_sub(1))
+        .map(|index| joins(between(index)))
+        .collect();
+    // Whether tokens `index` and `index + 1` are joined and of these kinds.
+    let link = |index: usize, left: &dyn Fn(Numeral) -> bool, right: &dyn Fn(Numeral) -> bool| {
+        joined.get(index).copied().unwrap_or(false)
+            && left(tokens[index].kind)
+            && right(tokens[index + 1].kind)
     };
-    (joined_before && number_word(previous))
-        || (joined_after && NUMBER_CONTINUATIONS.contains(&next))
+    let is = |wanted: Numeral| move |kind: Numeral| kind == wanted;
+    let bonded: Vec<bool> = (0..joined.len())
+        .map(|index| {
+            if !joined[index] {
+                return false;
+            }
+            let previous = |left: &dyn Fn(Numeral) -> bool, right: &dyn Fn(Numeral) -> bool| {
+                index > 0 && link(index - 1, left, right)
+            };
+            match (tokens[index].kind, tokens[index + 1].kind) {
+                (Tens, Unit) => true,
+                (left, Scale) => numeral(left) || left == A,
+                (Scale, right) if numeral(right) => true,
+                (Scale, And) => link(index + 1, &is(And), &numeral),
+                (And, right) if numeral(right) => previous(&is(Scale), &is(And)),
+                (left, Point) if numeral(left) => {
+                    link(index + 1, &is(Point), &|kind| matches!(kind, Unit | Figure))
+                }
+                (Point, Unit | Figure) => previous(&numeral, &is(Point)),
+                (left, And) if numeral(left) => {
+                    link(index + 1, &is(And), &is(A)) && link(index + 2, &is(A), &is(Fraction))
+                }
+                (And, A) => previous(&numeral, &is(And)) && link(index + 1, &is(A), &is(Fraction)),
+                (A, Fraction) => {
+                    previous(&is(And), &is(A)) && index > 1 && link(index - 2, &numeral, &is(And))
+                }
+                (left, Fraction) => numeral(left),
+                (left, right) if worded(left) && worded(right) => !between(index).contains('-'),
+                _ => false,
+            }
+        })
+        .collect();
+    (0..tokens.len())
+        .map(|index| {
+            numeral(tokens[index].kind)
+                && (index
+                    .checked_sub(1)
+                    .is_some_and(|previous| bonded[previous])
+                    || bonded.get(index).copied().unwrap_or(false))
+        })
+        .collect()
 }
 
 /// Finds signed decimal figures, hand-rolled because this crate carries no
@@ -1200,21 +1507,15 @@ fn scan_numbers(text: &str) -> Vec<FoundNumber> {
         let mut start = index;
         let mut sign = 1.0;
         let mut explicit_sign = false;
+        // U+2212 MINUS SIGN arrives here as `-`, which `Canonical` writes it
+        // as. Discarding it once read a negative figure as positive and
+        // reported a sign error as agreement.
         if start > 0 && (bytes[start - 1] == b'+' || bytes[start - 1] == b'-') {
             if bytes[start - 1] == b'-' {
                 sign = -1.0;
             }
             explicit_sign = true;
             start -= 1;
-        } else if let Some(minus_start) = start.checked_sub(3) {
-            // U+2212 MINUS SIGN, three bytes. Discarding it read a negative
-            // figure as positive and reported a sign error as agreement --
-            // silently, and in the direction that hides a disagreement.
-            if &bytes[minus_start..start] == "\u{2212}".as_bytes() {
-                sign = -1.0;
-                explicit_sign = true;
-                start = minus_start;
-            }
         }
         let digits_start = index;
         while index < bytes.len() {
@@ -1660,22 +1961,11 @@ fn attribute_all(text: &str, numbers: &[FoundNumber]) -> Attribution {
 fn check_one(
     text: &str,
     found: &FoundNumber,
-    field: Option<&'static FieldSpec>,
-    uncertain: bool,
-    phrase_end: Option<usize>,
+    (field, uncertain, phrase_end): (Option<&'static FieldSpec>, bool, Option<usize>),
     evidence: &JsonValue,
+    placement: Placement,
 ) -> NumericCheck {
-    let window_start = text[..found.start]
-        .char_indices()
-        .rev()
-        .nth(CONTEXT_CHARS)
-        .map_or(0, |(offset, _)| offset);
-    let window_end = text[found.end..]
-        .char_indices()
-        .nth(CONTEXT_CHARS)
-        .map_or(text.len(), |(offset, _)| found.end + offset);
-    let window = &text[window_start..window_end];
-    let excerpt = window.trim().to_string();
+    let Placement { offset, excerpt } = placement;
 
     // A quantity of something is not the value of a field -- except the one
     // duration the evidence carries, which attribution has already named.
@@ -1688,7 +1978,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::NotAFieldValue,
             excerpt,
-            offset: found.start,
+            offset,
         };
     }
     let Some(field) = field else {
@@ -1699,7 +1989,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::Unattributed,
             excerpt,
-            offset: found.start,
+            offset,
         };
     };
     if uncertain {
@@ -1710,7 +2000,7 @@ fn check_one(
             relation: RELATION_NOT_READ,
             verdict: NumericVerdict::UncertainAttribution,
             excerpt,
-            offset: found.start,
+            offset,
         };
     }
     let relation = relation_of(text, found, field, phrase_end);
@@ -1736,7 +2026,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::NotInEvidence,
             excerpt,
-            offset: found.start,
+            offset,
         };
     };
 
@@ -1768,7 +2058,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::UncertainAttribution,
             excerpt,
-            offset: found.start,
+            offset,
         };
     }
     // A threshold is compared at face value. The rounding and truncation
@@ -1793,7 +2083,7 @@ fn check_one(
             relation,
             verdict: NumericVerdict::ImplausibleAttribution,
             excerpt,
-            offset: found.start,
+            offset,
         };
     }
     let verdict = match relation {
@@ -1816,7 +2106,7 @@ fn check_one(
         relation,
         verdict,
         excerpt,
-        offset: found.start,
+        offset,
     }
 }
 
@@ -3808,6 +4098,213 @@ mod n14_boundaries {
         assert_eq!(
             verdicts("5/3 confluences", 5)[0],
             (5.0, RELATION_EQUALS, "matches")
+        );
+    }
+}
+
+/// `n15`: review's cases against `n14`, and the digit forms of the same
+/// faults. These are regression cases, not validation evidence: each was
+/// found by probing this checker.
+#[cfg(test)]
+mod n15_expressions {
+    use super::*;
+    use serde_json::json;
+
+    fn evidence(count: i64, horizon: i64) -> JsonValue {
+        json!({
+            "daily_indicators": {"confluence_count": count, "support": {"nearest_support": 446.0}},
+            "markov": {"horizon_days": horizon, "signed_signal": -0.523},
+        })
+    }
+
+    /// The verdicts, in order, for every figure in the note.
+    fn verdicts(note: &str, count: i64, horizon: i64) -> Vec<(f64, &'static str, &'static str)> {
+        numeric_checks(note, &evidence(count, horizon))
+            .into_iter()
+            .map(|check| (check.quoted, check.relation, check.verdict.as_str()))
+            .collect()
+    }
+
+    /// Review's first case: part of a compound read as a smaller number,
+    /// past an "and", past a "point", or behind a non-breaking hyphen. No
+    /// numeral inside a longer expression is read, in words or in digits.
+    #[test]
+    fn a_numeral_inside_a_longer_expression_is_not_read() {
+        for (note, count) in [
+            ("one hundred and five-day markov signal", 4),
+            ("a hundred and five-day markov signal", 4),
+            ("one hundred and 5-day markov signal", 4),
+            ("five point two confluences", 2),
+            ("five point two confluences", 5),
+            ("5 point 2 confluences", 2),
+            ("5 hundred confluences", 5),
+            ("twenty\u{2011}five-day markov signal", 4),
+            ("twenty\u{2011}five confluences", 5),
+            ("twenty\u{2010}five confluences", 5),
+            ("twenty\u{00a0}five confluences", 5),
+            ("five six confluences", 6),
+        ] {
+            assert!(
+                verdicts(note, count, 5).is_empty(),
+                "{note}: {:?}",
+                verdicts(note, count, 5)
+            );
+        }
+    }
+
+    /// Review's second case: "five–six confluences" compared the six as an
+    /// exact count. The en dash bounds a clause, which hid the five, and the
+    /// range check read only digits across a dash.
+    #[test]
+    fn a_range_in_words_is_a_range_across_any_dash() {
+        for note in [
+            "five\u{2013}six confluences",
+            "five \u{2013} six confluences",
+            "five-six confluences",
+            "five\u{2011}six confluences",
+            "five\u{2014}six confluences",
+            "5\u{2013}six confluences",
+            "five\u{2013}6 confluences",
+            "5\u{2014}6 confluences",
+        ] {
+            for count in [5, 6] {
+                let read = verdicts(note, count, 5);
+                assert!(
+                    read.iter()
+                        .all(|(_, _, verdict)| !matches!(*verdict, "matches" | "differs")),
+                    "{note} against {count}: {read:?}"
+                );
+            }
+        }
+    }
+
+    /// Review's third case: `n14` exempted the horizon from every spatial
+    /// word, so "under five-day Markov horizon" matched a five-day horizon.
+    /// Only "over", which before a horizon means across, is still read.
+    #[test]
+    fn only_over_is_read_as_across_before_a_horizon() {
+        for note in [
+            "under five-day markov horizon",
+            "under 5-day markov horizon",
+            "below 5-day markov horizon",
+            "above five-day markov horizon",
+            "near five-day markov signal",
+        ] {
+            for horizon in [5, 6] {
+                assert_eq!(
+                    verdicts(note, 4, horizon),
+                    vec![(5.0, RELATION_UNSUPPORTED, "uncertain_attribution")],
+                    "{note} against {horizon}"
+                );
+            }
+        }
+        for note in [
+            "positive bull_prob dominance over 5-day horizon",
+            "bullish, but markov is negative over five-day horizon",
+        ] {
+            assert_eq!(
+                verdicts(note, 4, 5),
+                vec![(5.0, RELATION_EQUALS, "matches")],
+                "{note}"
+            );
+        }
+    }
+
+    /// One reading per construction, however a dash, space or sign is
+    /// spelled.
+    #[test]
+    fn every_spelling_of_a_character_reads_the_same() {
+        for (ascii, unicode) in [
+            ("-0.523 markov signal", "\u{2212}0.523 markov signal"),
+            ("-0.523 markov signal", "\u{fe63}0.523 markov signal"),
+            ("5-day markov signal", "5\u{2011}day markov signal"),
+            ("5-day markov signal", "5\u{2010}day markov signal"),
+            ("five-confluence setup", "five\u{2011}confluence setup"),
+            ("5 confluences", "5\u{00a0}confluences"),
+            ("5 confluences", "5\u{202f}confluences"),
+            ("4/3 confluences", "4/3\u{200b} confluences"),
+            ("4/3 confluences", "4\u{00ad}/3 confluences"),
+            ("5-6 confluences", "5\u{2012}6 confluences"),
+            (
+                "twenty-five confluences, markov signal -0.523",
+                "twenty\u{2011}five confluences, markov signal -0.523",
+            ),
+        ] {
+            let plain = numeric_checks(ascii, &evidence(5, 5));
+            let written = numeric_checks(unicode, &evidence(5, 5));
+            assert!(!plain.is_empty(), "{ascii} reads something");
+            let reading = |checks: &[NumericCheck]| {
+                checks
+                    .iter()
+                    .map(|check| (check.quoted, check.field, check.relation, check.verdict))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(reading(&plain), reading(&written), "{unicode:?}");
+        }
+    }
+
+    /// Offsets and excerpts are the note's, not the canonical text's, so a
+    /// figure is found where a reader sees it.
+    #[test]
+    fn offsets_and_excerpts_are_the_notes_own() {
+        let note = "strong\u{2011}setup, five\u{2011}day markov signal \u{2212}0.523";
+        let checks = numeric_checks(note, &evidence(5, 5));
+        assert_eq!(
+            checks.iter().map(|check| check.offset).collect::<Vec<_>>(),
+            vec![note.find("five").unwrap(), note.find('\u{2212}').unwrap()]
+        );
+        assert_eq!(
+            checks.iter().map(|check| check.verdict).collect::<Vec<_>>(),
+            vec![NumericVerdict::Matches, NumericVerdict::Matches]
+        );
+        for check in &checks {
+            assert!(check.excerpt.contains('\u{2011}'), "{}", check.excerpt);
+            let span = figure_at(note, check.offset).expect("found where the note has it");
+            assert!(note[span.start..span.end].contains(['5', 'f']));
+        }
+    }
+
+    /// An en or em dash touching a digit is a minus sign the scanner does not
+    /// read, or the far end of a range. The figure arrived unsigned, and was
+    /// compared as positive.
+    #[test]
+    fn a_dash_touching_a_figure_abstains() {
+        for note in ["markov signal \u{2013}0.523", "markov signal\u{2014}0.523"] {
+            assert_eq!(
+                verdicts(note, 5, 5),
+                vec![(0.523, RELATION_UNSUPPORTED, "uncertain_attribution")],
+                "{note}"
+            );
+        }
+    }
+
+    /// What `n14` read correctly and must still read: a digit figure beside a
+    /// number word, a list joined by "and", a count, the N/M notation, and a
+    /// spaced em dash, which separates clauses and joins no range.
+    #[test]
+    fn separate_figures_are_still_read() {
+        assert_eq!(
+            verdicts("and +0.551 five-day markov signal. hold", 5, 5)
+                .iter()
+                .filter(|(quoted, ..)| *quoted == 5.0)
+                .count(),
+            1
+        );
+        assert_eq!(
+            verdicts("markov signed_signal -0.523 and 4/3 confluences", 4, 5),
+            vec![
+                (-0.523, RELATION_EQUALS, "matches"),
+                (4.0, RELATION_EQUALS, "matches"),
+                (3.0, RELATION_EQUALS, "not_in_evidence"),
+            ]
+        );
+        assert_eq!(
+            verdicts("four confluences", 4, 5),
+            vec![(4.0, RELATION_EQUALS, "matches")]
+        );
+        assert_eq!(
+            verdicts("rsi weak \u{2014} 5 confluences", 5, 5),
+            vec![(5.0, RELATION_EQUALS, "matches")]
         );
     }
 }
