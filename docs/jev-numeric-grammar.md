@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n15-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n16-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -9,9 +9,49 @@ stands as scored. The whole-note audit is keyed to `n12`.
 - `n14` abstains on comparisons, ranges and compound numbers, where earlier
   versions guessed.
 - `n15` reads a numeric expression whole, and each dash and space in one
-  spelling.
+  spelling. The fresh evaluation measured it.
+- `n16` matches a field's name only as a whole word.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n16`: a name is a whole word
+
+The fresh evaluation found one concrete parser defect in `n15`. In #361,
+"supported by 5 confluences", the keyword "support" was found inside
+"supported". It contested the count, and a correct figure went uncompared. The
+keyword search was a plain substring match for every name except the
+initialisms.
+
+Now a name needs a non-alphanumeric character, or the text's edge, before it,
+and no letter after it. A digit may follow, because notes write the period
+onto the indicator: "rsi14". The same rule decides whether a clause names a
+Markov field before a duration is read as the horizon, so "markovian" no
+longer names one.
+
+Measured in `jev-numeric-n16-changes.json` (`n15` at `cc7b0a4`, `n16` at
+`7f468fa`):
+- **Development dump:** 3 of 1,476 claims change, all through
+  "supportive". None is added or lost, and none moves to or from `differs`.
+  - **#165 BAC,** "markov long 0.579, and supportive quiver", and **#275
+    FORTUM**, "support break-risk (0.25), and supportive +0.243", were
+    abstentions. Both now compare and match.
+  - **#164 BAC,** "markov long signal 0.5792", had been given to the support
+    level, which the evidence did not hold. It now names the signed signal,
+    and still abstains, contested by a nearby "quiver".
+- **Fresh frame:** 1 of 68 claims changes, #361's "5 confluences", which now
+  matches.
+
+**The fresh set cannot validate this.** The defect was found there, so those
+notes are now development evidence. The set remains a measurement of `n15`, and
+its scorer refuses any other method. The regression tests in
+`jev_numeric::n16_whole_names` fail at `n15`, apart from the one pinning what
+must not change, and pass at `n16`.
+
+**What `n16` does not change:**
+- "above support with 5 confluences" still abstains. The "support" there is a
+  word, six characters from the figure, and the margin rule is by design.
+- The signed-conviction question from the same evaluation is open, and is left
+  for an independent adjudicator.
 
 ## `n15`: the whole expression, in one spelling
 

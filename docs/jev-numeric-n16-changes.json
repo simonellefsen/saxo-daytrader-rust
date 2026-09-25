@@ -1,0 +1,129 @@
+{
+  "what_this_is": "n15 against n16, claim by claim, from recorded runs of committed code with clean trees (jev_provenance::census_of_every_claim), over two frames: the development dump and the fresh evaluation's frame.",
+  "development_dump": {
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "n15": {
+      "commit": "cc7b0a4",
+      "method_version": "n15-2026-09-25",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 9,
+        "implausible_attribution": 6,
+        "matches": 1247,
+        "not_a_field_value": 14,
+        "not_in_evidence": 4,
+        "unattributed": 147,
+        "uncertain_attribution": 49
+      }
+    },
+    "n16": {
+      "commit": "7f468fa",
+      "method_version": "n16-2026-09-25",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 9,
+        "implausible_attribution": 6,
+        "matches": 1249,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": [
+      {
+        "claim": "164|BAC:xnys|96",
+        "figure": "0.5792",
+        "was": {
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "not_in_evidence",
+          "relation": "equals"
+        },
+        "now": {
+          "field": "markov.signed_signal",
+          "verdict": "uncertain_attribution",
+          "relation": "not_read"
+        },
+        "excerpt": "end, 5/3 confluences, markov long signal 0.5792, and supportive quiver congress context"
+      },
+      {
+        "claim": "165|BAC:xnys|85",
+        "figure": "0.579",
+        "was": {
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "uncertain_attribution",
+          "relation": "not_read"
+        },
+        "now": {
+          "field": "markov.signed_signal",
+          "verdict": "matches",
+          "relation": "equals"
+        },
+        "excerpt": "confluences, bullish trend, markov long 0.579, and supportive quiver context; blocked"
+      },
+      {
+        "claim": "275|FORTUM:xhel|84",
+        "figure": "0.25",
+        "was": {
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "uncertain_attribution",
+          "relation": "not_read"
+        },
+        "now": {
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "matches",
+          "relation": "equals"
+        },
+        "excerpt": "5/3 confluences, low support break-risk (0.25), and supportive +0.243 bull markov sig"
+      }
+    ]
+  },
+  "fresh_frame": {
+    "status": "The frame in which the defect was found. These notes are development evidence for n16, not validation of it.",
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "n15": {
+      "commit": "c45b3aa, checker byte-identical to cc7b0a4",
+      "method_version": "n15-2026-09-25",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 1,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 5
+      }
+    },
+    "n16": {
+      "commit": "7f468fa",
+      "method_version": "n16-2026-09-25",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 1,
+        "implausible_attribution": 1,
+        "matches": 48,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": [
+      {
+        "claim": "361|NSIS-B:xcse|38",
+        "figure": "5",
+        "was": {
+          "field": "daily_indicators.confluence_count",
+          "verdict": "uncertain_attribution",
+          "relation": "not_read"
+        },
+        "now": {
+          "field": "daily_indicators.confluence_count",
+          "verdict": "matches",
+          "relation": "equals"
+        },
+        "excerpt": "actionable technical buy supported by 5 confluences, low 0.231 break-risk, and"
+      }
+    ]
+  },
+  "regression_tests": "jev_numeric::n16_whole_names. At n15 (c45b3aa) the two tests of the defect fail and the one pinning what must not change passes; at n16 all three pass."
+}

@@ -4,6 +4,13 @@
 under evaluation is numeric method **`n15-2026-09-25`, frozen at `cc7b0a4`**.
 The scorer refuses to run under any other.
 
+**The checker has since moved to `n16`**, which fixes the "supported" defect
+this set found (`jev-numeric-grammar.md`). This set remains a measurement of
+`n15`, and cannot validate `n16`: its notes shaped the fix. Its reconciliation
+test recomputes the seeded readings only under `n15`; on later methods it still
+checks the natural, coherence and derivability figures. The seeded figures can
+be reproduced at `c45b3aa`.
+
 | file | |
 |---|---|
 | `jev-fresh-v1.json` | the instrument: 51 whole notes and their evidence, with the rubric. **No verdicts, no spans, no strata.** |
