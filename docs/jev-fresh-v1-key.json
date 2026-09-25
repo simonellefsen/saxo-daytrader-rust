@@ -1,0 +1,1166 @@
+{
+  "frame": {
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "reports": [
+      {
+        "created_at": "2026-09-23T08:48:34Z",
+        "id": 320
+      },
+      {
+        "created_at": "2026-09-23T12:21:27Z",
+        "id": 321
+      },
+      {
+        "created_at": "2026-09-23T14:54:37Z",
+        "id": 322
+      },
+      {
+        "created_at": "2026-09-23T18:17:23Z",
+        "id": 323
+      },
+      {
+        "created_at": "2026-09-24T08:53:34Z",
+        "id": 356
+      },
+      {
+        "created_at": "2026-09-24T12:17:27Z",
+        "id": 357
+      },
+      {
+        "created_at": "2026-09-24T14:51:33Z",
+        "id": 358
+      },
+      {
+        "created_at": "2026-09-24T18:21:41Z",
+        "id": 359
+      },
+      {
+        "created_at": "2026-09-25T08:49:05Z",
+        "id": 360
+      },
+      {
+        "created_at": "2026-09-25T12:22:48Z",
+        "id": 361
+      },
+      {
+        "created_at": "2026-09-25T14:47:03Z",
+        "id": 362
+      }
+    ],
+    "rule": "Every completed report after #319, the last in the development dump, up to and including #362, the last created before n15-2026-09-25 was frozen at cc7b0a4; every distinct note those reports attached to a selected symbol."
+  },
+  "frozen_commit": "cc7b0a4",
+  "keys": [
+    {
+      "extracted": [
+        {
+          "end": 71,
+          "field": "markov.conviction",
+          "figure": "+0.806",
+          "start": 65,
+          "verdict": "matches"
+        },
+        {
+          "end": 100,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.113",
+          "start": 95,
+          "verdict": "matches"
+        },
+        {
+          "end": 129,
+          "field": null,
+          "figure": "356.01",
+          "start": 123,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-00c0303db2",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 39,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 38,
+          "verdict": "matches"
+        },
+        {
+          "end": 82,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.236",
+          "start": 77,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-0110c45666",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 34,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 33,
+          "verdict": "matches"
+        },
+        {
+          "end": 114,
+          "field": "markov.conviction",
+          "figure": "0.20",
+          "start": 110,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "fresh-02712374e4",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 66,
+          "field": "markov.conviction",
+          "figure": "+0.420",
+          "start": 60,
+          "verdict": "matches"
+        },
+        {
+          "end": 87,
+          "field": "markov.bear_prob",
+          "figure": "2.2%",
+          "start": 83,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-06c619a826",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 46,
+          "field": "markov.signed_signal",
+          "figure": "+0.745",
+          "start": 40,
+          "verdict": "matches"
+        },
+        {
+          "end": 91,
+          "field": null,
+          "figure": "484.76",
+          "start": 85,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-10688ff154",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 87,
+          "field": "markov.conviction",
+          "figure": "+0.745",
+          "start": 81,
+          "verdict": "matches"
+        },
+        {
+          "end": 127,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "502",
+          "start": 124,
+          "verdict": "not_in_evidence"
+        }
+      ],
+      "id": "fresh-11253ba36c",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 88,
+          "field": "markov.conviction",
+          "figure": "+0.745",
+          "start": 82,
+          "verdict": "matches"
+        },
+        {
+          "end": 133,
+          "field": null,
+          "figure": "502",
+          "start": 130,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-12ed988968",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 23,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 22,
+          "verdict": "matches"
+        },
+        {
+          "end": 55,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.214",
+          "start": 50,
+          "verdict": "matches"
+        },
+        {
+          "end": 111,
+          "field": "markov.signed_signal",
+          "figure": "0.20",
+          "start": 107,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "fresh-1fa84ecf3c",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 37,
+          "field": "markov.signed_signal",
+          "figure": "+0.491",
+          "start": 31,
+          "verdict": "matches"
+        },
+        {
+          "end": 70,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.236",
+          "start": 65,
+          "verdict": "not_in_evidence"
+        }
+      ],
+      "id": "fresh-296fde72d8",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 50,
+          "field": null,
+          "figure": "6.71",
+          "start": 46,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 66,
+          "field": "markov.signed_signal",
+          "figure": "+0.420",
+          "start": 60,
+          "verdict": "matches"
+        },
+        {
+          "end": 115,
+          "field": null,
+          "figure": "6.51",
+          "start": 111,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-312af6c9ae",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 63,
+          "field": "markov.signed_signal",
+          "figure": "+0.399",
+          "start": 57,
+          "verdict": "matches"
+        },
+        {
+          "end": 90,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.343",
+          "start": 85,
+          "verdict": "not_in_evidence"
+        },
+        {
+          "end": 103,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "776",
+          "start": 100,
+          "verdict": "not_in_evidence"
+        }
+      ],
+      "id": "fresh-3a4fe3c8f2",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [],
+      "id": "fresh-47fe52e6dd",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 59,
+          "field": null,
+          "figure": "413.70",
+          "start": 53,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 101,
+          "field": null,
+          "figure": "383.90",
+          "start": 95,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 116,
+          "field": "markov.signed_signal",
+          "figure": "+0.364",
+          "start": 110,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-4c86903ff6",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 39,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 38,
+          "verdict": "uncertain_attribution"
+        },
+        {
+          "end": 62,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.231",
+          "start": 57,
+          "verdict": "matches"
+        },
+        {
+          "end": 95,
+          "field": "markov.conviction",
+          "figure": "+0.2595",
+          "start": 88,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-4f5fd8c0bf",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 37,
+          "field": null,
+          "figure": "+8%",
+          "start": 34,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 57,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 56,
+          "verdict": "matches"
+        },
+        {
+          "end": 95,
+          "field": null,
+          "figure": "33.59",
+          "start": 90,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-505293bb65",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [],
+      "id": "fresh-52fa6618fd",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 34,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 33,
+          "verdict": "matches"
+        },
+        {
+          "end": 54,
+          "field": "markov.signed_signal",
+          "figure": "+0.419",
+          "start": 48,
+          "verdict": "matches"
+        },
+        {
+          "end": 84,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.125",
+          "start": 79,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-62427c2bea",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 26,
+          "field": "daily_indicators.confluence_count",
+          "figure": "6",
+          "start": 25,
+          "verdict": "matches"
+        },
+        {
+          "end": 74,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.110",
+          "start": 69,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-65f68db078",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 103,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "1.00",
+          "start": 99,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-6dda2d3c55",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 79,
+          "field": "markov.signed_signal",
+          "figure": "+0.316",
+          "start": 73,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-6ed6c90799",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 44,
+          "field": null,
+          "figure": "+2.08%",
+          "start": 38,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 63,
+          "field": null,
+          "figure": "842.40",
+          "start": 57,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 101,
+          "field": "markov.signed_signal",
+          "figure": "+0.599",
+          "start": 95,
+          "verdict": "matches"
+        },
+        {
+          "end": 139,
+          "field": null,
+          "figure": "790.19",
+          "start": 133,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-74282c98e4",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 41,
+          "field": "daily_indicators.confluence_count",
+          "figure": "6",
+          "start": 40,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-77e4c9ca16",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 42,
+          "field": null,
+          "figure": "435.06",
+          "start": 36,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 53,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 52,
+          "verdict": "matches"
+        },
+        {
+          "end": 122,
+          "field": null,
+          "figure": "382.52",
+          "start": 116,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-79a8be9e87",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 46,
+          "field": "markov.conviction",
+          "figure": "+0.742",
+          "start": 40,
+          "verdict": "matches"
+        },
+        {
+          "end": 87,
+          "field": null,
+          "figure": "515.5",
+          "start": 82,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 107,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "502",
+          "start": 104,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-7e5e21362e",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 42,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 41,
+          "verdict": "matches"
+        },
+        {
+          "end": 87,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.092",
+          "start": 82,
+          "verdict": "matches"
+        },
+        {
+          "end": 120,
+          "field": "markov.signed_signal",
+          "figure": "+0.260",
+          "start": 114,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-834bd27ad5",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 76,
+          "field": "markov.conviction",
+          "figure": "+0.742",
+          "start": 70,
+          "verdict": "matches"
+        },
+        {
+          "end": 93,
+          "field": null,
+          "figure": "+6.1%",
+          "start": 88,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-8372feaaeb",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 35,
+          "field": "markov.conviction",
+          "figure": "+0.701",
+          "start": 29,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-843dbae5bf",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 37,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 36,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-8e0b57dc42",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 56,
+          "field": null,
+          "figure": "24.18",
+          "start": 51,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 97,
+          "field": null,
+          "figure": "22.95",
+          "start": 92,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 112,
+          "field": "markov.signed_signal",
+          "figure": "+0.678",
+          "start": 106,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-978ff05310",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 60,
+          "field": null,
+          "figure": "34.23",
+          "start": 55,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 79,
+          "field": "daily_indicators.support.downside_to_support_pct",
+          "figure": "33.59",
+          "start": 74,
+          "verdict": "implausible_attribution"
+        }
+      ],
+      "id": "fresh-9e662171fc",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 47,
+          "field": null,
+          "figure": "227.23",
+          "start": 41,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 58,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 57,
+          "verdict": "matches"
+        },
+        {
+          "end": 91,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.125",
+          "start": 86,
+          "verdict": "matches"
+        },
+        {
+          "end": 129,
+          "field": null,
+          "figure": "216.37",
+          "start": 123,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-a39dbec5d9",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 38,
+          "field": "markov.conviction",
+          "figure": "+0.745",
+          "start": 32,
+          "verdict": "matches"
+        },
+        {
+          "end": 82,
+          "field": null,
+          "figure": "484.76",
+          "start": 76,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-a45ceb915d",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 37,
+          "field": "markov.signed_signal",
+          "figure": "+0.364",
+          "start": 31,
+          "verdict": "matches"
+        },
+        {
+          "end": 83,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "391",
+          "start": 80,
+          "verdict": "not_in_evidence"
+        },
+        {
+          "end": 100,
+          "field": null,
+          "figure": "25",
+          "start": 98,
+          "verdict": "not_a_field_value"
+        },
+        {
+          "end": 123,
+          "field": null,
+          "figure": "6,240",
+          "start": 118,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-b15ea011c2",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 74,
+          "field": "markov.conviction",
+          "figure": "+0.678",
+          "start": 68,
+          "verdict": "matches"
+        },
+        {
+          "end": 86,
+          "field": "markov.bull_prob",
+          "figure": "71.3%",
+          "start": 81,
+          "verdict": "matches"
+        },
+        {
+          "end": 150,
+          "field": null,
+          "figure": "40",
+          "start": 148,
+          "verdict": "not_a_field_value"
+        }
+      ],
+      "id": "fresh-b196192ef8",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 40,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 39,
+          "verdict": "matches"
+        },
+        {
+          "end": 74,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.221",
+          "start": 69,
+          "verdict": "matches"
+        },
+        {
+          "end": 93,
+          "field": "markov.signed_signal",
+          "figure": "+0.447",
+          "start": 87,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-b3bf23b493",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 77,
+          "field": "markov.conviction",
+          "figure": "+0.800",
+          "start": 71,
+          "verdict": "matches"
+        },
+        {
+          "end": 121,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.176",
+          "start": 116,
+          "verdict": "matches"
+        },
+        {
+          "end": 136,
+          "field": null,
+          "figure": "+2.30%",
+          "start": 130,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-bce6065f20",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 43,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 42,
+          "verdict": "matches"
+        },
+        {
+          "end": 72,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.144",
+          "start": 67,
+          "verdict": "matches"
+        },
+        {
+          "end": 106,
+          "field": "markov.signed_signal",
+          "figure": "+0.293",
+          "start": 100,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-be258916cd",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 31,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 30,
+          "verdict": "matches"
+        },
+        {
+          "end": 73,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.231",
+          "start": 68,
+          "verdict": "matches"
+        },
+        {
+          "end": 108,
+          "field": "markov.signed_signal",
+          "figure": "+0.2595",
+          "start": 101,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-c979a67ff4",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 66,
+          "field": "markov.conviction",
+          "figure": "+0.800",
+          "start": 60,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-cd0660f989",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 78,
+          "field": "markov.conviction",
+          "figure": "+0.535",
+          "start": 72,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-d0dd76c166",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 55,
+          "field": "markov.signed_signal",
+          "figure": "+0.316",
+          "start": 49,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-d2cb7181db",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 37,
+          "field": "markov.conviction",
+          "figure": "+0.701",
+          "start": 31,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-dab04c739d",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 27,
+          "field": "daily_indicators.confluence_count",
+          "figure": "6",
+          "start": 26,
+          "verdict": "differs"
+        },
+        {
+          "end": 98,
+          "field": "markov.conviction",
+          "figure": "-0.124",
+          "start": 92,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-e2f6a33d7a",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 44,
+          "field": "quiver.signal",
+          "figure": "+0.711",
+          "start": 38,
+          "verdict": "uncertain_attribution"
+        },
+        {
+          "end": 100,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.996",
+          "start": 95,
+          "verdict": "matches"
+        },
+        {
+          "end": 141,
+          "field": "markov.conviction",
+          "figure": "+0.006",
+          "start": 135,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-e950b8c436",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 30,
+          "field": "markov.conviction",
+          "figure": "+0.710",
+          "start": 24,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-ee9c5b2a4c",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 49,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "801",
+          "start": 46,
+          "verdict": "not_in_evidence"
+        },
+        {
+          "end": 74,
+          "field": "markov.signed_signal",
+          "figure": "+0.399",
+          "start": 68,
+          "verdict": "matches"
+        },
+        {
+          "end": 120,
+          "field": null,
+          "figure": "772.06",
+          "start": 114,
+          "verdict": "unattributed"
+        }
+      ],
+      "id": "fresh-f05dd4b576",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 41,
+          "field": null,
+          "figure": "+2.05%",
+          "start": 35,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 59,
+          "field": null,
+          "figure": "35.80",
+          "start": 54,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 100,
+          "field": null,
+          "figure": "+10.1%",
+          "start": 94,
+          "verdict": "unattributed"
+        },
+        {
+          "end": 112,
+          "field": "markov.signed_signal",
+          "figure": "+0.325",
+          "start": 106,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-f513b5a0d5",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 52,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 51,
+          "verdict": "uncertain_attribution"
+        }
+      ],
+      "id": "fresh-f5dcb1c5fa",
+      "stratum": "reached_with_figures"
+    },
+    {
+      "extracted": [
+        {
+          "end": 34,
+          "field": "quiver.signal",
+          "figure": "+0.723",
+          "start": 28,
+          "verdict": "matches"
+        },
+        {
+          "end": 99,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.638",
+          "start": 94,
+          "verdict": "not_in_evidence"
+        }
+      ],
+      "id": "fresh-f6c714e6bb",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 116,
+          "field": "daily_indicators.support.break_risk",
+          "figure": "0.638",
+          "start": 111,
+          "verdict": "not_in_evidence"
+        }
+      ],
+      "id": "fresh-f7fd7b58b5",
+      "stratum": "never_reached"
+    },
+    {
+      "extracted": [
+        {
+          "end": 59,
+          "field": "daily_indicators.support.nearest_support",
+          "figure": "428",
+          "start": 56,
+          "verdict": "matches"
+        },
+        {
+          "end": 78,
+          "field": "daily_indicators.confluence_count",
+          "figure": "5",
+          "start": 77,
+          "verdict": "matches"
+        },
+        {
+          "end": 101,
+          "field": "markov.signed_signal",
+          "figure": "+0.386",
+          "start": 95,
+          "verdict": "matches"
+        }
+      ],
+      "id": "fresh-fb22201b8b",
+      "stratum": "reached_with_figures"
+    }
+  ],
+  "method_version": "n15-2026-09-25",
+  "population": {
+    "never_reached": 23,
+    "reached_with_figures": 28
+  },
+  "protocol": "fresh-protocol-v1-2026-09-25",
+  "strata": "`never_reached`: production never showed the checker this note, because the candidate had no indicator snapshot or fell past the question budget. Its `extracted` is what the method reads when given the note and the same evidence anyway.",
+  "version": "fresh-v1-2026-09-25",
+  "warning": "Do not read this before labelling. It holds every figure the checker extracted from each note, with its verdict."
+}

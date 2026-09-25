@@ -27,6 +27,9 @@ mod jev_challenge;
 // A labelling instrument, not a runtime path.
 #[cfg(test)]
 mod jev_controls;
+// A held-out evaluation instrument, not a runtime path.
+#[cfg(test)]
+mod jev_fresh;
 mod jev_numeric;
 #[cfg(test)]
 mod jev_provenance;

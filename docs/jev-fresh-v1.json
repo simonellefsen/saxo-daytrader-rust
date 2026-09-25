@@ -1,0 +1,2262 @@
+{
+  "cases": [
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 18.642954262609255,
+          "close": 393.3,
+          "close_dkk": 2585.3773032188415,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 3.637374670461637,
+          "min_confluences": 3,
+          "reward_risk": 0.14965439279093665,
+          "rsi14": 62.6868068402356,
+          "sentiment": "BUY",
+          "sma20": 358.79099999999994,
+          "sma200": 243.38065000000017,
+          "sma50": 355.3898,
+          "support": {
+            "break_risk": 0.113219103363122,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.950354609929079,
+            "downside_to_support_pct": 10.373760488176966,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 352.5,
+            "next_support": 328.0,
+            "touch_count": 2
+          },
+          "symbol": "PANW:xnas",
+          "trend_bias": "bullish",
+          "uic": 25592892
+        },
+        "markov": {
+          "bear_prob": 0.05711369588971138,
+          "bull_prob": 0.8633625507354736,
+          "close": 389.2999877929687,
+          "close_dkk": 2559.0830220780917,
+          "conviction": 0.8062488436698914,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.07952374964952469,
+          "signed_signal": 0.8062488436698914,
+          "state": "Bull",
+          "symbol": "PANW:xnas"
+        },
+        "quiver": {
+          "confidence": 0.3808336853981018,
+          "direction": "neutral",
+          "run_date": "2026-09-24",
+          "signal": -0.08809623122215271
+        },
+        "symbol": "PANW:xnas"
+      },
+      "id": "fresh-00c0303db2",
+      "note": "Held cybersecurity leader maintaining premier Markov conviction (+0.806 Bull), low break risk (0.113), and working stop at 356.01 USD.",
+      "source_report": 358,
+      "symbol": "PANW:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 22.586728063485197,
+          "close": 427.69,
+          "close_dkk": 2803.880064315796,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.417220967138159,
+          "min_confluences": 3,
+          "reward_risk": 1.0052363465917855,
+          "rsi14": 59.25206224700524,
+          "sentiment": "BUY",
+          "sma20": 395.6565,
+          "sma200": 344.5257500000002,
+          "sma50": 380.9418,
+          "support": {
+            "break_risk": 0.2355141701321076,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.899623924441676,
+            "downside_to_support_pct": 1.2240173957773053,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 422.455,
+            "next_support": 393.3071937499999,
+            "touch_count": 2
+          },
+          "symbol": "MDB:xnas",
+          "trend_bias": "bullish",
+          "uic": 8089285
+        },
+        "markov": {
+          "bear_prob": 0.19941426813602448,
+          "bull_prob": 0.4844309687614441,
+          "close": 425.635009765625,
+          "close_dkk": 2790.4078153725713,
+          "conviction": 0.2850166857242584,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3161547780036926,
+          "signed_signal": 0.2850166857242584,
+          "state": "Sideways",
+          "symbol": "MDB:xnas"
+        },
+        "quiver": null,
+        "symbol": "MDB:xnas"
+      },
+      "id": "fresh-0110c45666",
+      "note": "Enterprise database leader displaying 5 confluences, bullish trend bias, and 0.236 break risk.",
+      "source_report": 322,
+      "symbol": "MDB:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 4.932843372526499,
+          "close": 220.4,
+          "close_dkk": 220.4,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": 0.520152902092399,
+          "min_confluences": 3,
+          "reward_risk": 0.3851733891617263,
+          "rsi14": 67.08351777692135,
+          "sentiment": "BUY",
+          "sma20": 211.27,
+          "sma200": 191.55524999999997,
+          "sma50": 196.25200000000007,
+          "support": {
+            "break_risk": 0.21427010008433975,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 2.899426155240127,
+            "downside_to_support_pct": 1.2794918330308498,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 217.58,
+            "next_support": 211.27142857142857,
+            "touch_count": 5
+          },
+          "symbol": "BAVA:xcse",
+          "trend_bias": "bullish",
+          "uic": 2086
+        },
+        "markov": {
+          "bear_prob": 0.15440388023853302,
+          "bull_prob": 0.24925388395786283,
+          "close": 219.8000030517578,
+          "close_dkk": 219.8000030517578,
+          "conviction": 0.09484999626874924,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.5963422060012817,
+          "signed_signal": 0.09484999626874924,
+          "state": "Sideways",
+          "symbol": "BAVA:xcse"
+        },
+        "quiver": null,
+        "symbol": "BAVA:xcse"
+      },
+      "id": "fresh-02712374e4",
+      "note": "Danish healthcare candidate with 5 technical confluences and low break risk; awaiting Markov conviction above 0.20.",
+      "source_report": 360,
+      "symbol": "BAVA:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.02183444611728191,
+          "bull_prob": 0.44181859493255615,
+          "close": 6.771999835968018,
+          "close_dkk": 50.623407377463536,
+          "conviction": 0.4199841320514679,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.536346971988678,
+          "signed_signal": 0.4199841320514679,
+          "state": "Sideways",
+          "symbol": "ISP:xmil"
+        },
+        "quiver": null,
+        "symbol": "ISP:xmil"
+      },
+      "id": "fresh-06c619a826",
+      "note": "Italian banking leader displaying strong Markov conviction (+0.420) and negligible 2.2% bear probability.",
+      "source_report": 320,
+      "symbol": "ISP:xmil"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.0165253896266222,
+          "bull_prob": 0.7610986828804016,
+          "close": 518.0,
+          "close_dkk": 518.0,
+          "conviction": 0.7445732951164246,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.22237595915794373,
+          "signed_signal": 0.7445732951164246,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-10688ff154",
+      "note": "Held top-conviction Danish holding with +0.745 Markov Bull regime and secure stop at 484.76 DKK.",
+      "source_report": 360,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.0165253896266222,
+          "bull_prob": 0.7610986828804016,
+          "close": 515.5,
+          "close_dkk": 515.5,
+          "conviction": 0.7445732951164246,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.22237595915794373,
+          "signed_signal": 0.7445732951164246,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-11253ba36c",
+      "note": "Core Danish medical technology holding maintaining top Nordic Markov conviction (+0.745 Bull) and secure price action above 502 DKK support.",
+      "source_report": 357,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.0165253896266222,
+          "bull_prob": 0.7610986828804016,
+          "close": 515.5,
+          "close_dkk": 515.5,
+          "conviction": 0.7445732951164246,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.22237595915794373,
+          "signed_signal": 0.7445732951164246,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-12ed988968",
+      "note": "Core held Danish medical equipment holding with highest Nordic Markov conviction (+0.745 Bull) and secure technical cushion above 502 DKK.",
+      "source_report": 356,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 4.932843372526499,
+          "close": 220.4,
+          "close_dkk": 220.4,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": 0.520152902092399,
+          "min_confluences": 3,
+          "reward_risk": 0.3851733891617263,
+          "rsi14": 67.08351777692135,
+          "sentiment": "BUY",
+          "sma20": 211.27,
+          "sma200": 191.55524999999997,
+          "sma50": 196.25200000000007,
+          "support": {
+            "break_risk": 0.21427010008433975,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 2.899426155240127,
+            "downside_to_support_pct": 1.2794918330308498,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 217.58,
+            "next_support": 211.27142857142857,
+            "touch_count": 5
+          },
+          "symbol": "BAVA:xcse",
+          "trend_bias": "bullish",
+          "uic": 2086
+        },
+        "markov": {
+          "bear_prob": 0.15440388023853302,
+          "bull_prob": 0.24925388395786283,
+          "close": 219.8000030517578,
+          "close_dkk": 219.8000030517578,
+          "conviction": 0.09484999626874924,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.5963422060012817,
+          "signed_signal": 0.09484999626874924,
+          "state": "Sideways",
+          "symbol": "BAVA:xcse"
+        },
+        "quiver": null,
+        "symbol": "BAVA:xcse"
+      },
+      "id": "fresh-1fa84ecf3c",
+      "note": "Healthcare setup with 5 technical confluences and 0.214 break-risk; awaiting Markov signal expansion above 0.20 threshold.",
+      "source_report": 361,
+      "symbol": "BAVA:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.15735124051570892,
+          "bull_prob": 0.6484510898590088,
+          "close": 251.5500030517578,
+          "close_dkk": 1653.5765789846046,
+          "conviction": 0.49109986424446106,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.1941976547241211,
+          "signed_signal": 0.49109986424446106,
+          "state": "Bull",
+          "symbol": "DDOG:xnas"
+        },
+        "quiver": {
+          "confidence": 0.19276238977909088,
+          "direction": "neutral",
+          "run_date": "2026-09-24",
+          "signal": 0.026940152049064636
+        },
+        "symbol": "DDOG:xnas"
+      },
+      "id": "fresh-296fde72d8",
+      "note": "Observability platform showing +0.491 Bull Markov signal and low 0.236 break risk; near-term candidate for pullback entry.",
+      "source_report": 358,
+      "symbol": "DDOG:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.02183444611728191,
+          "bull_prob": 0.44181859493255615,
+          "close": 6.771999835968018,
+          "close_dkk": 50.623814249249335,
+          "conviction": 0.4199841320514679,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.536346971988678,
+          "signed_signal": 0.4199841320514679,
+          "state": "Sideways",
+          "symbol": "ISP:xmil"
+        },
+        "quiver": null,
+        "symbol": "ISP:xmil"
+      },
+      "id": "fresh-312af6c9ae",
+      "note": "Executed Italian banking starter trading near 6.71 EUR with +0.420 Markov signal and protective stop active at 6.51 EUR.",
+      "source_report": 321,
+      "symbol": "ISP:xmil"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.12695834040641785,
+          "bull_prob": 0.5263795852661133,
+          "close": 797.0,
+          "close_dkk": 797.0,
+          "conviction": 0.3994212746620178,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3466620445251465,
+          "signed_signal": 0.3994212746620178,
+          "state": "Bull",
+          "symbol": "SCHO:xcse"
+        },
+        "quiver": null,
+        "symbol": "SCHO:xcse"
+      },
+      "id": "fresh-3a4fe3c8f2",
+      "note": "Danish industrial holding with fresh Markov Bull regime (+0.399) and low break risk (0.343) against 776 DKK support.",
+      "source_report": 320,
+      "symbol": "SCHO:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.21212320029735565,
+          "bull_prob": 0.3899462819099426,
+          "close": 189.2599945068359,
+          "close_dkk": 1240.7639308149228,
+          "conviction": 0.17782306671142578,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3979305326938629,
+          "signed_signal": 0.17782306671142578,
+          "state": "Bull",
+          "symbol": "PLTR:xnas"
+        },
+        "quiver": {
+          "confidence": 0.6954993009567261,
+          "direction": "bullish",
+          "run_date": "2026-09-23",
+          "signal": 0.27285507321357727
+        },
+        "symbol": "PLTR:xnas"
+      },
+      "id": "fresh-47fe52e6dd",
+      "note": "High Quiver interest and constructive price momentum; awaiting lower break risk before entry.",
+      "source_report": 322,
+      "symbol": "PLTR:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.1876441985368729,
+          "bull_prob": 0.5520085096359253,
+          "close": 413.7999877929687,
+          "close_dkk": 286.7013189377976,
+          "conviction": 0.3643643260002136,
+          "currency": "NOK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.26034730672836304,
+          "signed_signal": 0.3643643260002136,
+          "state": "Bull",
+          "symbol": "EQNR:xosl"
+        },
+        "quiver": null,
+        "symbol": "EQNR:xosl"
+      },
+      "id": "fresh-4c86903ff6",
+      "note": "Freshly executed Norwegian energy starter holding at 413.70 NOK with active protective stop at 383.90 NOK and +0.364 Bull Markov signal.",
+      "source_report": 357,
+      "symbol": "EQNR:xosl"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 8.923874788196724,
+          "close": 442.9,
+          "close_dkk": 442.9,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": 0.06592028066787281,
+          "min_confluences": 3,
+          "reward_risk": 1.2382513495836398,
+          "rsi14": 56.31936840813419,
+          "sentiment": "BUY",
+          "sma20": 438.6799999999999,
+          "sma200": 399.526,
+          "sma50": 430.9300000000001,
+          "support": {
+            "break_risk": 0.2309149608166551,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 2.7672817295260126,
+            "downside_to_support_pct": 0.6152630390607283,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 440.175,
+            "next_support": 427.9941176470589,
+            "touch_count": 4
+          },
+          "symbol": "NSIS-B:xcse",
+          "trend_bias": "bullish",
+          "uic": 40846885
+        },
+        "markov": {
+          "bear_prob": 0.04944669455289841,
+          "bull_prob": 0.3089401423931122,
+          "close": 446.1000061035156,
+          "close_dkk": 446.1000061035156,
+          "conviction": 0.25949347019195557,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.6416131258010864,
+          "signed_signal": 0.25949347019195557,
+          "state": "Sideways",
+          "symbol": "NSIS-B:xcse"
+        },
+        "quiver": null,
+        "symbol": "NSIS-B:xcse"
+      },
+      "id": "fresh-4f5fd8c0bf",
+      "note": "Actionable technical BUY supported by 5 confluences, low 0.231 break-risk, and positive +0.2595 Markov conviction.",
+      "source_report": 361,
+      "symbol": "NSIS-B:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 1.1152176877018498,
+          "close": 35.82,
+          "close_dkk": 267.7648814105988,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.2086617669693984,
+          "min_confluences": 3,
+          "reward_risk": 1.0,
+          "rsi14": 68.63286428522343,
+          "sentiment": "BUY",
+          "sma20": 33.148500000000006,
+          "sma200": 26.50985,
+          "sma50": 31.785800000000005,
+          "support": {
+            "break_risk": 0.21329192008749365,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 4.094980804777471,
+            "downside_to_support_pct": 1.8285873813512037,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 35.165,
+            "next_support": 33.725,
+            "touch_count": 6
+          },
+          "symbol": "NESTE:xhel",
+          "trend_bias": "bullish",
+          "uic": 25935728
+        },
+        "markov": {
+          "bear_prob": 0.1531471461057663,
+          "bull_prob": 0.485067218542099,
+          "close": 35.220001220703125,
+          "close_dkk": 263.27971664273355,
+          "conviction": 0.3319200873374939,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.3617856204509735,
+          "signed_signal": 0.3319200873374939,
+          "state": "Bull",
+          "symbol": "NESTE:xhel"
+        },
+        "quiver": null,
+        "symbol": "NESTE:xhel"
+      },
+      "id": "fresh-505293bb65",
+      "note": "Held renewable leader maintaining +8% unrealized gains, 5 confluences, and active stop at 33.59 EUR.",
+      "source_report": 360,
+      "symbol": "NESTE:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.21212320029735565,
+          "bull_prob": 0.3899462819099426,
+          "close": 189.2599945068359,
+          "close_dkk": 1242.1663567309442,
+          "conviction": 0.17782306671142578,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3979305326938629,
+          "signed_signal": 0.17782306671142578,
+          "state": "Bull",
+          "symbol": "PLTR:xnas"
+        },
+        "quiver": {
+          "confidence": 0.6954993009567261,
+          "direction": "bullish",
+          "run_date": "2026-09-23",
+          "signal": 0.27285507321357727
+        },
+        "symbol": "PLTR:xnas"
+      },
+      "id": "fresh-52fa6618fd",
+      "note": "Positive congressional inflows and constructive momentum; awaiting support break-risk compression before proposing starter capital.",
+      "source_report": 323,
+      "symbol": "PLTR:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 6.251425020811735,
+          "close": 228.87,
+          "close_dkk": 1500.441979751587,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 0.4164083134395739,
+          "min_confluences": 3,
+          "reward_risk": 0.4710925893209531,
+          "rsi14": 59.36025984649772,
+          "sentiment": "BUY",
+          "sma20": 220.53100000000003,
+          "sma200": 198.85415000000003,
+          "sma50": 215.10780000000003,
+          "support": {
+            "break_risk": 0.12536175126907406,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 3.735309067944108,
+            "downside_to_support_pct": 5.447051455702655,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 216.40333333333336,
+            "next_support": 208.32,
+            "touch_count": 3
+          },
+          "symbol": "NVDA:xnas",
+          "trend_bias": "bullish",
+          "uic": 1249
+        },
+        "markov": {
+          "bear_prob": 0.12838713824748993,
+          "bull_prob": 0.5474853515625,
+          "close": 225.6490020751953,
+          "close_dkk": 1479.325535905431,
+          "conviction": 0.41909822821617126,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3241274952888489,
+          "signed_signal": 0.41909822821617126,
+          "state": "Bull",
+          "symbol": "NVDA:xnas"
+        },
+        "quiver": null,
+        "symbol": "NVDA:xnas"
+      },
+      "id": "fresh-62427c2bea",
+      "note": "Top semiconductor candidate with 5 confluences, +0.419 Bull Markov signal, and 0.125 support break risk.",
+      "source_report": 322,
+      "symbol": "NVDA:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 0.4571184273457526,
+          "close": 9.446,
+          "close_dkk": 70.61404695034027,
+          "confluence_count": 6,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.06404981981403639,
+          "min_confluences": 3,
+          "reward_risk": 2.0826112951249103,
+          "rsi14": 55.53714505474386,
+          "sentiment": "BUY",
+          "sma20": 9.0273,
+          "sma200": 8.496245000000002,
+          "sma50": 8.777360000000002,
+          "support": {
+            "break_risk": 0.11040269614479156,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 5.614243323442125,
+            "downside_to_support_pct": 10.80880796104172,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 8.424999999999999,
+            "next_support": 7.952,
+            "touch_count": 6
+          },
+          "symbol": "NOKIA:xhel",
+          "trend_bias": "bullish",
+          "uic": 2300939
+        },
+        "markov": {
+          "bear_prob": 0.4302408695220947,
+          "bull_prob": 0.31860995292663574,
+          "close": 9.08199977874756,
+          "close_dkk": 67.89294503276096,
+          "conviction": 0.1116309091448784,
+          "currency": "EUR",
+          "direction": "short",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.25114917755126953,
+          "signed_signal": -0.1116309091448784,
+          "state": "Sideways",
+          "symbol": "NOKIA:xhel"
+        },
+        "quiver": null,
+        "symbol": "NOKIA:xhel"
+      },
+      "id": "fresh-65f68db078",
+      "note": "Nordic tech holding with 6 technical confluences and low break risk (0.110), but immediate entry is deferred pending positive Markov regime convergence.",
+      "source_report": 356,
+      "symbol": "NOKIA:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 2.04988442587207,
+          "close": 69.22,
+          "close_dkk": 453.8748579502106,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": -0.4668735198561722,
+          "min_confluences": 3,
+          "reward_risk": 3.2062783233273744,
+          "rsi14": 36.3591762631058,
+          "sentiment": "SELL",
+          "sma20": 72.95200000000001,
+          "sma200": 75.26610000000001,
+          "sma50": 73.38979999999998,
+          "support": {
+            "break_risk": 1.0,
+            "break_risk_label": "high",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 1.689423289567426,
+            "downside_to_support_pct": 0.0,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 69.36875,
+            "next_support": 68.1968181818182,
+            "touch_count": 4
+          },
+          "symbol": "UBER:xnys",
+          "trend_bias": "bearish",
+          "uic": 13697176
+        },
+        "markov": {
+          "bear_prob": 0.26082301139831543,
+          "bull_prob": 0.2434526234865189,
+          "close": 69.0999984741211,
+          "close_dkk": 453.0880091274412,
+          "conviction": 0.017370400950312614,
+          "currency": "USD",
+          "direction": "short",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.4957243502140045,
+          "signed_signal": -0.017370400950312614,
+          "state": "Bear",
+          "symbol": "UBER:xnys"
+        },
+        "quiver": {
+          "confidence": 0.9011933207511902,
+          "direction": "bullish",
+          "run_date": "2026-09-25",
+          "signal": 0.7176951766014099
+        },
+        "symbol": "UBER:xnys"
+      },
+      "id": "fresh-6dda2d3c55",
+      "note": "Considered candidate with strong congressional buying but rejected due to high support break risk (1.00) and bearish trend bias.",
+      "source_report": 362,
+      "symbol": "UBER:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.030548959970474243,
+          "bull_prob": 0.346753865480423,
+          "close": 280.29998779296875,
+          "close_dkk": 2095.371361459838,
+          "conviction": 0.31620490550994873,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.6226971745491028,
+          "signed_signal": 0.31620490550994873,
+          "state": "Sideways",
+          "symbol": "DB1GN:xetr"
+        },
+        "quiver": null,
+        "symbol": "DB1GN:xetr"
+      },
+      "id": "fresh-6ed6c90799",
+      "note": "German exchange infrastructure holding on near-term watchlist with solid +0.316 Markov signal, monitored for future redeployment.",
+      "source_report": 321,
+      "symbol": "DB1GN:xetr"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.0,
+          "bull_prob": 0.5990289449691772,
+          "close": 829.2000122070312,
+          "close_dkk": 829.2000122070312,
+          "conviction": 0.5990289449691772,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.40097108483314514,
+          "signed_signal": 0.5990289449691772,
+          "state": "Sideways",
+          "symbol": "PNDORA:xcse"
+        },
+        "quiver": null,
+        "symbol": "PNDORA:xcse"
+      },
+      "id": "fresh-74282c98e4",
+      "note": "Danish jewelry manufacturer advancing +2.08% intraday to 842.40 DKK with strong Markov regime (+0.599) and active protective stop at 790.19 DKK.",
+      "source_report": 357,
+      "symbol": "PNDORA:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 0.4676659986800414,
+          "close": 9.284,
+          "close_dkk": 69.40161333084107,
+          "confluence_count": 6,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.06318843511657771,
+          "min_confluences": 3,
+          "reward_risk": 2.6899539490803863,
+          "rsi14": 53.40718463048923,
+          "sentiment": "BUY",
+          "sma20": 8.9961,
+          "sma200": 8.475575000000003,
+          "sma50": 8.784080000000001,
+          "support": {
+            "break_risk": 0.13520119026927382,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 5.614243323442125,
+            "downside_to_support_pct": 9.252477380439483,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 8.424999999999999,
+            "next_support": 7.952,
+            "touch_count": 6
+          },
+          "symbol": "NOKIA:xhel",
+          "trend_bias": "bullish",
+          "uic": 2300939
+        },
+        "markov": {
+          "bear_prob": 0.36803990602493286,
+          "bull_prob": 0.3708224892616272,
+          "close": 9.494000434875488,
+          "close_dkk": 70.97145057562102,
+          "conviction": 0.0027825762517750263,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.26113757491111755,
+          "signed_signal": 0.0027825762517750263,
+          "state": "Bull",
+          "symbol": "NOKIA:xhel"
+        },
+        "quiver": null,
+        "symbol": "NOKIA:xhel"
+      },
+      "id": "fresh-77e4c9ca16",
+      "note": "Top-ranked Nordic technology setup with 6 technical confluences and bullish bias, held on near-term watchlist pending Markov conviction.",
+      "source_report": 320,
+      "symbol": "NOKIA:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 22.586728063485197,
+          "close": 427.69,
+          "close_dkk": 2807.049268360138,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.417220967138159,
+          "min_confluences": 3,
+          "reward_risk": 1.0052363465917855,
+          "rsi14": 59.25206224700524,
+          "sentiment": "BUY",
+          "sma20": 395.6565,
+          "sma200": 344.5257500000002,
+          "sma50": 380.9418,
+          "support": {
+            "break_risk": 0.2355141701321076,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.899623924441676,
+            "downside_to_support_pct": 1.2240173957773053,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 422.455,
+            "next_support": 393.3071937499999,
+            "touch_count": 2
+          },
+          "symbol": "MDB:xnas",
+          "trend_bias": "bullish",
+          "uic": 8089285
+        },
+        "markov": {
+          "bear_prob": 0.19941426813602448,
+          "bull_prob": 0.4844309687614441,
+          "close": 425.635009765625,
+          "close_dkk": 2793.561791837681,
+          "conviction": 0.2850166857242584,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3161547780036926,
+          "signed_signal": 0.2850166857242584,
+          "state": "Sideways",
+          "symbol": "MDB:xnas"
+        },
+        "quiver": null,
+        "symbol": "MDB:xnas"
+      },
+      "id": "fresh-79a8be9e87",
+      "note": "Morning software addition filled at 435.06 USD with 5 technical confluences, bullish trend bias, and active stop at 382.52 USD.",
+      "source_report": 323,
+      "symbol": "MDB:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 21.402725334501383,
+          "close": 515.0,
+          "close_dkk": 515.0,
+          "confluence_count": 4,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": -1.237286458353518,
+          "min_confluences": 3,
+          "reward_risk": 0.4789109723086017,
+          "rsi14": 57.309401670073214,
+          "sentiment": "OVERWEIGHT",
+          "sma20": 504.37999999999994,
+          "sma200": 460.4114999999999,
+          "sma50": 466.324,
+          "support": {
+            "break_risk": 0.4146365129594075,
+            "break_risk_label": "moderate",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 5.776611187337193,
+            "downside_to_support_pct": 2.3514563106796142,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 502.89,
+            "next_support": 473.84,
+            "touch_count": 10
+          },
+          "symbol": "CHEMM:xcse",
+          "trend_bias": "bullish",
+          "uic": 24725
+        },
+        "markov": {
+          "bear_prob": 0.016616003587841988,
+          "bull_prob": 0.7589300870895386,
+          "close": 516.0,
+          "close_dkk": 516.0,
+          "conviction": 0.7423140406608582,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.22445392608642575,
+          "signed_signal": 0.7423140406608582,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-7e5e21362e",
+      "note": "Top European Markov conviction holding (+0.742) maintaining firm consolidation at 515.5 DKK above solid 502 DKK support.",
+      "source_report": 321,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 17.37688264324974,
+          "close": 709.48,
+          "close_dkk": 4663.802413139343,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 0.7410841467844449,
+          "min_confluences": 3,
+          "reward_risk": 0.3378051242280949,
+          "rsi14": 67.94744850378062,
+          "sentiment": "BUY",
+          "sma20": 675.9185,
+          "sma200": 580.5815000000001,
+          "sma50": 636.9142,
+          "support": {
+            "break_risk": 0.0916268725237054,
+            "break_risk_label": "low",
+            "confidence": 0.7523809523809524,
+            "downside_after_break_pct": 7.24888139184533,
+            "downside_to_support_pct": 6.206306026949319,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 665.4475,
+            "next_support": 617.21,
+            "touch_count": 1
+          },
+          "symbol": "DE:xnys",
+          "trend_bias": "bullish",
+          "uic": 445
+        },
+        "markov": {
+          "bear_prob": 0.07947659492492676,
+          "bull_prob": 0.3397658169269562,
+          "close": 699.4500122070312,
+          "close_dkk": 4597.869784633105,
+          "conviction": 0.2602892220020294,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.5807575583457947,
+          "signed_signal": 0.2602892220020294,
+          "state": "Bull",
+          "symbol": "DE:xnys"
+        },
+        "quiver": {
+          "confidence": 0.20635442435741425,
+          "direction": "neutral",
+          "run_date": "2026-09-24",
+          "signal": -0.06577453762292862
+        },
+        "symbol": "DE:xnys"
+      },
+      "id": "fresh-834bd27ad5",
+      "note": "Top industrial swing candidate backed by 5 technical confluences, low break risk (0.092), bullish trend bias, and +0.260 Bull Markov signal.",
+      "source_report": 358,
+      "symbol": "DE:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 21.402725334501383,
+          "close": 515.0,
+          "close_dkk": 515.0,
+          "confluence_count": 4,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": -1.237286458353518,
+          "min_confluences": 3,
+          "reward_risk": 0.4789109723086017,
+          "rsi14": 57.309401670073214,
+          "sentiment": "OVERWEIGHT",
+          "sma20": 504.37999999999994,
+          "sma200": 460.4114999999999,
+          "sma50": 466.324,
+          "support": {
+            "break_risk": 0.4146365129594075,
+            "break_risk_label": "moderate",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 5.776611187337193,
+            "downside_to_support_pct": 2.3514563106796142,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 502.89,
+            "next_support": 473.84,
+            "touch_count": 10
+          },
+          "symbol": "CHEMM:xcse",
+          "trend_bias": "bullish",
+          "uic": 24725
+        },
+        "markov": {
+          "bear_prob": 0.016616003587841988,
+          "bull_prob": 0.7589300870895386,
+          "close": 516.0,
+          "close_dkk": 516.0,
+          "conviction": 0.7423140406608582,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.22445392608642575,
+          "signed_signal": 0.7423140406608582,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-8372feaaeb",
+      "note": "Core Danish holding demonstrating highest European Markov conviction (+0.742) and solid +6.1% unrealised gain.",
+      "source_report": 320,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.06748805195093155,
+          "bull_prob": 0.7685525417327881,
+          "close": 333.94000244140625,
+          "close_dkk": 2191.7417744846316,
+          "conviction": 0.7010645270347595,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.16395938396453855,
+          "signed_signal": 0.7010645270347595,
+          "state": "Bull",
+          "symbol": "SNOW:xnys"
+        },
+        "quiver": null,
+        "symbol": "SNOW:xnys"
+      },
+      "id": "fresh-843dbae5bf",
+      "note": "High Markov Bull conviction (+0.701) on watchlist; held in reserve pending fresh daily technical indicator confirmation.",
+      "source_report": 323,
+      "symbol": "SNOW:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 0.35792218499038103,
+          "close": 22.98,
+          "close_dkk": 171.7865322303772,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.029884118221991385,
+          "min_confluences": 3,
+          "reward_risk": 0.1676342023940566,
+          "rsi14": 64.80729435026507,
+          "sentiment": "BUY",
+          "sma20": 22.337000000000003,
+          "sma200": 20.4872,
+          "sma50": 21.778,
+          "support": {
+            "break_risk": 0.25,
+            "break_risk_label": "low",
+            "confidence": 0.7523809523809524,
+            "downside_after_break_pct": 2.0833333333333353,
+            "downside_to_support_pct": 0.0,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 23.04,
+            "next_support": 22.56,
+            "touch_count": 1
+          },
+          "symbol": "KESKOB:xhel",
+          "trend_bias": "bullish",
+          "uic": 6456320
+        },
+        "markov": {
+          "bear_prob": 0.20314694941043857,
+          "bull_prob": 0.3415374457836151,
+          "close": 22.959999084472656,
+          "close_dkk": 171.63701578477776,
+          "conviction": 0.13839051127433777,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.4553155899047851,
+          "signed_signal": 0.13839051127433777,
+          "state": "Sideways",
+          "symbol": "KESKOB:xhel"
+        },
+        "quiver": null,
+        "symbol": "KESKOB:xhel"
+      },
+      "id": "fresh-8e0b57dc42",
+      "note": "Finnish retail candidate displaying 5 technical confluences and low break risk; monitoring for entry timing.",
+      "source_report": 361,
+      "symbol": "KESKOB:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.03453587740659714,
+          "bull_prob": 0.7125404477119446,
+          "close": 24.125,
+          "close_dkk": 180.34788954257965,
+          "conviction": 0.6780045628547668,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.2529236972332001,
+          "signed_signal": 0.6780045628547668,
+          "state": "Bull",
+          "symbol": "ENI:xmil"
+        },
+        "quiver": null,
+        "symbol": "ENI:xmil"
+      },
+      "id": "fresh-978ff05310",
+      "note": "Freshly executed Italian energy starter holding at 24.18 EUR with active protective stop at 22.95 EUR and +0.678 Bull Markov regime.",
+      "source_report": 357,
+      "symbol": "ENI:xmil"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 1.1152176877018498,
+          "close": 35.82,
+          "close_dkk": 267.7716964530945,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.2086617669693984,
+          "min_confluences": 3,
+          "reward_risk": 1.0,
+          "rsi14": 68.63286428522343,
+          "sentiment": "BUY",
+          "sma20": 33.148500000000006,
+          "sma200": 26.50985,
+          "sma50": 31.785800000000005,
+          "support": {
+            "break_risk": 0.21329192008749365,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 4.094980804777471,
+            "downside_to_support_pct": 1.8285873813512037,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 35.165,
+            "next_support": 33.725,
+            "touch_count": 6
+          },
+          "symbol": "NESTE:xhel",
+          "trend_bias": "bullish",
+          "uic": 25935728
+        },
+        "markov": {
+          "bear_prob": 0.1531471461057663,
+          "bull_prob": 0.485067218542099,
+          "close": 35.220001220703125,
+          "close_dkk": 263.28641753064585,
+          "conviction": 0.3319200873374939,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.3617856204509735,
+          "signed_signal": 0.3319200873374939,
+          "state": "Bull",
+          "symbol": "NESTE:xhel"
+        },
+        "quiver": null,
+        "symbol": "NESTE:xhel"
+      },
+      "id": "fresh-9e662171fc",
+      "note": "Renewable holding experiencing mid-session pullback to 34.23 EUR; stop at 33.59 EUR provides firm downside protection.",
+      "source_report": 361,
+      "symbol": "NESTE:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 6.251425020811735,
+          "close": 228.87,
+          "close_dkk": 1502.137917766571,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 0.4164083134395739,
+          "min_confluences": 3,
+          "reward_risk": 0.4710925893209531,
+          "rsi14": 59.36025984649772,
+          "sentiment": "BUY",
+          "sma20": 220.53100000000003,
+          "sma200": 198.85415000000003,
+          "sma50": 215.10780000000003,
+          "support": {
+            "break_risk": 0.12536175126907406,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 3.735309067944108,
+            "downside_to_support_pct": 5.447051455702655,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 216.40333333333336,
+            "next_support": 208.32,
+            "touch_count": 3
+          },
+          "symbol": "NVDA:xnas",
+          "trend_bias": "bullish",
+          "uic": 1249
+        },
+        "markov": {
+          "bear_prob": 0.12838713824748993,
+          "bull_prob": 0.5474853515625,
+          "close": 225.6490020751953,
+          "close_dkk": 1480.9976061665511,
+          "conviction": 0.41909822821617126,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3241274952888489,
+          "signed_signal": 0.41909822821617126,
+          "state": "Bull",
+          "symbol": "NVDA:xnas"
+        },
+        "quiver": null,
+        "symbol": "NVDA:xnas"
+      },
+      "id": "fresh-a39dbec5d9",
+      "note": "Morning semiconductor addition filled at 227.23 USD with 5 technical confluences, low 0.125 break risk, and active stop at 216.37 USD.",
+      "source_report": 323,
+      "symbol": "NVDA:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.0165253896266222,
+          "bull_prob": 0.7610986828804016,
+          "close": 518.0,
+          "close_dkk": 518.0,
+          "conviction": 0.7445732951164246,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.22237595915794373,
+          "signed_signal": 0.7445732951164246,
+          "state": "Sideways",
+          "symbol": "CHEMM:xcse"
+        },
+        "quiver": null,
+        "symbol": "CHEMM:xcse"
+      },
+      "id": "fresh-a45ceb915d",
+      "note": "Core Danish holding maintaining +0.745 Markov conviction and secure stop at 484.76 DKK despite mild daily dip.",
+      "source_report": 361,
+      "symbol": "CHEMM:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.1876441985368729,
+          "bull_prob": 0.5520085096359253,
+          "close": 413.7999877929687,
+          "close_dkk": 287.2268433358804,
+          "conviction": 0.3643643260002136,
+          "currency": "NOK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.26034730672836304,
+          "signed_signal": 0.3643643260002136,
+          "state": "Bull",
+          "symbol": "EQNR:xosl"
+        },
+        "quiver": null,
+        "symbol": "EQNR:xosl"
+      },
+      "id": "fresh-b15ea011c2",
+      "note": "Norwegian energy major showing +0.364 Bull Markov state and solid support above 391 NOK. Sized at 25 shares above the 6,240 DKK XOSL commission floor.",
+      "source_report": 356,
+      "symbol": "EQNR:xosl"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.03453587740659714,
+          "bull_prob": 0.7125404477119446,
+          "close": 24.125,
+          "close_dkk": 180.3476479649544,
+          "conviction": 0.6780045628547668,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.2529236972332001,
+          "signed_signal": 0.6780045628547668,
+          "state": "Bull",
+          "symbol": "ENI:xmil"
+        },
+        "quiver": null,
+        "symbol": "ENI:xmil"
+      },
+      "id": "fresh-b196192ef8",
+      "note": "Italian energy blue-chip displaying top European Markov conviction (+0.678 Bull, 71.3% bull probability) and favorable valuation backdrop. Sized at 40 shares as a starter position.",
+      "source_report": 356,
+      "symbol": "ENI:xmil"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 18.95692409060056,
+          "close": 306.34,
+          "close_dkk": 2008.6683615207671,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 9.287597696502518,
+          "min_confluences": 3,
+          "reward_risk": 1.3754868603883277,
+          "rsi14": 60.2183835140656,
+          "sentiment": "BUY",
+          "sma20": 265.2795,
+          "sma200": 210.978125,
+          "sma50": 263.3498,
+          "support": {
+            "break_risk": 0.22085497640020907,
+            "break_risk_label": "low",
+            "confidence": 0.8809523809523809,
+            "downside_after_break_pct": 10.8,
+            "downside_to_support_pct": 2.885682574916751,
+            "history_coverage": 0.6031746031746031,
+            "nearest_support": 297.5,
+            "next_support": 265.37,
+            "touch_count": 3
+          },
+          "symbol": "ARM:xnas",
+          "trend_bias": "bullish",
+          "uic": 37597520
+        },
+        "markov": {
+          "bear_prob": 0.2219139188528061,
+          "bull_prob": 0.6693220734596252,
+          "close": 318.2349853515625,
+          "close_dkk": 2086.6636632653535,
+          "conviction": 0.4474081397056579,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.10876403003931046,
+          "signed_signal": 0.4474081397056579,
+          "state": "Bull",
+          "symbol": "ARM:xnas"
+        },
+        "quiver": {
+          "confidence": 0.3101608455181122,
+          "direction": "neutral",
+          "run_date": "2026-09-25",
+          "signal": 0.1242690533399582
+        },
+        "symbol": "ARM:xnas"
+      },
+      "id": "fresh-b3bf23b493",
+      "note": "Semiconductor architecture leader with 5 confluences, low break risk 0.221, and robust +0.447 Bull Markov signal.",
+      "source_report": 362,
+      "symbol": "ARM:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 18.590873821271504,
+          "close": 374.57,
+          "close_dkk": 2458.4078291511537,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.5468193754555464,
+          "min_confluences": 3,
+          "reward_risk": 0.6538154213113083,
+          "rsi14": 56.87912706295791,
+          "sentiment": "BUY",
+          "sma20": 356.121,
+          "sma200": 242.39255000000009,
+          "sma50": 354.5816,
+          "support": {
+            "break_risk": 0.17580364896986544,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.950354609929079,
+            "downside_to_support_pct": 5.892089596070159,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 352.5,
+            "next_support": 328.0,
+            "touch_count": 2
+          },
+          "symbol": "PANW:xnas",
+          "trend_bias": "bullish",
+          "uic": 25592892
+        },
+        "markov": {
+          "bear_prob": 0.05648196488618851,
+          "bull_prob": 0.856892466545105,
+          "close": 378.2839965820313,
+          "close_dkk": 2482.7838290302316,
+          "conviction": 0.8004105091094971,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.08662556856870651,
+          "signed_signal": 0.8004105091094971,
+          "state": "Bull",
+          "symbol": "PANW:xnas"
+        },
+        "quiver": {
+          "confidence": 0.381353497505188,
+          "direction": "neutral",
+          "run_date": "2026-09-23",
+          "signal": -0.0895814523100853
+        },
+        "symbol": "PANW:xnas"
+      },
+      "id": "fresh-bce6065f20",
+      "note": "Leading cybersecurity holding showing top portfolio Markov conviction (+0.800), bullish trend bias, low break risk (0.176), and a +2.30% intraday advance.",
+      "source_report": 323,
+      "symbol": "PANW:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 17.455669597303334,
+          "close": 694.94,
+          "close_dkk": 4556.714732503891,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 0.14615319641030666,
+          "min_confluences": 3,
+          "reward_risk": 0.7527640189769598,
+          "rsi14": 60.6069519920551,
+          "sentiment": "BUY",
+          "sma20": 678.9385,
+          "sma200": 581.6806500000001,
+          "sma50": 639.0234,
+          "support": {
+            "break_risk": 0.1444021459775587,
+            "break_risk_label": "low",
+            "confidence": 0.7523809523809524,
+            "downside_after_break_pct": 7.24888139184533,
+            "downside_to_support_pct": 4.243891558983518,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 665.4475,
+            "next_support": 617.21,
+            "touch_count": 1
+          },
+          "symbol": "DE:xnys",
+          "trend_bias": "bullish",
+          "uic": 445
+        },
+        "markov": {
+          "bear_prob": 0.07616549730300903,
+          "bull_prob": 0.3687692880630493,
+          "close": 688.9450073242188,
+          "close_dkk": 4517.405624599633,
+          "conviction": 0.2926037907600403,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.5550652146339417,
+          "signed_signal": 0.2926037907600403,
+          "state": "Bull",
+          "symbol": "DE:xnys"
+        },
+        "quiver": {
+          "confidence": 0.2058326750993729,
+          "direction": "neutral",
+          "run_date": "2026-09-25",
+          "signal": -0.0642838329076767
+        },
+        "symbol": "DE:xnys"
+      },
+      "id": "fresh-be258916cd",
+      "note": "High-conviction industrial candidate with 5 technical confluences, 0.144 break risk, and supportive +0.293 Bull Markov regime.",
+      "source_report": 362,
+      "symbol": "DE:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 8.923874788196724,
+          "close": 442.9,
+          "close_dkk": 442.9,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "DKK",
+          "macd_histogram": 0.06592028066787281,
+          "min_confluences": 3,
+          "reward_risk": 1.2382513495836398,
+          "rsi14": 56.31936840813419,
+          "sentiment": "BUY",
+          "sma20": 438.6799999999999,
+          "sma200": 399.526,
+          "sma50": 430.9300000000001,
+          "support": {
+            "break_risk": 0.2309149608166551,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 2.7672817295260126,
+            "downside_to_support_pct": 0.6152630390607283,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 440.175,
+            "next_support": 427.9941176470589,
+            "touch_count": 4
+          },
+          "symbol": "NSIS-B:xcse",
+          "trend_bias": "bullish",
+          "uic": 40846885
+        },
+        "markov": {
+          "bear_prob": 0.04944669455289841,
+          "bull_prob": 0.3089401423931122,
+          "close": 446.1000061035156,
+          "close_dkk": 446.1000061035156,
+          "conviction": 0.25949347019195557,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.6416131258010864,
+          "signed_signal": 0.25949347019195557,
+          "state": "Sideways",
+          "symbol": "NSIS-B:xcse"
+        },
+        "quiver": null,
+        "symbol": "NSIS-B:xcse"
+      },
+      "id": "fresh-c979a67ff4",
+      "note": "Actionable technical BUY with 5 confluences, bullish SMA structure, 0.231 break-risk, and supportive +0.2595 Markov regime.",
+      "source_report": 360,
+      "symbol": "NSIS-B:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 18.590873821271504,
+          "close": 374.57,
+          "close_dkk": 2455.632246932983,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.5468193754555464,
+          "min_confluences": 3,
+          "reward_risk": 0.6538154213113083,
+          "rsi14": 56.87912706295791,
+          "sentiment": "BUY",
+          "sma20": 356.121,
+          "sma200": 242.39255000000009,
+          "sma50": 354.5816,
+          "support": {
+            "break_risk": 0.17580364896986544,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.950354609929079,
+            "downside_to_support_pct": 5.892089596070159,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 352.5,
+            "next_support": 328.0,
+            "touch_count": 2
+          },
+          "symbol": "PANW:xnas",
+          "trend_bias": "bullish",
+          "uic": 25592892
+        },
+        "markov": {
+          "bear_prob": 0.05648196488618851,
+          "bull_prob": 0.856892466545105,
+          "close": 378.2839965820313,
+          "close_dkk": 2479.980725913774,
+          "conviction": 0.8004105091094971,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.08662556856870651,
+          "signed_signal": 0.8004105091094971,
+          "state": "Bull",
+          "symbol": "PANW:xnas"
+        },
+        "quiver": {
+          "confidence": 0.381353497505188,
+          "direction": "neutral",
+          "run_date": "2026-09-23",
+          "signal": -0.0895814523100853
+        },
+        "symbol": "PANW:xnas"
+      },
+      "id": "fresh-cd0660f989",
+      "note": "Held cybersecurity position with highest Markov conviction (+0.800) and low break risk.",
+      "source_report": 322,
+      "symbol": "PANW:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 17.91917181528002,
+          "close": 389.92,
+          "close_dkk": 2556.7015979766848,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 3.882769254345269,
+          "min_confluences": 3,
+          "reward_risk": 0.2500115544502904,
+          "rsi14": 61.08786139647997,
+          "sentiment": "BUY",
+          "sma20": 361.3215,
+          "sma200": 244.3360500000001,
+          "sma50": 356.10779999999994,
+          "support": {
+            "break_risk": 0.11948336540834414,
+            "break_risk_label": "low",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 6.950354609929079,
+            "downside_to_support_pct": 9.59684037751334,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 352.5,
+            "next_support": 328.0,
+            "touch_count": 2
+          },
+          "symbol": "PANW:xnas",
+          "trend_bias": "bullish",
+          "uic": 25592892
+        },
+        "markov": {
+          "bear_prob": 0.16858558356761932,
+          "bull_prob": 0.703303873538971,
+          "close": 375.1400146484375,
+          "close_dkk": 2459.7893796590506,
+          "conviction": 0.5347183346748352,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.12811052799224854,
+          "signed_signal": 0.5347183346748352,
+          "state": "Sideways",
+          "symbol": "PANW:xnas"
+        },
+        "quiver": {
+          "confidence": 0.3803137242794037,
+          "direction": "neutral",
+          "run_date": "2026-09-25",
+          "signal": -0.08661061525344849
+        },
+        "symbol": "PANW:xnas"
+      },
+      "id": "fresh-d0dd76c166",
+      "note": "Cybersecurity core holding showing highest portfolio Markov conviction (+0.535) and resilient technical structure.",
+      "source_report": 362,
+      "symbol": "PANW:xnas"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.030548959970474243,
+          "bull_prob": 0.346753865480423,
+          "close": 280.29998779296875,
+          "close_dkk": 2095.3545206211857,
+          "conviction": 0.31620490550994873,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.6226971745491028,
+          "signed_signal": 0.31620490550994873,
+          "state": "Sideways",
+          "symbol": "DB1GN:xetr"
+        },
+        "quiver": null,
+        "symbol": "DB1GN:xetr"
+      },
+      "id": "fresh-d2cb7181db",
+      "note": "German market infrastructure operator with solid +0.316 Markov signal and steady sideways consolidation.",
+      "source_report": 320,
+      "symbol": "DB1GN:xetr"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.06748805195093155,
+          "bull_prob": 0.7685525417327881,
+          "close": 333.94000244140625,
+          "close_dkk": 2189.267262557056,
+          "conviction": 0.7010645270347595,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.16395938396453855,
+          "signed_signal": 0.7010645270347595,
+          "state": "Bull",
+          "symbol": "SNOW:xnys"
+        },
+        "quiver": null,
+        "symbol": "SNOW:xnys"
+      },
+      "id": "fresh-dab04c739d",
+      "note": "Strong Markov Bull conviction (+0.701) on watchlist; monitored for technical confluence alignment.",
+      "source_report": 322,
+      "symbol": "SNOW:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 0.45746711110677024,
+          "close": 9.07,
+          "close_dkk": 67.80087868213654,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.036805430315668575,
+          "min_confluences": 3,
+          "reward_risk": 2.3662903271473654,
+          "rsi14": 49.84199099398525,
+          "sentiment": "BUY",
+          "sma20": 9.030599999999998,
+          "sma200": 8.515215000000001,
+          "sma50": 8.775720000000002,
+          "support": {
+            "break_risk": 0.1618789110271331,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 5.614243323442125,
+            "downside_to_support_pct": 7.111356119073885,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 8.424999999999999,
+            "next_support": 7.952,
+            "touch_count": 6
+          },
+          "symbol": "NOKIA:xhel",
+          "trend_bias": "bullish",
+          "uic": 2300939
+        },
+        "markov": {
+          "bear_prob": 0.4290817379951477,
+          "bull_prob": 0.3048516809940338,
+          "close": 9.40999984741211,
+          "close_dkk": 70.34247608085025,
+          "conviction": 0.1242300420999527,
+          "currency": "EUR",
+          "direction": "short",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.2660665810108185,
+          "signed_signal": -0.1242300420999527,
+          "state": "Sideways",
+          "symbol": "NOKIA:xhel"
+        },
+        "quiver": null,
+        "symbol": "NOKIA:xhel"
+      },
+      "id": "fresh-e2f6a33d7a",
+      "note": "Solid technical base with 6 confluences, currently gated due to negative Markov conviction (-0.124).",
+      "source_report": 360,
+      "symbol": "NOKIA:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 2.1187216894006906,
+          "close": 69.42,
+          "close_dkk": 456.3358565711975,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": -0.5026578380177347,
+          "min_confluences": 3,
+          "reward_risk": 3.0549080761196303,
+          "rsi14": 36.89815742032061,
+          "sentiment": "SELL",
+          "sma20": 73.4155,
+          "sma200": 75.37660000000002,
+          "sma50": 73.4588,
+          "support": {
+            "break_risk": 0.9957226567107248,
+            "break_risk_label": "high",
+            "confidence": 0.869047619047619,
+            "downside_after_break_pct": 1.1527555807599208,
+            "downside_to_support_pct": 0.2088735234802593,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 69.275,
+            "next_support": 68.47642857142857,
+            "touch_count": 2
+          },
+          "symbol": "UBER:xnys",
+          "trend_bias": "bearish",
+          "uic": 13697176
+        },
+        "markov": {
+          "bear_prob": 0.250504732131958,
+          "bull_prob": 0.2441360205411911,
+          "close": 69.83429718017578,
+          "close_dkk": 459.0592598928706,
+          "conviction": 0.006368707865476608,
+          "currency": "USD",
+          "direction": "short",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.5053592324256897,
+          "signed_signal": -0.006368707865476608,
+          "state": "Bear",
+          "symbol": "UBER:xnys"
+        },
+        "quiver": {
+          "confidence": 0.8989729881286621,
+          "direction": "bullish",
+          "run_date": "2026-09-24",
+          "signal": 0.7113513946533203
+        },
+        "symbol": "UBER:xnys"
+      },
+      "id": "fresh-e950b8c436",
+      "note": "Substantial congressional net buying (+0.711) noted, but entry blocked by elevated break risk (0.996) and near-zero Markov conviction (+0.006).",
+      "source_report": 358,
+      "symbol": "UBER:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.06334781646728516,
+          "bull_prob": 0.7729382514953613,
+          "close": 334.2799987792969,
+          "close_dkk": 2197.4063609560544,
+          "conviction": 0.7095904350280762,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.16371391713619232,
+          "signed_signal": 0.7095904350280762,
+          "state": "Bull",
+          "symbol": "SNOW:xnys"
+        },
+        "quiver": null,
+        "symbol": "SNOW:xnys"
+      },
+      "id": "fresh-ee9c5b2a4c",
+      "note": "High Markov conviction (+0.710 Bull) enterprise data platform on watchlist; monitor for technical consolidation before entry.",
+      "source_report": 358,
+      "symbol": "SNOW:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.12695834040641785,
+          "bull_prob": 0.5263795852661133,
+          "close": 797.0,
+          "close_dkk": 797.0,
+          "conviction": 0.3994212746620178,
+          "currency": "DKK",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3466620445251465,
+          "signed_signal": 0.3994212746620178,
+          "state": "Bull",
+          "symbol": "SCHO:xcse"
+        },
+        "quiver": null,
+        "symbol": "SCHO:xcse"
+      },
+      "id": "fresh-f05dd4b576",
+      "note": "Executed Danish industrial starter holding at 801 DKK, supported by +0.399 Markov Bull signal and working stop at 772.06 DKK.",
+      "source_report": 321,
+      "symbol": "SCHO:xcse"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 1.08309270289682,
+          "close": 34.23,
+          "close_dkk": 255.8849975967407,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "EUR",
+          "macd_histogram": 0.1279511499909307,
+          "min_confluences": 3,
+          "reward_risk": 0.40162767123862914,
+          "rsi14": 61.533303118148226,
+          "sentiment": "BUY",
+          "sma20": 32.749999999999986,
+          "sma200": 26.328525000000003,
+          "sma50": 31.614400000000003,
+          "support": {
+            "break_risk": 0.22091661691030645,
+            "break_risk_label": "low",
+            "confidence": 0.9857142857142857,
+            "downside_after_break_pct": 6.723793710095081,
+            "downside_to_support_pct": 1.472392638036803,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 33.726,
+            "next_support": 31.458333333333332,
+            "touch_count": 5
+          },
+          "symbol": "NESTE:xhel",
+          "trend_bias": "bullish",
+          "uic": 25935728
+        },
+        "markov": {
+          "bear_prob": 0.1494504064321518,
+          "bull_prob": 0.4742262363433838,
+          "close": 35.130001068115234,
+          "close_dkk": 262.6129196286347,
+          "conviction": 0.3247758448123932,
+          "currency": "EUR",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.3763233423233032,
+          "signed_signal": 0.3247758448123932,
+          "state": "Bull",
+          "symbol": "NESTE:xhel"
+        },
+        "quiver": null,
+        "symbol": "NESTE:xhel"
+      },
+      "id": "fresh-f513b5a0d5",
+      "note": "Leading European performer gaining +2.05% intraday to 35.80 EUR, extending unrealised gain to +10.1% with +0.325 Markov Bull support.",
+      "source_report": 321,
+      "symbol": "NESTE:xhel"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 10.862391182183476,
+          "close": 451.15,
+          "close_dkk": 2958.186104655266,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.826103398991471,
+          "min_confluences": 3,
+          "reward_risk": 0.7990874066694419,
+          "rsi14": 62.54910282470072,
+          "sentiment": "BUY",
+          "sma20": 429.023,
+          "sma200": 382.4241000000002,
+          "sma50": 419.3598,
+          "support": {
+            "break_risk": 0.11743250396267356,
+            "break_risk_label": "low",
+            "confidence": 0.7523809523809524,
+            "downside_after_break_pct": 2.083576650860764,
+            "downside_to_support_pct": 5.106948908345331,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 428.11,
+            "next_support": 419.19,
+            "touch_count": 1
+          },
+          "symbol": "TSM:xnys",
+          "trend_bias": "bullish",
+          "uic": 1077
+        },
+        "markov": {
+          "bear_prob": 0.09990274161100388,
+          "bull_prob": 0.48546144366264343,
+          "close": 450.2070007324219,
+          "close_dkk": 2952.00286774947,
+          "conviction": 0.38555869460105896,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-25",
+          "sideways_prob": 0.4146358072757721,
+          "signed_signal": 0.38555869460105896,
+          "state": "Bull",
+          "symbol": "TSM:xnys"
+        },
+        "quiver": {
+          "confidence": 0.3283669352531433,
+          "direction": "bullish",
+          "run_date": "2026-09-25",
+          "signal": 0.1762864738702774
+        },
+        "symbol": "TSM:xnys"
+      },
+      "id": "fresh-f5dcb1c5fa",
+      "note": "Foundry leader trading steadily above support with 5 confluences and confirmed stop protection.",
+      "source_report": 362,
+      "symbol": "TSM:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.24020251631736755,
+          "bull_prob": 0.24481703341007233,
+          "close": 69.30999755859375,
+          "close_dkk": 454.3873375863768,
+          "conviction": 0.00461451755836606,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.5149804353713989,
+          "signed_signal": 0.00461451755836606,
+          "state": "Bear",
+          "symbol": "UBER:xnys"
+        },
+        "quiver": {
+          "confidence": 0.903141975402832,
+          "direction": "bullish",
+          "run_date": "2026-09-23",
+          "signal": 0.7232627868652344
+        },
+        "symbol": "UBER:xnys"
+      },
+      "id": "fresh-f6c714e6bb",
+      "note": "Heavy congressional buying (+0.723) noted, but disqualified today due to elevated break risk (0.638).",
+      "source_report": 322,
+      "symbol": "UBER:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": null,
+        "markov": {
+          "bear_prob": 0.24020251631736755,
+          "bull_prob": 0.24481703341007233,
+          "close": 69.30999755859375,
+          "close_dkk": 454.9009280948667,
+          "conviction": 0.00461451755836606,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-23",
+          "sideways_prob": 0.5149804353713989,
+          "signed_signal": 0.00461451755836606,
+          "state": "Bear",
+          "symbol": "UBER:xnys"
+        },
+        "quiver": {
+          "confidence": 0.903141975402832,
+          "direction": "bullish",
+          "run_date": "2026-09-23",
+          "signal": 0.7232627868652344
+        },
+        "symbol": "UBER:xnys"
+      },
+      "id": "fresh-f7fd7b58b5",
+      "note": "Substantial congressional buying noted, but candidate remains disqualified due to elevated support break risk (0.638).",
+      "source_report": 323,
+      "symbol": "UBER:xnys"
+    },
+    {
+      "evidence": {
+        "daily_indicators": {
+          "asset_type": "Stock",
+          "atr14": 10.777959734659133,
+          "close": 446.57,
+          "close_dkk": 2935.5503236675263,
+          "confluence_count": 5,
+          "confluences": null,
+          "currency": "USD",
+          "macd_histogram": 2.637115866407383,
+          "min_confluences": 3,
+          "reward_risk": 1.5044591369048037,
+          "rsi14": 60.61536999246327,
+          "sentiment": "BUY",
+          "sma20": 427.35,
+          "sma200": 381.6419500000001,
+          "sma50": 418.7263999999999,
+          "support": {
+            "break_risk": 0.14295283816195406,
+            "break_risk_label": "low",
+            "confidence": 0.7523809523809524,
+            "downside_after_break_pct": 2.083576650860764,
+            "downside_to_support_pct": 4.1337304341984416,
+            "history_coverage": 0.9523809523809524,
+            "nearest_support": 428.11,
+            "next_support": 419.19,
+            "touch_count": 1
+          },
+          "symbol": "TSM:xnys",
+          "trend_bias": "bullish",
+          "uic": 1077
+        },
+        "markov": {
+          "bear_prob": 0.09990274161100388,
+          "bull_prob": 0.48546144366264343,
+          "close": 443.8949890136719,
+          "close_dkk": 2917.966004598333,
+          "conviction": 0.38555869460105896,
+          "currency": "USD",
+          "direction": "long",
+          "horizon_days": 5,
+          "run_date": "2026-09-24",
+          "sideways_prob": 0.4146358072757721,
+          "signed_signal": 0.38555869460105896,
+          "state": "Bull",
+          "symbol": "TSM:xnys"
+        },
+        "quiver": {
+          "confidence": 0.3293817639350891,
+          "direction": "bullish",
+          "run_date": "2026-09-24",
+          "signal": 0.17918595671653748
+        },
+        "symbol": "TSM:xnys"
+      },
+      "id": "fresh-fb22201b8b",
+      "note": "Held foundry market leader consolidating securely above 428 USD support with 5 confluences and +0.386 Bull Markov regime.",
+      "source_report": 358,
+      "symbol": "TSM:xnys"
+    }
+  ],
+  "how_to_label": {
+    "field": "The dotted path of the evidence field the figure states, exactly as it appears in that note's evidence, such as \"daily_indicators.rsi14\" or \"markov.signed_signal\". The path must hold a number. Write \"none\" when no single field states it: a distance, a ratio, a threshold, or a field the evidence lacks.",
+    "figure": "The number exactly as the note writes it, as it appears in the quote: \"0.612\", \"+0.55\", \"61%\", \"5\", \"five\". It must occur once in the quote as a whole number, not inside a longer one. One claim per figure: \"4/3 confluences\" is two claims, the 4 and the 3.",
+    "note": "Optional: why, for anything uncertain.",
+    "quote": "The exact words of the claim from the note, as short as still makes the claim. It must occur exactly once in the note; lengthen it if it repeats.",
+    "status": "Set \"labelled\" once you have read the whole note, including when it makes no numeric claim. A note left without it counts as unread.",
+    "task": "Read each whole note and list every numeric claim it makes about the supplied evidence: every figure, in digits or in words, that states or compares a value the evidence holds. Judge each against the evidence beside it. Qualitative claims are not asked for.",
+    "verdict": "\"consistent\" if the evidence supports the figure at the precision written, \"inconsistent\" if it contradicts it, \"cannot_tell\" if two readings are both defensible or the evidence it needs is missing. Missing evidence is \"cannot_tell\", never \"inconsistent\"."
+  },
+  "out_of_scope": "Portfolio capital, holdings, allocations, unrealised profit, trading costs, orders, stops and executions, and recommendations or intentions. Their supporting material is not in the evidence. List no claim for them.",
+  "version": "fresh-v1-2026-09-25",
+  "what_this_is": "Every note from eleven decision reports, each with the evidence the report was given about its symbol. What any checker made of them is not here."
+}

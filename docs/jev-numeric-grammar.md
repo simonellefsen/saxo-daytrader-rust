@@ -551,6 +551,8 @@ produces still needs adjudication, and the sensitivity of the whole grader —
 whether it catches a note that genuinely misstates the evidence — remains
 unmeasured, because every frozen label in both adjudication samples was `fair`.
 That needs seeded known-faulty examples and an independent adjudicator, neither
-of which exists yet.
+of which existed when this was written. The seeded challenge set, the controls
+and the whole-note audit have since been built, all on the development dump.
+`jev-fresh-evaluation.md` is the first held-out one.
 
 No trading parameter depends on any of this.
