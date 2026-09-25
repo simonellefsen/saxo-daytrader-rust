@@ -8,9 +8,11 @@ The scorer refuses to run under any other.
 |---|---|
 | `jev-fresh-v1.json` | the instrument: 51 whole notes and their evidence, with the rubric. **No verdicts, no spans, no strata.** |
 | `jev-fresh-v1-key.json` | the frame, and every figure `n15` extracts from each note, with its verdict. Do not read first. |
-| `jev-fresh-v1-labels.json` | empty until an independent labeller fills it; then committed as delivered and never edited |
-| `jev-fresh-v1-seeded.json` | not yet generated: the seeded cases, generated from the committed labels |
-| `jev-fresh-v1-results.json` | not yet written: the single scoring run |
+| `jev-fresh-v1-labels.json` | 51 labelled notes from a fresh-context AI reviewer, as delivered. Never edited. |
+| `jev-fresh-v1-labeller-notes.md` | the labeller's reasoning for every uncertain or contradicting claim |
+| `jev-fresh-v1-labelling-provenance.json` | who labelled, from what, with fingerprints |
+| `jev-fresh-v1-seeded.json` | 490 seeded cases, generated from the committed labels |
+| `jev-fresh-v1-results.json` | the single scoring run, unedited, with fingerprints |
 
 ## Why
 
@@ -179,6 +181,125 @@ reported per change, split between the changed figure and the untouched ones.
 cargo test generate_the_seeded_cases -- --ignored
 cargo test score_the_fresh_set -- --ignored --nocapture
 ```
+
+## Results, as they came out
+
+Scored once, at `057006d` with a clean tree and the checker byte-identical to
+`cc7b0a4`. The order held:
+1. labels committed as delivered (`afcb71f`);
+2. seeded cases generated from them (`3843366`);
+3. one scoring run (`ddc7781`).
+
+**The labels are one AI review, not human ground truth.** The labeller was a
+fresh-context reviewer given the instrument only. Its provenance file records
+what it could not see.
+
+**One process fault, before scoring.** `3843366` was committed with its
+determinism check failing, and pushed; my command chain did not stop on the
+failed test. The file was exactly what the generator wrote. The check compared
+it with a regeneration held in memory, and serde_json's default parser reads
+some floats back one unit in the last place off. `057006d` compares both as
+read from text, and adds a check that every key's truth recomputes against the
+evidence as stored. No case or key changed, and nothing had been scored.
+
+### Natural notes
+
+All 51 notes were labelled, and the file was accepted. The labeller found **90
+numeric claims**: 72 consistent, 15 `cannot_tell` and 3 inconsistent. Two
+notes make no numeric claim.
+
+| per note | the 28 the checker read | all 51, as the method reads them |
+|---|---|---|
+| `false_alarm` | 0 | 0 |
+| `accepted_error` | 1 | 1 |
+| `unflagged_error` | 1 to 4 | 1 to 13 |
+| `omission` | 1 | 1 |
+| `wrong_field` | 1 | 1 |
+
+**No consistent claim was flagged: 0 of the 46 the checker compared in
+production**, and 0 of 68 across every note. Every figure the method compared
+lies inside a labelled claim. The 25 extracted figures that no claim covers
+were all left uncompared.
+
+**The three inconsistent claims**, all in notes the checker read:
+- **#360 NOKIA, "6 confluences"** against a count of 5, was flagged. It is the
+  one flag in the frame, and the labeller agrees.
+- **#321 CHEMM, "502 DKK support"** against 502.89, was accepted. The checker
+  accepts truncation and the labeller rounds, to 503. This is the third time
+  the convention has decided a case, after LMND in the controls and ASML in
+  the whole-note audit.
+- **#321 CHEMM, "consolidation at 515.5 DKK"** against a daily close of
+  515.0, was not compared. The checker does not read the close.
+
+**The rest:**
+- **Three consistent claims were found but not compared:**
+  - two "5 confluences", each contested by a nearby "support". In #361 the
+    "support" is inside "supported". In #362 it is a separate word, six
+    characters away.
+  - **#358 UBER**'s "congressional net buying (+0.711)": "net buying" is
+    outside the gap grammar.
+- **One claim was omitted:** #358 UBER's "near-zero Markov conviction",
+  which the labeller gave no field.
+- **One claim was compared against another field.** #360 NOKIA's "negative
+  Markov conviction (-0.124)" is the signed signal to the labeller and
+  `markov.conviction` to the checker. The two hold the same magnitude, so
+  both accept the note as written.
+
+The 23 notes production never showed the checker hold 33 claims. The method
+accepts all 22 labelled consistent and leaves the 11 `cannot_tell` uncompared.
+In production none of them is checked at all.
+
+### Seeded cases
+
+490 cases, from 69 anchors in 47 notes. **Every consistent claim that could
+anchor was confirmed by the key's own arithmetic.** The three that could not
+anchor were two percentages and one with no field.
+
+| keyed figure | figures | correct | abstained | decided wrongly | other field |
+|---|---|---|---|---|---|
+| changed, made false | 349 | **329** | 14 | 3 accepted | 3 flagged |
+| changed, kept or made true | 71 | **66** | 4 | 1 false alarm | 0 |
+| changed, unsettleable | 69 | **68** | — | 1 compared | — |
+| changed, out of scope | 1 | 1 | — | 0 | — |
+| untouched neighbours | 420 | **391** | 28 | **0** | 1 right verdict |
+
+**All nine wrong or wrong-field outcomes are one anchor**: NOKIA's "negative
+Markov conviction (-0.124)" again. Each change moved the field the labeller
+named, and the checker compared the one it named. For example, a flipped sign
+still matches the conviction's magnitude. Which field the note means is a
+question for reconciliation, not something the score settles. The other 68
+anchors gave no wrong decision, and no untouched neighbour was ever flagged.
+
+**The 46 abstentions are four figures:** the two contested "5 confluences",
+UBER's Quiver figure, and the repaired CHEMM close, a field the checker does
+not read.
+
+The 71 figures kept or made true are 69 `both_moved` and 2 repairs: NOKIA's 6
+to 5, and CHEMM's close. CHEMM's "502" was not repaired, because the key's
+arithmetic accepts truncation too. On that convention, the key and the checker
+agree with each other and not with the labeller.
+
+### What it shows, at its real strength
+
+- **No false alarm was found.** None on the 46 consistent claims the checker
+  compared in production, and none on 420 untouched figures beside seeded
+  errors. That is these notes: 28 of them, from eleven reports.
+- **Seeded single-figure errors were flagged on the right field 329 of 349
+  times.** The 490 cases come from 69 anchors, so they are nowhere near 490
+  independent trials. They measure sensitivity to one changed figure in claims
+  the labeller found, not a natural error rate.
+- **Natural errors are too rare here to measure detection:** 3 in 90 claims.
+  One was caught, one was decided by the truncation convention, and one lies
+  outside the fields the checker reads.
+- **Two defects in `n15`, recorded and not fixed:**
+  - a keyword matched inside a longer word ("supported" contests as
+    "support");
+  - an unresolved question about what a signed "conviction" figure names.
+
+  A fix would be `n16`, which this set cannot then validate.
+
+The results are scored and not yet reconciled. A reconciliation, if made, goes
+in a separate file beside the labels, never over them.
 
 ## What this cannot establish
 
