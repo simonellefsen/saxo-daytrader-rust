@@ -1,0 +1,387 @@
+{
+  "fingerprints": {
+    "instrument_sha256": "40466f79a64c2c8ced015e3e732a0d43493262318737771be815c37e4a21d177",
+    "key_sha256": "9a043bc8739ae10e92bcd73a14670cc3f848ad13cb4e77e84d24344c1dc8629b",
+    "labels_sha256": "703008eaeb7b3e778a92104584d8c8cc4fb98e261f5355d232047a4df4b38ef3",
+    "seeded_sha256": "4214603bc806fbc32c63d427a69d34a96161c032783d4dd260672e0b98cac84b"
+  },
+  "labelled_at": "2026-09-25T16:30:24Z",
+  "labelled_by": "Fresh-context Codex AI reviewer; independent blind labels, not human ground truth",
+  "method_version": "n15-2026-09-25",
+  "natural": {
+    "claims_by_stratum": {
+      "never_reached": {
+        "abstained|cannot_tell": 11,
+        "accepted|consistent": 22
+      },
+      "reached_with_figures": {
+        "abstained|cannot_tell": 4,
+        "abstained|consistent": 3,
+        "abstained|inconsistent": 1,
+        "accepted|consistent": 46,
+        "accepted|inconsistent": 1,
+        "flagged|inconsistent": 1,
+        "omitted|consistent": 1
+      }
+    },
+    "decided_against_another_field": {
+      "accepted|consistent": 1
+    },
+    "extracted_figures_no_claim_covers": {
+      "implausible_attribution": 1,
+      "not_a_field_value": 2,
+      "not_in_evidence": 1,
+      "unattributed": 19,
+      "uncertain_attribution": 2
+    },
+    "headline": {
+      "every_note": {
+        "claims": {
+          "consistent_flagged": [
+            0,
+            68
+          ],
+          "inconsistent_accepted": [
+            1,
+            2
+          ],
+          "inconsistent_flagged": [
+            1,
+            3
+          ]
+        },
+        "notes": {
+          "accepted_error": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 51
+          },
+          "false_alarm": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 51
+          },
+          "omission": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 51
+          },
+          "unflagged_error": {
+            "notes": [
+              1,
+              13
+            ],
+            "of": 51
+          },
+          "wrong_field": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 51
+          }
+        }
+      },
+      "notes_the_checker_read": {
+        "claims": {
+          "consistent_flagged": [
+            0,
+            46
+          ],
+          "inconsistent_accepted": [
+            1,
+            2
+          ],
+          "inconsistent_flagged": [
+            1,
+            3
+          ]
+        },
+        "notes": {
+          "accepted_error": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 28
+          },
+          "false_alarm": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 28
+          },
+          "omission": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 28
+          },
+          "unflagged_error": {
+            "notes": [
+              1,
+              4
+            ],
+            "of": 28
+          },
+          "wrong_field": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 28
+          }
+        }
+      }
+    },
+    "notes": 51,
+    "notes_by_stratum": {
+      "never_reached": {
+        "accepted_error": [
+          0,
+          23,
+          0
+        ],
+        "false_alarm": [
+          0,
+          23,
+          0
+        ],
+        "omission": [
+          0,
+          23,
+          0
+        ],
+        "unflagged_error": [
+          0,
+          14,
+          9
+        ],
+        "wrong_field": [
+          0,
+          23,
+          0
+        ]
+      },
+      "reached_with_figures": {
+        "accepted_error": [
+          1,
+          27,
+          0
+        ],
+        "false_alarm": [
+          0,
+          28,
+          0
+        ],
+        "omission": [
+          1,
+          27,
+          0
+        ],
+        "unflagged_error": [
+          1,
+          24,
+          3
+        ],
+        "wrong_field": [
+          1,
+          27,
+          0
+        ]
+      }
+    },
+    "protocol": "fresh-protocol-v1-2026-09-25",
+    "reading": "Counts over the whole frame, which has no sampling error and describes these reports only. `notes_the_checker_read` is production: the notes the checker was shown. `every_note` is the method, given every note and its evidence. `[a, b]` is `a` notes, or `b` if every unresolved note went the same way. Claim pairs are [count, of].",
+    "status": "complete",
+    "unlabelled": 0,
+    "version": "fresh-v1-2026-09-25"
+  },
+  "protocol": "fresh-protocol-v1-2026-09-25",
+  "seeded": {
+    "by_mutation": {
+      "both_moved": {
+        "changed": {
+          "holds": {
+            "abstained": 3,
+            "correct": 65,
+            "false_alarm": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "evidence_removed": {
+        "changed": {
+          "unsettleable": {
+            "correct": 68,
+            "decided_without_evidence": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "evidence_value_down": {
+        "changed": {
+          "fails": {
+            "abstained": 3,
+            "correct": 65,
+            "error_accepted": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "evidence_value_up": {
+        "changed": {
+          "fails": {
+            "abstained": 3,
+            "correct": 65,
+            "error_accepted": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "note_value_down": {
+        "changed": {
+          "fails": {
+            "abstained": 3,
+            "correct": 65,
+            "flagged_wrong_field": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "note_value_up": {
+        "changed": {
+          "fails": {
+            "abstained": 3,
+            "correct": 65,
+            "flagged_wrong_field": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 56
+          }
+        }
+      },
+      "other_symbol_value": {
+        "changed": {
+          "fails": {
+            "abstained": 1,
+            "correct": 50,
+            "flagged_wrong_field": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "abstained": 4,
+            "correct": 37
+          }
+        }
+      },
+      "out_of_scope_stop_inserted": {
+        "changed": {
+          "out_of_scope": {
+            "correct": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "correct": 3
+          }
+        }
+      },
+      "repaired": {
+        "changed": {
+          "holds": {
+            "abstained": 1,
+            "correct": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "correct": 1,
+            "right_verdict_wrong_field": 1
+          }
+        }
+      },
+      "sign_flipped": {
+        "changed": {
+          "fails": {
+            "abstained": 1,
+            "correct": 19,
+            "error_accepted": 1
+          }
+        },
+        "untouched": {
+          "holds": {
+            "correct": 14
+          }
+        }
+      }
+    },
+    "cases": 490,
+    "method_version": "n15-2026-09-25",
+    "reading": "Each keyed figure's outcome under its truth. `changed` is the figure the change made or unsettled; `untouched` are the other anchored figures in the same note, which test that an error is placed on the right figure.",
+    "status": "complete",
+    "totals": {
+      "changed|fails": {
+        "abstained": 14,
+        "correct": 329,
+        "error_accepted": 3,
+        "flagged_wrong_field": 3
+      },
+      "changed|holds": {
+        "abstained": 4,
+        "correct": 66,
+        "false_alarm": 1
+      },
+      "changed|out_of_scope": {
+        "correct": 1
+      },
+      "changed|unsettleable": {
+        "correct": 68,
+        "decided_without_evidence": 1
+      },
+      "untouched|holds": {
+        "abstained": 28,
+        "correct": 391,
+        "right_verdict_wrong_field": 1
+      }
+    }
+  },
+  "version": "fresh-v1-2026-09-25"
+}
