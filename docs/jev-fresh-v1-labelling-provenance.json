@@ -1,0 +1,61 @@
+{
+  "instrument_version": "fresh-v1-2026-09-25",
+  "scoring_protocol": "fresh-protocol-v1-2026-09-25",
+  "source_commit": "9d9e3e2fe7e43a11268e8b1046d933d237f8ea78",
+  "instrument_sha256": "40466f79a64c2c8ced015e3e732a0d43493262318737771be815c37e4a21d177",
+  "review_setup_recorded_at": "2026-09-25T16:29:09Z",
+  "reviewer": "Fresh-context Codex AI subagent /root/blind_fresh_numeric_labeller",
+  "conversation_history_forwarded": false,
+  "delivery": {
+    "labels_sha256": "703008eaeb7b3e778a92104584d8c8cc4fb98e261f5355d232047a4df4b38ef3",
+    "labeller_notes_sha256": "3dfceb5d93e0bdb370e5a479702f716f3dcca8984242c6ec240c11d46501d981",
+    "notes_labelled": 51,
+    "claims_extracted": 90,
+    "zero_claim_notes": 2,
+    "structural_validation_recorded_at": "2026-09-25T16:35:53Z",
+    "structural_checks_passed": [
+      "Instrument version and SHA-256 unchanged",
+      "All 51 original case IDs exactly once in original order, all marked labelled",
+      "Claim properties, verdict enums and optional notes conform to the rubric",
+      "Every quotation occurs exactly once in its source note",
+      "Every figure occurs once as a whole number within its quotation and source context",
+      "No duplicate underlying figure spans within a note",
+      "Every non-none field resolves to a numeric value in its supplied evidence",
+      "Every uncertain or contradictory claim and zero-claim note has a reasoning reference",
+      "Nonempty reviewer identity and valid UTC timestamp",
+      "git diff --check"
+    ],
+    "substantive_labels_modified_by_parent": false,
+    "fresh_key_opened_during_labelling": false,
+    "seeded_cases_generated_during_labelling": false,
+    "fresh_scorer_run_during_labelling": false,
+    "reviewer_reported_no_prohibited_inputs_consulted": true,
+    "independence_scope": "Fresh conversation context and restricted substantive inputs; one AI reviewer, not human ground truth."
+  },
+  "substantive_input": "docs/jev-fresh-v1.json, including its embedded rubric",
+  "other_permitted_inputs": [
+    "docs/jev-fresh-v1-labels.json (empty output template)",
+    "/Users/lindau/.codex/RTK.md (shell convention only)"
+  ],
+  "prohibited_review_inputs": [
+    "Answer keys and checker or scorer source/tests",
+    "Prior labels, controls, adjudications and evaluation findings",
+    "Other project documents, repository history, wiki and memory",
+    "Parent task history or other agents' discussions",
+    "External sources and provider calls"
+  ],
+  "procedure": [
+    "Read all 51 whole notes and their supplied evidence.",
+    "Manually identify every in-scope numeric claim under the instrument rubric, one claim per figure.",
+    "Preserve exact unique quotations and figure spans; mark every fully reviewed note labelled, including zero-claim notes.",
+    "Record rubric interpretations and reasons for uncertainty, contradictions and zero-claim notes separately.",
+    "Parent validates structure without revising substantive judgements.",
+    "Preserve the delivered labels and reasoning in a local commit before any fresh-set key inspection, seed generation or scoring."
+  ],
+  "limitations": [
+    "Single AI review, not human ground truth or measured inter-rater agreement.",
+    "The parent has seen prior findings and evaluation documentation; none were forwarded to this fresh-context reviewer.",
+    "Blinding uses fresh context and input restrictions, not operating-system access restrictions.",
+    "Structural validation does not establish claim-extraction completeness or judgement accuracy."
+  ]
+}

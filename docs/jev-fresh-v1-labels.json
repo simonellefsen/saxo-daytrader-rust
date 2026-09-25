@@ -1,262 +1,873 @@
 {
-  "labelled_at": "",
-  "labelled_by": "",
+  "version": "fresh-v1-2026-09-25",
+  "labelled_by": "Fresh-context Codex AI reviewer; independent blind labels, not human ground truth",
+  "labelled_at": "2026-09-25T16:30:24Z",
   "labels": [
     {
-      "claims": [],
       "id": "fresh-00c0303db2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.806 Bull)",
+          "figure": "+0.806",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.113)",
+          "figure": "0.113",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-0110c45666",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.236 break risk",
+          "figure": "0.236",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-02712374e4",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-06c619a826",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.420)",
+          "figure": "+0.420",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "2.2% bear probability",
+          "figure": "2.2%",
+          "field": "markov.bear_prob",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-10688ff154",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.745 Markov Bull regime",
+          "figure": "+0.745",
+          "field": "markov.signed_signal",
+          "verdict": "consistent",
+          "note": "Numeric signal only; the qualitative Bull regime label is outside this rubric."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-11253ba36c",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.745 Bull)",
+          "figure": "+0.745",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "502 DKK support",
+          "figure": "502",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "Daily indicators and support evidence are absent; a price above this level does not establish support."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-12ed988968",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.745 Bull)",
+          "figure": "+0.745",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "technical cushion above 502 DKK",
+          "figure": "502",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "The close exceeds 502, but the wording can also assert an established technical support level; no technical evidence is supplied."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-1fa84ecf3c",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.214 break-risk",
+          "figure": "0.214",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-296fde72d8",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.491 Bull Markov signal",
+          "figure": "+0.491",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.236 break risk",
+          "figure": "0.236",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "No daily indicators or support break-risk evidence."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-312af6c9ae",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "trading near 6.71 EUR",
+          "figure": "6.71",
+          "field": "markov.close",
+          "verdict": "cannot_tell",
+          "note": "The supplied close is about 6.772. It is not 6.71 at two decimals, but near is an unspecified approximation, so both support and contradiction readings are defensible."
+        },
+        {
+          "quote": "+0.420 Markov signal",
+          "figure": "+0.420",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-3a4fe3c8f2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov Bull regime (+0.399)",
+          "figure": "+0.399",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.343)",
+          "figure": "0.343",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "No daily indicators or support break-risk evidence."
+        },
+        {
+          "quote": "776 DKK support",
+          "figure": "776",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "No support level is supplied."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-47fe52e6dd",
-      "status": ""
+      "status": "labelled",
+      "claims": []
     },
     {
-      "claims": [],
       "id": "fresh-4c86903ff6",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.364 Bull Markov signal",
+          "figure": "+0.364",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-4f5fd8c0bf",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.231 break-risk",
+          "figure": "0.231",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.2595 Markov conviction",
+          "figure": "+0.2595",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-505293bb65",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-52fa6618fd",
-      "status": ""
+      "status": "labelled",
+      "claims": []
     },
     {
-      "claims": [],
       "id": "fresh-62427c2bea",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.419 Bull Markov signal",
+          "figure": "+0.419",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.125 support break risk",
+          "figure": "0.125",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-65f68db078",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "6 technical confluences",
+          "figure": "6",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.110)",
+          "figure": "0.110",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-6dda2d3c55",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "support break risk (1.00)",
+          "figure": "1.00",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-6ed6c90799",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.316 Markov signal",
+          "figure": "+0.316",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-74282c98e4",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "advancing +2.08% intraday",
+          "figure": "+2.08%",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "No intraday return or matching start/end prices are supplied."
+        },
+        {
+          "quote": "intraday to 842.40 DKK",
+          "figure": "842.40",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "The evidence gives a Markov close, not the asserted intraday quote; those observations need not be simultaneous."
+        },
+        {
+          "quote": "Markov regime (+0.599)",
+          "figure": "+0.599",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-77e4c9ca16",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "6 technical confluences",
+          "figure": "6",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-79a8be9e87",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-7e5e21362e",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction holding (+0.742)",
+          "figure": "+0.742",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "consolidation at 515.5 DKK",
+          "figure": "515.5",
+          "field": "daily_indicators.close",
+          "verdict": "inconsistent",
+          "note": "Read as the factual quoted market level, without an explicit alternate time. Daily close is 515.0; Markov close is 516.0; neither supports 515.5 at one decimal."
+        },
+        {
+          "quote": "502 DKK support",
+          "figure": "502",
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "inconsistent",
+          "note": "Nearest support is 502.89, which rounds to 503 at the written whole-DKK precision, not 502."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-834bd27ad5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.092)",
+          "figure": "0.092",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.260 Bull Markov signal",
+          "figure": "+0.260",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-8372feaaeb",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.742)",
+          "figure": "+0.742",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-843dbae5bf",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov Bull conviction (+0.701)",
+          "figure": "+0.701",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-8e0b57dc42",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-978ff05310",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.678 Bull Markov regime",
+          "figure": "+0.678",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-9e662171fc",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "mid-session pullback to 34.23 EUR",
+          "figure": "34.23",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "Mid-session quote evidence is absent. The two supplied closes do not establish or refute a later mid-session price."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-a39dbec5d9",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.125 break risk",
+          "figure": "0.125",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-a45ceb915d",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.745 Markov conviction",
+          "figure": "+0.745",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-b15ea011c2",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.364 Bull Markov state",
+          "figure": "+0.364",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "support above 391 NOK",
+          "figure": "391",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "The numeric threshold constrains a support level, but no support evidence is present."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-b196192ef8",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.678 Bull, 71.3% bull probability)",
+          "figure": "+0.678",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "71.3% bull probability",
+          "figure": "71.3%",
+          "field": "markov.bull_prob",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-b3bf23b493",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk 0.221",
+          "figure": "0.221",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.447 Bull Markov signal",
+          "figure": "+0.447",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-bce6065f20",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.800)",
+          "figure": "+0.800",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.176)",
+          "figure": "0.176",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+2.30% intraday advance",
+          "figure": "+2.30%",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "The evidence lacks an intraday return and time-matched prices from which to establish it."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-be258916cd",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 technical confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.144 break risk",
+          "figure": "0.144",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.293 Bull Markov regime",
+          "figure": "+0.293",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-c979a67ff4",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "0.231 break-risk",
+          "figure": "0.231",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.2595 Markov regime",
+          "figure": "+0.2595",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-cd0660f989",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.800)",
+          "figure": "+0.800",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-d0dd76c166",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.535)",
+          "figure": "+0.535",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-d2cb7181db",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.316 Markov signal",
+          "figure": "+0.316",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-dab04c739d",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov Bull conviction (+0.701)",
+          "figure": "+0.701",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-e2f6a33d7a",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "6 confluences",
+          "figure": "6",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "inconsistent",
+          "note": "Supplied confluence_count is 5, not 6."
+        },
+        {
+          "quote": "negative Markov conviction (-0.124)",
+          "figure": "-0.124",
+          "field": "markov.signed_signal",
+          "verdict": "consistent",
+          "note": "Negative explicitly denotes directional conviction, so this is the signed signal (-0.124230...), not the unsigned conviction magnitude (+0.124230...)."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-e950b8c436",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "congressional net buying (+0.711)",
+          "figure": "+0.711",
+          "field": "quiver.signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.996)",
+          "figure": "0.996",
+          "field": "daily_indicators.support.break_risk",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "near-zero Markov conviction",
+          "figure": "zero",
+          "field": "none",
+          "verdict": "consistent",
+          "note": "Number-word comparison to zero; conviction magnitude 0.0063687 is near zero on the supplied probability-derived scale and rounds to zero at integer precision."
+        },
+        {
+          "quote": "Markov conviction (+0.006)",
+          "figure": "+0.006",
+          "field": "markov.conviction",
+          "verdict": "consistent",
+          "note": "The explicit term conviction without a directional qualifier denotes magnitude, which is positive; signed_signal is a different field."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-ee9c5b2a4c",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "Markov conviction (+0.710 Bull)",
+          "figure": "+0.710",
+          "field": "markov.conviction",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-f05dd4b576",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "+0.399 Markov Bull signal",
+          "figure": "+0.399",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-f513b5a0d5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "gaining +2.05% intraday",
+          "figure": "+2.05%",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "No intraday return or time-matched reference prices are supplied."
+        },
+        {
+          "quote": "intraday to 35.80 EUR",
+          "figure": "35.80",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "The claimed intraday quote is not supplied. The daily and Markov closes can be different-time observations."
+        },
+        {
+          "quote": "+0.325 Markov Bull support",
+          "figure": "+0.325",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-f5dcb1c5fa",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-f6c714e6bb",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "congressional buying (+0.723)",
+          "figure": "+0.723",
+          "field": "quiver.signal",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "break risk (0.638)",
+          "figure": "0.638",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "Daily indicators are absent; no support break-risk field is supplied."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-f7fd7b58b5",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "support break risk (0.638)",
+          "figure": "0.638",
+          "field": "none",
+          "verdict": "cannot_tell",
+          "note": "Daily indicators are absent; no support break-risk field is supplied."
+        }
+      ]
     },
     {
-      "claims": [],
       "id": "fresh-fb22201b8b",
-      "status": ""
+      "status": "labelled",
+      "claims": [
+        {
+          "quote": "428 USD support",
+          "figure": "428",
+          "field": "daily_indicators.support.nearest_support",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "5 confluences",
+          "figure": "5",
+          "field": "daily_indicators.confluence_count",
+          "verdict": "consistent"
+        },
+        {
+          "quote": "+0.386 Bull Markov regime",
+          "figure": "+0.386",
+          "field": "markov.signed_signal",
+          "verdict": "consistent"
+        }
+      ]
     }
-  ],
-  "version": "fresh-v1-2026-09-25"
+  ]
 }
