@@ -291,6 +291,10 @@ checker agree.
 30 of the 52 are strength and freshness words. Defining them would be a rubric
 change for a future instrument, not a reading of this one.
 
+**Settled on 2026-09-26: the convention is rounding.** ASML's label is right
+under it, and from `n17` the checker flags the claim. The recorded figures
+stand as scored. The reconciliation records this beside its reading.
+
 **Truncation, as a scenario, not a reconciled reading.** If the rubric accepted
 truncation as the checker does, only ASML moves. Unflagged numeric errors would
 be **0 to 376 of 1,116 notes** instead of 1 to 395. In the notes the checker

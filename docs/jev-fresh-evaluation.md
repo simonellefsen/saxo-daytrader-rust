@@ -401,9 +401,10 @@ on it.
   bounds;
 - key a removed field as unsettleable only when nothing linked still
   determines it;
-- state in the rubric the signed-conviction rule and the truncation
-  convention, once Simon has chosen one, so a labeller applies them rather
-  than choosing.
+- state in the rubric the signed-conviction rule and the rounding convention,
+  so a labeller applies them rather than choosing. Simon settled the
+  convention on 2026-09-26: rounding, not truncation (`n17`). This set's key
+  keeps the truncation it was generated with.
 
 ## What this cannot establish
 

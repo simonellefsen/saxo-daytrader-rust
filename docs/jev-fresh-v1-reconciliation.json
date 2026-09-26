@@ -866,5 +866,14 @@
       "document": "docs/jev-adjudication-2026-09-26-signed-conviction.md",
       "ruling": "Under the same rule, UBER's '+0.006' states the signed signal, -0.0064, so its sign is wrong: negligible in size, and the only written sign in either frame that contradicts the signal. The label, consistent as the magnitude, stands as delivered; neither the score nor the reconciliation surfaced it, because label and checker agreed."
     }
-  ]
+  ],
+  "convention_settled": {
+    "date": "2026-09-26",
+    "decided_by": "Simon",
+    "convention": "Rounding to the precision written, either way at a half. Truncation is not accepted.",
+    "method": "n17-2026-09-26 (0e4b405)",
+    "record": "docs/jev-numeric-n17-changes.json",
+    "claim": "fresh-7e5e21362e#2, CHEMM '502 DKK support' against 502.89",
+    "effect": "Under the settled convention the label, inconsistent, is right: 502.89 rounds to 503. The 'unresolved_convention' reading and the truncation_read_as_consistent scenario are kept as recorded; this sits beside them. The recorded score stands as n15's. From n17 the checker flags this claim."
+  }
 }

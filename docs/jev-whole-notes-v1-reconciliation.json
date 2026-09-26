@@ -1404,5 +1404,14 @@
       "date": "2026-09-25",
       "what": "The open question on numbers written as words said 'None of the six is wrong.' One of the six is cannot_tell, so this now says that none was labelled inconsistent and one remains unresolved. Only the wording changed; no reading, label or figure did."
     }
-  ]
+  ],
+  "convention_settled": {
+    "date": "2026-09-26",
+    "decided_by": "Simon",
+    "convention": "Rounding to the precision written, either way at a half. Truncation is not accepted.",
+    "method": "n17-2026-09-26 (0e4b405)",
+    "record": "docs/jev-numeric-n17-changes.json",
+    "claim": "note-0975b93ee0#3, ASML 'break risk (0.400)' against 0.4006",
+    "effect": "Under the settled convention the label, inconsistent, is right: 0.4006 rounds to 0.401. The truncation scenario above no longer describes the checker. The recorded figures stand as scored under n12's convention. From n17 the checker flags this claim, in both of the reports that write it."
+  }
 }

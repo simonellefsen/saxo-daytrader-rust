@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n16-2026-09-25`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n17-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -11,8 +11,57 @@ stands as scored. The whole-note audit is keyed to `n12`.
 - `n15` reads a numeric expression whole, and each dash and space in one
   spelling. The fresh evaluation measured it.
 - `n16` matches a field's name only as a whole word.
+- `n17` compares by rounding alone, the convention Simon settled.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n17`: rounding, not truncation
+
+**The convention is settled.** Simon decided on 2026-09-26: a figure written
+short is consistent only if it is the stored value rounded at the precision
+written. Until now the checker also accepted truncation. That decided a case
+in each of three instruments, each time against a labeller who rounded:
+- LMND's "RSI 60" for 60.66, in the controls;
+- ASML's "0.400" for 0.4006, in the whole-note audit;
+- CHEMM's "502" for 502.89, in the fresh evaluation.
+
+**Either way at a half.** That keeps both half conventions accepted before,
+away from zero and to even. It also covers a decimal half stored just short in
+binary: 23.135 is 23.13499…, and "23.14" is how a person rounds it.
+
+Measured in `jev-numeric-n17-changes.json` (`n16` at `7f468fa`, `n17` at
+`0e4b405`): **seven claims move from `matches` to `differs`**, and nothing else
+changes. Each is a truncation that rounding does not produce:
+
+| claim | written | stored | rounds to |
+|---|---|---|---|
+| #101 LMND RSI | 60 | 60.66 | 61 |
+| #189 AMGN Markov signal | +0.480 | 0.48065 | 0.481 |
+| #283, #284 ASML break risk | 0.400 | 0.40060 | 0.401 |
+| #293 ISP Markov signal | +0.4199 | 0.419984 | 0.4200 |
+| #311 DE downside to support | 9.9% | 9.979% | 10.0% |
+| #321 CHEMM support | 502 | 502.89 | 503 |
+
+The first six are from the development dump, where differs rise from 9 to 15;
+#321 is from the fresh frame. **They are small**: none is off by more than one
+unit in the last place written. Under the convention they are inconsistent, and
+the checker now says so. The three instruments' recorded results stand as they
+were scored. Each reconciliation now records beside it that its open question
+is settled.
+
+**The frozen challenge sets are not edited.** They keyed "the stored value
+truncated to one fewer decimal" as true. The scorer now re-reads each such case
+under the convention, with the key's own arithmetic: true only where the
+truncation is also a rounding. That makes 8, 7 and 6 cases per set false. The
+checker detects every one, and no seeded falsehood is accepted. Removing a
+convention can only make fewer figures writable, so no case keyed false
+changes.
+
+**Not changed:**
+- the fresh set's own key, which keeps the convention of its time;
+- the completion audit's metadata provenance (`decision_quality.rs`). That
+  still matches a figure to its source by rounding or truncation. It traces
+  where a figure came from, not whether it is right.
 
 ## `n16`: a name is a whole word
 

@@ -1,0 +1,154 @@
+{
+  "what_this_is": "n16 against n17, claim by claim, from recorded runs of committed code with clean trees (jev_provenance::census_of_every_claim), over the development dump and the fresh evaluation's frame. n17 settles the convention: rounding, either way at a half; truncation is no longer accepted.",
+  "decided": "By Simon, 2026-09-26: 'Use rounding, not truncation, as the convention.'",
+  "development_dump": {
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "n16": {
+      "commit": "7f468fa",
+      "method_version": "n16-2026-09-25",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 9,
+        "implausible_attribution": 6,
+        "matches": 1249,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "n17": {
+      "commit": "0e4b405",
+      "method_version": "n17-2026-09-26",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": [
+      {
+        "claim": "101|LMND:xnys|97",
+        "figure": "60",
+        "field": "daily_indicators.rsi14",
+        "stored": 60.661875394447584,
+        "rounds_to": 61.0,
+        "truncates_to": 60.0,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "hnical neutral (hold, neutral trend, rsi 60). lowest-priced strong-signal name; wat"
+      },
+      {
+        "claim": "189|AMGN:xnas|9",
+        "figure": "+0.480",
+        "field": "markov.signed_signal",
+        "stored": 0.4806515872478485,
+        "rounds_to": 0.481,
+        "truncates_to": 0.48,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "positive +0.480 markov bull regime and bullish daily tr"
+      },
+      {
+        "claim": "283|ASML:xnas|102",
+        "figure": "0.400",
+        "field": "daily_indicators.support.break_risk",
+        "stored": 0.4006035157009156,
+        "rounds_to": 0.401,
+        "truncates_to": 0.4,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "3658 markov signal; moderate break risk (0.400) warrants observation."
+      },
+      {
+        "claim": "284|ASML:xnas|102",
+        "figure": "0.400",
+        "field": "daily_indicators.support.break_risk",
+        "stored": 0.4006035157009156,
+        "rounds_to": 0.401,
+        "truncates_to": 0.4,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "3658 markov signal; moderate break risk (0.400) keeps it on watch."
+      },
+      {
+        "claim": "293|ISP:xmil|66",
+        "figure": "+0.4199",
+        "field": "markov.signed_signal",
+        "stored": 0.4199841320514679,
+        "rounds_to": 0.42,
+        "truncates_to": 0.4199,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "howing 4 technical confluences and solid +0.4199 bull markov signal with low downside ri"
+      },
+      {
+        "claim": "311|DE:xnys|65",
+        "figure": "9.9%",
+        "field": "daily_indicators.support.downside_to_support_pct",
+        "stored": 9.97914326969356,
+        "rounds_to": 10.0,
+        "truncates_to": 9.9,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "ow support break risk (0.213); currently 9.9% above nearest support, awaiting a tight"
+      }
+    ]
+  },
+  "fresh_frame": {
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "n16": {
+      "commit": "7f468fa",
+      "method_version": "n16-2026-09-25",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 1,
+        "implausible_attribution": 1,
+        "matches": 48,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "n17": {
+      "commit": "0e4b405",
+      "method_version": "n17-2026-09-26",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": [
+      {
+        "claim": "321|CHEMM:xcse|104",
+        "figure": "502",
+        "field": "daily_indicators.support.nearest_support",
+        "stored": 502.89,
+        "rounds_to": 503.0,
+        "truncates_to": 502.0,
+        "was": "matches",
+        "now": "differs",
+        "excerpt": "m consolidation at 515.5 dkk above solid 502 dkk support."
+      }
+    ]
+  },
+  "challenge_sets": {
+    "reading": "The frozen files are unedited. The scorer re-reads each boundary_truncated case under the convention, by the key's own arithmetic: true only where the truncation is also a rounding.",
+    "cases_now_false": {
+      "jev-challenge-v1.json": 8,
+      "jev-challenge-v2.json": 7,
+      "jev-challenge-v3.json": 6
+    },
+    "detected": "all of them; boundary_truncated decides 15 of 15 correctly in each set, and no seeded falsehood is accepted"
+  }
+}

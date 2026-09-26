@@ -182,6 +182,22 @@ field that is never checked produces no verdict to adjudicate.
 It has caught no regression yet, which is the point of keeping `v1` frozen —
 that number only becomes meaningful after the method moves under it.
 
+## Since `n17`: rounding, not truncation
+
+The convention was settled on 2026-09-26. A figure written short is consistent
+only if it is the stored value rounded at the precision written. These sets
+keyed `boundary_truncated`, "the stored value truncated to one fewer decimal",
+as true, which was right under the convention of their time.
+
+The frozen files are not edited. The scorer re-reads each such case under the
+current convention, with the key's own arithmetic, `truth_under_the_convention`:
+true only where the truncation is also a rounding. That makes 8 cases false in
+`v1`, 7 in `v2` and 6 in `v3`. It lists them under
+`reread_under_the_convention`. The checker detects all of them, so
+`boundary_truncated` still decides 15 of 15 correctly in each set. No other
+mutation depends on truncation being true: removing a convention can only make
+fewer figures writable.
+
 ## Regenerating
 
 ```

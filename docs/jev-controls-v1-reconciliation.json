@@ -622,5 +622,14 @@
       "status": "not revised",
       "effect": "The adjudication stays at five confirmed and four unresolved; the blind label would make it six and three. An independent reader can settle it. The checker's author should not."
     }
-  ]
+  ],
+  "convention_settled": {
+    "date": "2026-09-26",
+    "decided_by": "Simon",
+    "convention": "Rounding to the precision written, either way at a half. Truncation is not accepted.",
+    "method": "n17-2026-09-26 (0e4b405)",
+    "record": "docs/jev-numeric-n17-changes.json",
+    "claim": "ctl-016172464d, LMND 'RSI 60' against 60.66",
+    "effect": "Under the settled convention the label, inconsistent, is right: 60.66 rounds to 61. The label is unchanged, and so is this reconciliation's reading. The recorded v4 figures stand as scored under n10's convention. From n17 the checker flags this claim; it is one of the seven the n17 census moves to differs."
+  }
 }

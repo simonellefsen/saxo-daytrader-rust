@@ -388,6 +388,10 @@ outside the evidence, and 12 are claims the evidence should have covered but
 did not. Under v4 all 37 count both ways, and that is most of the population
 range's width.
 
+**Settled on 2026-09-26: the convention is rounding.** LMND's label is right
+under it, and from `n17` the checker flags the claim. The v4 figures stand as
+scored. The reconciliation records this beside its reading.
+
 **Truncation, as a scenario, not a reconciled reading.** If the rubric accepted
 truncation as the checker does, only LMND moves. Accepted claims wrong would be
 **0 to 94 of 1,153** instead of 1 to 132, and all claims wrong 6 to 355 of
