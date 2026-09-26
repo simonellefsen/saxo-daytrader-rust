@@ -575,10 +575,16 @@ defective. None of it is adjudicated, and the question itself is uncalibrated.
    problem, not an attribution one, and not fixed.
 6. **Signs are not read.** "markov is positive at 0.1634" abstains rather than
    check the sign, because the grammar compares magnitudes written as quoted.
-7. **Digits are ASCII, and number words stop at twelve.** A figure in other
+7. **A sign beside "conviction" is discarded.** `markov.conviction` is
+   compared by magnitude, so "Markov conviction (+0.124)" is accepted against
+   a -0.124 signal. The 2026-09-26 adjudication rules that a signed figure
+   there states the signed signal, so this hides sign errors. #358 UBER's
+   "+0.006" against -0.0064 is one. Not fixed: review advised no further
+   tuning, and the decision is Simon's.
+8. **Digits are ASCII, and number words stop at twelve.** A figure in other
    digits is not read. A number word over twelve, "fifteen confluences", is
    not read on its own, though it is recognised as part of a compound.
-8. **The whitelist is English and hand-built.** A new phrasing abstains until
+9. **The whitelist is English and hand-built.** A new phrasing abstains until
    someone adds it, which is the intended failure direction but means coverage
    drifts as the report model's wording drifts. The harness above is how that
    is detected.

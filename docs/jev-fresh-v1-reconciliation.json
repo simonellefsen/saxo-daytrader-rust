@@ -851,5 +851,20 @@
       "date": "2026-09-25",
       "what": "docs/jev-fresh-evaluation.md: the seeded results now carry review's qualification. The kept-true controls are single-field arithmetic tests, 37 of 69 of them in evidence the model could not produce, and the nine NOKIA outcomes are one disputed reading. The signed-conviction question is moved from the n15 defects to an open question. A reconciliation section is added. The recorded figures and the labels are unchanged."
     }
+  ],
+  "adjudications": [
+    {
+      "claim": "fresh-e2f6a33d7a#1",
+      "date": "2026-09-26",
+      "document": "docs/jev-adjudication-2026-09-26-signed-conviction.md",
+      "ruling": "markov.signed_signal, consistent. A figure written with a sign beside 'conviction' states the signed signal; an unsigned one states the magnitude.",
+      "note": "The 'unresolved_attribution' reading recorded above is kept as it was; this ruling sits beside it. Decided by the checker's author, against the checker's current rule; not independent."
+    },
+    {
+      "claim": "fresh-e950b8c436#3",
+      "date": "2026-09-26",
+      "document": "docs/jev-adjudication-2026-09-26-signed-conviction.md",
+      "ruling": "Under the same rule, UBER's '+0.006' states the signed signal, -0.0064, so its sign is wrong: negligible in size, and the only written sign in either frame that contradicts the signal. The label, consistent as the magnitude, stands as delivered; neither the score nor the reconciliation surfaced it, because label and checker agreed."
+    }
   ]
 }

@@ -372,13 +372,38 @@ present, but a reader could settle them.
 error goes. Read NOKIA's figure as conviction and the one wrong field goes. No
 false alarm appears under either.
 
+**Two qualifications travel with any summary of these figures**, as review
+asked:
+1. "No wrong decision without the NOKIA anchor" is a post-hoc subset result,
+   not independent validation. It locates the disagreement; it does not
+   establish which reading is right.
+2. "Coherent evidence" means passing the listed checks in `context_problems`.
+   It is not proof that every relationship in a synthetic context is valid.
+
+**The signed-conviction question was adjudicated on 2026-09-26**
+(`jev-adjudication-2026-09-26-signed-conviction.md`). Ruling: a figure
+written with a sign beside "conviction" states the signed signal, and an
+unsigned one states the magnitude. So NOKIA's figure is the signed signal, and
+the labeller's field is right. The seeded `sign_flipped` acceptance is then a
+genuine miss: the checker discards a sign it attributes to conviction. #358
+UBER's "+0.006", against -0.0064, reads as a negligible sign error that no
+score surfaced. The ruling was made by the checker's author, against the
+checker's current rule. Nothing was rescored, and no label changed.
+
+**This evaluation is kept as it is.** It is historical evidence. It is not to
+be regenerated to get cleaner results, and review recommends no further tuning
+on it.
+
 **For a future version**, as review recommended:
 - separate valid-context changes from deliberate evidence corruption, and
   report them apart;
 - in the former, move linked fields together and keep every field inside its
   bounds;
 - key a removed field as unsettleable only when nothing linked still
-  determines it.
+  determines it;
+- state in the rubric the signed-conviction rule and the truncation
+  convention, once Simon has chosen one, so a labeller applies them rather
+  than choosing.
 
 ## What this cannot establish
 
