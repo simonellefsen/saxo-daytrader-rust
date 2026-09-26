@@ -68,6 +68,7 @@ mod saxo_rate_limit;
 mod scheduler;
 mod scheduler_state;
 mod shadow_assessment;
+mod shutdown;
 mod state;
 mod strategy_journal;
 mod strategy_journal_state;
@@ -83,7 +84,11 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    api::router, mcp::run_mcp_http, saxo_order::sync_saxo_broker_orders, scheduler::run_scheduler,
+    api::router,
+    mcp::run_mcp_http,
+    saxo_order::sync_saxo_broker_orders,
+    scheduler::run_scheduler,
+    shutdown::{ShutdownSignal, server_shutdown},
     state::AppState,
 };
 
@@ -120,16 +125,20 @@ async fn main() -> Result<()> {
     // `Arc` is Rust's thread-safe shared pointer. Axum clones this cheap pointer
     // into request handlers instead of cloning the whole app state.
     info!("starting process in web mode");
+    let shutdown = ShutdownSignal::listen();
     let state = Arc::new(AppState::load().await.map_err(|err| {
         error!("application state failed to load: {err:#}");
         err
     })?);
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".to_string());
-    let app = router(state);
+    let app = router(state.clone());
 
     let listener = TcpListener::bind(&bind_addr)
         .await
         .with_context(|| format!("binding {bind_addr}"))?;
     info!("serving Rust Dioxus app on http://{bind_addr}");
-    axum::serve(listener, app).await.context("serving app")
+    axum::serve(listener, app)
+        .with_graceful_shutdown(server_shutdown(shutdown, state))
+        .await
+        .context("serving app")
 }

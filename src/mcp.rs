@@ -18,6 +18,7 @@ use crate::{
 };
 
 pub async fn run_mcp_http() -> Result<()> {
+    let shutdown = crate::shutdown::ShutdownSignal::listen();
     let state = Arc::new(AppState::load().await.context("loading MCP app state")?);
     let bind_addr = env::var("BIND_ADDR")
         .or_else(|_| env::var("MCP_BIND_ADDR"))
@@ -25,13 +26,14 @@ pub async fn run_mcp_http() -> Result<()> {
     let app = Router::new()
         .route("/health", get(mcp_health))
         .route("/mcp", post(mcp_endpoint))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = TcpListener::bind(&bind_addr)
         .await
         .with_context(|| format!("binding daytrader MCP server on {bind_addr}"))?;
     info!("serving daytrader MCP server on http://{bind_addr}/mcp");
     axum::serve(listener, app)
+        .with_graceful_shutdown(crate::shutdown::server_shutdown(shutdown, state))
         .await
         .context("serving daytrader MCP server")
 }

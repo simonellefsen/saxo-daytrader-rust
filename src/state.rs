@@ -137,6 +137,10 @@ static SAXO_EXCHANGE_CALENDAR_CACHE: OnceLock<RwLock<Option<SaxoExchangeCalendar
 
 const SAXO_SESSION_REFRESH_LEASE_SECONDS: i64 = 45;
 const SAXO_SESSION_REFRESH_LEASE_WAIT_ATTEMPTS: usize = 50;
+const SAXO_SESSION_PERSIST_ATTEMPTS: u32 = 3;
+/// While shutting down, an access token is still handed out if it outlives
+/// this; the replacement process owns the next rotation.
+const SAXO_SESSION_DRAINING_MIN_ACCESS_SECONDS: i64 = 60;
 const INTEGRITY_MONEY_ABS_TOLERANCE_DKK: f64 = 50.0;
 const INTEGRITY_MONEY_REL_TOLERANCE: f64 = 0.002;
 const INTEGRITY_BROKER_CASH_ABS_TOLERANCE_DKK: f64 = 500.0;
@@ -2709,6 +2713,101 @@ fn saxo_refresh_lease_owner(source: &str) -> String {
         source.replace(':', "_"),
         nonce
     )
+}
+
+/// Test-only interleaving point between a process deciding a refresh is due
+/// and it trying to take the refresh lease. Another process completing a
+/// whole refresh in that gap is the race this seam makes deterministic.
+#[cfg(test)]
+pub(crate) mod saxo_lease_gap_hook {
+    use std::{
+        collections::HashMap,
+        future::Future,
+        path::{Path, PathBuf},
+        pin::Pin,
+        sync::{LazyLock, Mutex},
+    };
+
+    type Hook = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+    static HOOKS: LazyLock<Mutex<HashMap<PathBuf, Hook>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    /// Runs `hook` once, the next time the process owning `session_file`
+    /// reaches the gap.
+    pub(crate) fn install<F, Fut>(session_file: &Path, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        HOOKS.lock().expect("lease gap hooks").insert(
+            session_file.to_path_buf(),
+            Box::new(move || Box::pin(hook())),
+        );
+    }
+
+    pub(crate) async fn run(session_file: &Path) {
+        let hook = HOOKS.lock().expect("lease gap hooks").remove(session_file);
+        if let Some(hook) = hook {
+            hook().await;
+        }
+    }
+}
+
+/// Per-process coordination for Saxo token rotation, keyed by the working
+/// copy it guards. In production that is one per process; keying by file lets
+/// tests run several simulated pods in one process.
+struct SaxoRefreshGate {
+    in_flight: tokio::sync::Mutex<()>,
+    draining: std::sync::atomic::AtomicBool,
+}
+
+impl SaxoRefreshGate {
+    fn is_draining(&self) -> bool {
+        self.draining.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn begin_draining(&self) {
+        self.draining
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn saxo_refresh_gate(session_file: &std::path::Path) -> std::sync::Arc<SaxoRefreshGate> {
+    static GATES: OnceLock<std::sync::Mutex<HashMap<PathBuf, std::sync::Arc<SaxoRefreshGate>>>> =
+        OnceLock::new();
+    GATES
+        .get_or_init(Default::default)
+        .lock()
+        .expect("Saxo refresh gates")
+        .entry(session_file.to_path_buf())
+        .or_insert_with(|| {
+            std::sync::Arc::new(SaxoRefreshGate {
+                in_flight: tokio::sync::Mutex::new(()),
+                draining: std::sync::atomic::AtomicBool::new(false),
+            })
+        })
+        .clone()
+}
+
+enum SaxoRefreshLease {
+    NotNeeded,
+    Draining,
+    Held(String),
+}
+
+struct SaxoRotation {
+    result: Result<JsonValue>,
+    release_lease: bool,
+}
+
+impl SaxoRotation {
+    fn released(result: Result<JsonValue>) -> Self {
+        Self {
+            result,
+            release_lease: true,
+        }
+    }
 }
 
 fn saxo_session_needs_refresh(session: &JsonValue) -> bool {
@@ -16611,7 +16710,7 @@ impl AppState {
         if let Err(err) = self.ensure_saxo_session_json("auth_status").await {
             warn!("Saxo leased session refresh before auth status skipped: {err:#}");
         }
-        auth::auth_status(&self.config, &self.config_path, false).await
+        auth::auth_status(&self.config, &self.config_path).await
     }
 
     pub async fn saxo_auth_status_value(&self) -> JsonValue {
@@ -16631,58 +16730,116 @@ impl AppState {
     }
 
     pub async fn refresh_saxo_session(&self) -> Result<auth::SaxoSessionApiStatus> {
-        let lease_owner = self
-            .prepare_saxo_session_refresh_lease_if_needed("refresh")
-            .await?;
-        let result = match auth::refresh_session(&self.config, &self.config_path).await {
-            Ok(_) => {
-                self.persist_saxo_session_file_to_db("refresh").await?;
-                Ok(auth::session_api(&self.config, &self.config_path).await)
-            }
-            Err(err) => {
-                if let Err(persist_err) = self
-                    .persist_invalid_saxo_session_file_to_db("refresh_invalid")
-                    .await
-                {
-                    warn!("Saxo invalid session database persistence failed: {persist_err:#}");
-                }
-                Err(err)
-            }
-        };
-        if let Some(owner) = lease_owner {
-            if let Err(err) = self.release_saxo_session_refresh_lease(&owner).await {
-                warn!("Saxo session refresh lease release failed: {err:#}");
-            }
-        }
-        result
+        self.ensure_saxo_session_json("refresh").await?;
+        Ok(auth::session_api(&self.config, &self.config_path).await)
     }
 
+    /// Returns a session whose access token is outside the refresh margin,
+    /// rotating the refresh token first when it is due.
+    ///
+    /// Saxo refresh tokens are single-use and every pod refreshes the same
+    /// one, so a rotation is only ever made from the durable row, under the
+    /// cross-process lease, and made durable before the lease is released.
+    /// The pod-local file is a read cache and never the refresh input.
     pub async fn ensure_saxo_session_json(&self, source: &str) -> Result<JsonValue> {
-        let lease_owner = self
-            .prepare_saxo_session_refresh_lease_if_needed(source)
-            .await?;
-        let result = match auth::ensure_session_json(&self.config, &self.config_path).await {
-            Ok(session) => {
-                self.persist_saxo_session_file_to_db(source).await?;
-                Ok(session)
+        if let Err(err) = self.sync_saxo_session_storage().await {
+            warn!("Saxo session restore before use failed: {err:#}");
+        }
+        let session = auth::export_session_json(&self.config, &self.config_path)?;
+        if !saxo_session_needs_refresh(&session) {
+            return auth::usable_session_json(session);
+        }
+        self.rotate_durable_saxo_session(source).await
+    }
+
+    async fn rotate_durable_saxo_session(&self, source: &str) -> Result<JsonValue> {
+        let gate = saxo_refresh_gate(&self.saxo_session_file());
+        // One rotation per process at a time; a shutdown drain waits on this.
+        let _in_flight = gate.in_flight.lock().await;
+        if gate.is_draining() {
+            return self.saxo_session_while_draining(source);
+        }
+        let owner = match self
+            .prepare_saxo_session_refresh_lease_if_needed(source, &gate)
+            .await?
+        {
+            SaxoRefreshLease::Held(owner) => owner,
+            // Another task or process rotated the token while this one waited.
+            SaxoRefreshLease::NotNeeded => {
+                return auth::usable_session_json(auth::export_session_json(
+                    &self.config,
+                    &self.config_path,
+                )?);
             }
-            Err(err) => {
-                let invalid_source = format!("{source}_invalid");
-                if let Err(persist_err) = self
-                    .persist_invalid_saxo_session_file_to_db(&invalid_source)
-                    .await
-                {
-                    warn!("Saxo invalid session database persistence failed: {persist_err:#}");
-                }
-                Err(err)
-            }
+            SaxoRefreshLease::Draining => return self.saxo_session_while_draining(source),
         };
-        if let Some(owner) = lease_owner {
+        let rotation = self.rotate_saxo_session_under_lease(source).await;
+        if rotation.release_lease {
             if let Err(err) = self.release_saxo_session_refresh_lease(&owner).await {
                 warn!("Saxo session refresh lease release failed: {err:#}");
             }
         }
-        result
+        rotation.result
+    }
+
+    /// A process that has begun shutting down starts no rotation: Saxo would
+    /// consume the durable token, and the successor could die with the pod.
+    /// It keeps serving an access token that has not expired yet.
+    fn saxo_session_while_draining(&self, source: &str) -> Result<JsonValue> {
+        let session = auth::export_session_json(&self.config, &self.config_path)?;
+        if auth::session_access_token_valid_for(&session, SAXO_SESSION_DRAINING_MIN_ACCESS_SECONDS)
+        {
+            info!(
+                source,
+                "Saxo refresh deferred while shutting down; serving the unexpired access token"
+            );
+            return Ok(session);
+        }
+        bail!(
+            "Saxo session refresh deferred: this process is shutting down and its replacement refreshes from the durable session."
+        );
+    }
+
+    /// Stops this process from starting any new token rotation and waits up to
+    /// `timeout` for one already in flight to become durable. Returns whether
+    /// nothing was left in flight.
+    pub async fn drain_saxo_session_refreshes(&self, timeout: StdDuration) -> bool {
+        let gate = saxo_refresh_gate(&self.saxo_session_file());
+        gate.begin_draining();
+        match tokio::time::timeout(timeout, gate.in_flight.lock()).await {
+            Ok(_idle) => true,
+            Err(_) => {
+                warn!(
+                    timeout_seconds = timeout.as_secs(),
+                    "a Saxo token rotation was still in flight at shutdown"
+                );
+                false
+            }
+        }
+    }
+
+    /// Marks this process as shutting down without waiting; see
+    /// `drain_saxo_session_refreshes`.
+    pub fn begin_saxo_session_drain(&self) {
+        saxo_refresh_gate(&self.saxo_session_file()).begin_draining();
+    }
+
+    fn saxo_session_file(&self) -> PathBuf {
+        auth::session_file_path(&self.config, &self.config_path)
+    }
+
+    /// Stores a session from a completed OAuth login: durable row first, then
+    /// the working copy, so a concurrent restore cannot put the replaced
+    /// session back in the file and have it written over the new one.
+    pub async fn store_saxo_oauth_session(&self, session: &JsonValue) -> Result<()> {
+        let durable = self
+            .save_saxo_session_to_db(session, "oauth_callback")
+            .await;
+        // Even if the durable write failed, keep the new login in the working
+        // copy: it is the newest session, so the next restore pushes it.
+        auth::import_session_json(&self.config, &self.config_path, session)
+            .context("writing the new Saxo session to the working copy")?;
+        durable
     }
 
     pub async fn user_logout_saxo_session(&self) -> Result<JsonValue> {
@@ -16695,7 +16852,7 @@ impl AppState {
             warn!("Saxo leased session refresh during user logout no-op skipped: {err:#}");
         }
         let mut status =
-            serde_json::to_value(auth::auth_status(&self.config, &self.config_path, false).await)
+            serde_json::to_value(auth::auth_status(&self.config, &self.config_path).await)
                 .expect("Saxo auth status must serialize");
         if let Some(obj) = status.as_object_mut() {
             obj.insert("logout_scope".to_string(), json!("user"));
@@ -16711,6 +16868,29 @@ impl AppState {
         let status = auth::logout_session(&self.config, &self.config_path)?;
         self.clear_saxo_session_from_db().await?;
         Ok(status)
+    }
+
+    async fn ensure_saxo_session_schema(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS saxo_sessions (
+                singleton_key TEXT PRIMARY KEY,
+                session_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                refresh_lease_owner TEXT,
+                refresh_lease_expires_at TEXT,
+                refresh_lease_source TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await
+        .context("creating Saxo session state table")?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_owner TEXT")
+            .await?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_expires_at TEXT")
+            .await?;
+        self.ensure_table_column("saxo_sessions", "refresh_lease_source TEXT")
+            .await
     }
 
     async fn ensure_runtime_state_schema(&self) -> Result<()> {
@@ -16882,26 +17062,7 @@ impl AppState {
         .execute(&self.pool)
         .await
         .context("creating notification alert state table")?;
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS saxo_sessions (
-                singleton_key TEXT PRIMARY KEY,
-                session_json TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                source TEXT NOT NULL,
-                refresh_lease_owner TEXT,
-                refresh_lease_expires_at TEXT,
-                refresh_lease_source TEXT
-            )",
-        )
-        .execute(&self.pool)
-        .await
-        .context("creating Saxo session state table")?;
-        self.ensure_table_column("saxo_sessions", "refresh_lease_owner TEXT")
-            .await?;
-        self.ensure_table_column("saxo_sessions", "refresh_lease_expires_at TEXT")
-            .await?;
-        self.ensure_table_column("saxo_sessions", "refresh_lease_source TEXT")
-            .await?;
+        self.ensure_saxo_session_schema().await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS runtime_settings (
                 key TEXT PRIMARY KEY,
@@ -17729,20 +17890,27 @@ impl AppState {
         }
     }
 
+    /// Reconciles the pod-local working copy with the durable row. The durable
+    /// row wins unless the working copy holds a strictly newer session (a
+    /// rotation or login whose durable write failed) or has learned that Saxo
+    /// refused the very token the durable row still holds.
     async fn sync_saxo_session_storage(&self) -> Result<()> {
         let file_session = auth::export_session_json(&self.config, &self.config_path).ok();
         let db_session = self.load_saxo_session_from_db().await?;
 
         match (file_session, db_session) {
             (Some(file), Some(db)) => {
-                if saxo_session_score(&db) >= saxo_session_score(&file) {
-                    auth::import_session_json(&self.config, &self.config_path, &db)
-                        .context("restoring Saxo session file from database")?;
-                    info!("Saxo session file restored from database state");
-                } else {
+                if file == db {
+                    return Ok(());
+                }
+                if saxo_working_copy_supersedes_durable(&file, &db) {
                     self.save_saxo_session_to_db(&file, "startup_file_sync")
                         .await?;
                     info!("Saxo session database state updated from local file");
+                } else {
+                    auth::import_session_json(&self.config, &self.config_path, &db)
+                        .context("restoring Saxo session file from database")?;
+                    info!("Saxo session file restored from database state");
                 }
             }
             (Some(file), None) => {
@@ -17763,24 +17931,31 @@ impl AppState {
     }
 
     async fn load_saxo_session_from_db(&self) -> Result<Option<JsonValue>> {
+        Ok(self
+            .load_saxo_session_row_from_db()
+            .await?
+            .map(|(_, session)| session))
+    }
+
+    /// The durable session and its exact stored text, which a compare-and-set
+    /// write uses to prove the row has not moved since it was read.
+    async fn load_saxo_session_row_from_db(&self) -> Result<Option<(String, JsonValue)>> {
+        // Aliased away from `*_json` so the row decoder hands back the text
+        // exactly as stored instead of parsing it.
         let Some(row) = self
             .first_json(
-                "SELECT session_json, updated_at, source FROM saxo_sessions WHERE singleton_key = 'default' LIMIT 1",
+                "SELECT session_json AS session_text FROM saxo_sessions WHERE singleton_key = 'default' LIMIT 1",
             )
             .await?
         else {
             return Ok(None);
         };
-        let value = row.get("session_json").cloned().unwrap_or(JsonValue::Null);
-        if value.is_object() {
-            return Ok(Some(value));
-        }
-        if let Some(text) = value.as_str() {
-            return Ok(Some(
-                serde_json::from_str(text).context("parsing Saxo session JSON from database")?,
-            ));
-        }
-        Ok(None)
+        let Some(text) = row.get("session_text").and_then(JsonValue::as_str) else {
+            return Ok(None);
+        };
+        let session =
+            serde_json::from_str(text).context("parsing Saxo session JSON from database")?;
+        Ok(Some((text.to_string(), session)))
     }
 
     async fn save_saxo_session_to_db(&self, session: &JsonValue, source: &str) -> Result<()> {
@@ -17805,33 +17980,73 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn persist_saxo_session_file_to_db(&self, source: &str) -> Result<()> {
-        let session = auth::export_session_json(&self.config, &self.config_path)
-            .context("reading Saxo session file for database persistence")?;
-        self.save_saxo_session_to_db(&session, source).await
+    /// Replaces the durable session only if the row still holds exactly
+    /// `expected_text`. Token-bearing statements go straight to the pool, never
+    /// through the query helpers that quote a failed statement in the error.
+    async fn replace_saxo_session_in_db_if_unchanged(
+        &self,
+        expected_text: &str,
+        session: &JsonValue,
+        source: &str,
+    ) -> Result<bool> {
+        let session_text =
+            serde_json::to_string(session).context("serializing Saxo session for database")?;
+        let updated_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let sql = format!(
+            "UPDATE saxo_sessions
+             SET session_json = '{}', updated_at = '{}', source = '{}'
+             WHERE singleton_key = 'default' AND session_json = '{}'",
+            sql_escape(&session_text),
+            sql_escape(&updated_at),
+            sql_escape(source),
+            sql_escape(expected_text)
+        );
+        let result = sqlx::query(&sql)
+            .execute(&self.pool)
+            .await
+            .context("conditionally persisting Saxo session to database")?;
+        Ok(result.rows_affected() == 1)
     }
 
-    async fn persist_invalid_saxo_session_file_to_db(&self, source: &str) -> Result<()> {
-        let session = auth::export_session_json(&self.config, &self.config_path)
-            .context("reading Saxo session file for invalid database persistence")?;
-        if saxo_session_refresh_invalid(&session) {
-            self.save_saxo_session_to_db(&session, source).await?;
+    /// Saxo has already consumed the token this rotation replaced, so the
+    /// successor must reach the durable row; a transient database error gets
+    /// retried rather than stranding every other process on a dead token.
+    async fn persist_rotated_saxo_session(&self, session: &JsonValue, source: &str) -> Result<()> {
+        let mut attempt = 1;
+        loop {
+            match self.save_saxo_session_to_db(session, source).await {
+                Ok(()) => return Ok(()),
+                Err(err) if attempt < SAXO_SESSION_PERSIST_ATTEMPTS => {
+                    warn!(
+                        attempt,
+                        "persisting the rotated Saxo session failed; retrying: {err:#}"
+                    );
+                    sleep(StdDuration::from_millis(250 * attempt as u64)).await;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
         }
-        Ok(())
     }
 
     async fn prepare_saxo_session_refresh_lease_if_needed(
         &self,
         source: &str,
-    ) -> Result<Option<String>> {
+        gate: &SaxoRefreshGate,
+    ) -> Result<SaxoRefreshLease> {
         if let Err(err) = self.sync_saxo_session_storage().await {
             warn!("Saxo session restore before refresh lease check failed: {err:#}");
         }
         if !self.current_saxo_session_needs_refresh() {
-            return Ok(None);
+            return Ok(SaxoRefreshLease::NotNeeded);
+        }
+        #[cfg(test)]
+        saxo_lease_gap_hook::run(&self.saxo_session_file()).await;
+        if gate.is_draining() {
+            return Ok(SaxoRefreshLease::Draining);
         }
         if let Some(owner) = self.acquire_saxo_session_refresh_lease(source).await? {
-            return Ok(Some(owner));
+            return Ok(SaxoRefreshLease::Held(owner));
         }
 
         info!(
@@ -17844,13 +18059,114 @@ impl AppState {
                 warn!("Saxo session restore while waiting for refresh lease failed: {err:#}");
             }
             if !self.current_saxo_session_needs_refresh() {
-                return Ok(None);
+                return Ok(SaxoRefreshLease::NotNeeded);
+            }
+            if gate.is_draining() {
+                return Ok(SaxoRefreshLease::Draining);
             }
             if let Some(owner) = self.acquire_saxo_session_refresh_lease(source).await? {
-                return Ok(Some(owner));
+                return Ok(SaxoRefreshLease::Held(owner));
             }
         }
         bail!("Saxo session refresh lease is still held by another process; refresh not attempted");
+    }
+
+    /// The rotation itself, with the lease held.
+    ///
+    /// The refresh input is the durable row as read now, never the working
+    /// copy: the lease is typically free because another process just rotated
+    /// the token and released it, after this process last looked.
+    async fn rotate_saxo_session_under_lease(&self, source: &str) -> SaxoRotation {
+        if let Err(err) = self.sync_saxo_session_storage().await {
+            return SaxoRotation::released(Err(err.context(
+                "re-reading the durable Saxo session under the refresh lease; refresh not attempted",
+            )));
+        }
+        let (durable_text, durable) = match self.load_saxo_session_row_from_db().await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                return SaxoRotation::released(Err(anyhow!(
+                    "No durable Saxo session is stored. Re-authentication is required."
+                )));
+            }
+            Err(err) => return SaxoRotation::released(Err(err)),
+        };
+        if !saxo_session_needs_refresh(&durable) {
+            return SaxoRotation::released(auth::usable_session_json(durable));
+        }
+
+        match auth::refresh_session_json(&self.config, &durable).await {
+            Ok(rotated) => {
+                let durable_write = self.persist_rotated_saxo_session(&rotated, source).await;
+                if let Err(err) =
+                    auth::import_session_json(&self.config, &self.config_path, &rotated)
+                {
+                    warn!("Saxo session working copy update after rotation failed: {err:#}");
+                }
+                match durable_write {
+                    Ok(()) => SaxoRotation::released(Ok(rotated)),
+                    Err(err) => {
+                        // Keep the lease so it lapses rather than letting
+                        // another process present the consumed token at once;
+                        // this process's next restore pushes the working copy.
+                        error!(
+                            "Saxo rotated the refresh token but the durable write failed; holding the refresh lease until it lapses: {err:#}"
+                        );
+                        SaxoRotation {
+                            result: Ok(rotated),
+                            release_lease: false,
+                        }
+                    }
+                }
+            }
+            Err(err) if auth::is_refresh_rejection(&err) => {
+                let refused = match auth::mark_refresh_rejected(&durable, &err.to_string()) {
+                    Ok(refused) => refused,
+                    Err(mark_err) => return SaxoRotation::released(Err(mark_err)),
+                };
+                match self
+                    .replace_saxo_session_in_db_if_unchanged(
+                        &durable_text,
+                        &refused,
+                        &format!("{source}_invalid"),
+                    )
+                    .await
+                {
+                    Ok(true) => {
+                        if let Err(import_err) =
+                            auth::import_session_json(&self.config, &self.config_path, &refused)
+                        {
+                            warn!("Saxo session working copy update failed: {import_err:#}");
+                        }
+                        warn!(
+                            source,
+                            "Saxo refused the durable refresh token; re-authentication is required"
+                        );
+                    }
+                    Ok(false) => {
+                        // The durable row moved on while this request was in
+                        // flight, so the refusal concerns a token no process
+                        // holds any more. Adopt the newer row; mark nothing.
+                        warn!(
+                            source,
+                            "Saxo refused a refresh token the durable session no longer holds; adopting the newer durable session"
+                        );
+                        if let Err(sync_err) = self.sync_saxo_session_storage().await {
+                            warn!(
+                                "Saxo session restore after a superseded refusal failed: {sync_err:#}"
+                            );
+                        }
+                    }
+                    Err(persist_err) => {
+                        warn!("Saxo invalid session database persistence failed: {persist_err:#}");
+                    }
+                }
+                SaxoRotation::released(Err(err))
+            }
+            // A transport failure leaves it unknown whether Saxo consumed the
+            // token, so nothing is marked; the next attempt finds out.
+            Err(err) => SaxoRotation::released(Err(err)),
+        }
     }
 
     fn current_saxo_session_needs_refresh(&self) -> bool {
@@ -19303,27 +19619,27 @@ fn market_exchange_row(
     })
 }
 
-fn saxo_session_score(session: &JsonValue) -> (i64, i64) {
-    let now = Utc::now().timestamp();
-    let refresh_invalid = saxo_session_refresh_invalid(session);
-    let has_refresh = non_empty_session_text(session.get("refresh_token")).is_some();
-    let has_access = non_empty_session_text(session.get("access_token")).is_some();
-    let refresh_expires_at = parse_session_time(session.get("refresh_token_expires_at"));
-    let access_expires_at = parse_session_time(session.get("access_token_expires_at"));
-
-    // Compare health before recency. A freshly marked-invalid cache should never
-    // overwrite an older cache that still has a usable refresh token.
-    let health = if refresh_invalid {
-        0
-    } else if has_refresh && refresh_expires_at.is_none_or(|expires_at| expires_at > now) {
-        3
-    } else if has_access && access_expires_at.is_some_and(|expires_at| expires_at > now) {
-        1
-    } else {
-        0
-    };
-
-    (health, saxo_session_rank(session))
+/// Whether the pod-local working copy should replace the durable row.
+///
+/// Saxo rotates a grant's refresh token linearly and a new login is newer than
+/// any rotation, so between two different refresh tokens the later session is
+/// the live one and the earlier has been consumed: recency decides, and a
+/// refreshable-looking copy never outranks a newer row just because that row
+/// was refused. For the same refresh token, knowing Saxo refused it is the
+/// newer fact.
+fn saxo_working_copy_supersedes_durable(file: &JsonValue, db: &JsonValue) -> bool {
+    let same_refresh_token = matches!(
+        (
+            non_empty_session_text(file.get("refresh_token")),
+            non_empty_session_text(db.get("refresh_token")),
+        ),
+        (Some(file_token), Some(db_token)) if file_token == db_token
+    );
+    let file_refused = saxo_session_refresh_invalid(file);
+    if same_refresh_token && file_refused != saxo_session_refresh_invalid(db) {
+        return file_refused;
+    }
+    saxo_session_rank(file) > saxo_session_rank(db)
 }
 
 fn saxo_session_refresh_invalid(session: &JsonValue) -> bool {
@@ -26220,23 +26536,58 @@ market_data:
         );
     }
 
-    #[test]
-    fn saxo_session_score_prefers_refreshable_session_over_invalid_recent_session() {
-        let old_refreshable = json!({
-            "access_token": "access",
-            "refresh_token": "refresh",
-            "refresh_token_expires_at": (Utc::now() + Duration::hours(1)).to_rfc3339(),
-            "last_refreshed_at": (Utc::now() - Duration::minutes(30)).to_rfc3339(),
-        });
-        let recently_invalid = json!({
-            "access_token": "access",
-            "refresh_token": "refresh",
-            "refresh_token_invalid_at": Utc::now().to_rfc3339(),
-            "refresh_token_expires_at": (Utc::now() + Duration::hours(1)).to_rfc3339(),
-            "last_refreshed_at": Utc::now().to_rfc3339(),
-        });
+    fn restore_rule_session(refresh_token: &str, minutes_ago: i64, refused: bool) -> JsonValue {
+        json!({
+            "access_token": "test-access",
+            "refresh_token": refresh_token,
+            "refresh_token_invalid_at": refused.then(|| Utc::now().to_rfc3339()),
+            "refresh_token_expires_at": (Utc::now() + Duration::minutes(60 - minutes_ago)).to_rfc3339(),
+            "last_refreshed_at": (Utc::now() - Duration::minutes(minutes_ago)).to_rfc3339(),
+        })
+    }
 
-        assert!(saxo_session_score(&old_refreshable) > saxo_session_score(&recently_invalid));
+    /// Between two different refresh tokens the later one is live and the
+    /// earlier consumed, so a stale working copy never displaces the durable
+    /// row -- not even a refused one. Presenting the stale token would only be
+    /// refused in turn.
+    #[test]
+    fn a_stale_working_copy_never_displaces_a_newer_durable_session() {
+        let stale_file = restore_rule_session("test-refresh-1", 30, false);
+        let newer_refused_db = restore_rule_session("test-refresh-2", 5, true);
+        let newer_live_db = restore_rule_session("test-refresh-2", 5, false);
+
+        assert!(!saxo_working_copy_supersedes_durable(
+            &stale_file,
+            &newer_refused_db
+        ));
+        assert!(!saxo_working_copy_supersedes_durable(
+            &stale_file,
+            &newer_live_db
+        ));
+    }
+
+    /// A working copy holding a newer rotation or login -- one whose durable
+    /// write failed -- is pushed to the durable row rather than lost.
+    #[test]
+    fn a_newer_working_copy_replaces_the_durable_session() {
+        let rotated_file = restore_rule_session("test-refresh-3", 1, false);
+        let durable = restore_rule_session("test-refresh-2", 5, false);
+
+        assert!(saxo_working_copy_supersedes_durable(
+            &rotated_file,
+            &durable
+        ));
+    }
+
+    /// For one and the same refresh token, knowing Saxo refused it is the
+    /// newer fact, whichever copy holds it.
+    #[test]
+    fn a_refusal_of_the_same_token_wins_in_either_direction() {
+        let live = restore_rule_session("test-refresh-2", 5, false);
+        let refused = restore_rule_session("test-refresh-2", 5, true);
+
+        assert!(saxo_working_copy_supersedes_durable(&refused, &live));
+        assert!(!saxo_working_copy_supersedes_durable(&live, &refused));
     }
 
     #[test]
@@ -29192,5 +29543,393 @@ analysis_windows:
                 "{path} has a scenario and must be marked covered"
             );
         }
+    }
+
+    // Saxo refresh-token rotation across pods. Every pod refreshes the same
+    // single-use token; these tests share one durable row between simulated
+    // pods, each with its own working-copy file, against a fake Saxo token
+    // endpoint that consumes whatever token it accepts.
+
+    struct SaxoPods {
+        dir: PathBuf,
+        pool: AnyPool,
+        client_id: String,
+    }
+
+    impl SaxoPods {
+        async fn new(label: &str) -> Self {
+            static INSTALL_DRIVERS: std::sync::Once = std::sync::Once::new();
+            INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
+            let unique = format!(
+                "{label}-{}-{}",
+                process::id(),
+                Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            );
+            let dir = env::temp_dir().join(format!("saxo-session-rotation-{unique}"));
+            std::fs::create_dir_all(&dir).expect("create pod working-copy directory");
+            let pool = sqlx::any::AnyPoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .expect("open in-memory durable session database");
+            let pods = Self {
+                dir,
+                pool,
+                client_id: format!("test-client-{unique}"),
+            };
+            pods.pod("schema")
+                .ensure_saxo_session_schema()
+                .await
+                .expect("create Saxo session schema");
+            pods
+        }
+
+        /// One process: its own working copy, the shared durable row.
+        fn pod(&self, name: &str) -> AppState {
+            let config = serde_yaml::from_str(&format!(
+                "saxo:\n  environment: sim\n  auth_mode: pkce\n  client_id: {}\n  session_path: {}\n",
+                self.client_id,
+                self.working_copy(name).display()
+            ))
+            .expect("parse pod config");
+            AppState {
+                config_path: self.dir.join("config.yaml"),
+                config,
+                db_url: "sqlite::memory:".to_string(),
+                pool: self.pool.clone(),
+            }
+        }
+
+        fn working_copy(&self, name: &str) -> PathBuf {
+            self.dir.join(format!("{name}.json"))
+        }
+
+        /// A durable session whose access token is inside the 15-minute
+        /// refresh margin, so the next use rotates it.
+        async fn seed_due_session(&self, refresh_token: &str) {
+            let session = json!({
+                "environment": "sim",
+                "auth_mode": "pkce",
+                "client_id": self.client_id,
+                "redirect_uri": "https://example.invalid/api/saxo/auth/callback",
+                "code_verifier": "test-verifier",
+                "client_key": "test-client-key",
+                "account_key": "test-account-key",
+                "default_account_id": "test-account",
+                "client_id_display": "test-client",
+                "access_token": "test-access-0",
+                "refresh_token": refresh_token,
+                "token_type": "Bearer",
+                "access_token_expires_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
+                "refresh_token_expires_at": (Utc::now() + Duration::minutes(45)).to_rfc3339(),
+                "created_at": (Utc::now() - Duration::hours(2)).to_rfc3339(),
+                "last_refreshed_at": (Utc::now() - Duration::minutes(15)).to_rfc3339(),
+                "refresh_token_invalid_at": null,
+                "refresh_error": null,
+            });
+            self.pod("seed")
+                .save_saxo_session_to_db(&session, "test_seed")
+                .await
+                .expect("seed durable session");
+        }
+
+        async fn durable(&self) -> JsonValue {
+            self.pod("reader")
+                .load_saxo_session_from_db()
+                .await
+                .expect("read durable session")
+                .expect("durable session row")
+        }
+
+        /// A stalled or dead lease holder's lease lapses after 45 seconds.
+        async fn lapse_refresh_lease(&self) {
+            sqlx::query(
+                "UPDATE saxo_sessions SET refresh_lease_expires_at = '2000-01-01T00:00:00Z'",
+            )
+            .execute(&self.pool)
+            .await
+            .expect("lapse the refresh lease");
+        }
+    }
+
+    impl Drop for SaxoPods {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// The 2026-09-26 shape. The scheduler decides from the durable row that
+    /// a refresh is due; before it takes the lease, the API pod rotates the
+    /// token and releases the lease; the scheduler then wins the free lease.
+    /// It must present the rotated token, not the one its working copy held
+    /// when it decided -- that one Saxo has consumed.
+    #[tokio::test]
+    async fn a_pod_that_wins_the_lease_after_another_rotated_presents_the_durable_token() {
+        let pods = SaxoPods::new("lease-gap").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 300);
+        pods.seed_due_session("test-refresh-0").await;
+        let scheduler = pods.pod("scheduler");
+        let api = pods.pod("api");
+
+        saxo_lease_gap_hook::install(&pods.working_copy("scheduler"), move || async move {
+            api.ensure_saxo_session_json("auth_status")
+                .await
+                .expect("the API pod rotates the token in the gap");
+        });
+
+        let status = scheduler.refresh_saxo_session().await;
+
+        assert_eq!(
+            saxo.rejected(),
+            0,
+            "no pod may present a refresh token Saxo already consumed"
+        );
+        assert!(
+            status.is_ok(),
+            "the scheduler refresh must succeed: {:#}",
+            status.err().unwrap()
+        );
+        let durable = pods.durable().await;
+        assert!(durable["refresh_token_invalid_at"].is_null());
+        assert_eq!(durable["refresh_token"], saxo.current_refresh_token());
+    }
+
+    /// A pod whose lease lapsed while its request was in flight can lose the
+    /// rotation to another pod. The refusal it then receives concerns a token
+    /// the durable row no longer holds, so it must not mark the winner's live
+    /// session invalid.
+    #[tokio::test]
+    async fn a_refusal_for_a_superseded_token_leaves_the_newer_durable_session_live() {
+        let pods = SaxoPods::new("superseded-refusal").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 300);
+        pods.seed_due_session("test-refresh-0").await;
+        saxo.hold_responses();
+
+        let winner = pods.pod("winner");
+        let winner_call =
+            tokio::spawn(async move { winner.ensure_saxo_session_json("price_monitor").await });
+        saxo.answered().await; // Saxo rotated the token; the response is in flight.
+        pods.lapse_refresh_lease().await;
+        let loser = pods.pod("loser");
+        let loser_call =
+            tokio::spawn(async move { loser.ensure_saxo_session_json("refresh").await });
+        saxo.answered().await; // Saxo refused the consumed token.
+
+        saxo.release_next(); // The rotation lands first ...
+        winner_call
+            .await
+            .expect("winner task")
+            .expect("the winner makes its rotation durable");
+        saxo.release_next(); // ... then the refusal.
+        let _ = loser_call.await.expect("loser task");
+
+        let durable = pods.durable().await;
+        assert!(
+            durable["refresh_token_invalid_at"].is_null(),
+            "a refusal for a superseded token must not invalidate the live session"
+        );
+        assert_eq!(durable["refresh_token"], saxo.current_refresh_token());
+    }
+
+    /// The rollout race itself. A pod killed after Saxo rotated the token but
+    /// before the rotation was durable leaves the durable row holding a
+    /// consumed token, and its replacement is refused. Nothing in-process can
+    /// survive SIGKILL; the defense is the SIGTERM drain in the next test,
+    /// which keeps a pod from being killed mid-rotation.
+    #[tokio::test]
+    async fn a_pod_killed_between_rotation_and_the_durable_write_strands_its_replacement() {
+        let pods = SaxoPods::new("killed-mid-rotation").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 300);
+        pods.seed_due_session("test-refresh-0").await;
+        saxo.hold_responses();
+
+        let old_pod = pods.pod("old");
+        let rotation =
+            tokio::spawn(async move { old_pod.ensure_saxo_session_json("price_monitor").await });
+        saxo.answered().await; // Saxo rotated; the response dies with the pod.
+        rotation.abort();
+        let _ = rotation.await;
+        pods.lapse_refresh_lease().await;
+        saxo.deliver_responses();
+
+        let replacement = pods.pod("replacement");
+        let err = replacement
+            .ensure_saxo_session_json("refresh")
+            .await
+            .expect_err("the replacement can only present the consumed token");
+
+        assert!(format!("{err:#}").contains("HTTP 401"));
+        assert_eq!(saxo.rejected(), 1);
+        assert!(!pods.durable().await["refresh_token_invalid_at"].is_null());
+    }
+
+    /// SIGTERM drains instead: the rotation already in flight completes and
+    /// becomes durable before the drain returns, the draining pod starts no
+    /// new rotation, and the replacement rotates the durable token cleanly.
+    #[tokio::test]
+    async fn a_sigterm_drain_lands_the_rotation_in_flight_and_starts_none() {
+        let pods = SaxoPods::new("sigterm-drain").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 300);
+        pods.seed_due_session("test-refresh-0").await;
+        saxo.hold_responses();
+
+        let old_pod = pods.pod("old");
+        let rotation = {
+            let pod = old_pod.clone();
+            tokio::spawn(async move { pod.ensure_saxo_session_json("price_monitor").await })
+        };
+        saxo.answered().await; // Saxo rotated; the response is in flight.
+        let drain = {
+            let pod = old_pod.clone();
+            tokio::spawn(async move {
+                pod.drain_saxo_session_refreshes(StdDuration::from_secs(10))
+                    .await
+            })
+        };
+        sleep(StdDuration::from_millis(100)).await;
+        assert!(
+            !drain.is_finished(),
+            "the drain must wait for a rotation Saxo already made"
+        );
+
+        saxo.deliver_responses();
+        saxo.release_next();
+        rotation
+            .await
+            .expect("rotation task")
+            .expect("the in-flight rotation completes");
+        assert!(drain.await.expect("drain task"), "nothing left in flight");
+        assert_eq!(pods.durable().await["refresh_token"], "test-refresh-1");
+
+        // The rotated access token is again inside the refresh margin, but a
+        // draining pod serves it rather than rotating.
+        old_pod
+            .ensure_saxo_session_json("price_monitor")
+            .await
+            .expect("a draining pod serves the unexpired access token");
+        assert_eq!(saxo.accepted(), 1, "a draining pod starts no rotation");
+
+        let replacement = pods.pod("replacement");
+        replacement
+            .refresh_saxo_session()
+            .await
+            .expect("the replacement rotates the durable token");
+        assert_eq!(saxo.rejected(), 0);
+        assert_eq!(pods.durable().await["refresh_token"], "test-refresh-2");
+    }
+
+    /// A draining pod whose access token has run out refuses rather than
+    /// rotating; the error says why.
+    #[tokio::test]
+    async fn a_draining_pod_with_an_expired_access_token_refuses_to_rotate() {
+        let pods = SaxoPods::new("drain-expired").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 300);
+        pods.seed_due_session("test-refresh-0").await;
+        let session = json!({
+            "access_token_expires_at": (Utc::now() - Duration::minutes(1)).to_rfc3339(),
+        });
+        sqlx::query(&format!(
+            "UPDATE saxo_sessions SET session_json = json_patch(session_json, '{}')",
+            session
+        ))
+        .execute(&pods.pool)
+        .await
+        .expect("expire the access token");
+        let pod = pods.pod("old");
+        pod.begin_saxo_session_drain();
+
+        let err = pod
+            .ensure_saxo_session_json("price_monitor")
+            .await
+            .expect_err("a draining pod must not rotate");
+
+        assert!(format!("{err:#}").contains("shutting down"), "{err:#}");
+        assert_eq!(saxo.accepted() + saxo.rejected(), 0);
+    }
+
+    /// Concurrent callers in one pod make one rotation, not one each.
+    #[tokio::test]
+    async fn concurrent_callers_in_one_pod_share_a_single_rotation() {
+        let pods = SaxoPods::new("single-flight").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-0", 1200);
+        pods.seed_due_session("test-refresh-0").await;
+        let pod = pods.pod("api");
+
+        let calls = (0..4).map(|_| {
+            let pod = pod.clone();
+            tokio::spawn(async move { pod.ensure_saxo_session_json("auth_status").await })
+        });
+        for call in calls.collect::<Vec<_>>() {
+            call.await
+                .expect("caller task")
+                .expect("every caller gets a usable session");
+        }
+
+        assert_eq!(saxo.accepted(), 1);
+        assert_eq!(saxo.rejected(), 0);
+    }
+
+    /// Saxo refusing the durable token itself is a real invalidation: it is
+    /// recorded durably so every pod stops presenting it.
+    #[tokio::test]
+    async fn a_refusal_of_the_durable_token_is_recorded_durably() {
+        let pods = SaxoPods::new("durable-refusal").await;
+        let saxo = auth::fake_token_endpoint::register(&pods.client_id, "test-refresh-9", 300);
+        pods.seed_due_session("test-refresh-0").await;
+
+        let err = pods
+            .pod("scheduler")
+            .refresh_saxo_session()
+            .await
+            .expect_err("Saxo refuses the token");
+
+        assert!(format!("{err:#}").contains("HTTP 401"));
+        assert_eq!(saxo.rejected(), 1);
+        let durable = pods.durable().await;
+        assert!(!durable["refresh_token_invalid_at"].is_null());
+        assert_eq!(durable["refresh_token"], "test-refresh-0");
+        let err = pods
+            .pod("api")
+            .ensure_saxo_session_json("auth_status")
+            .await
+            .expect_err("no pod presents a refused token again");
+        assert!(format!("{err:#}").contains("Re-authentication is required"));
+        assert_eq!(saxo.rejected(), 1);
+    }
+
+    /// A new login reaches the durable row even when a stale working copy is
+    /// restored concurrently, and it outranks a refused session.
+    #[tokio::test]
+    async fn an_oauth_login_replaces_a_refused_durable_session() {
+        let pods = SaxoPods::new("oauth-login").await;
+        pods.seed_due_session("test-refresh-0").await;
+        let refused = auth::mark_refresh_rejected(&pods.durable().await, "test refusal")
+            .expect("mark refused");
+        pods.pod("seed")
+            .save_saxo_session_to_db(&refused, "test_seed")
+            .await
+            .expect("store refused session");
+        let api = pods.pod("api");
+        api.sync_saxo_session_storage().await.expect("restore");
+        let mut login = refused.clone();
+        login["refresh_token"] = json!("test-refresh-login");
+        login["refresh_token_invalid_at"] = JsonValue::Null;
+        login["refresh_error"] = JsonValue::Null;
+        login["created_at"] = json!(Utc::now().to_rfc3339());
+        login["last_refreshed_at"] = json!(Utc::now().to_rfc3339());
+        login["refresh_token_expires_at"] =
+            json!((Utc::now() + Duration::minutes(60)).to_rfc3339());
+
+        api.store_saxo_oauth_session(&login)
+            .await
+            .expect("store login");
+        pods.pod("scheduler")
+            .sync_saxo_session_storage()
+            .await
+            .expect("another pod restores");
+
+        let durable = pods.durable().await;
+        assert_eq!(durable["refresh_token"], "test-refresh-login");
+        assert!(durable["refresh_token_invalid_at"].is_null());
     }
 }

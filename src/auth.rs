@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::OnceLock};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::http::{HeaderMap, header};
@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use url::Url;
 
@@ -19,8 +18,6 @@ use crate::config::{
 };
 
 const TOKEN_SAFETY_MARGIN_SECONDS: i64 = 15 * 60;
-
-static SAXO_REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SsoSession {
@@ -259,12 +256,15 @@ pub async fn start_saxo_auth(
     })
 }
 
+/// Completes the OAuth code exchange and returns where to send the operator
+/// plus the new session. It writes nothing: `AppState` makes the session
+/// durable first and only then updates the pod-local working copy.
 pub async fn finish_saxo_auth(
     config: &YamlValue,
     config_path: &PathBuf,
     code: &str,
     state: &str,
-) -> Result<String> {
+) -> Result<(String, JsonValue)> {
     let oauth_state = pop_oauth_state(config, config_path, state)?;
     if oauth_state.state != state {
         bail!("Saxo OAuth state mismatch.");
@@ -304,31 +304,20 @@ pub async fn finish_saxo_auth(
         refresh_token_invalid_at: None,
         refresh_error: None,
     };
-    save_session(&session_path(config, config_path), &session)?;
     info!(
         environment = %session.environment,
         auth_mode = %session.auth_mode,
         client_key_present = session.client_key.as_ref().is_some_and(|value| !value.is_empty()),
         account_key_present = session.account_key.as_ref().is_some_and(|value| !value.is_empty()),
-        "stored Saxo OAuth session"
+        "completed Saxo OAuth code exchange"
     );
-    Ok(oauth_state.return_to)
+    Ok((oauth_state.return_to, serde_json::to_value(session)?))
 }
 
-pub async fn auth_status(
-    config: &YamlValue,
-    config_path: &PathBuf,
-    auto_refresh: bool,
-) -> SaxoAuthStatus {
+/// Reports the working copy's health. It never refreshes: only the leased
+/// refresh in `AppState` may present a refresh token, and only the durable one.
+pub async fn auth_status(config: &YamlValue, config_path: &PathBuf) -> SaxoAuthStatus {
     let path = session_path(config, config_path);
-    if auto_refresh {
-        if let Err(err) = ensure_access_token(config, config_path).await {
-            warn!(
-                session_path = %path.display(),
-                "Saxo auto-refresh skipped while building auth status: {err:#}"
-            );
-        }
-    }
     match load_session(&path) {
         Ok(session) => session_status(config, &path, &session),
         Err(err) => base_status(config, &path, Some(err.to_string())),
@@ -386,11 +375,6 @@ fn session_api_status(
     }
 }
 
-pub async fn refresh_session(config: &YamlValue, config_path: &PathBuf) -> Result<SaxoAuthStatus> {
-    ensure_access_token(config, config_path).await?;
-    Ok(auth_status(config, config_path, false).await)
-}
-
 pub fn logout_session(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
     let path = session_path(config, config_path);
     if path.exists() {
@@ -414,88 +398,58 @@ pub fn import_session_json(
     save_session(&session_path(config, config_path), &session)
 }
 
-pub async fn ensure_session_json(config: &YamlValue, config_path: &PathBuf) -> Result<JsonValue> {
-    // Broker code should not need access to the private session struct. Returning JSON
-    // is like returning a Python dict: callers can read only the fields they need while
-    // this module keeps ownership of token refresh and file persistence.
-    let session = ensure_access_token(config, config_path).await?;
-    Ok(serde_json::to_value(session)?)
+/// Returns the session if its access token is outside the refresh margin.
+///
+/// Broker code reads only the fields it needs from the returned JSON; the
+/// private session struct stays in this module.
+pub fn usable_session_json(session: JsonValue) -> Result<JsonValue> {
+    if session_access_token_valid_for(&session, TOKEN_SAFETY_MARGIN_SECONDS) {
+        return Ok(session);
+    }
+    bail!("{REAUTH_REQUIRED}");
 }
 
-async fn ensure_access_token(
-    config: &YamlValue,
-    config_path: &PathBuf,
-) -> Result<SaxoSessionCache> {
-    let path = session_path(config, config_path);
-    let mut session = load_session(&path)?;
-    if access_token_valid(&session) {
-        info!(
-            environment = %session.environment,
-            session_path = %path.display(),
-            "Saxo access token is still within the safety window"
-        );
-        return Ok(session);
-    }
-    if !refresh_token_valid(&session) {
-        warn!(
-            environment = %session.environment,
-            session_path = %path.display(),
-            "Saxo refresh token is missing, expired, or already marked invalid"
-        );
-        bail!("No valid Saxo refresh token is available. Re-authentication is required.");
-    }
+pub const REAUTH_REQUIRED: &str =
+    "No valid Saxo refresh token is available. Re-authentication is required.";
 
-    let _refresh_guard = saxo_refresh_lock().lock().await;
-    session = load_session(&path)?;
-    if access_token_valid(&session) {
-        info!(
-            environment = %session.environment,
-            session_path = %path.display(),
-            "Saxo access token was refreshed by another task"
-        );
-        return Ok(session);
-    }
-    if !refresh_token_valid(&session) {
-        warn!(
-            environment = %session.environment,
-            session_path = %path.display(),
-            "Saxo refresh token became unavailable while waiting for refresh lock"
-        );
-        bail!("No valid Saxo refresh token is available. Re-authentication is required.");
-    }
+/// Whether the session's access token outlives `seconds` from now.
+pub fn session_access_token_valid_for(session: &JsonValue, seconds: i64) -> bool {
+    serde_json::from_value::<SaxoSessionCache>(session.clone())
+        .map(|session| access_token_valid_for(&session, seconds))
+        .unwrap_or(false)
+}
 
+/// Presents `session`'s refresh token to Saxo and returns the rotated session.
+///
+/// The input must be the durable session read under the refresh lease: Saxo
+/// consumes the token presented, so presenting any copy but the durable one
+/// either fails or strands the durable row on a consumed token. This function
+/// touches no file; the caller makes the rotation durable.
+pub async fn refresh_session_json(config: &YamlValue, session: &JsonValue) -> Result<JsonValue> {
+    let session = serde_json::from_value::<SaxoSessionCache>(session.clone())
+        .context("decoding the durable Saxo session")?;
+    if !refresh_token_valid(&session) {
+        bail!("{REAUTH_REQUIRED}");
+    }
     info!(
         environment = %session.environment,
         auth_mode = %session.auth_mode,
-        session_path = %path.display(),
-        "refreshing Saxo access token"
+        "refreshing Saxo access token from the durable session"
     );
     match refresh_access_token(config, &session).await {
         Ok(refreshed) => {
-            save_session(&path, &refreshed)?;
-            info!(
-                environment = %refreshed.environment,
-                session_path = %path.display(),
-                "Saxo access token refreshed"
-            );
-            Ok(refreshed)
+            info!(environment = %refreshed.environment, "Saxo access token refreshed");
+            Ok(serde_json::to_value(refreshed)?)
         }
         Err(err) => {
-            let message = err.to_string();
-            if message.contains("HTTP 400") || message.contains("HTTP 401") {
-                session.refresh_token_invalid_at =
-                    Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-                session.refresh_error = Some(message);
-                let _ = save_session(&path, &session);
+            if is_refresh_rejection(&err) {
                 warn!(
                     environment = %session.environment,
-                    session_path = %path.display(),
-                    "Saxo refresh token marked invalid after authorization failure"
+                    "Saxo refused the refresh token presented"
                 );
             } else {
                 error!(
                     environment = %session.environment,
-                    session_path = %path.display(),
                     "Saxo token refresh failed: {err:#}"
                 );
             }
@@ -504,8 +458,21 @@ async fn ensure_access_token(
     }
 }
 
-fn saxo_refresh_lock() -> &'static Mutex<()> {
-    SAXO_REFRESH_LOCK.get_or_init(|| Mutex::new(()))
+/// Saxo answered 400 or 401: it refused the refresh token presented. Any other
+/// failure leaves it unknown whether Saxo consumed the token.
+pub fn is_refresh_rejection(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("HTTP 400") || message.contains("HTTP 401")
+}
+
+/// `session` with its refresh token recorded as refused by Saxo.
+pub fn mark_refresh_rejected(session: &JsonValue, message: &str) -> Result<JsonValue> {
+    let mut session = serde_json::from_value::<SaxoSessionCache>(session.clone())
+        .context("decoding the refused Saxo session")?;
+    session.refresh_token_invalid_at =
+        Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    session.refresh_error = Some(message.to_string());
+    Ok(serde_json::to_value(session)?)
 }
 
 async fn refresh_access_token(
@@ -513,37 +480,7 @@ async fn refresh_access_token(
     session: &SaxoSessionCache,
 ) -> Result<SaxoSessionCache> {
     let environment = session.environment.to_lowercase();
-    let client_id = yaml_string(config, &["saxo", "client_id"])
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| session.client_id.clone());
-    let client_secret = yaml_string(config, &["saxo", "client_secret"]).unwrap_or_default();
-    let token_url = format!("{}/token", auth_base_url(&environment)?);
-
-    let mut form = vec![
-        ("grant_type", "refresh_token".to_string()),
-        (
-            "refresh_token",
-            session.refresh_token.clone().unwrap_or_default(),
-        ),
-    ];
-    let client = http_client()?;
-    let mut request = client.post(token_url).form(&form);
-    if session.auth_mode == "pkce" {
-        form.push(("client_id", client_id));
-        if let Some(code_verifier) = &session.code_verifier {
-            form.push(("code_verifier", code_verifier.clone()));
-        }
-        form.push(("redirect_uri", session.redirect_uri.clone()));
-        request = client
-            .post(format!("{}/token", auth_base_url(&environment)?))
-            .form(&form);
-    } else {
-        if client_secret.trim().is_empty() {
-            bail!("SAXO_CLIENT_SECRET is missing for secret-based Saxo token refresh.");
-        }
-        request = request.basic_auth(client_id, Some(client_secret));
-    }
-    let token_response = send_token_request(request).await?;
+    let token_response = request_refreshed_tokens(config, session).await?;
 
     let mut refreshed = SaxoSessionCache {
         access_token: Some(token_response.access_token),
@@ -583,6 +520,55 @@ async fn refresh_access_token(
         }
     }
     Ok(refreshed)
+}
+
+/// Presents the session's refresh token to Saxo's token endpoint.
+///
+/// Saxo rotates refresh tokens: a successful call consumes the token presented
+/// and returns its only valid successor, so whoever receives the response must
+/// make it durable before anyone else refreshes.
+async fn request_refreshed_tokens(
+    config: &YamlValue,
+    session: &SaxoSessionCache,
+) -> Result<TokenResponse> {
+    #[cfg(test)]
+    if let Some(endpoint) = fake_token_endpoint::for_client(&session.client_id) {
+        return endpoint
+            .exchange(session.refresh_token.as_deref().unwrap_or_default())
+            .await;
+    }
+    let environment = session.environment.to_lowercase();
+    let client_id = yaml_string(config, &["saxo", "client_id"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| session.client_id.clone());
+    let client_secret = yaml_string(config, &["saxo", "client_secret"]).unwrap_or_default();
+    let token_url = format!("{}/token", auth_base_url(&environment)?);
+
+    let mut form = vec![
+        ("grant_type", "refresh_token".to_string()),
+        (
+            "refresh_token",
+            session.refresh_token.clone().unwrap_or_default(),
+        ),
+    ];
+    let client = http_client()?;
+    let mut request = client.post(token_url).form(&form);
+    if session.auth_mode == "pkce" {
+        form.push(("client_id", client_id));
+        if let Some(code_verifier) = &session.code_verifier {
+            form.push(("code_verifier", code_verifier.clone()));
+        }
+        form.push(("redirect_uri", session.redirect_uri.clone()));
+        request = client
+            .post(format!("{}/token", auth_base_url(&environment)?))
+            .form(&form);
+    } else {
+        if client_secret.trim().is_empty() {
+            bail!("SAXO_CLIENT_SECRET is missing for secret-based Saxo token refresh.");
+        }
+        request = request.basic_auth(client_id, Some(client_secret));
+    }
+    send_token_request(request).await
 }
 
 async fn exchange_authorization_code(
@@ -772,6 +758,10 @@ fn status_value(status: SaxoAuthStatus) -> JsonValue {
 }
 
 fn access_token_valid(session: &SaxoSessionCache) -> bool {
+    access_token_valid_for(session, TOKEN_SAFETY_MARGIN_SECONDS)
+}
+
+fn access_token_valid_for(session: &SaxoSessionCache, seconds: i64) -> bool {
     let Some(expires_at) = parse_iso(session.access_token_expires_at.as_deref()) else {
         return false;
     };
@@ -779,7 +769,7 @@ fn access_token_valid(session: &SaxoSessionCache) -> bool {
         .access_token
         .as_ref()
         .is_some_and(|value| !value.is_empty())
-        && expires_at > Utc::now() + ChronoDuration::seconds(TOKEN_SAFETY_MARGIN_SECONDS)
+        && expires_at > Utc::now() + ChronoDuration::seconds(seconds)
 }
 
 fn refresh_token_valid(session: &SaxoSessionCache) -> bool {
@@ -899,6 +889,12 @@ fn first_header(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn first_csv_value(value: &str) -> String {
     value.split(',').next().unwrap_or(value).trim().to_string()
+}
+
+/// The pod-local working copy of the Saxo session. It identifies the process's
+/// session cache; it is never the durable record.
+pub fn session_file_path(config: &YamlValue, config_path: &PathBuf) -> PathBuf {
+    session_path(config, config_path)
 }
 
 fn session_path(config: &YamlValue, config_path: &PathBuf) -> PathBuf {
@@ -1034,6 +1030,183 @@ fn html_escape(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// A hermetic stand-in for Saxo's token endpoint that keeps its one property
+/// that matters here: a refresh token is single-use. Presenting the current
+/// token rotates it; presenting any other token is refused with the same 401
+/// the real endpoint returned on 2026-09-26.
+///
+/// Endpoints are keyed by `client_id`, so parallel tests cannot see each
+/// other's tokens. The test tokens are placeholder strings, never real values.
+#[cfg(test)]
+pub(crate) mod fake_token_endpoint {
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::{Arc, LazyLock, Mutex},
+    };
+
+    use anyhow::{Result, bail};
+    use tokio::sync::{Notify, oneshot};
+
+    use super::TokenResponse;
+
+    static ENDPOINTS: LazyLock<Mutex<HashMap<String, Arc<FakeSaxoTokenEndpoint>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) const REJECTION: &str = "Saxo token request failed with HTTP 401: 401 - Unauthorized: Access is denied due to invalid credentials. (HTML error page)";
+
+    pub(crate) struct FakeSaxoTokenEndpoint {
+        state: Mutex<FakeState>,
+        answered: Notify,
+    }
+
+    struct FakeState {
+        current_refresh_token: String,
+        generation: i64,
+        access_expires_in: i64,
+        accepted: u32,
+        rejected: u32,
+        hold_responses: bool,
+        held: VecDeque<oneshot::Sender<()>>,
+    }
+
+    /// Registers an endpoint whose only valid refresh token is
+    /// `initial_refresh_token`. `access_expires_in` sets the lifetime of every
+    /// access token it issues, so a test can make each new token immediately
+    /// due for refresh again (below the 15-minute margin) or comfortably fresh.
+    pub(crate) fn register(
+        client_id: &str,
+        initial_refresh_token: &str,
+        access_expires_in: i64,
+    ) -> Arc<FakeSaxoTokenEndpoint> {
+        let endpoint = Arc::new(FakeSaxoTokenEndpoint {
+            state: Mutex::new(FakeState {
+                current_refresh_token: initial_refresh_token.to_string(),
+                generation: 0,
+                access_expires_in,
+                accepted: 0,
+                rejected: 0,
+                hold_responses: false,
+                held: VecDeque::new(),
+            }),
+            answered: Notify::new(),
+        });
+        ENDPOINTS
+            .lock()
+            .expect("fake token endpoint registry")
+            .insert(client_id.to_string(), endpoint.clone());
+        endpoint
+    }
+
+    pub(super) fn for_client(client_id: &str) -> Option<Arc<FakeSaxoTokenEndpoint>> {
+        ENDPOINTS
+            .lock()
+            .expect("fake token endpoint registry")
+            .get(client_id)
+            .cloned()
+    }
+
+    impl FakeSaxoTokenEndpoint {
+        pub(super) async fn exchange(&self, presented: &str) -> Result<TokenResponse> {
+            // The server decides -- and for an accepted token, consumes it --
+            // before the response travels back. Holding the response models a
+            // caller that is killed or stalled after that point.
+            let (outcome, held) = {
+                let mut state = self.state.lock().expect("fake token endpoint state");
+                let outcome = if presented == state.current_refresh_token {
+                    state.generation += 1;
+                    state.accepted += 1;
+                    let generation = state.generation;
+                    state.current_refresh_token = format!("test-refresh-{generation}");
+                    Ok(TokenResponse {
+                        access_token: format!("test-access-{generation}"),
+                        refresh_token: Some(state.current_refresh_token.clone()),
+                        token_type: Some("Bearer".to_string()),
+                        expires_in: Some(state.access_expires_in),
+                        // Strictly later per rotation, so successive sessions
+                        // rank apart even within one wall-clock second.
+                        refresh_token_expires_in: Some(3600 + generation),
+                    })
+                } else {
+                    state.rejected += 1;
+                    Err(())
+                };
+                let held = state.hold_responses.then(|| {
+                    let (release, held) = oneshot::channel();
+                    state.held.push_back(release);
+                    held
+                });
+                (outcome, held)
+            };
+            self.answered.notify_one();
+            if let Some(held) = held {
+                // A dropped sender (the test ended) releases too.
+                let _ = held.await;
+            }
+            match outcome {
+                Ok(response) => Ok(response),
+                Err(()) => bail!("{REJECTION}"),
+            }
+        }
+
+        /// Responses decided from now on wait for `release_next`.
+        pub(crate) fn hold_responses(&self) {
+            self.state
+                .lock()
+                .expect("fake token endpoint state")
+                .hold_responses = true;
+        }
+
+        /// Responses decided from now on are delivered at once.
+        pub(crate) fn deliver_responses(&self) {
+            self.state
+                .lock()
+                .expect("fake token endpoint state")
+                .hold_responses = false;
+        }
+
+        /// Delivers the oldest held response.
+        pub(crate) fn release_next(&self) {
+            let release = self
+                .state
+                .lock()
+                .expect("fake token endpoint state")
+                .held
+                .pop_front();
+            if let Some(release) = release {
+                let _ = release.send(());
+            }
+        }
+
+        /// Resolves once the endpoint has decided a request, whether or not
+        /// the response has been delivered.
+        pub(crate) async fn answered(&self) {
+            self.answered.notified().await;
+        }
+
+        pub(crate) fn accepted(&self) -> u32 {
+            self.state
+                .lock()
+                .expect("fake token endpoint state")
+                .accepted
+        }
+
+        pub(crate) fn rejected(&self) -> u32 {
+            self.state
+                .lock()
+                .expect("fake token endpoint state")
+                .rejected
+        }
+
+        pub(crate) fn current_refresh_token(&self) -> String {
+            self.state
+                .lock()
+                .expect("fake token endpoint state")
+                .current_refresh_token
+                .clone()
+        }
+    }
 }
 
 #[cfg(test)]

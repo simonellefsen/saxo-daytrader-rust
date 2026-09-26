@@ -37,27 +37,43 @@ pub async fn run_scheduler() -> Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
         .max(1);
+    let shutdown = crate::shutdown::ShutdownSignal::listen();
     let state = AppState::load().await?;
     info!(
         interval_minutes,
         fast_interval_minutes, "starting Rust scheduler"
     );
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            shutdown.received().await;
+            // Stop starting Saxo token rotations at once, mid-cycle included:
+            // the price monitor shares this process. A cycle already running
+            // finishes; no new one starts.
+            state.begin_saxo_session_drain();
+            let _ = stop_tx.send(true);
+        });
+    }
     tokio::spawn(crate::price_monitor::run_price_monitor_loop(state.clone()));
     tokio::spawn(crate::jev_review::run_observation_loop(state.clone()));
     run_cycle(&state).await?;
     loop {
+        if *stop_rx.borrow() {
+            break;
+        }
         let sleep_minutes =
             next_interval_minutes(&state, interval_minutes, fast_interval_minutes).await;
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                info!("scheduler shutdown requested");
-                return Ok(());
-            }
+            _ = stop_rx.changed() => break,
             _ = sleep(Duration::from_secs(sleep_minutes * 60)) => {
                 run_cycle(&state).await?;
             }
         }
     }
+    info!("scheduler shutdown requested; waiting for any Saxo token rotation in flight");
+    crate::shutdown::drain_saxo_session_refreshes(&state).await;
+    Ok(())
 }
 
 /// Fast poll while orders are queued or awaiting broker sync so fills land

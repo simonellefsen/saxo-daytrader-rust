@@ -1555,12 +1555,9 @@ async fn saxo_auth_callback(
     .await;
 
     match result {
-        Ok(target) => {
+        Ok((target, session)) => {
             return_to = target;
-            if let Err(err) = state
-                .persist_saxo_session_file_to_db("oauth_callback")
-                .await
-            {
+            if let Err(err) = state.store_saxo_oauth_session(&session).await {
                 warn!("Saxo OAuth callback completed but database persistence failed: {err:#}");
             }
             info!(return_to = %return_to, "Saxo OAuth callback completed");

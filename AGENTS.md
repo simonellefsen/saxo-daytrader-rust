@@ -89,6 +89,9 @@ Target these files for future Rust work:
   - Maintains the Saxo session cache on each heartbeat; successful refreshes are persisted back to the database by `AppState`.
   - Runs scheduled OpenRouter decision reports, the Rust Trading Manager, Saxo execution queue processing, and the EOD journal cycle.
 
+- `src/shutdown.rs`
+  - SIGTERM/SIGINT handling for every mode. Processes run as PID 1, which ignores an unhandled SIGTERM; draining Saxo token rotation before exit lives here.
+
 - `src/trading_manager.rs`
   - Turns fresh scheduled decision reports into local `execution_orders`.
   - Applies market-open filters, risk exclusions, minimum trade value, SELL holding caps, and technical gates before queueing.
@@ -245,6 +248,8 @@ Do not change app pods to reference the CNPG-generated secret directly in `saxo`
 ## Saxo Session Persistence
 
 The Rust runtime stores the rollout-safe Saxo OAuth cache in `saxo_sessions` in the CNPG-backed `daytrader` database in namespace `saxo`. Pods use `/tmp/daytrader/saxo_session.json` only as an ephemeral working file for the OAuth helper code. On startup, API requests, scheduler heartbeats, OAuth callback, and refresh, `AppState` restores from or writes to the database row. User/SSO logout must not clear this service-level Saxo session because the scheduler renews it without a browser user; only the explicit `/api/saxo/session/disconnect` endpoint removes the durable row. The table contains tokens, so treat database access as credential access.
+
+Saxo refresh tokens are single-use and every pod refreshes the same one. Only `AppState::rotate_saxo_session_under_lease` may present a refresh token, and only the durable row's, re-read after taking the refresh lease; a refusal is recorded by compare-and-set so it cannot overwrite a newer rotation. Every mode handles SIGTERM (`src/shutdown.rs`) by starting no new rotation and letting one in flight become durable, because a pod SIGKILLed between Saxo's rotation and the durable write strands every other pod on a consumed token. See `wiki/decisions/2026-09-26-saxo-refresh-token-rotation-across-pods.md`.
 
 ## ngrok
 

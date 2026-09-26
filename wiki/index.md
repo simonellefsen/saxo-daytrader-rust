@@ -48,6 +48,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 ## Decisions
 
 - [decisions/README](decisions/README.md) - Landing page for architecture and workflow decision records.
+- [Saxo refresh-token rotation across pods](decisions/2026-09-26-saxo-refresh-token-rotation-across-pods.md) - The 2026-09-26 SIM refresh-token refusal: evidence and its limits, the lease-gap, refusal-clobber, stale-file and SIGKILL defects, and the invariants that only the durable row is presented under the lease and SIGTERM drains rotation.
 - [Shadow mid-session Decision Reports and tuning evidence](decisions/2026-08-19-shadow-mid-session-decision-reports.md) - Implemented 14:15 Copenhagen EU and 14:15 New York US shadow pulses, non-execution guarantees, initial typed tuning pulse comparison, and remaining EOD/Hermes/promotion evidence plan.
 
 ## Experiments

@@ -3057,3 +3057,8 @@ broker mutation was added.
 - Added [reviewed Jev adoption gates](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md) and linked the roadmap. Verified synthetic OpenRouter transport and the deployed disabled endpoint; activation is separate.
 - Corrected awaited sidecars on the scheduler critical path, weak answer validation, discarded provider billing, delete/insert persistence and silent ledger-read failures. Added regression coverage and retained question/answer measurement provenance.
 - Distinguished semantic calibration from return association, self-consistency from source verification, observation versioning from trading strategy epochs, and implemented API views from the unfinished operator panel. No trading settings changed.
+
+## [2026-09-26] Saxo session | Refresh token refused mid-lifetime; rotation made durable-only
+
+- Investigated the 04:56Z SIM refresh-token 401 from non-secret session metadata, `scheduler_cycle_history` and ReplicaSet times. Filed [Saxo refresh-token rotation across pods](decisions/2026-09-26-saxo-refresh-token-rotation-across-pods.md): the failing refresh waited 5.9 s on another process's lease (every successful one took <=449 ms); PID 1 ignored SIGTERM on every release; no refresh was due while pods were being killed that morning; the lease holder cannot be identified because the old code overwrote the durable row on refusal.
+- Fixed and covered by tests: refresh input is the durable row read under the lease, refusals are compare-and-set, stale working copies no longer outrank newer rows, rotations are durable before the lease is released, and all three modes drain rotation on SIGTERM. No token values were read or recorded.
