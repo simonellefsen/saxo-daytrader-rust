@@ -396,7 +396,8 @@ rule. Nothing was rescored, and no label changed.
 
 **This evaluation is kept as it is.** It is historical evidence. It is not to
 be regenerated to get cleaner results, and review recommends no further tuning
-on it.
+on it. Its successor, with explicit conventions and coherent synthetic evidence,
+is preregistered in `jev-fresh-evaluation-v2.md`, against `n20`.
 
 **For a future version**, as review recommended:
 - separate valid-context changes from deliberate evidence corruption, and

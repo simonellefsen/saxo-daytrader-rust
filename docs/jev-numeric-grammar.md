@@ -1,6 +1,8 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n20-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n20-2026-09-26`**, grading version **`v16`**. **`n20` is
+frozen** for the second fresh evaluation (`jev-fresh-evaluation-v2.md`): it does
+not change until that set is scored. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.

@@ -41,6 +41,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::jev_whole_notes::{Extracted, NoteCase, NoteKey, quote_span};
 
+/// The second fresh evaluation, fixed before its frame exists.
+mod v2;
+
 pub(crate) const FRESH_VERSION: &str = "fresh-v1-2026-09-25";
 /// The method under evaluation. Nothing is scored under any other.
 pub(crate) const FROZEN_METHOD: &str = "n15-2026-09-25";
@@ -651,6 +654,10 @@ pub(crate) struct SeededCase {
     pub note: String,
     pub evidence: JsonValue,
     pub keys: Vec<SeededKey>,
+    /// `valid_context` or `corruption`, from fresh-v2 on. Absent in fresh-v1,
+    /// which did not tell them apart.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub family: String,
 }
 
 /// A figure the labeller read as consistent, and the key's own arithmetic
@@ -771,6 +778,9 @@ struct Change<'a> {
     evidence: JsonValue,
     /// The field whose stored value the change moved or removed.
     evidence_field: Option<&'a str>,
+    /// Fields the change moved with it, to keep the evidence one the model
+    /// could produce. Empty in fresh-v1, which moved one field at a time.
+    linked: Vec<String>,
 }
 
 /// The truth of a written figure against the evidence as it now stands, by
@@ -792,6 +802,7 @@ fn build(
     anchors: &[Anchor],
     index: usize,
     change: Change,
+    truth: &dyn Fn(&str, &str, &JsonValue) -> Option<&'static str>,
 ) -> Option<SeededCase> {
     let (at, removed, added) = match (&change.rewrite, &change.insert) {
         (Some((target, figure)), _) => {
@@ -828,10 +839,12 @@ fn build(
         keys.push(SeededKey {
             start,
             end,
-            truth: truth_of(&figure, &anchor.field, &change.evidence).to_string(),
+            truth: truth(&figure, &anchor.field, &change.evidence)?.to_string(),
             figure,
             field: Some(anchor.field.clone()),
-            changed: rewritten || change.evidence_field == Some(anchor.field.as_str()),
+            changed: rewritten
+                || change.evidence_field == Some(anchor.field.as_str())
+                || change.linked.contains(&anchor.field),
         });
     }
     if let Some((offset, inserted, figure)) = &change.insert {
@@ -868,6 +881,7 @@ fn build(
         note: text,
         evidence: change.evidence,
         keys,
+        family: String::new(),
     })
 }
 
@@ -891,7 +905,10 @@ pub(crate) fn generate_seeded(cases: &[NoteCase], labels: &[FreshLabel]) -> Vec<
         let note = case.note.to_lowercase();
         let anchors = anchors(case, label);
         let mut emit = |anchors: &[Anchor], index: usize, change: Change| {
-            if let Some(built) = build(case, &note, anchors, index, change) {
+            let truth = |figure: &str, field: &str, evidence: &JsonValue| {
+                Some(truth_of(figure, field, evidence))
+            };
+            if let Some(built) = build(case, &note, anchors, index, change, &truth) {
                 seeded.push(built);
             }
         };
@@ -904,6 +921,7 @@ pub(crate) fn generate_seeded(cases: &[NoteCase], labels: &[FreshLabel]) -> Vec<
                 insert: None,
                 evidence: case.evidence.clone(),
                 evidence_field: None,
+                linked: Vec::new(),
             };
             let in_evidence = |mutation, direction, stored: Option<f64>| {
                 let mut evidence = case.evidence.clone();
@@ -915,6 +933,7 @@ pub(crate) fn generate_seeded(cases: &[NoteCase], labels: &[FreshLabel]) -> Vec<
                     insert: None,
                     evidence,
                     evidence_field: Some(field),
+                    linked: Vec::new(),
                 }
             };
             // The note changes, and the claim becomes false.
@@ -1005,6 +1024,7 @@ pub(crate) fn generate_seeded(cases: &[NoteCase], labels: &[FreshLabel]) -> Vec<
                         )),
                         evidence: case.evidence.clone(),
                         evidence_field: None,
+                        linked: Vec::new(),
                     },
                 );
             }
@@ -1056,6 +1076,7 @@ pub(crate) fn generate_seeded(cases: &[NoteCase], labels: &[FreshLabel]) -> Vec<
                     insert: None,
                     evidence: case.evidence.clone(),
                     evidence_field: None,
+                    linked: Vec::new(),
                 },
             );
         }
@@ -1301,6 +1322,155 @@ pub(crate) fn derivable_after_removal(evidence: &JsonValue, field: &str) -> bool
         "markov.bear_prob" => has("bull_prob") && (has("sideways_prob") || has("signed_signal")),
         _ => false,
     }
+}
+
+// Shared by every fresh set's frame and files. Test-only, like the module.
+
+fn note_id(seed: &str, report: i64, symbol: &str) -> String {
+    let digest =
+        <sha2::Sha256 as sha2::Digest>::digest(format!("{seed}|{report}|{symbol}").as_bytes());
+    format!("fresh-{}", &format!("{digest:x}")[..10])
+}
+
+fn by_symbol<'a>(prompt: &'a JsonValue, block: &str, symbol: &str) -> Option<&'a JsonValue> {
+    prompt
+        .get(block)?
+        .get("signals")?
+        .as_array()?
+        .iter()
+        .find(|signal| signal.get("symbol").and_then(JsonValue::as_str) == Some(symbol))
+}
+
+/// The evidence `grading_inputs` would build, for a symbol it never
+/// judged. The same construction as the whole-note audit's.
+fn evidence_for(prompt: &JsonValue, symbol: &str) -> JsonValue {
+    let markov = by_symbol(prompt, "markov_method", symbol)
+        .cloned()
+        .or_else(|| {
+            crate::markov_method::embedded_prompt_signal_rows(prompt)
+                .get(symbol)
+                .cloned()
+        });
+    json!({
+        "symbol": symbol,
+        "daily_indicators": by_symbol(prompt, "daily_indicators", symbol),
+        "markov": markov,
+        "quiver": by_symbol(prompt, "quiver_signals", symbol).map(|signal| json!({
+            "signal": signal.get("signal"),
+            "direction": signal.get("direction"),
+            "confidence": signal.get("confidence"),
+            "run_date": signal.get("run_date"),
+        })),
+    })
+}
+
+fn document(path: &str) -> Option<JsonValue> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn sha256_of(path: &str) -> String {
+    format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(std::fs::read(path).unwrap_or_default())
+    )
+}
+
+/// Every distinct note the accepted reports attached to a selected symbol,
+/// with its evidence and what the checker extracts from it, keyed by a
+/// hash-ordered id; and the accepted reports themselves.
+fn frame_notes(
+    sources: &[JsonValue],
+    seed: &str,
+    accept: impl Fn(i64, &str) -> bool,
+) -> (Vec<JsonValue>, BTreeMap<String, (NoteCase, NoteKey)>) {
+    let mut reports = Vec::new();
+    let mut notes: BTreeMap<String, (NoteCase, NoteKey)> = BTreeMap::new();
+    for entry in sources {
+        let report_id = entry.get("id").and_then(JsonValue::as_i64).expect("id");
+        let created_at = entry
+            .get("created_at")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default();
+        if !accept(report_id, created_at) {
+            continue;
+        }
+        let Some(report) = entry.get("report") else {
+            continue;
+        };
+        reports.push(json!({"id": report_id, "created_at": entry.get("created_at")}));
+        let prompt = entry
+            .get("request")
+            .map(crate::xai_decision::decision_prompt_user_payload)
+            .unwrap_or(JsonValue::Null);
+        let inputs = crate::jev_review::grading_inputs(report, &prompt);
+        for asset in report
+            .get("selected_assets")
+            .and_then(JsonValue::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(symbol), Some(note)) = (
+                asset.get("symbol").and_then(JsonValue::as_str),
+                asset.get("notes").and_then(JsonValue::as_str),
+            ) else {
+                continue;
+            };
+            if note.trim().is_empty() {
+                continue;
+            }
+            let id = note_id(seed, report_id, symbol);
+            if notes.contains_key(&id) {
+                continue;
+            }
+            let judged = inputs
+                .candidates
+                .iter()
+                .position(|candidate| candidate["symbol"].as_str() == Some(symbol));
+            let lowered = note.to_lowercase();
+            let evidence = match judged {
+                Some(index) => inputs.evidence[index].clone(),
+                None => evidence_for(&prompt, symbol),
+            };
+            // What the method reads in every note, given its evidence --
+            // including the notes production never showed it.
+            let extracted: Vec<Extracted> = crate::jev_numeric::numeric_checks(&lowered, &evidence)
+                .into_iter()
+                .filter_map(|check| {
+                    let span = crate::jev_numeric::figure_at(&lowered, check.offset)?;
+                    Some(Extracted {
+                        start: span.start,
+                        end: span.end,
+                        figure: lowered[span.start..span.end].to_string(),
+                        field: check.field.map(str::to_string),
+                        verdict: check.verdict.as_str().to_string(),
+                    })
+                })
+                .collect();
+            let stratum = match (judged, extracted.is_empty()) {
+                (None, _) => STRATUM_NEVER_REACHED,
+                (Some(_), false) => STRATUM_WITH_FIGURES,
+                (Some(_), true) => STRATUM_WITHOUT_FIGURES,
+            };
+            notes.insert(
+                id.clone(),
+                (
+                    NoteCase {
+                        id: id.clone(),
+                        source_report: report_id,
+                        symbol: symbol.to_string(),
+                        note: note.to_string(),
+                        evidence,
+                    },
+                    NoteKey {
+                        id,
+                        stratum: stratum.to_string(),
+                        extracted,
+                    },
+                ),
+            );
+        }
+    }
+    (reports, notes)
 }
 
 #[cfg(test)]
@@ -1818,54 +1988,6 @@ mod frozen {
     const FRAME_REPORTS: usize = 11;
     const FRAME_NOTES: usize = 51;
 
-    fn note_id(report: i64, symbol: &str) -> String {
-        let digest = sha2::Sha256::digest(format!("{SEED}|{report}|{symbol}").as_bytes());
-        format!("fresh-{}", &format!("{digest:x}")[..10])
-    }
-
-    fn by_symbol<'a>(prompt: &'a JsonValue, block: &str, symbol: &str) -> Option<&'a JsonValue> {
-        prompt
-            .get(block)?
-            .get("signals")?
-            .as_array()?
-            .iter()
-            .find(|signal| signal.get("symbol").and_then(JsonValue::as_str) == Some(symbol))
-    }
-
-    /// The evidence `grading_inputs` would build, for a symbol it never
-    /// judged. The same construction as the whole-note audit's.
-    fn evidence_for(prompt: &JsonValue, symbol: &str) -> JsonValue {
-        let markov = by_symbol(prompt, "markov_method", symbol)
-            .cloned()
-            .or_else(|| {
-                crate::markov_method::embedded_prompt_signal_rows(prompt)
-                    .get(symbol)
-                    .cloned()
-            });
-        json!({
-            "symbol": symbol,
-            "daily_indicators": by_symbol(prompt, "daily_indicators", symbol),
-            "markov": markov,
-            "quiver": by_symbol(prompt, "quiver_signals", symbol).map(|signal| json!({
-                "signal": signal.get("signal"),
-                "direction": signal.get("direction"),
-                "confidence": signal.get("confidence"),
-                "run_date": signal.get("run_date"),
-            })),
-        })
-    }
-
-    fn document(path: &str) -> Option<JsonValue> {
-        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-    }
-
-    fn sha256_of(path: &str) -> String {
-        format!(
-            "{:x}",
-            sha2::Sha256::digest(std::fs::read(path).unwrap_or_default())
-        )
-    }
-
     /// The seeded cases the labels generate, as they read back from a file.
     ///
     /// serde_json's default parser does not round-trip every float: it read
@@ -2227,91 +2349,13 @@ mod frozen {
         let path = std::env::var("JEV_FRESH_PATH").expect("JEV_FRESH_PATH");
         let raw = std::fs::read(&path).expect("the frame dump");
         let sources: Vec<JsonValue> = serde_json::from_slice(&raw).expect("a JSON array");
-        let mut reports = Vec::new();
-        let mut notes: BTreeMap<String, (NoteCase, NoteKey)> = BTreeMap::new();
-        for entry in &sources {
-            let report_id = entry.get("id").and_then(JsonValue::as_i64).expect("id");
+        let (reports, notes) = frame_notes(&sources, SEED, |report_id, _| {
             assert!(
                 report_id > LAST_DEVELOPMENT_REPORT && report_id <= LAST_REPORT_BEFORE_FREEZE,
                 "report {report_id} is outside the frame"
             );
-            let Some(report) = entry.get("report") else {
-                continue;
-            };
-            reports.push(json!({"id": report_id, "created_at": entry.get("created_at")}));
-            let prompt = entry
-                .get("request")
-                .map(crate::xai_decision::decision_prompt_user_payload)
-                .unwrap_or(JsonValue::Null);
-            let inputs = crate::jev_review::grading_inputs(report, &prompt);
-            for asset in report
-                .get("selected_assets")
-                .and_then(JsonValue::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let (Some(symbol), Some(note)) = (
-                    asset.get("symbol").and_then(JsonValue::as_str),
-                    asset.get("notes").and_then(JsonValue::as_str),
-                ) else {
-                    continue;
-                };
-                if note.trim().is_empty() {
-                    continue;
-                }
-                let id = note_id(report_id, symbol);
-                if notes.contains_key(&id) {
-                    continue;
-                }
-                let judged = inputs
-                    .candidates
-                    .iter()
-                    .position(|candidate| candidate["symbol"].as_str() == Some(symbol));
-                let lowered = note.to_lowercase();
-                let evidence = match judged {
-                    Some(index) => inputs.evidence[index].clone(),
-                    None => evidence_for(&prompt, symbol),
-                };
-                // What the method reads in every note, given its evidence --
-                // including the notes production never showed it.
-                let extracted: Vec<Extracted> =
-                    crate::jev_numeric::numeric_checks(&lowered, &evidence)
-                        .into_iter()
-                        .filter_map(|check| {
-                            let span = crate::jev_numeric::figure_at(&lowered, check.offset)?;
-                            Some(Extracted {
-                                start: span.start,
-                                end: span.end,
-                                figure: lowered[span.start..span.end].to_string(),
-                                field: check.field.map(str::to_string),
-                                verdict: check.verdict.as_str().to_string(),
-                            })
-                        })
-                        .collect();
-                let stratum = match (judged, extracted.is_empty()) {
-                    (None, _) => STRATUM_NEVER_REACHED,
-                    (Some(_), false) => STRATUM_WITH_FIGURES,
-                    (Some(_), true) => STRATUM_WITHOUT_FIGURES,
-                };
-                notes.insert(
-                    id.clone(),
-                    (
-                        NoteCase {
-                            id: id.clone(),
-                            source_report: report_id,
-                            symbol: symbol.to_string(),
-                            note: note.to_string(),
-                            evidence,
-                        },
-                        NoteKey {
-                            id,
-                            stratum: stratum.to_string(),
-                            extracted,
-                        },
-                    ),
-                );
-            }
-        }
+            true
+        });
         let mut population: BTreeMap<String, usize> = BTreeMap::new();
         for (_, key) in notes.values() {
             *population.entry(key.stratum.clone()).or_default() += 1;
