@@ -1,0 +1,67 @@
+{
+  "what_this_is": "n18 against n19, claim by claim, from recorded runs of committed code with clean trees (jev_provenance::census_of_every_claim).",
+  "change": "n19 decides the rounding test in whole units of the last written place, allowing only a bound on the binary error of the scaled value; past what a double resolves, the stored number itself matches, a figure further off than any rounding plus that uncertainty differs, and anything between is not compared (relation beyond_double_precision). n18's fixed slack of eight epsilons exceeded one unit at 15 decimals.",
+  "development_dump": {
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "n18": {
+      "commit": "ea48362",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "n19": {
+      "commit": "35de87a",
+      "method_version": "n19-2026-09-26",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "fresh_frame": {
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "n18": {
+      "commit": "ea48362",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "n19": {
+      "commit": "35de87a",
+      "method_version": "n19-2026-09-26",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "long_figures_in_the_frames": "Four claims are written to 16 or 17 decimals, each an exact copy of the stored double; all still match. None is written to 7-15 decimals.",
+  "metadata_provenance": "Every finding over all 361 stored trades is identical to v2.",
+  "regression_tests": "jev_numeric::tests::rounding_either_way_at_a_half_is_the_only_convention (review's two 15-decimal figures now differ) and jev_challenge::tests::a_truncation_is_true_only_where_it_also_rounds (review's ten-decimal truncation now keyed false) both fail on the n18 code (4fdf393) and pass at n19."
+}

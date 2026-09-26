@@ -38,7 +38,7 @@ reconciliation and the recorded score, and edits none of them.
    0.1242…` beside `"signed_signal": -0.1242…`. So "conviction" in a note is
    the report model's own word, not a defined term. The quantity it was told
    gates a trade is the signed signal.
-4. **The report model's usage is the signed signal.** The same prompt carries
+4. **The report model writes a sign beside "conviction".** The same prompt carries
    its earlier rationales, which write "+0.216 Markov conviction", "+0.429
    Markov conviction" and "+0.599 Markov conviction". Across the development
    dump and the fresh frame, the checker gives 30 figures to
@@ -46,11 +46,15 @@ reconciliation and the recorded score, and edits none of them.
    - Three are not conviction values at all: two prices (#312 and #313 CHEMM,
      "525 dkk") and a threshold (#360 BAVA, "awaiting markov conviction above
      0.20", the gate's 0.20).
-   - Of the other 27, **26 are written with an explicit sign**. A magnitude
-     never needs one.
-   - **25 of those 26 signs agree with the signed signal's direction**: 24 plus
-     signs on positive signals, and NOKIA's minus on a negative one.
-   - The one that does not is #358 UBER, below.
+   - Of the other 27, **26 are written with an explicit sign**.
+   - 24 of those are plus signs on positive signals. **These cannot tell the
+     two fields apart**: where the signal is positive, conviction holds the
+     same value, and a plus can decorate a positive magnitude. They show a
+     habit of writing signs, not which field is meant. *(Amended; see
+     below.)*
+   - NOKIA's minus, on a negative signal, is the one case the fields
+     separate, and there it is the signed signal's.
+   - #358 UBER's plus, on a negative signal, is discussed below.
    - One figure is unsigned: #172 ADS, "weak markov conviction at 0.055", on a
      positive signal.
 5. **The labeller's rule sits between the two.** Its notes read "conviction" as
@@ -61,19 +65,21 @@ reconciliation and the recorded score, and edits none of them.
 
 ## The ruling
 
-**In these notes, "Markov conviction" is the report model's name for the Markov
-signal. A figure written with a sign states `markov.signed_signal`. An unsigned
-figure states the magnitude, which `markov.conviction` holds.**
+**NOKIA's "-0.124" states `markov.signed_signal`, and is consistent.** That
+rests on this note's own evidence. It writes "negative" and a minus sign, which
+conviction can never carry, and it cites the gate, which reads the signed
+signal. The labeller's field is right. The checker compared the right value
+through the wrong field.
 
-The written sign decides, because the sign is exactly the information that
-tells the two fields apart. A reader does not have to judge which adjectives
-count as directional. And the rule never reads more into a figure than it
-writes: an unsigned figure is compared as the magnitude, where both fields
-agree.
+**For labelling from now on, a convention:** a figure written with a sign
+beside "conviction" states `markov.signed_signal`, and an unsigned one states
+the magnitude, which `markov.conviction` holds. The written sign decides,
+because it is the information that tells the two fields apart, and a labeller
+need not judge which adjectives count as directional.
 
-**NOKIA's "-0.124" states `markov.signed_signal`, and is consistent.** The
-labeller's field is right. The checker compared the right value through the
-wrong field.
+**It is a convention, not a finding about every historical author.** Across
+the stored notes it is decided by evidence only where the fields separate: a
+signed figure on a negative signal. That happens twice, NOKIA and UBER.
 
 ## What follows for the fresh evaluation
 
@@ -97,15 +103,14 @@ Nothing is rescored, and no label changes. As description:
   - The ninth outcome is the same figure, untouched, in the note's `repaired`
     case. It was accepted through conviction, again the right verdict on the
     wrong field.
-- **#358 UBER, "near-zero Markov conviction (+0.006)", now reads as a sign
-  error.** The signed signal is -0.0064, the direction short, the state Bear.
-  Under this ruling the figure states the signed signal, and its sign is wrong.
-  - It is negligible in size.
-  - It is the only written sign across both frames that contradicts the
-    signal.
-  - The labeller read it as the magnitude, consistent, and the checker
-    accepted it, so neither the score nor the reconciliation could surface it.
-  - It is recorded here beside the label, which stands as delivered.
+- **#358 UBER, "near-zero Markov conviction (+0.006)", is a sign error under
+  the convention, not an established report error.** The signed signal is
+  -0.0064, the direction short, the state Bear. But the stored conviction
+  really is +0.0063687, and nothing in the note says which the author meant.
+  - Read as the signed signal, as the convention would, its sign is wrong.
+  - Read as the magnitude, as the labeller did, it is consistent.
+  - It is negligible in size either way.
+  - The label stands as delivered.
 
 As review cautioned: this locates the disagreement and settles a term. It does
 not validate the checker, and "no wrong decision without NOKIA" remains a
@@ -123,3 +128,18 @@ it is Simon's decision. If built, only a later fresh set could evaluate it.
 applies it rather than choosing one. The truncation convention, which has now
 decided a case in each of three instruments, is the other term to settle
 before then. It is a policy choice, and it is Simon's to make.
+
+## Amended, 2026-09-26
+
+Review found the first version overstated its evidence.
+- **Evidence point 4** counted 24 plus signs on positive signals as support for
+  the signed reading. Where the signal is positive the two fields hold the
+  same value, so those cases cannot tell them apart.
+- **The ruling** is now split in two. The NOKIA ruling rests on that note's own
+  evidence. The sign rule is a convention for future labelling, and does not
+  state what every historical author meant.
+- **UBER's "+0.006"** is now described as a sign error under the convention,
+  not an established report error: its stored conviction is positive.
+
+The NOKIA ruling and its consequences for the fresh evaluation are unchanged.
+

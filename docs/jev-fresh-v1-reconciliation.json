@@ -850,6 +850,10 @@
     {
       "date": "2026-09-25",
       "what": "docs/jev-fresh-evaluation.md: the seeded results now carry review's qualification. The kept-true controls are single-field arithmetic tests, 37 of 69 of them in evidence the model could not produce, and the nine NOKIA outcomes are one disputed reading. The signed-conviction question is moved from the n15 defects to an open question. A reconciliation section is added. The recorded figures and the labels are unchanged."
+    },
+    {
+      "date": "2026-09-26",
+      "what": "adjudications: after review, the NOKIA ruling rests on that note's own evidence, the sign rule is recorded as a convention for future labelling, and UBER's '+0.006' is described as an error under the convention rather than an established report error. The positive-signal cases cannot distinguish the fields."
     }
   ],
   "adjudications": [
@@ -857,14 +861,14 @@
       "claim": "fresh-e2f6a33d7a#1",
       "date": "2026-09-26",
       "document": "docs/jev-adjudication-2026-09-26-signed-conviction.md",
-      "ruling": "markov.signed_signal, consistent. A figure written with a sign beside 'conviction' states the signed signal; an unsigned one states the magnitude.",
+      "ruling": "markov.signed_signal, consistent. Rests on this note's own evidence: 'negative', the minus sign, and the gate it cites, which reads the signed signal. A sign rule for future labelling is adopted separately, as a convention.",
       "note": "The 'unresolved_attribution' reading recorded above is kept as it was; this ruling sits beside it. Decided by the checker's author, against the checker's current rule; not independent."
     },
     {
       "claim": "fresh-e950b8c436#3",
       "date": "2026-09-26",
       "document": "docs/jev-adjudication-2026-09-26-signed-conviction.md",
-      "ruling": "Under the same rule, UBER's '+0.006' states the signed signal, -0.0064, so its sign is wrong: negligible in size, and the only written sign in either frame that contradicts the signal. The label, consistent as the magnitude, stands as delivered; neither the score nor the reconciliation surfaced it, because label and checker agreed."
+      "ruling": "Under the labelling convention, UBER's '+0.006' states the signed signal, -0.0064, and its sign is wrong. That is an error under the convention, not an established report error: the stored conviction really is +0.0063687, and the note does not say which it meant. The label, consistent as the magnitude, stands as delivered."
     }
   ],
   "convention_settled": {

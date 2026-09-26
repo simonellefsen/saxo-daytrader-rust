@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n18-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n19-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -13,8 +13,34 @@ stands as scored. The whole-note audit is keyed to `n12`.
 - `n16` matches a field's name only as a whole word.
 - `n17` compares by rounding alone, the convention Simon settled.
 - `n18` holds the rounding allowance at a half to floating-point error.
+- `n19` decides rounding in whole units, and abstains past what a double
+  resolves.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n19`: rounding decided in whole units
+
+Review reproduced that `n18` matched both "0.123456789070000" and
+"0.123456789070002" for a stored 0.123456789070001. Neither is its rounding
+at 15 decimals. `n18` compared in value, with a fixed slack of eight
+floating-point epsilons, and at 15 decimals that slack exceeds one unit of the
+written place.
+
+Now the test is decided in **whole units of the last written place**. The only
+allowance is a bound on the binary error of the scaled stored value. Where a
+double cannot pin that value to a twentieth of a unit, the precision written is
+finer than the stored number resolves. There:
+- a figure that is the stored number itself matches;
+- one further off than any rounding plus that uncertainty differs;
+- anything between is not compared, with relation `beyond_double_precision`.
+
+Both of review's figures now differ: a double pins the stored value at 15
+decimals to about a tenth of a unit, and each figure is a whole unit away.
+
+Measured in `jev-numeric-n19-changes.json`: **no claim changes** on either
+frame. The four figures written to 16 or 17 decimals are exact copies of the
+stored double, and still match. No metadata-provenance finding changes either.
+The regression cases fail on the `n18` code.
 
 ## `n18`: the half-unit allowance, tightened
 
@@ -639,10 +665,12 @@ defective. None of it is adjudicated, and the question itself is uncalibrated.
    check the sign, because the grammar compares magnitudes written as quoted.
 7. **A sign beside "conviction" is discarded.** `markov.conviction` is
    compared by magnitude, so "Markov conviction (+0.124)" is accepted against
-   a -0.124 signal. The 2026-09-26 adjudication rules that a signed figure
-   there states the signed signal, so this hides sign errors. #358 UBER's
-   "+0.006" against -0.0064 is one. Not fixed: review advised no further
-   tuning, and the decision is Simon's.
+   a -0.124 signal. The 2026-09-26 adjudication adopts, for labelling, the
+   convention that a signed figure there states the signed signal. Under that
+   convention this rule hides sign errors: #358 UBER's "+0.006", against a
+   signal of -0.0064, would be one. Its stored conviction is +0.0064, though,
+   so it is not independently a report error. Not fixed: review advised no
+   further tuning, and the decision is Simon's.
 8. **Digits are ASCII, and number words stop at twelve.** A figure in other
    digits is not read. A number word over twelve, "fifteen confluences", is
    not read on its own, though it is recognised as part of a compound.

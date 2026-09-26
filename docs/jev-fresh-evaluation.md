@@ -381,14 +381,18 @@ asked:
    It is not proof that every relationship in a synthetic context is valid.
 
 **The signed-conviction question was adjudicated on 2026-09-26**
-(`jev-adjudication-2026-09-26-signed-conviction.md`). Ruling: a figure
-written with a sign beside "conviction" states the signed signal, and an
-unsigned one states the magnitude. So NOKIA's figure is the signed signal, and
-the labeller's field is right. The seeded `sign_flipped` acceptance is then a
-genuine miss: the checker discards a sign it attributes to conviction. #358
-UBER's "+0.006", against -0.0064, reads as a negligible sign error that no
-score surfaced. The ruling was made by the checker's author, against the
-checker's current rule. Nothing was rescored, and no label changed.
+(`jev-adjudication-2026-09-26-signed-conviction.md`, amended the same day
+after review).
+- **NOKIA's figure is the signed signal.** That rests on the note's "negative",
+  its minus sign and the gate it cites, so the labeller's field is right.
+- **For future labelling, a convention:** a signed figure beside "conviction"
+  states the signed signal. Under it, the seeded `sign_flipped` acceptance is a
+  miss, because the checker discards a sign it attributes to conviction.
+  #358 UBER's "+0.006" is a sign error only under the convention: its stored
+  conviction is +0.0064, so it is not an established report error.
+
+The ruling was made by the checker's author, against the checker's current
+rule. Nothing was rescored, and no label changed.
 
 **This evaluation is kept as it is.** It is historical evidence. It is not to
 be regenerated to get cleaner results, and review recommends no further tuning

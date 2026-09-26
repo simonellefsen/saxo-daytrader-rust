@@ -198,6 +198,13 @@ true only where the truncation is also a rounding. That makes 8 cases false in
 mutation depends on truncation being true: removing a convention can only make
 fewer figures writable.
 
+**The key's rounding test was itself corrected at `n19`.** Its first version
+allowed 1e-9 of the scaled value, the fault the checker had until `n18`. From
+about nine decimals that exceeds half a unit, and review showed the key calling
+a ten-decimal truncation true. It now allows only the binary error, in its own
+code, and leaves a case it cannot settle at its recorded truth. These sets'
+truncation cases use at most three decimals, so none of their results changed.
+
 ## Regenerating
 
 ```
