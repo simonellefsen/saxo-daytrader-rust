@@ -1,0 +1,65 @@
+{
+  "what_this_is": "n17 against n18, claim by claim, from recorded runs of committed code with clean trees (jev_provenance::census_of_every_claim).",
+  "change": "n18 holds the rounding allowance at a decimal half to floating-point error. n17's was 1e-9 of the scaled value, which from about nine decimals exceeds half a unit, so a truncation written that long was accepted. No stored claim is written to 7-15 decimals, so no reading changes.",
+  "development_dump": {
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "n17": {
+      "commit": "0e4b405",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "n18": {
+      "commit": "ea48362",
+      "method_version": "n18-2026-09-26",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "fresh_frame": {
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "n17": {
+      "commit": "0e4b405",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "n18": {
+      "commit": "ea48362",
+      "method_version": "n18-2026-09-26",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "regression_test": "jev_numeric::tests::rounding_either_way_at_a_half_is_the_only_convention now rejects '0.1234567890' for 0.123456789071; it fails on the n17 code (db7a698) and passes at n18."
+}

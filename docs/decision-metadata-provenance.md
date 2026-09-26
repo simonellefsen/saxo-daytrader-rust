@@ -36,7 +36,7 @@ through the decision-time context and names where it came from:
 | `other_symbol_other_source` | another symbol, another source | no |
 | `carried_from_earlier_report` | found only in the model's own earlier report | no |
 | `no_source` | a full-precision figure found nowhere | no |
-| `disagrees_with_own_symbol` | a short figure that is not its own symbol's | no |
+| `disagrees_with_own_symbol` | a short figure that is not its own symbol's, or a long one that is its own symbol's cut short rather than rounded | no |
 | `no_own_signal` | a short figure for a symbol with no signal | no |
 
 It also lists every piece of metadata that disagrees with the symbol's own
@@ -50,11 +50,23 @@ came from some other symbol would be a guess. State, direction and counts are
 likewise only compared against their own symbol, because too many symbols share
 a value of five to say which one it came from.
 
-**Agreement allows rounding and truncation at the precision written**, plus
-the difference between single- and double-precision storage. 0.5828422796683945
-against 0.5828422904014587 is one signal stored twice. Without that allowance,
-39 correct trades read as disagreements. And #304's 0.429226 is its own
+**Agreement is rounding at the precision written**, plus the difference between
+single- and double-precision storage. 0.5828422796683945 against
+0.5828422904014587 is one signal stored twice. Without that allowance, 39
+correct trades read as disagreements. And #304's 0.429226 is its own
 0.4292262494564056, rounded.
+
+**Since v2 (`ea48362`), truncation is not accepted.** Simon settled the
+convention as rounding on 2026-09-26, for every figure a report writes.
+Rounding is now the numeric checker's own test, `written_by_rounding`, so the
+two cannot drift apart. A long figure that is the trade's own signal cut short
+reads `disagrees_with_own_symbol`, not `no_source`: it came from its own
+symbol, and is written wrongly.
+
+Re-measured over the same stored reports, and over the eleven reports after
+them, in `decision-metadata-provenance-v2-results.json`. **Every finding is
+identical to v1** across all 361 trades. No stored trade depended on
+truncation.
 
 ## Where it sits, and what it does not touch
 

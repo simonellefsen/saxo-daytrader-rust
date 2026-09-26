@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n17-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n18-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -12,8 +12,23 @@ stands as scored. The whole-note audit is keyed to `n12`.
   spelling. The fresh evaluation measured it.
 - `n16` matches a field's name only as a whole word.
 - `n17` compares by rounding alone, the convention Simon settled.
+- `n18` holds the rounding allowance at a half to floating-point error.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n18`: the half-unit allowance, tightened
+
+`n17`'s allowance for a decimal half was 1e-9 of the scaled value. That grows
+with the value: from about nine decimals it exceeds half a unit, and a
+truncation written that long was accepted again, "0.1234567890" for
+0.123456789071. It is now a few units of floating-point error, enough for
+23.135 stored as 23.13499…, and no more.
+
+Found while moving the rounding test into one function,
+`written_by_rounding`, which the completion audit's metadata provenance now
+shares. No stored claim is written to between 7 and 15 decimals. Every claim
+reads identically at `n17` and `n18`, on the dump and on the fresh frame
+(`jev-numeric-n18-changes.json`). The regression test fails on the `n17` code.
 
 ## `n17`: rounding, not truncation
 
@@ -57,11 +72,9 @@ checker detects every one, and no seeded falsehood is accepted. Removing a
 convention can only make fewer figures writable, so no case keyed false
 changes.
 
-**Not changed:**
-- the fresh set's own key, which keeps the convention of its time;
-- the completion audit's metadata provenance (`decision_quality.rs`). That
-  still matches a figure to its source by rounding or truncation. It traces
-  where a figure came from, not whether it is right.
+**Not changed:** the fresh set's own key, which keeps the convention of its
+time. The completion audit's metadata provenance was aligned afterwards: see
+`n18` and `decision-metadata-provenance.md`.
 
 ## `n16`: a name is a whole word
 
