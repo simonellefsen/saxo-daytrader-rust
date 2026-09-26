@@ -30,8 +30,10 @@
 use super::*;
 
 pub(crate) const FRESH_V2_VERSION: &str = "fresh-v2-2026-09-26";
-/// Revision 2, from review of the first, before any report was in the frame.
-pub(crate) const PROTOCOL_V2: &str = "fresh-protocol-v2-2026-09-26-r2";
+/// Revision 3: revision 2, from review of the first, and a check that each
+/// dumped report's contents are usable, both before any report was in the
+/// frame.
+pub(crate) const PROTOCOL_V2: &str = "fresh-protocol-v2-2026-09-26-r3";
 /// The method under evaluation. Nothing is scored under any other.
 pub(crate) const FROZEN_METHOD_V2: &str = "n20-2026-09-26";
 pub(crate) const FROZEN_COMMIT_V2: &str = "07cf157";
@@ -645,15 +647,77 @@ pub(crate) fn generate_seeded_v2(cases: &[NoteCase], labels: &[FreshLabel]) -> G
     out
 }
 
+/// The prompt's evidence blocks. Each may be absent -- early in a report's
+/// life a source can be unavailable -- but where present it is an object
+/// holding a `signals` list, as in every stored report.
+const EVIDENCE_BLOCKS: [&str; 3] = ["daily_indicators", "markov_method", "quiver_signals"];
+
+/// A frame that passed: its eligible reports, and the evidence blocks each
+/// report's prompt did not carry, recorded rather than hidden.
+#[derive(Debug, PartialEq)]
+pub(crate) struct FrameCheck {
+    pub eligible: Vec<i64>,
+    pub absent_sources: BTreeMap<i64, Vec<&'static str>>,
+}
+
+/// Everything wrong with one dumped report's contents: a report or prompt
+/// that is missing or malformed, as opposed to a legitimately empty candidate
+/// list or an absent evidence source. Returns the absent sources when the
+/// contents are usable.
+fn payload_problems(entry: &JsonValue) -> Result<Vec<&'static str>, Vec<String>> {
+    let id = entry["id"].as_i64().unwrap_or(-1);
+    let mut problems = Vec::new();
+    match entry.get("report").and_then(JsonValue::as_object) {
+        None => problems.push(format!("report {id} has no report object")),
+        Some(report) => match report.get("selected_assets").and_then(JsonValue::as_array) {
+            // An empty list is a report that selected nothing, which happens.
+            Some(assets) => {
+                for (index, asset) in assets.iter().enumerate() {
+                    let symbol = asset.get("symbol").and_then(JsonValue::as_str);
+                    let notes = asset.get("notes");
+                    if symbol.is_none_or(str::is_empty)
+                        || notes.is_some_and(|notes| !notes.is_null() && !notes.is_string())
+                    {
+                        problems.push(format!("report {id}'s selected asset {index} is malformed"));
+                    }
+                }
+            }
+            None => problems.push(format!("report {id} has no selected_assets list")),
+        },
+    }
+    let prompt = entry
+        .get("request")
+        .filter(|request| request.is_object())
+        .map(crate::xai_decision::decision_prompt_user_payload)
+        .unwrap_or(JsonValue::Null);
+    let mut absent = Vec::new();
+    if prompt.is_object() {
+        for block in EVIDENCE_BLOCKS {
+            match prompt.get(block) {
+                None | Some(JsonValue::Null) => absent.push(block),
+                Some(value) if value.get("signals").is_some_and(JsonValue::is_array) => {}
+                Some(_) => problems.push(format!("report {id}'s prompt has a malformed {block}")),
+            }
+        }
+    } else {
+        problems.push(format!("report {id}'s stored prompt does not decode"));
+    }
+    if problems.is_empty() {
+        Ok(absent)
+    } else {
+        Err(problems)
+    }
+}
+
 /// Everything wrong with a frame's manifest and dump, and the eligible report
 /// ids when nothing is. The manifest is the recorded result of
 /// `MANIFEST_QUERY` over every report in the window, whatever its status; the
-/// dump must hold exactly its eligible reports, and a frame with none is not a
-/// frame.
+/// dump must hold exactly its eligible reports, each with usable contents,
+/// and a frame with none is not a frame.
 pub(crate) fn validate_frame(
     manifest: &JsonValue,
     dump: &[JsonValue],
-) -> Result<Vec<i64>, Vec<String>> {
+) -> Result<FrameCheck, Vec<String>> {
     let mut problems = Vec::new();
     if manifest["manifest_query"] != MANIFEST_QUERY {
         problems.push("the manifest was not taken with MANIFEST_QUERY".to_string());
@@ -716,6 +780,7 @@ pub(crate) fn validate_frame(
         .iter()
         .filter_map(|row| Some((row["id"].as_i64()?, row)))
         .collect();
+    let mut absent_sources = BTreeMap::new();
     for entry in dump {
         let id = entry["id"].as_i64().unwrap_or(-1);
         if entry["status"] != "completed" {
@@ -726,9 +791,21 @@ pub(crate) fn validate_frame(
                 "report {id}'s creation time differs from the manifest"
             ));
         }
+        // Identity is not enough: a matching row with a null report would be
+        // counted as a report and yield no notes.
+        match payload_problems(entry) {
+            Ok(absent) if !absent.is_empty() => {
+                absent_sources.insert(id, absent);
+            }
+            Ok(_) => {}
+            Err(found) => problems.extend(found),
+        }
     }
     if problems.is_empty() {
-        Ok(eligible)
+        Ok(FrameCheck {
+            eligible,
+            absent_sources,
+        })
     } else {
         Err(problems)
     }
@@ -1125,8 +1202,31 @@ mod tests {
         })
     }
 
+    /// A stored prompt as the provider request carries it: the payload as a
+    /// JSON string in a message.
+    fn request(payload: JsonValue) -> JsonValue {
+        json!({"messages": [
+            {"role": "system", "content": "rules"},
+            {"role": "user", "content": payload.to_string()},
+        ]})
+    }
+
     fn report(id: i64, created_at: &str) -> JsonValue {
-        json!({"id": id, "created_at": created_at, "status": "completed", "report": {}, "request": {}})
+        json!({
+            "id": id,
+            "created_at": created_at,
+            "status": "completed",
+            "report": {"selected_assets": [
+                {"symbol": "AAA:xcse", "notes": "Five confluences and rsi 61.3."},
+            ]},
+            "request": request(json!({
+                "daily_indicators": {"signals": [
+                    {"symbol": "AAA:xcse", "rsi14": 61.34, "confluence_count": 5},
+                ]},
+                "markov_method": {"signals": []},
+                "quiver_signals": {"signals": []},
+            })),
+        })
     }
 
     #[test]
@@ -1141,7 +1241,10 @@ mod tests {
             report(400, "2026-09-28T08:49:05Z"),
             report(402, "2026-09-28T14:47:03Z"),
         ];
-        assert_eq!(validate_frame(&good, &dump), Ok(vec![400, 402]));
+        assert_eq!(
+            validate_frame(&good, &dump).map(|checked| checked.eligible),
+            Ok(vec![400, 402])
+        );
 
         // A partial export, an empty one, and one with a stray report.
         assert!(validate_frame(&good, &dump[..1]).is_err());
@@ -1160,6 +1263,70 @@ mod tests {
         let mut other_query = good;
         other_query["manifest_query"] = json!("select 1");
         assert!(validate_frame(&other_query, &dump).is_err());
+    }
+
+    /// Review's case: a dump row that matches the manifest in identity, time
+    /// and status but carries no usable contents. The identity checks passed
+    /// it, and frame extraction then counted a report with no notes. Now it is
+    /// refused, through the same path the builder takes, while a report that
+    /// legitimately selected nothing, or whose prompt lacked a source, passes
+    /// with the absence recorded.
+    #[test]
+    fn a_frame_refuses_rows_without_usable_contents() {
+        let rows = json!([
+            {"id": 400, "created_at": "2026-09-28T08:49:05Z", "status": "completed", "has_report": true, "has_request": true},
+        ]);
+        let manifest = manifest(rows, json!([400]));
+        let usable = report(400, "2026-09-28T08:49:05Z");
+        let checked = validate_frame(&manifest, std::slice::from_ref(&usable)).expect("usable");
+        let (reports, notes) =
+            frame_notes(std::slice::from_ref(&usable), SEED_V2, |_, at| in_frame(at));
+        assert_eq!(
+            (reports.len(), notes.len()),
+            (1, 1),
+            "the one note is extracted"
+        );
+        assert!(checked.absent_sources.is_empty());
+
+        let hollow = |change: &dyn Fn(&mut JsonValue)| {
+            let mut entry = usable.clone();
+            change(&mut entry);
+            validate_frame(&manifest, &[entry])
+        };
+        type Hollowing<'a> = (&'a str, &'a dyn Fn(&mut JsonValue));
+        let cases: [Hollowing; 5] = [
+            ("null report and request", &|entry| {
+                entry["report"] = JsonValue::Null;
+                entry["request"] = JsonValue::Null;
+            }),
+            ("no selected_assets list", &|entry| {
+                entry["report"] = json!({})
+            }),
+            ("an asset without a symbol", &|entry| {
+                entry["report"]["selected_assets"] = json!([{"notes": "x"}]);
+            }),
+            ("a prompt that does not decode", &|entry| {
+                entry["request"] = json!({"messages": [{"role": "user", "content": "not json"}]});
+            }),
+            ("a malformed evidence block", &|entry| {
+                entry["request"] = request(json!({"daily_indicators": {"signals": "x"}}));
+            }),
+        ];
+        for (what, change) in cases {
+            assert!(hollow(change).is_err(), "{what} was accepted");
+        }
+
+        // Legitimate: nothing selected, and sources absent from the prompt.
+        let mut empty = usable.clone();
+        empty["report"]["selected_assets"] = json!([]);
+        empty["request"] = request(json!({"daily_indicators": {"signals": []}}));
+        let checked = validate_frame(&manifest, std::slice::from_ref(&empty)).expect("legitimate");
+        assert_eq!(
+            checked.absent_sources.get(&400),
+            Some(&vec!["markov_method", "quiver_signals"])
+        );
+        let (reports, notes) = frame_notes(&[empty], SEED_V2, |_, at| in_frame(at));
+        assert_eq!((reports.len(), notes.len()), (1, 0));
     }
 
     #[test]
@@ -1343,8 +1510,9 @@ mod frozen {
         let path = std::env::var("JEV_FRESH_PATH").expect("JEV_FRESH_PATH");
         let raw = std::fs::read(&path).expect("the frame dump");
         let sources: Vec<JsonValue> = serde_json::from_slice(&raw).expect("a JSON array");
-        let eligible = validate_frame(&manifest, &sources)
+        let checked = validate_frame(&manifest, &sources)
             .unwrap_or_else(|problems| panic!("the frame is not complete: {problems:#?}"));
+        let eligible = checked.eligible.clone();
         let (reports, notes) = frame_notes(&sources, SEED_V2, |_, created_at| in_frame(created_at));
         let reported: Vec<i64> = reports
             .iter()
@@ -1408,6 +1576,7 @@ mod frozen {
                     "opens": FRAME_OPENS,
                     "closes": FRAME_CLOSES,
                     "manifest_sha256": sha256_of(MANIFEST_PATH),
+                    "absent_sources": checked.absent_sources,
                     "dump_sha256": format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&raw)),
                     "reports": reports,
                 },

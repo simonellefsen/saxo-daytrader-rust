@@ -1,10 +1,11 @@
 # Fresh evaluation v2: fixed before its frame exists
 
-`fresh-v2-2026-09-26`, protocol **`fresh-protocol-v2-2026-09-26-r2`**. Code:
+`fresh-v2-2026-09-26`, protocol **`fresh-protocol-v2-2026-09-26-r3`**. Code:
 `src/jev_fresh/v2.rs`, test-only.
 
-**Status: preregistered, revision 2. The frame is open, and no report is in it
-yet.** The amendment at the end records what revision 2 changed, and why.
+**Status: preregistered, revision 3. The frame is open, and no report is in it
+yet.** The amendments at the end record what each revision changed, and why.
+**The machinery is now closed to change** until the set is scored.
 
 ## What is frozen
 
@@ -45,7 +46,19 @@ hold:
 - no report is eligible;
 - the dump lacks an eligible report, or holds one that isn't;
 - any report is not completed, or its creation time disagrees with the
-  manifest.
+  manifest;
+- any dumped report's contents are unusable.
+
+Unusable contents means any of these:
+- no report object, or no `selected_assets` list;
+- a selected asset without a symbol, or with notes that are not text;
+- a stored prompt that does not decode;
+- an evidence block that is present but has no `signals` list.
+
+**These are told apart from legitimate gaps.** A report that selected nothing
+is kept: 13 stored reports did. A prompt without one of its evidence blocks
+is kept, and the key records which were absent. In every stored report, each
+block present is an object holding a `signals` list.
 
 It also refuses to run before the close, and to run twice. A test checks the
 built frame against the manifest on every build.
@@ -188,3 +201,18 @@ not on anything in the frame.
 
 Revision 1's protocol id, `fresh-protocol-v2-2026-09-26`, generated nothing:
 no frame, labels or cases exist under it.
+
+## Amendment: revision 3, 2026-09-26
+
+Made after review of revision 2 (`7f7885f`), before any report existed in the
+frame. Review reproduced that a dump row matching the manifest in id, time and
+status, but with a null report and prompt, was accepted. Frame extraction then
+counted that report and found no notes in it.
+
+Now each dumped report's contents are validated, telling missing or malformed
+payloads apart from an empty candidate list or an absent evidence source. A
+test drives this through the same validation and extraction the builder uses.
+The absent sources are recorded in the key.
+
+Review asked that the machinery then stop changing. It does: the next step is
+to let the window run.
