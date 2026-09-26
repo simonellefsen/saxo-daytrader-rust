@@ -248,7 +248,7 @@ const SAME_NUMBER_RELATIVE: f64 = 1e-7;
 /// It is observational either way: it cannot block, approve or change a trade.
 fn metadata_provenance(trades: &[JsonValue], context: Option<&JsonValue>) -> JsonValue {
     let Some(context) = context.filter(|context| context.is_object()) else {
-        return json!({"version": "v1", "status": "not_available"});
+        return json!({"version": "v2", "status": "not_available"});
     };
     let listed: std::collections::HashMap<String, &JsonValue> = context
         .pointer("/markov_method/signals")
@@ -312,7 +312,8 @@ fn metadata_provenance(trades: &[JsonValue], context: Option<&JsonValue>) -> Jso
         })
         .count();
     json!({
-        "version": "v1",
+        // v2: a short figure matches by rounding alone, not truncation.
+        "version": "v2",
         "status": if cross == 0 && disagreeing == 0 { "consistent" } else { "review" },
         "trades_with_a_signal_from_elsewhere": cross,
         "trades_with_disagreeing_metadata": disagreeing,
@@ -355,22 +356,33 @@ fn written_decimals(value: f64) -> usize {
         .map_or(0, |(_, fraction)| fraction.len())
 }
 
-/// Whether a written figure is the stored one: what rounding or truncating
-/// the stored value gives at the precision written, or -- for a long figure --
-/// the same number stored at the other precision.
+/// Whether a written figure is the stored one: the stored value rounded at
+/// the precision written, or -- for a long figure -- the same number stored at
+/// the other precision.
 ///
 /// Both, always. Report #304 wrote EQNR's 0.4292262494564056 as 0.429226: six
 /// decimals, rounded, and treating six decimals as a full-precision copy
 /// called its own signal a figure from nowhere.
+///
+/// Rounding is the numeric checker's own test, `written_by_rounding`, so the
+/// two cannot drift apart. Truncation is not accepted: Simon settled the
+/// convention as rounding on 2026-09-26, for every figure a report writes. The
+/// storage allowance stays, because it is not a way of writing a figure: one
+/// signal held in single and double precision differs in the eighth digit.
 fn same_figure(written: f64, actual: f64) -> bool {
     let decimals = written_decimals(written);
-    let scale = 10f64.powi(decimals.min(15) as i32);
-    let quoted = [(actual * scale).round(), (actual * scale).trunc()]
-        .iter()
-        .any(|candidate| (candidate / scale - written).abs() <= 1e-12 * written.abs().max(1.0));
+    let rounded = crate::jev_numeric::written_by_rounding(written, decimals, actual);
     let stored_elsewhere = decimals >= IDENTIFYING_DECIMALS
         && (written - actual).abs() <= SAME_NUMBER_RELATIVE * actual.abs().max(1.0);
-    quoted || stored_elsewhere
+    rounded || stored_elsewhere
+}
+
+/// Whether `written` is `actual` truncated at the precision written. Used only
+/// to name where a figure came from, never to accept it: under the rounding
+/// convention a truncation is written wrongly.
+fn truncates_to(written: f64, actual: f64) -> bool {
+    let scale = 10f64.powi(written_decimals(written).min(15) as i32);
+    ((actual * scale).trunc() / scale - written).abs() <= 1e-12 * written.abs().max(1.0)
 }
 
 /// The Markov gate's threshold as the decision-time context recorded it.
@@ -464,7 +476,16 @@ fn markov_signal_finding(
         .collect();
     sources.sort_by_key(|(rank, ..)| *rank);
     let Some(&(best, finding, ..)) = sources.first() else {
-        return json!({"written": written, "decision_time": own_value, "finding": "no_source"});
+        // The trade's own signal cut short rather than rounded came from its
+        // own symbol, and is written wrongly under the rounding convention.
+        // Calling it a figure from nowhere would name an invention that is not
+        // there.
+        let finding = if own_value.is_some_and(|actual| truncates_to(written, actual)) {
+            "disagrees_with_own_symbol"
+        } else {
+            "no_source"
+        };
+        return json!({"written": written, "decision_time": own_value, "finding": finding});
     };
     let found_at: Vec<JsonValue> = sources
         .iter()
@@ -864,6 +885,27 @@ mod metadata_provenance_tests {
         let context = context(vec![markov("NESTE:xhel", 0.4292262494564056)], json!({}));
         let provenance = metadata_provenance(&[trade("NESTE:xhel", 0.429226)], Some(&context));
         assert_eq!(finding(&provenance, 0), "own_symbol");
+    }
+
+    /// The convention is rounding, as for every figure a report writes. A
+    /// short figure truncated where rounding gives another is not the trade's
+    /// own signal as written.
+    #[test]
+    fn a_short_figure_matches_its_own_signal_only_by_rounding() {
+        let short = context(vec![markov("NESTE:xhel", 0.4199841320514679)], json!({}));
+        let rounded = metadata_provenance(&[trade("NESTE:xhel", 0.42)], Some(&short));
+        assert_eq!(finding(&rounded, 0), "own_symbol");
+        let truncated = metadata_provenance(&[trade("NESTE:xhel", 0.4199)], Some(&short));
+        assert_eq!(finding(&truncated, 0), "disagrees_with_own_symbol");
+        assert_eq!(truncated["version"], "v2");
+
+        // Long enough to name a source, and cut short: still its own signal,
+        // written wrongly, not a figure from nowhere.
+        let long = context(vec![markov("NESTE:xhel", 0.4292266494564056)], json!({}));
+        let cut = metadata_provenance(&[trade("NESTE:xhel", 0.429226)], Some(&long));
+        assert_eq!(finding(&cut, 0), "disagrees_with_own_symbol");
+        let invented = metadata_provenance(&[trade("NESTE:xhel", 0.311111)], Some(&long));
+        assert_eq!(finding(&invented, 0), "no_source");
     }
 
     /// The gate's minimum written as the signal, for a symbol the prompt gave

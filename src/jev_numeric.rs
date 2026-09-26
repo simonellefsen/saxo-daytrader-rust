@@ -76,7 +76,11 @@ use std::sync::LazyLock;
 /// `n17` compares by rounding alone. Truncation is no longer accepted: the
 /// convention was settled on 2026-09-26, after truncation had decided a case
 /// in each of three instruments against a labeller who rounded.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n17-2026-09-26";
+///
+/// `n18` holds the rounding allowance at a decimal half to floating-point
+/// error. `n17`'s grew with the value, and accepted truncation again for a
+/// figure written to about nine decimals or more.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n18-2026-09-26";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -2167,14 +2171,26 @@ fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> boo
     if discrete {
         return quoted.fract().abs() < f64::EPSILON && (quoted - actual).abs() < 1e-9;
     }
-    let scale = 10f64.powi(decimals as i32);
+    written_by_rounding(quoted, decimals, actual)
+}
+
+/// Whether `written`, at `decimals` places, is `actual` rounded: to the
+/// nearest value, either way at a half. The one rounding test every figure a
+/// report writes is held to -- here and in the completion audit's metadata
+/// provenance.
+///
+/// "Either way at a half" allows for the binary error in a decimal half:
+/// 23.135 is stored as 23.13499..., and "23.14" is its rounding. That
+/// allowance is a few units of floating-point error on the scaled value, no
+/// more. `n17` allowed 1e-9 of it, which grows with the value: from about nine
+/// decimals on it exceeded half a unit, and truncation was accepted again.
+pub(crate) fn written_by_rounding(written: f64, decimals: usize, actual: f64) -> bool {
+    let scale = 10f64.powi(decimals.min(15) as i32);
     let scaled = actual * scale;
-    // A neighbour no further than half a unit away, allowing for the binary
-    // error in a decimal half.
-    let half = 0.5 + 1e-9 * scaled.abs().max(1.0);
-    let slack = quoted.abs().max(actual.abs()).max(1.0) * 8.0 * f64::EPSILON;
+    let half = 0.5 + 8.0 * f64::EPSILON * scaled.abs().max(1.0);
+    let slack = written.abs().max(actual.abs()).max(1.0) * 8.0 * f64::EPSILON;
     [scaled.floor(), scaled.ceil()].iter().any(|neighbour| {
-        (scaled - neighbour).abs() <= half && (quoted - neighbour / scale).abs() <= slack
+        (scaled - neighbour).abs() <= half && (written - neighbour / scale).abs() <= slack
     })
 }
 
@@ -2845,6 +2861,15 @@ mod tests {
             ("support 23.12 eur", NumericVerdict::Differs),
         ] {
             assert_eq!(numeric_checks(note, &half)[0].verdict, verdict, "{note}");
+        }
+        // A long figure is held to rounding too. n17's allowance grew with
+        // the value and let this ten-decimal truncation through.
+        let long = json!({"markov": {"signed_signal": 0.123456789071}});
+        for (note, verdict) in [
+            ("markov signal 0.1234567891", NumericVerdict::Matches),
+            ("markov signal 0.1234567890", NumericVerdict::Differs),
+        ] {
+            assert_eq!(numeric_checks(note, &long)[0].verdict, verdict, "{note}");
         }
         // And an exact binary half, either way.
         let exact = json!({"daily_indicators": {"rsi14": 62.5}});
