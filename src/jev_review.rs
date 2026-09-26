@@ -583,9 +583,9 @@ fn numeric_payload(inputs: &GradingInputs) -> JsonValue {
         "method_version": crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "method": "A quoted figure is attributed to a field only when one phrase names it more \
                    closely than any rival, and abstains otherwise. An equality is tested against \
-                   what rounding and truncating the stored value actually produce at the \
-                   precision written; a discrete field requires a whole number and exact \
-                   equality. The comparison grammar is closed: it reads a figure only when its \
+                   what rounding the stored value produces at the precision written, either way \
+                   at a half; truncation is not accepted. A discrete field requires a whole \
+                   number and exact equality. The comparison grammar is closed: it reads a figure only when its \
                    clause asserts plainly -- nothing negated, past or prospective -- and the \
                    words between the field and the figure are connectives, words of degree or \
                    part of the field's own name, with at most one comparator and that \

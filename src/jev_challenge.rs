@@ -121,6 +121,69 @@ impl Outcome {
     }
 }
 
+/// Whether `written`, at `decimals`, is the stored value rounded -- either
+/// way at a half, allowing for a decimal half stored just short in binary.
+///
+/// The key's own arithmetic, deliberately not the checker's: it asks how far
+/// the whole number the written figure stands for lies from the scaled stored
+/// value, where the checker asks which neighbours of the scaled value match.
+fn rounds_to(stored: f64, written: f64, decimals: usize) -> bool {
+    let factor = 10f64.powi(decimals as i32);
+    let scaled = stored * factor;
+    let written_units = (written * factor).round();
+    (scaled - written_units).abs() <= 0.5 + 1e-9 * scaled.abs().max(1.0)
+}
+
+/// The figure a case targets, as written: its value and its decimals.
+fn figure_written_at(note: &str, offset: usize) -> Option<(f64, usize)> {
+    let tail = note.get(offset..)?;
+    let signed = tail.starts_with(['+', '-']);
+    let body = &tail[usize::from(signed)..];
+    let whole = body
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(body.len());
+    if whole == 0 {
+        return None;
+    }
+    let fraction = body[whole..]
+        .strip_prefix('.')
+        .map(|rest| {
+            rest.find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len())
+        })
+        .filter(|digits| *digits > 0)
+        .unwrap_or(0);
+    let end = usize::from(signed) + whole + if fraction > 0 { fraction + 1 } else { 0 };
+    Some((tail[..end].parse().ok()?, fraction))
+}
+
+/// What a case's claim is under the convention now in force.
+///
+/// The frozen sets were generated when truncation was an accepted way of
+/// writing a value, and `boundary_truncated` keyed "the stored value
+/// truncated to one fewer decimal" as true. Since `n17` the convention is
+/// rounding alone, settled on 2026-09-26, so such a figure is true only where
+/// the truncation is also a rounding. The frozen files are not edited: the
+/// truth is re-read here, by the key's own arithmetic, and every other case
+/// keeps its recorded truth. Removing a convention can only make fewer
+/// figures writable, so no case keyed false can become true.
+pub(crate) fn truth_under_the_convention(case: &ChallengeCase) -> Truth {
+    if case.mutation != "boundary_truncated" || case.truth != Truth::Holds {
+        return case.truth;
+    }
+    let stored = case
+        .target_field
+        .split('.')
+        .try_fold(&case.evidence, |cursor, segment| cursor.get(segment))
+        .and_then(JsonValue::as_f64);
+    match (stored, figure_written_at(&case.note, case.target_offset)) {
+        (Some(stored), Some((written, decimals))) if !rounds_to(stored, written, decimals) => {
+            Truth::Fails
+        }
+        _ => case.truth,
+    }
+}
+
 /// Scores one case against the checks the checker produced for it.
 pub(crate) fn outcome_for(case: &ChallengeCase, checks: &[NumericCheck]) -> Outcome {
     let Some(check) = checks
@@ -135,7 +198,7 @@ pub(crate) fn outcome_for(case: &ChallengeCase, checks: &[NumericCheck]) -> Outc
     if check.field != Some(case.target_field.as_str()) {
         return Outcome::WrongField;
     }
-    match (case.truth, check.verdict) {
+    match (truth_under_the_convention(case), check.verdict) {
         (Truth::Holds, NumericVerdict::Matches) => Outcome::Agreed,
         (Truth::Holds, NumericVerdict::Differs) => Outcome::FalsePositive,
         (Truth::Fails, NumericVerdict::Differs) => Outcome::Agreed,
@@ -157,9 +220,14 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
     let mut by_mutation: BTreeMap<String, BTreeMap<&'static str, i64>> = BTreeMap::new();
     let mut totals: BTreeMap<&'static str, i64> = BTreeMap::new();
     let mut misses = Vec::new();
+    let mut reread = Vec::new();
     for case in cases {
         let checks = crate::jev_numeric::numeric_checks(&case.note, &case.evidence);
         let outcome = outcome_for(case, &checks);
+        let truth = truth_under_the_convention(case);
+        if truth != case.truth {
+            reread.push(case.id.clone());
+        }
         *by_family
             .entry(case.family.clone())
             .or_default()
@@ -171,7 +239,7 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
             .entry(outcome.as_str())
             .or_default() += 1;
         *by_truth
-            .entry(match case.truth {
+            .entry(match truth {
                 Truth::Holds => "true_claims",
                 Truth::Fails => "false_claims",
                 Truth::Unsettleable => "unsettleable_claims",
@@ -192,7 +260,7 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
                 "id": case.id,
                 "mutation": case.mutation,
                 "outcome": outcome.as_str(),
-                "truth": case.truth,
+                "truth": truth,
                 "rationale": case.rationale,
                 "note": case.note,
                 "target_field": case.target_field,
@@ -242,6 +310,10 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
         // Named individually, because a count of misses that cannot be read
         // back is a number nobody can act on.
         "misses": misses,
+        "reread_under_the_convention": {
+            "convention": "rounding, either way at a half; truncation not accepted since n17",
+            "cases_now_false": reread,
+        },
         "reading": "`agreed` is the verdict the change makes correct. \
                     `false_negative` is a seeded falsehood recorded as agreement and is the \
                     number this set exists to produce. `abstained` is neither a hit nor a \
@@ -253,6 +325,44 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A truncation keyed true stays true only where it is also a rounding.
+    #[test]
+    fn a_truncation_is_true_only_where_it_also_rounds() {
+        let at = |note: &str, stored: f64| ChallengeCase {
+            mutation: "boundary_truncated".to_string(),
+            note: note.to_string(),
+            evidence: json!({"markov": {"signed_signal": stored}}),
+            target_field: "markov.signed_signal".to_string(),
+            target_offset: note.find(['+', '0', '-']).expect("a figure"),
+            ..case(Truth::Holds)
+        };
+        assert_eq!(
+            truth_under_the_convention(&at("markov +0.61 x", 0.6149)),
+            Truth::Holds
+        );
+        assert_eq!(
+            truth_under_the_convention(&at("markov +0.61 x", 0.6189)),
+            Truth::Fails
+        );
+        assert_eq!(
+            truth_under_the_convention(&at("markov -0.61 x", -0.6189)),
+            Truth::Fails
+        );
+        assert_eq!(
+            truth_under_the_convention(&at("markov 0.61 x", 0.605)),
+            Truth::Holds
+        );
+        let other = ChallengeCase {
+            mutation: "value_contradiction".to_string(),
+            ..at("markov +0.61 x", 0.6189)
+        };
+        assert_eq!(
+            truth_under_the_convention(&other),
+            Truth::Holds,
+            "only truncations are re-read"
+        );
+    }
 
     fn case(truth: Truth) -> ChallengeCase {
         ChallengeCase {

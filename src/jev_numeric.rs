@@ -72,7 +72,11 @@ use std::sync::LazyLock;
 /// `n16` matches a field's name only as a whole word. "support" was found
 /// inside "supported", and contested the count in "supported by 5
 /// confluences": the fresh evaluation's one concrete parser defect.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n16-2026-09-25";
+///
+/// `n17` compares by rounding alone. Truncation is no longer accepted: the
+/// convention was settled on 2026-09-26, after truncation had decided a case
+/// in each of three instruments against a labeller who rounded.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n17-2026-09-26";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -158,7 +162,7 @@ struct FieldSpec {
     ///
     /// A count is quoted exactly, so "4 confluences" against five is a
     /// disagreement. A continuous quantity is routinely written short --
-    /// "295 DKK support" for 295.73302 -- and that is truncation, not
+    /// "296 DKK support" for 295.73302 -- and that is rounding, not
     /// disagreement.
     discrete: bool,
     /// Whether a figure written with an explicit `+` or `-` could be this
@@ -2144,8 +2148,19 @@ fn check_one(
 /// Not a tolerance band. A band of one unit in the last place accepted "392"
 /// for a stored 391 and "0.060" for 0.061, neither of which any convention
 /// produces -- and on a count it accepted "4.5" against five, though a count
-/// is never written with a fraction. Accepting rounding and truncation means
-/// testing what each actually yields, not allowing everything between them.
+/// is never written with a fraction.
+///
+/// **The convention is rounding** to the nearest value at the precision
+/// written, either way at a half. Simon chose it on 2026-09-26. Truncation is
+/// no longer accepted: it had decided a case in each of the controls (LMND,
+/// RSI 60 for 60.66), the whole-note audit (ASML, 0.400 for 0.4006) and the
+/// fresh evaluation (CHEMM, 502 for 502.89), each time against a labeller who
+/// rounded.
+///
+/// "Either way at a half" keeps both half conventions this accepted before --
+/// away from zero and to even -- and also covers a decimal half the binary
+/// value falls just short of: 23.135 is stored as 23.13499..., and "23.14" is
+/// its rounding.
 ///
 /// A discrete field requires a whole number and exact equality.
 fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> bool {
@@ -2154,32 +2169,13 @@ fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> boo
     }
     let scale = 10f64.powi(decimals as i32);
     let scaled = actual * scale;
-    let candidates = [
-        // Round half away from zero, the common convention.
-        scaled.round() / scale,
-        // Round half to even, which differs only at an exact half.
-        round_half_even(scaled) / scale,
-        // Truncate, which is how "295" and "+0.4199" were written.
-        scaled.trunc() / scale,
-    ];
+    // A neighbour no further than half a unit away, allowing for the binary
+    // error in a decimal half.
+    let half = 0.5 + 1e-9 * scaled.abs().max(1.0);
     let slack = quoted.abs().max(actual.abs()).max(1.0) * 8.0 * f64::EPSILON;
-    candidates
-        .iter()
-        .any(|candidate| (quoted - candidate).abs() <= slack)
-}
-
-fn round_half_even(value: f64) -> f64 {
-    let floor = value.floor();
-    let fraction = value - floor;
-    if (fraction - 0.5).abs() < f64::EPSILON {
-        if (floor / 2.0).fract().abs() < f64::EPSILON {
-            floor
-        } else {
-            floor + 1.0
-        }
-    } else {
-        value.round()
-    }
+    [scaled.floor(), scaled.ceil()].iter().any(|neighbour| {
+        (scaled - neighbour).abs() <= half && (quoted - neighbour / scale).abs() <= slack
+    })
 }
 
 /// Whether a figure is even in the right range to be this field.
@@ -2602,12 +2598,12 @@ mod tests {
             "no disagreement should be reported here: {checks:?}"
         );
 
-        // 293 ISP: a truncation, not a disagreement.
+        // 293 ISP: the Markov figure, not the break risk. Since n17 a
+        // truncation is a disagreement: 0.41998 rounds to 0.4200.
         let isp = json!({"markov": {"signed_signal": 0.4199841320514679}});
-        assert_eq!(
-            numeric_checks("solid +0.4199 Bull Markov signal", &isp)[0].verdict,
-            NumericVerdict::Matches
-        );
+        let checks = numeric_checks("solid +0.4199 Bull Markov signal", &isp);
+        assert_eq!(checks[0].field, Some("markov.signed_signal"));
+        assert_eq!(checks[0].verdict, NumericVerdict::Differs);
     }
 
     /// A figure orders of magnitude from the stored value says the phrase was
@@ -2638,14 +2634,19 @@ mod tests {
         );
     }
 
-    /// Truncation is accepted; a genuinely different figure at the same
-    /// precision is not.
+    /// Rounding is accepted; truncation, and a genuinely different figure at
+    /// the same precision, are not.
     #[test]
-    fn the_truncation_tolerance_does_not_accept_a_different_figure() {
+    fn rounding_is_accepted_and_truncation_is_not() {
         let evidence = json!({"markov": {"signed_signal": 0.4199841320514679}});
         assert_eq!(
-            numeric_checks("+0.4199 Markov signal", &evidence)[0].verdict,
+            numeric_checks("+0.4200 Markov signal", &evidence)[0].verdict,
             NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("+0.4199 Markov signal", &evidence)[0].verdict,
+            NumericVerdict::Differs,
+            "truncated"
         );
         assert_eq!(
             numeric_checks("+0.4185 Markov signal", &evidence)[0].verdict,
@@ -2689,16 +2690,21 @@ mod tests {
         );
     }
 
-    /// "295 DKK support" for a stored 295.73302 is truncation. A count is not
-    /// written that way, so "4 confluences" against five stays a disagreement.
+    /// "296 DKK support" for a stored 295.73302 is rounding; since n17 "295"
+    /// is a truncation and a disagreement. A count is exact, so "4
+    /// confluences" against five stays a disagreement.
     #[test]
-    fn a_whole_number_truncates_on_a_price_but_not_on_a_count() {
+    fn a_whole_number_rounds_on_a_price_and_is_exact_on_a_count() {
         let price = json!({
             "daily_indicators": {"support": {"nearest_support": 295.73302}}
         });
         assert_eq!(
-            numeric_checks("consolidating near 295 DKK support", &price)[0].verdict,
+            numeric_checks("consolidating near 296 DKK support", &price)[0].verdict,
             NumericVerdict::Matches
+        );
+        assert_eq!(
+            numeric_checks("consolidating near 295 DKK support", &price)[0].verdict,
+            NumericVerdict::Differs
         );
 
         let counts = json!({"daily_indicators": {"confluence_count": 5}});
@@ -2797,13 +2803,14 @@ mod tests {
         );
     }
 
-    /// The convention test has to keep accepting what it was built to accept.
+    /// The convention is rounding, either way at a half, and nothing else.
+    /// Truncation was accepted until n17.
     #[test]
-    fn rounding_and_truncating_are_both_still_accepted() {
+    fn rounding_either_way_at_a_half_is_the_only_convention() {
         let support = json!({"daily_indicators": {"support": {"nearest_support": 295.73302}}});
         assert_eq!(
             numeric_checks("near 295 DKK support", &support)[0].verdict,
-            NumericVerdict::Matches,
+            NumericVerdict::Differs,
             "truncated"
         );
         assert_eq!(
@@ -2820,16 +2827,34 @@ mod tests {
         let markov = json!({"markov": {"signed_signal": 0.4199841320514679}});
         assert_eq!(
             numeric_checks("+0.4199 Markov signal", &markov)[0].verdict,
-            NumericVerdict::Matches
+            NumericVerdict::Differs,
+            "truncated"
         );
         assert_eq!(
             numeric_checks("+0.4200 Markov signal", &markov)[0].verdict,
             NumericVerdict::Matches
         );
-        assert_eq!(
-            numeric_checks("+0.4198 Markov signal", &markov)[0].verdict,
-            NumericVerdict::Differs
-        );
+
+        // A decimal half: 23.135 is stored as 23.13499..., so binary rounding
+        // alone gives 23.13, and 23.14 is the rounding a person writes. Both
+        // are rounding; 23.12 is neither.
+        let half = json!({"daily_indicators": {"support": {"nearest_support": 23.135}}});
+        for (note, verdict) in [
+            ("support 23.13 eur", NumericVerdict::Matches),
+            ("support 23.14 eur", NumericVerdict::Matches),
+            ("support 23.12 eur", NumericVerdict::Differs),
+        ] {
+            assert_eq!(numeric_checks(note, &half)[0].verdict, verdict, "{note}");
+        }
+        // And an exact binary half, either way.
+        let exact = json!({"daily_indicators": {"rsi14": 62.5}});
+        for (note, verdict) in [
+            ("rsi 62", NumericVerdict::Matches),
+            ("rsi 63", NumericVerdict::Matches),
+            ("rsi 61", NumericVerdict::Differs),
+        ] {
+            assert_eq!(numeric_checks(note, &exact)[0].verdict, verdict, "{note}");
+        }
     }
 
     /// A percentage of a value stored as a fraction is tested at the precision
@@ -2844,7 +2869,7 @@ mod tests {
         assert_eq!(
             numeric_checks("53% bull probability", &probs)[0].verdict,
             NumericVerdict::Matches,
-            "53.49 truncates to 53"
+            "53.49 rounds to 53"
         );
         assert_eq!(
             numeric_checks("55% bull probability", &probs)[0].verdict,
@@ -3227,9 +3252,9 @@ mod grammar_regressions {
     /// A threshold is compared at face value, so contradictory bounds cannot
     /// both hold.
     ///
-    /// Inclusive bounds borrowed equality's rounding and truncation
-    /// allowance, and 70 is a legitimate truncation of 70.9 -- so against a
-    /// stored 70.9 both "RSI <= 70" and "RSI > 70" were satisfied. A grader
+    /// Inclusive bounds borrowed equality's allowance, and 70 was then a
+    /// legitimate truncation of 70.9 -- so against a stored 70.9 both "RSI <=
+    /// 70" and "RSI > 70" were satisfied. A grader
     /// that accepts two mutually exclusive claims agrees with whatever it is
     /// shown, which is the failure this whole module exists to avoid.
     #[test]
@@ -3250,14 +3275,14 @@ mod grammar_regressions {
         );
 
         // Equality keeps the allowance: a note quoting a stored value short is
-        // truncating, not asserting a bound.
+        // rounding, not asserting a bound.
         assert_eq!(
             numeric_checks("RSI 70.9", &evidence)[0].verdict,
             NumericVerdict::Matches
         );
         let support = json!({"daily_indicators": {"support": {"nearest_support": 295.73302}}});
         assert_eq!(
-            numeric_checks("295 DKK support", &support)[0].verdict,
+            numeric_checks("296 DKK support", &support)[0].verdict,
             NumericVerdict::Matches
         );
     }

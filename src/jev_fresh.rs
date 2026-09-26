@@ -298,7 +298,11 @@ fn round_half_even(value: f64) -> f64 {
 /// either way at a half, or by truncating, at the precision written. A
 /// whole-number field needs the exact number.
 ///
-/// The key's own arithmetic, not a call into the checker it scores.
+/// The key's own arithmetic, not a call into the checker it scores. It keeps
+/// the convention in force when fresh-v1 was built, under `n15`: truncation
+/// accepted. The convention has since been settled as rounding alone (`n17`,
+/// 2026-09-26). A later version's key must follow that, and this one is left
+/// as it generated the recorded cases.
 pub(crate) fn producible(written: Written, stored: f64, discrete: bool) -> bool {
     if discrete {
         return written.decimals == 0 && (written.value - stored).abs() < 1e-9;
