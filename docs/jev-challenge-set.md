@@ -202,8 +202,12 @@ fewer figures writable.
 allowed 1e-9 of the scaled value, the fault the checker had until `n18`. From
 about nine decimals that exceeds half a unit, and review showed the key calling
 a ten-decimal truncation true. It now allows only the binary error, in its own
-code, and leaves a case it cannot settle at its recorded truth. These sets'
-truncation cases use at most three decimals, so none of their results changed.
+code. Since `n20` a case it cannot settle under the current convention is
+reported as `key_unresolved`, and counted as neither true nor false. Its
+recorded truth came from the old convention and does not stand in for the new
+one; it stays in the frozen file as history. These sets' truncation cases use
+at most three decimals, so none is unresolved and none of their results
+changed. A test asserts that.
 
 ## Regenerating
 

@@ -1,0 +1,68 @@
+{
+  "what_this_is": "n19 against n20, claim by claim, from recorded runs of committed code with clean trees (jev_provenance::census_of_every_claim).",
+  "change": "Past what a double resolves, n20 accepts only a figure that parses to the stored double itself. n19 also accepted neighbours within two epsilons, and matched '0.12345678907000104' for a stored 0.123456789070001.",
+  "development_dump": {
+    "dump_sha256": "2b45a89fe480252a127b0d2ed8d0a507465771744682c45720a25ee713fac9b4",
+    "n19": {
+      "commit": "35de87a",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "n20": {
+      "commit": "07cf157",
+      "method_version": "n20-2026-09-26",
+      "claims": 1476,
+      "by_verdict": {
+        "differs": 15,
+        "implausible_attribution": 6,
+        "matches": 1243,
+        "not_a_field_value": 14,
+        "not_in_evidence": 3,
+        "unattributed": 147,
+        "uncertain_attribution": 48
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "fresh_frame": {
+    "dump_sha256": "2495affe1a0e84ba4e9a4c0d416473b442985fa41695a57eada262c356c7bd56",
+    "n19": {
+      "commit": "35de87a",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "n20": {
+      "commit": "07cf157",
+      "method_version": "n20-2026-09-26",
+      "claims": 68,
+      "by_verdict": {
+        "differs": 2,
+        "implausible_attribution": 1,
+        "matches": 47,
+        "unattributed": 14,
+        "uncertain_attribution": 4
+      }
+    },
+    "claims_only_in_one": 0,
+    "changed": []
+  },
+  "long_figures_in_the_frames": "The four claims written to 16 or 17 decimals parse to their stored doubles exactly, and still match.",
+  "metadata_provenance": "Every finding over all 361 stored trades is identical to v2.",
+  "challenge_key": "A boundary_truncated case the key cannot settle under the current convention is now reported as key_unresolved, not counted under its old 'holds'. The frozen sets have none.",
+  "regression_tests": "jev_numeric::tests::rounding_either_way_at_a_half_is_the_only_convention fails on the n19 code (e29eaa5) at '0.12345678907000104' and passes at n20; jev_challenge::tests::a_case_the_key_cannot_settle_is_not_counted_as_true is new."
+}

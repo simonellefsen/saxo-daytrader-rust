@@ -1,6 +1,6 @@
 # The comparison grammar, and what it cannot read
 
-Method version **`n19-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
+Method version **`n20-2026-09-26`**, grading version **`v16`**. `n10-2026-09-22`
 was the evaluation baseline; the controls are keyed to it, and its v4 result
 stands as scored. The whole-note audit is keyed to `n12`.
 - `n11` widened the evidence.
@@ -15,8 +15,28 @@ stands as scored. The whole-note audit is keyed to `n12`.
 - `n18` holds the rounding allowance at a half to floating-point error.
 - `n19` decides rounding in whole units, and abstains past what a double
   resolves.
+- `n20` accepts, past that point, only the stored double itself.
 
 Each change is measured claim by claim against the version before it, below.
+
+## `n20`: the stored number itself means the same double
+
+Review reproduced that `n19` matched "0.12345678907000104" for a stored
+0.123456789070001. The two parse to different doubles. `n19`'s branch for "the
+stored number itself" allowed two epsilons, so a neighbour inside the
+uncertainty was confirmed as agreement. Now it requires the same double, and
+a neighbour is not compared.
+
+Measured in `jev-numeric-n20-changes.json`: **no claim changes** on either
+frame. The four 16- and 17-decimal figures in the stored notes parse to their
+stored doubles exactly. No metadata-provenance finding changes.
+
+**Where the fine-precision boundary now stands.** Wherever a double pins the
+scaled value to a twentieth of a unit, rounding is decided exactly. Beyond
+that, only an exact copy of the stored double matches, anything clearly
+further off differs, and the rest is not compared. That is a statement about
+this rule's arithmetic. No stored note writes a figure between 7 and 15
+decimals, so it has not been exercised on real notes there.
 
 ## `n19`: rounding decided in whole units
 
