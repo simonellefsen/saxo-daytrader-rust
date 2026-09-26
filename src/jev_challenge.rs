@@ -105,6 +105,9 @@ pub(crate) enum Outcome {
     /// The checker produced no check for the mutated figure at all, so the
     /// case measured nothing and is reported rather than quietly dropped.
     NotChecked,
+    /// The key cannot settle the case under the convention now in force, so
+    /// no verdict on it is right or wrong.
+    KeyUnresolved,
 }
 
 impl Outcome {
@@ -117,6 +120,7 @@ impl Outcome {
             Self::Abstained => "abstained",
             Self::WrongField => "wrong_field",
             Self::NotChecked => "not_checked",
+            Self::KeyUnresolved => "key_unresolved",
         }
     }
 }
@@ -139,7 +143,7 @@ fn rounds_to(stored: f64, written: f64, decimals: usize) -> Option<bool> {
         let written_units = (written * factor).round();
         return Some((scaled - written_units).abs() <= 0.5 + error);
     }
-    if (written - stored).abs() <= 2.0 * f64::EPSILON * written.abs().max(stored.abs()) {
+    if written == stored {
         Some(true)
     } else if (written - stored).abs() * factor > 0.5 + error {
         Some(false)
@@ -181,9 +185,15 @@ fn figure_written_at(note: &str, offset: usize) -> Option<(f64, usize)> {
 /// truth is re-read here, by the key's own arithmetic, and every other case
 /// keeps its recorded truth. Removing a convention can only make fewer
 /// figures writable, so no case keyed false can become true.
-pub(crate) fn truth_under_the_convention(case: &ChallengeCase) -> Truth {
+///
+/// `None` where the key cannot settle a re-read case under the current
+/// convention -- a figure written finer than a double resolves. The recorded
+/// truth came from the old convention and does not establish truth under the
+/// new one, so it is kept as history, and the case is reported as unresolved
+/// rather than counted as a true claim.
+pub(crate) fn truth_under_the_convention(case: &ChallengeCase) -> Option<Truth> {
     if case.mutation != "boundary_truncated" || case.truth != Truth::Holds {
-        return case.truth;
+        return Some(case.truth);
     }
     let stored = case
         .target_field
@@ -191,17 +201,20 @@ pub(crate) fn truth_under_the_convention(case: &ChallengeCase) -> Truth {
         .try_fold(&case.evidence, |cursor, segment| cursor.get(segment))
         .and_then(JsonValue::as_f64);
     match (stored, figure_written_at(&case.note, case.target_offset)) {
-        (Some(stored), Some((written, decimals)))
-            if rounds_to(stored, written, decimals) == Some(false) =>
-        {
-            Truth::Fails
-        }
-        _ => case.truth,
+        (Some(stored), Some((written, decimals))) => match rounds_to(stored, written, decimals) {
+            Some(true) => Some(Truth::Holds),
+            Some(false) => Some(Truth::Fails),
+            None => None,
+        },
+        _ => Some(case.truth),
     }
 }
 
 /// Scores one case against the checks the checker produced for it.
 pub(crate) fn outcome_for(case: &ChallengeCase, checks: &[NumericCheck]) -> Outcome {
+    let Some(truth) = truth_under_the_convention(case) else {
+        return Outcome::KeyUnresolved;
+    };
     let Some(check) = checks
         .iter()
         .find(|check| check.offset == case.target_offset)
@@ -214,7 +227,7 @@ pub(crate) fn outcome_for(case: &ChallengeCase, checks: &[NumericCheck]) -> Outc
     if check.field != Some(case.target_field.as_str()) {
         return Outcome::WrongField;
     }
-    match (truth_under_the_convention(case), check.verdict) {
+    match (truth, check.verdict) {
         (Truth::Holds, NumericVerdict::Matches) => Outcome::Agreed,
         (Truth::Holds, NumericVerdict::Differs) => Outcome::FalsePositive,
         (Truth::Fails, NumericVerdict::Differs) => Outcome::Agreed,
@@ -237,12 +250,15 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
     let mut totals: BTreeMap<&'static str, i64> = BTreeMap::new();
     let mut misses = Vec::new();
     let mut reread = Vec::new();
+    let mut unresolved = Vec::new();
     for case in cases {
         let checks = crate::jev_numeric::numeric_checks(&case.note, &case.evidence);
         let outcome = outcome_for(case, &checks);
         let truth = truth_under_the_convention(case);
-        if truth != case.truth {
-            reread.push(case.id.clone());
+        match truth {
+            Some(now) if now != case.truth => reread.push(case.id.clone()),
+            None => unresolved.push(case.id.clone()),
+            _ => {}
         }
         *by_family
             .entry(case.family.clone())
@@ -256,9 +272,10 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
             .or_default() += 1;
         *by_truth
             .entry(match truth {
-                Truth::Holds => "true_claims",
-                Truth::Fails => "false_claims",
-                Truth::Unsettleable => "unsettleable_claims",
+                Some(Truth::Holds) => "true_claims",
+                Some(Truth::Fails) => "false_claims",
+                Some(Truth::Unsettleable) => "unsettleable_claims",
+                None => "claims_the_key_cannot_settle",
             })
             .or_default()
             .entry(outcome.as_str())
@@ -329,6 +346,7 @@ pub(crate) fn score(cases: &[ChallengeCase]) -> JsonValue {
         "reread_under_the_convention": {
             "convention": "rounding, either way at a half; truncation not accepted since n17",
             "cases_now_false": reread,
+            "cases_the_key_cannot_settle": unresolved,
         },
         "reading": "`agreed` is the verdict the change makes correct. \
                     `false_negative` is a seeded falsehood recorded as agreement and is the \
@@ -355,19 +373,19 @@ mod tests {
         };
         assert_eq!(
             truth_under_the_convention(&at("markov +0.61 x", 0.6149)),
-            Truth::Holds
+            Some(Truth::Holds)
         );
         assert_eq!(
             truth_under_the_convention(&at("markov +0.61 x", 0.6189)),
-            Truth::Fails
+            Some(Truth::Fails)
         );
         assert_eq!(
             truth_under_the_convention(&at("markov -0.61 x", -0.6189)),
-            Truth::Fails
+            Some(Truth::Fails)
         );
         assert_eq!(
             truth_under_the_convention(&at("markov 0.61 x", 0.605)),
-            Truth::Holds
+            Some(Truth::Holds)
         );
         let other = ChallengeCase {
             mutation: "value_contradiction".to_string(),
@@ -375,17 +393,47 @@ mod tests {
         };
         assert_eq!(
             truth_under_the_convention(&other),
-            Truth::Holds,
+            Some(Truth::Holds),
             "only truncations are re-read"
         );
         // Review's case: a ten-decimal truncation the first key called true.
         assert_eq!(
             truth_under_the_convention(&at("markov 0.1234567890 x", 0.123456789071)),
-            Truth::Fails
+            Some(Truth::Fails)
         );
         assert_eq!(
             truth_under_the_convention(&at("markov 0.1234567891 x", 0.123456789071)),
-            Truth::Holds
+            Some(Truth::Holds)
+        );
+        // Finer than a double resolves: the key cannot settle it under the
+        // current convention, and the old label does not stand in for it.
+        assert_eq!(
+            truth_under_the_convention(&at("markov 0.1234567890700011 x", 0.123456789070001)),
+            None
+        );
+    }
+
+    /// A case the key cannot settle is reported as such, and counts as
+    /// neither a true claim nor a false one.
+    #[test]
+    fn a_case_the_key_cannot_settle_is_not_counted_as_true() {
+        let note = "markov signal 0.1234567890700011";
+        let unsettled = ChallengeCase {
+            mutation: "boundary_truncated".to_string(),
+            note: note.to_string(),
+            evidence: json!({"markov": {"signed_signal": 0.123456789070001}}),
+            target_field: "markov.signed_signal".to_string(),
+            target_offset: note.find('0').expect("a figure"),
+            ..case(Truth::Holds)
+        };
+        let report = score(&[unsettled]);
+        assert_eq!(report["totals"], json!({"key_unresolved": 1}));
+        assert!(report["by_truth"].get("true_claims").is_none());
+        assert_eq!(
+            report["reread_under_the_convention"]["cases_the_key_cannot_settle"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
         );
     }
 
@@ -1335,6 +1383,9 @@ mod frozen {
             // A verdict about some other field is not a decision about this
             // case, however it happens to read.
             assert_eq!(count("wrong_field"), 0, "{path}: {report:#}");
+            // Every re-read case settles: these sets truncate at three
+            // decimals at most.
+            assert_eq!(count("key_unresolved"), 0, "{path}: {report:#}");
             assert!(
                 count("abstained") <= *abstentions_at_freeze,
                 "{path}: abstentions rose from {abstentions_at_freeze} to {}: {report:#}",

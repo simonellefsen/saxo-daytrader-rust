@@ -85,7 +85,10 @@ use std::sync::LazyLock;
 /// and abstains where a figure is written finer than the stored double
 /// resolves. `n18` compared in value with a fixed slack, which at 15 decimals
 /// exceeded one unit.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n19-2026-09-26";
+///
+/// `n20` accepts, past what a double resolves, only the stored double itself.
+/// `n19` also accepted its neighbours within two epsilons.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n20-2026-09-26";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -2218,16 +2221,17 @@ const RESOLVABLE_UNITS: f64 = 0.05;
 /// no more: 23.135 is stored as 23.13499..., and "23.14" is its rounding.
 ///
 /// Past what a double resolves -- from about 15 decimals of a figure near 0.1
-/// -- the scaled value is not pinned to a unit. There a figure that is the
-/// stored number itself is accepted, one further off than any rounding plus
-/// that uncertainty is not, and anything between is `Unresolvable`, which the
-/// checker does not compare.
+/// -- the scaled value is not pinned to a unit. There a figure that parses to
+/// the stored double itself is accepted, one further off than any rounding
+/// plus that uncertainty is not, and anything between is `Unresolvable`, which
+/// the checker does not compare.
 ///
-/// Two versions got this wrong. `n17` allowed 1e-9 of the scaled value, which
-/// from about nine decimals exceeds half a unit and accepted truncation. `n18`
-/// compared in value with a fixed slack, which at 15 decimals exceeds one unit:
-/// it accepted both "0.123456789070000" and "0.123456789070002" for
-/// 0.123456789070001.
+/// Three versions got this wrong. `n17` allowed 1e-9 of the scaled value,
+/// which from about nine decimals exceeds half a unit and accepted
+/// truncation. `n18` compared in value with a fixed slack, which at 15
+/// decimals exceeds one unit: it accepted both "0.123456789070000" and
+/// "0.123456789070002" for 0.123456789070001. `n19` called a neighbouring
+/// double "the stored number itself": it matched "0.12345678907000104".
 pub(crate) fn rounding_of(written: f64, decimals: usize, actual: f64) -> Rounded {
     let scale = 10f64.powi(decimals.min(22) as i32);
     let scaled = actual * scale;
@@ -2242,7 +2246,9 @@ pub(crate) fn rounding_of(written: f64, decimals: usize, actual: f64) -> Rounded
             Rounded::No
         };
     }
-    if (written - actual).abs() <= 2.0 * f64::EPSILON * written.abs().max(actual.abs()) {
+    // The stored number itself means the same double, not a neighbour: two
+    // doubles apart is still inside the uncertainty, and that is not a match.
+    if written == actual {
         Rounded::Yes
     } else if (written - actual).abs() * scale > 0.5 + error {
         Rounded::No
@@ -2975,6 +2981,13 @@ mod tests {
             ),
             (
                 "markov signal 0.1234567890700011",
+                NumericVerdict::UncertainAttribution,
+                RELATION_BEYOND_PRECISION,
+            ),
+            // A different double, inside the uncertainty: not the stored
+            // number itself, so not a match. n19 matched it.
+            (
+                "markov signal 0.12345678907000104",
                 NumericVerdict::UncertainAttribution,
                 RELATION_BEYOND_PRECISION,
             ),
