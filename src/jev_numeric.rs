@@ -80,7 +80,12 @@ use std::sync::LazyLock;
 /// `n18` holds the rounding allowance at a decimal half to floating-point
 /// error. `n17`'s grew with the value, and accepted truncation again for a
 /// figure written to about nine decimals or more.
-pub(crate) const NUMERIC_METHOD_VERSION: &str = "n18-2026-09-26";
+///
+/// `n19` decides the rounding test in whole units of the last written place,
+/// and abstains where a figure is written finer than the stored double
+/// resolves. `n18` compared in value with a fixed slack, which at 15 decimals
+/// exceeded one unit.
+pub(crate) const NUMERIC_METHOD_VERSION: &str = "n19-2026-09-26";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericVerdict {
@@ -576,6 +581,10 @@ pub(crate) const RELATION_UNSUPPORTED: &str = "unsupported_construction";
 /// could be attributed to it. Distinct from `unsupported_construction`, where
 /// the field is known and the wording is what could not be read.
 pub(crate) const RELATION_NOT_READ: &str = "not_read";
+/// The figure is written finer than the stored double can resolve, and is
+/// neither the stored number itself nor clearly another, so nothing is
+/// compared.
+pub(crate) const RELATION_BEYOND_PRECISION: &str = "beyond_double_precision";
 
 fn words(text: &str) -> Vec<&str> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '\''))
@@ -2123,18 +2132,22 @@ fn check_one(
             offset,
         };
     }
-    let verdict = match relation {
-        RELATION_ABOVE if stored > written => NumericVerdict::Matches,
-        RELATION_BELOW if stored < written => NumericVerdict::Matches,
-        RELATION_AT_LEAST if stored >= written => NumericVerdict::Matches,
-        RELATION_AT_MOST if stored <= written => NumericVerdict::Matches,
+    let (relation, verdict) = match relation {
+        RELATION_ABOVE if stored > written => (relation, NumericVerdict::Matches),
+        RELATION_BELOW if stored < written => (relation, NumericVerdict::Matches),
+        RELATION_AT_LEAST if stored >= written => (relation, NumericVerdict::Matches),
+        RELATION_AT_MOST if stored <= written => (relation, NumericVerdict::Matches),
         RELATION_ABOVE | RELATION_BELOW | RELATION_AT_LEAST | RELATION_AT_MOST => {
-            NumericVerdict::Differs
+            (relation, NumericVerdict::Differs)
         }
-        _ if quoted_from(written, found.decimals, stored, field.discrete) => {
-            NumericVerdict::Matches
-        }
-        _ => NumericVerdict::Differs,
+        _ => match quoted_from(written, found.decimals, stored, field.discrete) {
+            Rounded::Yes => (relation, NumericVerdict::Matches),
+            Rounded::No => (relation, NumericVerdict::Differs),
+            Rounded::Unresolvable => (
+                RELATION_BEYOND_PRECISION,
+                NumericVerdict::UncertainAttribution,
+            ),
+        },
     };
     NumericCheck {
         quoted,
@@ -2167,31 +2180,81 @@ fn check_one(
 /// its rounding.
 ///
 /// A discrete field requires a whole number and exact equality.
-fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> bool {
+fn quoted_from(quoted: f64, decimals: usize, actual: f64, discrete: bool) -> Rounded {
     if discrete {
-        return quoted.fract().abs() < f64::EPSILON && (quoted - actual).abs() < 1e-9;
+        return if quoted.fract().abs() < f64::EPSILON && (quoted - actual).abs() < 1e-9 {
+            Rounded::Yes
+        } else {
+            Rounded::No
+        };
     }
-    written_by_rounding(quoted, decimals, actual)
+    rounding_of(quoted, decimals, actual)
 }
+
+/// How a written figure stands against a stored value under the rounding
+/// convention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Rounded {
+    /// The stored value rounded at the precision written.
+    Yes,
+    /// No rounding of the stored value at that precision produces it.
+    No,
+    /// Written finer than the stored double resolves, and neither the stored
+    /// number itself nor clearly another.
+    Unresolvable,
+}
+
+/// How finely a double must pin the scaled stored value, in units of the last
+/// written place, for the rounding test to be decided at that place.
+const RESOLVABLE_UNITS: f64 = 0.05;
 
 /// Whether `written`, at `decimals` places, is `actual` rounded: to the
 /// nearest value, either way at a half. The one rounding test every figure a
 /// report writes is held to -- here and in the completion audit's metadata
 /// provenance.
 ///
-/// "Either way at a half" allows for the binary error in a decimal half:
-/// 23.135 is stored as 23.13499..., and "23.14" is its rounding. That
-/// allowance is a few units of floating-point error on the scaled value, no
-/// more. `n17` allowed 1e-9 of it, which grows with the value: from about nine
-/// decimals on it exceeded half a unit, and truncation was accepted again.
-pub(crate) fn written_by_rounding(written: f64, decimals: usize, actual: f64) -> bool {
-    let scale = 10f64.powi(decimals.min(15) as i32);
+/// It is decided in whole units of the last written place, so nothing but
+/// floating-point error can blur it. "Either way at a half" is that error and
+/// no more: 23.135 is stored as 23.13499..., and "23.14" is its rounding.
+///
+/// Past what a double resolves -- from about 15 decimals of a figure near 0.1
+/// -- the scaled value is not pinned to a unit. There a figure that is the
+/// stored number itself is accepted, one further off than any rounding plus
+/// that uncertainty is not, and anything between is `Unresolvable`, which the
+/// checker does not compare.
+///
+/// Two versions got this wrong. `n17` allowed 1e-9 of the scaled value, which
+/// from about nine decimals exceeds half a unit and accepted truncation. `n18`
+/// compared in value with a fixed slack, which at 15 decimals exceeds one unit:
+/// it accepted both "0.123456789070000" and "0.123456789070002" for
+/// 0.123456789070001.
+pub(crate) fn rounding_of(written: f64, decimals: usize, actual: f64) -> Rounded {
+    let scale = 10f64.powi(decimals.min(22) as i32);
     let scaled = actual * scale;
-    let half = 0.5 + 8.0 * f64::EPSILON * scaled.abs().max(1.0);
-    let slack = written.abs().max(actual.abs()).max(1.0) * 8.0 * f64::EPSILON;
-    [scaled.floor(), scaled.ceil()].iter().any(|neighbour| {
-        (scaled - neighbour).abs() <= half && (written - neighbour / scale).abs() <= slack
-    })
+    // A bound on the binary error in `scaled`, in units of the last written
+    // place: the stored value's own representation, and the product.
+    let error = 4.0 * f64::EPSILON * scaled.abs().max(1.0);
+    if error <= RESOLVABLE_UNITS {
+        let written_units = (written * scale).round();
+        return if (scaled - written_units).abs() <= 0.5 + error {
+            Rounded::Yes
+        } else {
+            Rounded::No
+        };
+    }
+    if (written - actual).abs() <= 2.0 * f64::EPSILON * written.abs().max(actual.abs()) {
+        Rounded::Yes
+    } else if (written - actual).abs() * scale > 0.5 + error {
+        Rounded::No
+    } else {
+        Rounded::Unresolvable
+    }
+}
+
+/// Whether `written` is `actual` rounded at `decimals`, decided. Anything the
+/// double cannot resolve is not a match.
+pub(crate) fn written_by_rounding(written: f64, decimals: usize, actual: f64) -> bool {
+    rounding_of(written, decimals, actual) == Rounded::Yes
 }
 
 /// Whether a figure is even in the right range to be this field.
@@ -2871,6 +2934,64 @@ mod tests {
         ] {
             assert_eq!(numeric_checks(note, &long)[0].verdict, verdict, "{note}");
         }
+        // At the edge of a double. n18 matched both of review's unequal
+        // 15-decimal figures. A double pins 0.123456789070001 at 15 decimals
+        // to about a tenth of a unit, so a figure a whole unit off is not its
+        // rounding: both differ. The stored number itself matches, and so
+        // does a legitimate rounding one place coarser. Only a figure inside
+        // the double's own uncertainty -- here at 16 decimals -- is left
+        // uncompared.
+        let fine = json!({"markov": {"signed_signal": 0.123456789070001}});
+        for (note, verdict, relation) in [
+            (
+                "markov signal 0.123456789070001",
+                NumericVerdict::Matches,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.12345678907000",
+                NumericVerdict::Matches,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.123456789070000",
+                NumericVerdict::Differs,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.123456789070002",
+                NumericVerdict::Differs,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.1234567890700000",
+                NumericVerdict::Differs,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.123456789071000",
+                NumericVerdict::Differs,
+                RELATION_EQUALS,
+            ),
+            (
+                "markov signal 0.1234567890700011",
+                NumericVerdict::UncertainAttribution,
+                RELATION_BEYOND_PRECISION,
+            ),
+        ] {
+            let check = &numeric_checks(note, &fine)[0];
+            assert_eq!(
+                (check.verdict, check.relation),
+                (verdict, relation),
+                "{note}"
+            );
+        }
+        // A full-precision copy is the stored number.
+        let copy = json!({"markov": {"signed_signal": 0.40256834030151367}});
+        assert_eq!(
+            numeric_checks("markov signal 0.40256834030151367", &copy)[0].verdict,
+            NumericVerdict::Matches
+        );
         // And an exact binary half, either way.
         let exact = json!({"daily_indicators": {"rsi14": 62.5}});
         for (note, verdict) in [

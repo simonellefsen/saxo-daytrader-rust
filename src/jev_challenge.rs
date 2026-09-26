@@ -122,16 +122,30 @@ impl Outcome {
 }
 
 /// Whether `written`, at `decimals`, is the stored value rounded -- either
-/// way at a half, allowing for a decimal half stored just short in binary.
+/// way at a half, allowing only for the binary error in the scaled value.
+/// `None` where a double cannot settle it at that precision.
 ///
-/// The key's own arithmetic, deliberately not the checker's: it asks how far
-/// the whole number the written figure stands for lies from the scaled stored
-/// value, where the checker asks which neighbours of the scaled value match.
-fn rounds_to(stored: f64, written: f64, decimals: usize) -> bool {
-    let factor = 10f64.powi(decimals as i32);
+/// The key's own arithmetic, deliberately not a call into the checker. Its
+/// first version allowed 1e-9 of the scaled value, the fault the checker had
+/// until `n18`: from about nine decimals that exceeds half a unit, and review
+/// showed the key then calling "0.1234567890" for 0.123456789071 true. The
+/// frozen sets' truncation cases use at most three decimals, so none was
+/// affected.
+fn rounds_to(stored: f64, written: f64, decimals: usize) -> Option<bool> {
+    let factor = 10f64.powi(decimals.min(22) as i32);
     let scaled = stored * factor;
-    let written_units = (written * factor).round();
-    (scaled - written_units).abs() <= 0.5 + 1e-9 * scaled.abs().max(1.0)
+    let error = 4.0 * f64::EPSILON * scaled.abs().max(1.0);
+    if error <= 0.05 {
+        let written_units = (written * factor).round();
+        return Some((scaled - written_units).abs() <= 0.5 + error);
+    }
+    if (written - stored).abs() <= 2.0 * f64::EPSILON * written.abs().max(stored.abs()) {
+        Some(true)
+    } else if (written - stored).abs() * factor > 0.5 + error {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// The figure a case targets, as written: its value and its decimals.
@@ -177,7 +191,9 @@ pub(crate) fn truth_under_the_convention(case: &ChallengeCase) -> Truth {
         .try_fold(&case.evidence, |cursor, segment| cursor.get(segment))
         .and_then(JsonValue::as_f64);
     match (stored, figure_written_at(&case.note, case.target_offset)) {
-        (Some(stored), Some((written, decimals))) if !rounds_to(stored, written, decimals) => {
+        (Some(stored), Some((written, decimals)))
+            if rounds_to(stored, written, decimals) == Some(false) =>
+        {
             Truth::Fails
         }
         _ => case.truth,
@@ -361,6 +377,15 @@ mod tests {
             truth_under_the_convention(&other),
             Truth::Holds,
             "only truncations are re-read"
+        );
+        // Review's case: a ten-decimal truncation the first key called true.
+        assert_eq!(
+            truth_under_the_convention(&at("markov 0.1234567890 x", 0.123456789071)),
+            Truth::Fails
+        );
+        assert_eq!(
+            truth_under_the_convention(&at("markov 0.1234567891 x", 0.123456789071)),
+            Truth::Holds
         );
     }
 
