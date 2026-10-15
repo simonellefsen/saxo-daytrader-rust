@@ -3099,3 +3099,10 @@ broker mutation was added.
 - Applied the new rollover policy to the one model-backed baseline. Two `v16` runs of `wording-v1-2026-09-22` went through `~typesafe/jev-latest`, which resolved to `typesafe/jev-1.14-20261014`. Same case set and question fingerprints as the 1.13 runs; USD 0.0294 each.
 - Category flips: 29 detected of 30 in both runs, with the remaining case unanswered (neither a miss nor a detection). 1.13 managed 27 to 28. Invented evidence: 7 against 8 to 9, within what two runs can resolve. Variance: 3 of 85 verdicts, unchanged. The 009 family moved again.
 - Results files and the dated section are in [the raw doc](/Users/lindau/codex/rust_daytrader/docs/jev-wording-measurement.md). The [source note](sources/jev-wording-measurement.md) is updated. It remains a development baseline, not an evaluation.
+
+## [2026-10-15] Hermes | A stale experiment rejected, and proposals checked against the running config
+
+- `strategy-experiment-1789762547119303`, pending since 2026-09-18, proposed raising `strategy.swing.markov_gate.min_signed_signal` from 0.15 to 0.20. The gate had run at 0.20 since 2026-08-31 (`0bb74e9`, recalibrated for hourly bars), in both shipped configs and the live ConfigMap. Every Trading Manager run from 2026-09-01 recorded 0.20, so the 0.15 was the pre-recalibration value. A paper/SIM run would have compared 0.20 with 0.20.
+- Rejected at Simon's request, with the reason in its approval notes. Done through the transition endpoint, with actor `operator`.
+- The server had stored Hermes's `old_value` verbatim. Since `bd02ef9`, both proposal paths (the MCP tool and `POST /api/hermes/experiments`) refuse a proposal that does not start from the running value (`stale_starting_point`), proposes the value already running (`no_change`), or names a path with no single setting (`unknown_variable`). Each refusal carries the running value. Released and smoke-tested; CI green.
+- Still true, per [todo T3](todo.md): this threshold binds mainly through Hermes's advice, because the deterministic gate only reads it after the technical gate rejects a BUY.
