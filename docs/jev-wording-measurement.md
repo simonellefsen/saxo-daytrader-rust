@@ -169,6 +169,52 @@ Five things the first version of this document got wrong or overstated.
 
 No trading parameter depends on any of this.
 
+## Re-measured on `jev-1.14`, 2026-10-15
+
+On 2026-10-15 the floating alias `~typesafe/jev-latest` moved from
+`typesafe/jev-1.13-20260917` to `typesafe/jev-1.14-20261014`. Jev always runs
+the latest version by operator decision, so the baseline above describes 1.13.
+Two `v16` runs were made on 1.14, for like-for-like with B and C:
+
+| run | results | source |
+|---|---|---|
+| D | `…results-v16-20261015T185828157Z.json` | `19646fe`, clean tree |
+| E | `…results-v16-20261015T185902055Z.json` | `19646fe`; dirty only because D's results file was untracked, with an empty diff (`…run-v16-20261015T185902055Z.patch`) |
+
+Both runs used the same case set (`a297026f…`) and the same question
+fingerprints as C, resolved to `typesafe/jev-1.14-20261014`, and were billed
+USD 0.0294 each.
+
+| arm | cases | B (1.13) | C (1.13) | D (1.14) | E (1.14) |
+|---|---|---|---|---|---|
+| `category_flip` | 30 | 28 detected | 27 | **29, 1 unanswered** | **29, 1 unanswered** |
+| `stripped` | 12 | 12 | 12 | 12 | 12 |
+| `repeat` | 12 | 12 held | 11 held, 1 moved | 12 held | 11 held, 1 moved |
+| `paraphrase` | 7 | 7 held | 7 held | 7 held | 6 held, 1 moved |
+| `invented_evidence` | 12 | 8, 4 inconclusive | 9, 3 | 7, 5 | 7, 5 |
+| `control` | 12 | 12 `fair` | 12 `fair` | 12 `fair` | 11 `fair`, 1 `overstated` |
+
+- **Every flip 1.14 answered, it detected, in both runs.**
+  - The two flips 1.13 missed at least once (`-020`, `-021`) were caught
+    both times.
+  - The one 1.13 called `fair` in both runs (`-015`) came back unanswered in
+    both. That is neither a miss nor a detection.
+  - So the honest headline on 1.14 is **29 of 29 answered, 29 of 30 in all**.
+    On 1.13 it was 27 to 28 of 30.
+- **Invented evidence crossed for 7 cases in each 1.14 run, against 8 and 9
+  on 1.13.** Twelve cases and two runs a side cannot separate that from run
+  variance.
+- **Run-to-run variance is unchanged:** D and E differ in 3 of 85 verdicts,
+  as B and C did.
+- **The movers are the 009 family again.** `control-009` came back
+  `overstated` in E, and `repeat-009` and `paraphrase-009` moved. That is the
+  family that varied within a version on 1.13, so it is still consistent with
+  ordinary variation, not established as such.
+
+The limits above still apply. This is the development set that motivated
+`v16`, so it is a baseline, not an evaluation. Two runs give a range. There is
+still no `overstated` arm.
+
 ## Re-running
 
 ```

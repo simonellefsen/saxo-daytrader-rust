@@ -80,14 +80,23 @@ The deployed config uses the floating alias `~typesafe/jev-latest`, and
   2026-10-14 18:21Z.
 - **`typesafe/jev-1.14-20261014`** answers from 2026-10-15 08:55Z.
 
-These figures are 1.13's, and they do not carry over to 1.14. The
+The figures in the tables above are 1.13's. **Re-measured on 1.14 the
+same day**, two runs on the same cases and question text:
+- every flip 1.14 answered it detected, 29 of 30 in all, against 27 to 28 on
+  1.13; the remaining case came back unanswered in both runs;
+- invented evidence crossed for 7, against 8 to 9, which two runs on twelve
+  cases cannot separate from variance;
+- run-to-run variance stayed at 3 of 85 verdicts;
+- the movers were again the 009 family.
+
+The raw doc has the full table. The
 deterministic numeric checker does not call the model, so its evaluations are
 unaffected.
 
 **Policy since 2026-10-15:** Jev always runs the latest version. That makes
 every rollover a dated measurement epoch: judgements keep the version that
-made them, nothing is regraded, and this baseline describes 1.13 until it is
-re-measured on the version now answering. It is stated as
+made them, nothing is regraded, and the baseline has now been re-measured on
+1.14, as above. It is stated as
 `jev::ALIAS_ROLLOVER_POLICY` and in the
 [adoption review](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md)
 under item A.5. Rollovers are announced once in Slack and shown on the AI

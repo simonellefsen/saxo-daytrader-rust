@@ -3093,3 +3093,9 @@ broker mutation was added.
   - model-backed baselines are re-measured on the new version.
 - Where it shows: `/api/ai/jev` carries `models`, the AI Prompts view has a Jev Model card, and a once-per-version Slack alert announces each new version. Partial-answer handling was already defined in code and is recorded beside the item.
 - The roadmap's Jev line was stale ("observation still disabled") and is corrected: observation has run since 2026-09-20. The wording-measurement note now states the policy.
+
+## [2026-10-15] Jev | Wording baseline re-measured on jev-1.14
+
+- Applied the new rollover policy to the one model-backed baseline. Two `v16` runs of `wording-v1-2026-09-22` went through `~typesafe/jev-latest`, which resolved to `typesafe/jev-1.14-20261014`. Same case set and question fingerprints as the 1.13 runs; USD 0.0294 each.
+- Category flips: 29 detected of 30 in both runs, with the remaining case unanswered (neither a miss nor a detection). 1.13 managed 27 to 28. Invented evidence: 7 against 8 to 9, within what two runs can resolve. Variance: 3 of 85 verdicts, unchanged. The 009 family moved again.
+- Results files and the dated section are in [the raw doc](/Users/lindau/codex/rust_daytrader/docs/jev-wording-measurement.md). The [source note](sources/jev-wording-measurement.md) is updated. It remains a development baseline, not an evaluation.
