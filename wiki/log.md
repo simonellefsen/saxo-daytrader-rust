@@ -3062,3 +3062,8 @@ broker mutation was added.
 
 - Investigated the 04:56Z SIM refresh-token 401 from non-secret session metadata, `scheduler_cycle_history` and ReplicaSet times. Filed [Saxo refresh-token rotation across pods](decisions/2026-09-26-saxo-refresh-token-rotation-across-pods.md): the failing refresh waited 5.9 s on another process's lease (every successful one took <=449 ms); PID 1 ignored SIGTERM on every release; no refresh was due while pods were being killed that morning; the lease holder cannot be identified because the old code overwrote the durable row on refusal.
 - Fixed and covered by tests: refresh input is the durable row read under the lease, refusals are compare-and-set, stale working copies no longer outrank newer rows, rotations are durable before the lease is released, and all three modes drain rotation on SIGTERM. No token values were read or recorded.
+
+## [2026-10-15] Jev measurement | Fresh-v2 results filed
+
+- Added [sources/jev-fresh-evaluation-v2](sources/jev-fresh-evaluation-v2.md), summarising [the evaluation doc](/Users/lindau/codex/rust_daytrader/docs/jev-fresh-evaluation-v2.md), its results and its reconciliation. It covers 36 reports and 143 notes under `n20`. There was no false alarm, and the checker's 250 decisions all agree with the labels. It flagged 2 of 7 natural errors; the other five are bare price levels it leaves unattributed by design. All 43 field disagreements, and every wrong seeded outcome, are one signed-conviction reading.
+- Added [todo T4](todo.md) for that reading, which is the operator's call, and indexed the source note. The raw docs are unchanged. This is the first Jev evaluation filed in the wiki; fresh-v1 and the earlier instruments are referenced only through the docs.

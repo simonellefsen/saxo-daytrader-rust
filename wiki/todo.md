@@ -137,3 +137,24 @@ Three coherent answers, and they are not equivalent:
 - [urgent-todo](urgent-todo.md) — verified enforcement gaps
 - [roadmap](roadmap.md) — long-horizon map, including the `portfolio_position_snapshots` schema proposal
 - [log](log.md) — dated record of what landed
+
+## T4 — Decide how the numeric checker reads a signed "conviction" figure
+
+**Status:** open, raised 2026-10-15. This is the operator's call, not something the checker's author should settle.
+
+**The two readings disagree.** The 2026-09-26 adjudication made a labelling convention: a figure written with a sign beside "conviction" states `markov.signed_signal`. The numeric checker, `n20`, keeps its own rule and reads such a figure as `markov.conviction`, the magnitude.
+
+**What [fresh-v2](sources/jev-fresh-evaluation-v2.md) shows.**
+- **Natural notes:** 43 claims were read differently, and none changed a verdict. All 43 are positive, and for a positive signal the two fields hold the same number.
+- **Seeded cases:** the reading decides outcomes once the fields separate. Every wrong or wrong-field seeded outcome is one of these anchors:
+  - 43 sign flips accepted;
+  - 180 flags on another field;
+  - in single-field corruption, 86 errors accepted and 43 false alarms.
+
+That split was chosen after scoring. It locates the disagreement and validates nothing.
+
+**The choice:**
+- **Keep `n20`'s rule.** A note that writes a negative conviction for a long signal is not caught.
+- **Adopt the convention as `n21`.** The checker then reads the sign, but fresh-v2 cannot validate `n21`, because its notes would have shaped the change. A third fresh evaluation would be needed.
+
+Either way, record the decision beside the adjudication rather than over it.

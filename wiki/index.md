@@ -3,7 +3,7 @@ type: wiki-index
 tags:
   - daytrader/wiki
   - maintained-by-llm
-updated: 2026-08-31
+updated: 2026-10-15
 ---
 
 # Daytrader Knowledge Wiki
@@ -29,6 +29,7 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [sources/llm-wiki](sources/llm-wiki.md) - Source-note summary for the LLM Wiki pattern.
 - [sources/markov-hedge-fund-method](sources/markov-hedge-fund-method.md) - Source-note summary for the Markov regime method.
 - [sources/app-economy-insights](sources/app-economy-insights.md) - Public editorial-research source boundary and proposed advisory ingestion shape.
+- [sources/jev-fresh-evaluation-v2](sources/jev-fresh-evaluation-v2.md) - Second held-out evaluation of the Jev numeric checker (`n20`), scored once and reconciled on 2026-10-15. 36 reports and 143 notes: no false alarm, 2 of 7 natural errors flagged, five bare price levels left uncompared by design, and one disputed signed-conviction reading behind every wrong seeded outcome.
 
 ## Concepts
 
