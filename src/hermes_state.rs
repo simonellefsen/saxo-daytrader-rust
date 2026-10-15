@@ -867,6 +867,111 @@ pub(crate) fn normalize_hermes_experiment_variable_path(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+/// Why a proposal does not start from the running configuration, if it does not.
+///
+/// An experiment moves one variable away from its running value. A proposal
+/// that misstates that value, or proposes the value already running, has no
+/// treatment to test. Promoting it would write a baseline record of a change
+/// no evidence produced. `strategy-experiment-1789762547119303` did both: it
+/// proposed 0.15 -> 0.20 for a gate that had run at 0.20 for eighteen days.
+/// The refusal carries the running value, so the proposer can correct
+/// itself in the same run.
+pub(crate) fn hermes_experiment_starting_point_problem(
+    config: &serde_yaml::Value,
+    changed_variable_path: &str,
+    old_value: &JsonValue,
+    new_value: &JsonValue,
+) -> Option<JsonValue> {
+    let path = normalize_hermes_experiment_variable_path(changed_variable_path);
+    let keys: Vec<&str> = path.split('.').collect();
+    let running = crate::config::yaml_at(config, &keys).and_then(Setting::from_yaml);
+    let Some(running) = running else {
+        return Some(json!({
+            "status": "unknown_variable",
+            "detail": "The running configuration holds no single value at this path, so the proposal's starting point cannot be checked. Propose a supported variable, from its running value.",
+            "changed_variable_path": path,
+        }));
+    };
+    if Setting::from_json(old_value).as_ref() != Some(&running) {
+        return Some(json!({
+            "status": "stale_starting_point",
+            "detail": "old_value is not the value this variable runs at. Propose from the running value, or record the idea in reflection proposed_actions if it no longer applies.",
+            "changed_variable_path": path,
+            "old_value": old_value,
+            "running_value": running.to_json(),
+        }));
+    }
+    if Setting::from_json(new_value).as_ref() == Some(&running) {
+        return Some(json!({
+            "status": "no_change",
+            "detail": "new_value is already the running value, so there is nothing to test.",
+            "changed_variable_path": path,
+            "running_value": running.to_json(),
+        }));
+    }
+    None
+}
+
+/// One configuration setting, compared as the runtime reads it: `0.2`, `0.20`
+/// and `"0.20"` are the same number.
+#[derive(Clone, Debug)]
+enum Setting {
+    Number(f64),
+    Flag(bool),
+    Text(String),
+}
+
+impl Setting {
+    fn from_text(text: &str) -> Self {
+        let text = text.trim();
+        match text.parse::<f64>() {
+            Ok(number) if number.is_finite() => Self::Number(number),
+            _ => Self::Text(text.to_string()),
+        }
+    }
+
+    fn from_yaml(value: &serde_yaml::Value) -> Option<Self> {
+        match value {
+            serde_yaml::Value::Number(number) => number.as_f64().map(Self::Number),
+            serde_yaml::Value::Bool(flag) => Some(Self::Flag(*flag)),
+            serde_yaml::Value::String(text) => Some(Self::from_text(text)),
+            _ => None,
+        }
+    }
+
+    fn from_json(value: &JsonValue) -> Option<Self> {
+        match value {
+            JsonValue::Number(number) => number.as_f64().map(Self::Number),
+            JsonValue::Bool(flag) => Some(Self::Flag(*flag)),
+            JsonValue::String(text) => Some(Self::from_text(text)),
+            _ => None,
+        }
+    }
+
+    fn to_json(&self) -> JsonValue {
+        match self {
+            Self::Number(number) => json!(number),
+            Self::Flag(flag) => json!(flag),
+            Self::Text(text) => json!(text),
+        }
+    }
+}
+
+impl PartialEq for Setting {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Only the binary representation's error is forgiven, so a real
+            // difference in the last written decimal still counts.
+            (Self::Number(left), Self::Number(right)) => {
+                (left - right).abs() <= 1e-9 * left.abs().max(right.abs()).max(1.0)
+            }
+            (Self::Flag(left), Self::Flag(right)) => left == right,
+            (Self::Text(left), Self::Text(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
 pub(crate) fn hermes_experiment_review_family(value: &str) -> Option<&'static str> {
     let normalized = normalize_hermes_experiment_variable_path(value);
     HERMES_EXPERIMENT_REVIEW_FAMILIES
@@ -1175,5 +1280,84 @@ mod tests {
                 )
             },
         );
+    }
+
+    fn gate_config() -> serde_yaml::Value {
+        serde_yaml::from_str(
+            "strategy:\n  swing:\n    markov_gate:\n      min_signed_signal: 0.20\n",
+        )
+        .expect("config")
+    }
+
+    /// The 2026-09-18 proposal: 0.15 -> 0.20 for a gate already at 0.20.
+    #[test]
+    fn a_proposal_from_a_stale_value_is_refused_with_the_running_value() {
+        let path = "strategy.swing.markov_gate.min_signed_signal";
+        let problem = hermes_experiment_starting_point_problem(
+            &gate_config(),
+            path,
+            &json!("0.15"),
+            &json!("0.20"),
+        )
+        .expect("refused");
+        assert_eq!(problem["status"], "stale_starting_point");
+        assert_eq!(problem["running_value"], 0.2);
+    }
+
+    #[test]
+    fn a_proposal_of_the_running_value_is_refused_as_no_change() {
+        let path = "strategy.swing.markov_gate.min_signed_signal";
+        let problem = hermes_experiment_starting_point_problem(
+            &gate_config(),
+            path,
+            &json!(0.2),
+            &json!("0.20"),
+        )
+        .expect("refused");
+        assert_eq!(problem["status"], "no_change");
+    }
+
+    #[test]
+    fn a_proposal_from_the_running_value_is_accepted_in_either_form() {
+        let path = " Strategy.Swing.Markov_Gate.Min_Signed_Signal ";
+        for old in [json!(0.2), json!("0.20"), json!("0.2")] {
+            assert!(
+                hermes_experiment_starting_point_problem(&gate_config(), path, &old, &json!(0.25))
+                    .is_none(),
+                "{old}"
+            );
+        }
+        let problem = hermes_experiment_starting_point_problem(
+            &gate_config(),
+            "strategy.swing.no_such_key",
+            &json!(1),
+            &json!(2),
+        )
+        .expect("refused");
+        assert_eq!(problem["status"], "unknown_variable");
+    }
+
+    /// Every variable Hermes may propose has a value in both shipped configs,
+    /// so the check can never refuse a supported variable as unknown.
+    #[test]
+    fn every_supported_experiment_variable_has_a_running_value() {
+        for file in ["config.yaml", "deploy/k8s/base/config.k8s.yaml"] {
+            let config: serde_yaml::Value =
+                serde_yaml::from_str(&std::fs::read_to_string(file).expect("config"))
+                    .expect("yaml");
+            for path in crate::state::SUPPORTED_EXPERIMENT_VARIABLES {
+                let problem = hermes_experiment_starting_point_problem(
+                    &config,
+                    path,
+                    &json!(null),
+                    &json!(null),
+                );
+                assert_ne!(
+                    problem.as_ref().map(|value| value["status"].clone()),
+                    Some(json!("unknown_variable")),
+                    "{file}: {path}"
+                );
+            }
+        }
     }
 }

@@ -268,6 +268,14 @@ async fn call_tool(state: Arc<AppState>, params: JsonValue) -> Result<JsonValue>
                     "review_context": review_context,
                 })));
             }
+            if let Some(problem) = crate::hermes_state::hermes_experiment_starting_point_problem(
+                &state.config,
+                &request.changed_variable_path,
+                &request.old_value,
+                &request.new_value,
+            ) {
+                return Ok(tool_error_value(problem));
+            }
             json!({
                 "experiment": state.record_hermes_experiment(&request).await?,
                 "review_context": review_context,

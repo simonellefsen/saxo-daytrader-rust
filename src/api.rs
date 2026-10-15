@@ -2322,6 +2322,18 @@ async fn create_hermes_experiment(
         )
             .into_response();
     }
+    if let Some(problem) = crate::hermes_state::hermes_experiment_starting_point_problem(
+        &state.config,
+        &request.changed_variable_path,
+        &request.old_value,
+        &request.new_value,
+    ) {
+        warn!(
+            changed_variable_path = %request.changed_variable_path,
+            "Hermes experiment proposal refused: it does not start from the running value"
+        );
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(problem)).into_response();
+    }
     match state.record_hermes_experiment(&request).await {
         Ok(mut value) => {
             if let Some(object) = value.as_object_mut() {
