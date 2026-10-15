@@ -1,0 +1,65 @@
+{
+  "instrument_version": "fresh-v2-2026-09-26",
+  "scoring_protocol": "fresh-protocol-v2-2026-09-26-r3",
+  "source_commit": "170794517d02b1acd991ee9f2a1ee1fa98622cfd",
+  "instrument_sha256": "4e9607ae3c7c7941f4ffc34cfeb717e40be3fd898a5d2b3f469b374c77ab0825",
+  "review_setup_recorded_at": "2026-10-15T17:34:31Z",
+  "reviewer": "Fresh-context Claude AI subagent (claude-opus-5-5), launched as a background agent",
+  "conversation_history_forwarded": false,
+  "isolation": "The labeller worked in a scratch directory outside the repository holding only a copy of the instrument and the empty labels template. The instrument copy's SHA-256 was unchanged after delivery.",
+  "delivery": {
+    "labelled_at": "2026-10-15T17:45:57Z",
+    "labels_sha256": "608de4382d4fb8767bb8456e0999644304f81fd73978aa783aaf8c130692b022",
+    "labeller_notes_sha256": "c60d2df555777e62e417593026364472d94f70bd1de53b524de8a83c88a4f228",
+    "notes_labelled": 143,
+    "claims_extracted": 319,
+    "verdicts": {
+      "cannot_tell": 41,
+      "consistent": 271,
+      "inconsistent": 7
+    },
+    "zero_claim_notes": 1,
+    "structural_validation_recorded_at": "2026-10-15T17:47:31Z",
+    "structural_checks_passed": [
+      "Instrument copy returned with its SHA-256 unchanged",
+      "Labels and labeller notes copied into docs/ byte for byte",
+      "Version unchanged; all 143 case ids exactly once, in the original order, all labelled",
+      "Every claim has quote, figure, field and verdict; verdicts are consistent, inconsistent or cannot_tell",
+      "label_problems finds nothing: every quote occurs once in its note, every figure stands alone once in its quote, no figure span is claimed twice, every non-none field is a number in that case's evidence",
+      "Non-empty labelled_by and a UTC labelled_at"
+    ],
+    "how_structure_was_checked": "The repository test the_labels_are_not_filled_in_by_the_author, which asserts the labels are not rejected. It computes the natural score internally but asserts only that status; no score was viewed.",
+    "substantive_labels_modified_by_parent": false,
+    "fresh_key_opened_during_labelling": false,
+    "seeded_cases_generated_during_labelling": false,
+    "fresh_scorer_run_during_labelling": false,
+    "reviewer_reported_no_prohibited_inputs_consulted": true,
+    "independence_scope": "Fresh conversation context and restricted substantive inputs; one AI reviewer, not human ground truth."
+  },
+  "substantive_input": "docs/jev-fresh-v2.json, including its embedded rubric and conventions",
+  "other_permitted_inputs": [
+    "docs/jev-fresh-v2-labels.json (empty output template)"
+  ],
+  "prohibited_review_inputs": [
+    "Answer keys and checker or scorer source and tests",
+    "Prior labels, controls, adjudications and evaluation findings",
+    "Other project documents, repository history, wiki and memory",
+    "Parent task history or other agents' discussions",
+    "External sources, network access and provider calls",
+    "Delegation to other agents"
+  ],
+  "procedure": [
+    "Read the rubric, conventions and scope, then all 143 whole notes and their supplied evidence, in order.",
+    "Manually identify every in-scope numeric claim, one claim per figure; code only displayed cases, serialized the hand-made labels and checked structure.",
+    "Record judgement calls, every inconsistent and cannot_tell claim, the zero-claim note and out-of-scope exclusions in the labeller notes.",
+    "Parent validates structure without revising substantive judgements.",
+    "Commit the delivered labels and notes before seed generation or scoring."
+  ],
+  "limitations": [
+    "Single AI review, not human ground truth or measured inter-rater agreement.",
+    "Blinding uses fresh context and input instructions, not operating-system access restrictions.",
+    "The session harness placed the project's standing instructions (AGENTS.md) and the parent's memory index into the labeller's starting context on its own. The labeller reports it neither opened nor used them. The memory index holds one-line summaries of earlier Jev evaluations and the fact that this frame was built; it holds no labels, keys or note text.",
+    "The parent built this instrument and has seen the checker and prior findings; none were forwarded to the labeller.",
+    "Structural validation does not establish claim-extraction completeness or judgement accuracy."
+  ]
+}
