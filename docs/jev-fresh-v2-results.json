@@ -1,0 +1,460 @@
+{
+  "checker_source_sha256": "7816fd23fee51c7e7ddd103a3ed28f1ee92da25f462ab747191d484eac27893b",
+  "fingerprints": {
+    "instrument_sha256": "4e9607ae3c7c7941f4ffc34cfeb717e40be3fd898a5d2b3f469b374c77ab0825",
+    "key_sha256": "1da849fca48944c5cbf06baf243fbee12b564b1c9c8a35ad70c1ff3a503036e1",
+    "labels_sha256": "608de4382d4fb8767bb8456e0999644304f81fd73978aa783aaf8c130692b022",
+    "manifest_sha256": "e07c570b4d939706b4bf478fd141e3ac7e148a92d6576673ae50f8a90b6658b2",
+    "seeded_sha256": "514563edfd929b3b1d09f01317b3c5057bfd224c2fe2819c900a8e0261ae96e8"
+  },
+  "labelled_at": "2026-10-15T17:45:57Z",
+  "labelled_by": "Fresh-context Claude AI subagent (claude-opus-5-5), blind fresh-v2 labeller",
+  "method_version": "n20-2026-09-26",
+  "natural": {
+    "claims_by_stratum": {
+      "never_reached": {
+        "abstained|cannot_tell": 25,
+        "abstained|consistent": 7,
+        "abstained|inconsistent": 2,
+        "accepted|consistent": 41
+      },
+      "reached_with_figures": {
+        "abstained|cannot_tell": 16,
+        "abstained|consistent": 15,
+        "abstained|inconsistent": 3,
+        "accepted|consistent": 207,
+        "flagged|inconsistent": 2,
+        "omitted|consistent": 1
+      }
+    },
+    "decided_against_another_field": {
+      "accepted|consistent": 43
+    },
+    "extracted_figures_no_claim_covers": {
+      "unattributed": 35,
+      "uncertain_attribution": 3
+    },
+    "headline": {
+      "every_note": {
+        "claims": {
+          "consistent_flagged": [
+            0,
+            248
+          ],
+          "inconsistent_accepted": [
+            0,
+            2
+          ],
+          "inconsistent_flagged": [
+            2,
+            7
+          ]
+        },
+        "notes": {
+          "accepted_error": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 143
+          },
+          "false_alarm": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 143
+          },
+          "omission": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 143
+          },
+          "unflagged_error": {
+            "notes": [
+              5,
+              32
+            ],
+            "of": 143
+          },
+          "wrong_field": {
+            "notes": [
+              43,
+              43
+            ],
+            "of": 143
+          }
+        }
+      },
+      "notes_the_checker_read": {
+        "claims": {
+          "consistent_flagged": [
+            0,
+            207
+          ],
+          "inconsistent_accepted": [
+            0,
+            2
+          ],
+          "inconsistent_flagged": [
+            2,
+            5
+          ]
+        },
+        "notes": {
+          "accepted_error": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 100
+          },
+          "false_alarm": {
+            "notes": [
+              0,
+              0
+            ],
+            "of": 100
+          },
+          "omission": {
+            "notes": [
+              1,
+              1
+            ],
+            "of": 100
+          },
+          "unflagged_error": {
+            "notes": [
+              3,
+              13
+            ],
+            "of": 100
+          },
+          "wrong_field": {
+            "notes": [
+              21,
+              21
+            ],
+            "of": 100
+          }
+        }
+      }
+    },
+    "notes": 143,
+    "notes_by_stratum": {
+      "never_reached": {
+        "accepted_error": [
+          0,
+          43,
+          0
+        ],
+        "false_alarm": [
+          0,
+          43,
+          0
+        ],
+        "omission": [
+          0,
+          43,
+          0
+        ],
+        "unflagged_error": [
+          2,
+          24,
+          17
+        ],
+        "wrong_field": [
+          22,
+          21,
+          0
+        ]
+      },
+      "reached_with_figures": {
+        "accepted_error": [
+          0,
+          99,
+          0
+        ],
+        "false_alarm": [
+          0,
+          99,
+          0
+        ],
+        "omission": [
+          1,
+          98,
+          0
+        ],
+        "unflagged_error": [
+          3,
+          86,
+          10
+        ],
+        "wrong_field": [
+          21,
+          78,
+          0
+        ]
+      },
+      "reached_without_figures": {
+        "accepted_error": [
+          0,
+          1,
+          0
+        ],
+        "false_alarm": [
+          0,
+          1,
+          0
+        ],
+        "omission": [
+          0,
+          1,
+          0
+        ],
+        "unflagged_error": [
+          0,
+          1,
+          0
+        ],
+        "wrong_field": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    "protocol": "fresh-protocol-v2-2026-09-26-r3",
+    "reading": "Counts over the whole frame, which has no sampling error and describes these reports only. `notes_the_checker_read` is production: the notes the checker was shown. `every_note` is the method, given every note and its evidence. `[a, b]` is `a` notes, or `b` if every unresolved note went the same way. Claim pairs are [count, of].",
+    "status": "complete",
+    "unlabelled": 0,
+    "version": "fresh-v2-2026-09-26"
+  },
+  "not_generated": {
+    "both_moved": {
+      "dependents_not_reproduced": 138,
+      "outside_bounds": 60
+    },
+    "evidence_moved_down": {
+      "dependents_not_reproduced": 138
+    },
+    "evidence_moved_up": {
+      "dependents_not_reproduced": 138,
+      "outside_bounds": 60
+    }
+  },
+  "protocol": "fresh-protocol-v2-2026-09-26-r3",
+  "seeded": {
+    "cases": 2245,
+    "checker_source_sha256": "7816fd23fee51c7e7ddd103a3ed28f1ee92da25f462ab747191d484eac27893b",
+    "families": {
+      "corruption": {
+        "by_mutation": {
+          "single_field_both_moved": {
+            "changed|holds": {
+              "abstained": 22,
+              "correct": 205,
+              "false_alarm": 43
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          },
+          "single_field_down": {
+            "changed|fails": {
+              "abstained": 22,
+              "correct": 205,
+              "error_accepted": 43
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          },
+          "single_field_up": {
+            "changed|fails": {
+              "abstained": 22,
+              "correct": 205,
+              "error_accepted": 43
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          }
+        },
+        "cases": 810,
+        "totals": {
+          "changed|fails": {
+            "abstained": 44,
+            "correct": 410,
+            "error_accepted": 86
+          },
+          "changed|holds": {
+            "abstained": 22,
+            "correct": 205,
+            "false_alarm": 43
+          },
+          "untouched|holds": {
+            "abstained": 93,
+            "correct": 894,
+            "right_verdict_wrong_field": 75
+          }
+        }
+      },
+      "valid_context": {
+        "by_mutation": {
+          "both_moved": {
+            "changed|holds": {
+              "abstained": 11,
+              "correct": 52,
+              "right_verdict_wrong_field": 9
+            },
+            "untouched|holds": {
+              "abstained": 7,
+              "correct": 73,
+              "right_verdict_wrong_field": 2
+            }
+          },
+          "evidence_moved_down": {
+            "changed|fails": {
+              "abstained": 13,
+              "correct": 76,
+              "flagged_wrong_field": 43
+            },
+            "untouched|holds": {
+              "abstained": 12,
+              "correct": 114,
+              "right_verdict_wrong_field": 2
+            }
+          },
+          "evidence_moved_up": {
+            "changed|fails": {
+              "abstained": 11,
+              "correct": 52,
+              "flagged_wrong_field": 9
+            },
+            "untouched|holds": {
+              "abstained": 7,
+              "correct": 73,
+              "right_verdict_wrong_field": 2
+            }
+          },
+          "note_value_down": {
+            "changed|fails": {
+              "abstained": 22,
+              "correct": 205,
+              "flagged_wrong_field": 43
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          },
+          "note_value_up": {
+            "changed|fails": {
+              "abstained": 22,
+              "correct": 205,
+              "flagged_wrong_field": 43
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          },
+          "other_symbol_value": {
+            "changed|fails": {
+              "abstained": 21,
+              "correct": 138,
+              "flagged_wrong_field": 42
+            },
+            "untouched|holds": {
+              "abstained": 23,
+              "correct": 213,
+              "right_verdict_wrong_field": 13
+            }
+          },
+          "out_of_scope_stop_inserted": {
+            "changed|out_of_scope": {
+              "correct": 9
+            },
+            "untouched|holds": {
+              "abstained": 1,
+              "correct": 19,
+              "right_verdict_wrong_field": 2
+            }
+          },
+          "removed_with_its_links": {
+            "changed|unsettleable": {
+              "correct": 270
+            },
+            "untouched|holds": {
+              "abstained": 31,
+              "correct": 298,
+              "right_verdict_wrong_field": 25
+            }
+          },
+          "repaired": {
+            "changed|holds": {
+              "abstained": 5,
+              "correct": 2
+            },
+            "untouched|holds": {
+              "correct": 9,
+              "right_verdict_wrong_field": 1
+            }
+          },
+          "sign_flipped": {
+            "changed|fails": {
+              "abstained": 13,
+              "correct": 76,
+              "error_accepted": 43
+            },
+            "untouched|holds": {
+              "abstained": 12,
+              "correct": 114,
+              "right_verdict_wrong_field": 2
+            }
+          }
+        },
+        "cases": 1435,
+        "totals": {
+          "changed|fails": {
+            "abstained": 102,
+            "correct": 752,
+            "error_accepted": 43,
+            "flagged_wrong_field": 180
+          },
+          "changed|holds": {
+            "abstained": 16,
+            "correct": 54,
+            "right_verdict_wrong_field": 9
+          },
+          "changed|out_of_scope": {
+            "correct": 9
+          },
+          "changed|unsettleable": {
+            "correct": 270
+          },
+          "untouched|holds": {
+            "abstained": 155,
+            "correct": 1509,
+            "right_verdict_wrong_field": 99
+          }
+        }
+      }
+    },
+    "method_version": "n20-2026-09-26",
+    "reading": "Each keyed figure's outcome under its truth, per family. `valid_context` changes keep the evidence one the runtime could produce, by the checks in `evidence_problems`; `corruption` moves one field alone, and asks only whether the checker reads the field it names. `changed` is the figure the change made or unsettled; `untouched` are the other anchored figures.",
+    "status": "complete"
+  },
+  "version": "fresh-v2-2026-09-26"
+}
