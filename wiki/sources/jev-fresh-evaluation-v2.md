@@ -34,9 +34,9 @@ broker call.
 attribute to an evidence field is recorded as unattributed and never
 compared.
 
-**Fresh-v2 is the second held-out evaluation.** Fresh-v1 measured `n15` on 51
-notes from 11 reports
-([jev-fresh-evaluation.md](/Users/lindau/codex/rust_daytrader/docs/jev-fresh-evaluation.md)).
+**Fresh-v2 is the second held-out evaluation.** [Fresh-v1](jev-fresh-evaluation-v1.md)
+measured `n15` on 51 notes from 11 reports. The earlier instruments are
+filed as source notes too; the [index](../index.md) lists them in order.
 Fresh-v2 was preregistered on 2026-09-26, before any report in its window
 existed. It froze the method by source hash, fixed the window, and stated
 three conventions in the rubric:

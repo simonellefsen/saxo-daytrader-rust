@@ -3067,3 +3067,17 @@ broker mutation was added.
 
 - Added [sources/jev-fresh-evaluation-v2](sources/jev-fresh-evaluation-v2.md), summarising [the evaluation doc](/Users/lindau/codex/rust_daytrader/docs/jev-fresh-evaluation-v2.md), its results and its reconciliation. It covers 36 reports and 143 notes under `n20`. There was no false alarm, and the checker's 250 decisions all agree with the labels. It flagged 2 of 7 natural errors; the other five are bare price levels it leaves unattributed by design. All 43 field disagreements, and every wrong seeded outcome, are one signed-conviction reading.
 - Added [todo T4](todo.md) for that reading, which is the operator's call, and indexed the source note. The raw docs are unchanged. This is the first Jev evaluation filed in the wiki; fresh-v1 and the earlier instruments are referenced only through the docs.
+
+## [2026-10-15] Jev measurement | Earlier instruments filed
+
+- Added source notes for every Jev instrument before fresh-v2, each read in full from its raw doc and stated at that doc's strength:
+  - [grading adjudications](sources/jev-grading-adjudications-2026-09-21.md), with the rubric;
+  - [challenge set](sources/jev-challenge-set.md);
+  - [wording measurement](sources/jev-wording-measurement.md);
+  - [controls v1](sources/jev-controls-v1.md);
+  - [Markov provenance](sources/jev-markov-provenance.md);
+  - [whole-note audit](sources/jev-whole-notes-v1.md);
+  - [fresh-v1](sources/jev-fresh-evaluation-v1.md), with the signed-conviction adjudication.
+- Grouped them in the index in chronological order, and linked the fresh-v2 note to fresh-v1.
+- Recorded in the wording note that the live `~typesafe/jev-latest` alias moved from `jev-1.13-20260917` to `jev-1.14-20261014` on 2026-10-15. This comes from `jev_requests.model_resolved`. The wording figures are 1.13's; the numeric checker does not call the model.
+- The raw docs are unchanged. Labeller identities come from each provenance file.

@@ -29,7 +29,15 @@ This index is the content map for the LLM-maintained project wiki. Future Codex 
 - [sources/llm-wiki](sources/llm-wiki.md) - Source-note summary for the LLM Wiki pattern.
 - [sources/markov-hedge-fund-method](sources/markov-hedge-fund-method.md) - Source-note summary for the Markov regime method.
 - [sources/app-economy-insights](sources/app-economy-insights.md) - Public editorial-research source boundary and proposed advisory ingestion shape.
-- [sources/jev-fresh-evaluation-v2](sources/jev-fresh-evaluation-v2.md) - Second held-out evaluation of the Jev numeric checker (`n20`), scored once and reconciled on 2026-10-15. 36 reports and 143 notes: no false alarm, 2 of 7 natural errors flagged, five bare price levels left uncompared by design, and one disputed signed-conviction reading behind every wrong seeded outcome.
+- **Jev measurement**, in order. They evaluate the deterministic numeric checker, and the model-backed wording grader through the adjudications and one seeded measurement:
+  - [sources/jev-grading-adjudications-2026-09-21](sources/jev-grading-adjudications-2026-09-21.md) - The first grading adjudications and the frozen rubric. Self-adjudicated: wording agreement, a margin hypothesis that failed held-out, and nine numeric flags of which five are confirmed.
+  - [sources/jev-challenge-set](sources/jev-challenge-set.md) - Seeded regression sets v1 to v3: 72.6% of seeded false claims detected and none wrongly accepted at `n10`; unit errors and negations never checked.
+  - [sources/jev-wording-measurement](sources/jev-wording-measurement.md) - The wording grader on 85 seeded cases, `v15` to `v16`, measured on `jev-1.13`. The live alias rolled to `jev-1.14` on 2026-10-15.
+  - [sources/jev-controls-v1](sources/jev-controls-v1.md) - Blind clean controls at `n10`, protocol v4: 1 to 132 of 1,153 accepted claims wrong, and the width is `cannot_tell`.
+  - [sources/jev-markov-provenance](sources/jev-markov-provenance.md) - The missing Markov figures were in the prompt's debugging rows. One was another symbol's signal, carried forward; `n11` reads the rows.
+  - [sources/jev-whole-notes-v1](sources/jev-whole-notes-v1.md) - Whole-note audit at `n12`: every omission in a read note was a number written as a word (fixed in `n13`).
+  - [sources/jev-fresh-evaluation-v1](sources/jev-fresh-evaluation-v1.md) - First held-out evaluation, `n15`, on 51 notes: no false alarm. All nine wrong seeded outcomes are one signed-conviction anchor, later adjudicated.
+  - [sources/jev-fresh-evaluation-v2](sources/jev-fresh-evaluation-v2.md) - Second held-out evaluation of the Jev numeric checker (`n20`), scored once and reconciled on 2026-10-15. 36 reports and 143 notes: no false alarm, 2 of 7 natural errors flagged, five bare price levels left uncompared by design, and one disputed signed-conviction reading behind every wrong seeded outcome.
 
 ## Concepts
 
