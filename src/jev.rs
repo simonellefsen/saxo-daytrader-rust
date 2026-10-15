@@ -50,6 +50,19 @@ const MAX_ATTEMPTS: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 250;
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_MODEL: &str = "~typesafe/jev-latest";
+
+/// What a rollover of the floating alias means. Decided 2026-10-15: Jev always
+/// runs the latest version, so a rollover is a dated boundary to report, not a
+/// change to undo.
+pub(crate) const ALIAS_ROLLOVER_POLICY: &str = "Jev runs the floating alias \
+    `~typesafe/jev-latest` by operator decision, so it always answers with the \
+    latest version. Each resolved version is a measurement epoch. A stored \
+    judgement keeps the version that made it, and none is regraded on a rollover: \
+    a subject is judged again only when its question set changes. A figure that \
+    pools epochs says so. A rollover is announced once. Model-backed baselines, \
+    such as the wording measurement, describe the version they were measured on \
+    until they are re-measured on the new one. The deterministic numeric checker \
+    calls no model and is unaffected.";
 const DEFAULT_TIMEOUT_SECONDS: i64 = 15;
 const DEFAULT_MAX_STATE_CHARS: i64 = 24_000;
 const DEFAULT_MAX_QUESTIONS: i64 = 12;
@@ -98,6 +111,14 @@ impl std::fmt::Debug for JevConfig {
     }
 }
 
+/// The model the `jev:` block requests, whether or not Jev is enabled.
+pub(crate) fn configured_model(config: &YamlValue) -> String {
+    yaml_string(config, &["jev", "model"])
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+}
+
 impl JevConfig {
     /// Reads the `jev:` block. `api_key` resolves through the shared `ENV:`
     /// prefix handled by `config::yaml_string`, so the key never appears in
@@ -118,10 +139,7 @@ impl JevConfig {
                 .map(|url| url.trim().trim_end_matches('/').to_string())
                 .filter(|url| !url.is_empty())
                 .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            model: yaml_string(config, &["jev", "model"])
-                .map(|model| model.trim().to_string())
-                .filter(|model| !model.is_empty())
-                .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            model: configured_model(config),
             http_timeout_seconds: yaml_i64(config, &["jev", "http_timeout_seconds"])
                 .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
                 .clamp(1, 120) as u64,

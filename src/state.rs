@@ -8447,6 +8447,11 @@ impl AppState {
         } else {
             LlmUsageLedgerPayload::default()
         };
+        let jev_models = if dashboard_loads_tab_exclusive_data(&active_view, "prompts") {
+            self.jev_models().await
+        } else {
+            crate::models::JevModelsPayload::default()
+        };
         let run_schedules = dashboard_run_schedules_from_json(json!({
             "markov": crate::markov_method::markov_config_json_for_state(self),
             "quiver": crate::quiver::quiver_config_json_for_state(self),
@@ -8509,6 +8514,7 @@ impl AppState {
             ai_settings,
             ai_provider_capabilities,
             llm_usage,
+            jev_models,
             localization,
             active_view,
             performance_range,
@@ -15981,6 +15987,23 @@ impl AppState {
     /// Observational throughout. Nothing here is read by a path that can
     /// admit, size, or block a trade -- the rankings in particular are a view
     /// of news standing, not a candidate list.
+    /// Which Jev version answers, and every version that has. Never fails:
+    /// an unreadable ledger is reported as unavailable rather than as no
+    /// rollover having happened.
+    pub async fn jev_models(&self) -> crate::models::JevModelsPayload {
+        let configured = crate::jev::configured_model(&self.config);
+        match crate::jev_store::model_epochs(&self.pool).await {
+            Ok(epochs) => crate::jev_store::models_payload(&configured, epochs),
+            Err(err) => {
+                warn!("Jev model epochs unavailable: {err:#}");
+                crate::models::JevModelsPayload {
+                    unavailable: true,
+                    ..crate::jev_store::models_payload(&configured, Vec::new())
+                }
+            }
+        }
+    }
+
     pub async fn jev_observations(&self, limit: i64, days: i64) -> Result<JsonValue> {
         let availability = crate::jev::JevConfig::from_yaml(&self.config);
         let since = (Utc::now() - chrono::Duration::days(days.clamp(1, 365)))
@@ -16014,6 +16037,7 @@ impl AppState {
                     "newest_at": ranking.newest_at,
                 }))
                 .collect::<Vec<_>>(),
+            "models": self.jev_models().await,
             "report_grades": crate::jev_store::results_for(
                 &self.pool,
                 crate::jev_store::PURPOSE_REPORT_GRADING,

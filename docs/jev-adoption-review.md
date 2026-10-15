@@ -79,6 +79,35 @@ until released; both config defaults remain disabled.
    timestamps. Old headlines scored today are not historical out-of-sample
    features. Define partial-answer regrading and alias-rollover policies.
 
+   *Status, 2026-10-15, beside the item above.* Both policies are defined.
+   - **Partial answers** were settled in code before this: a partial grade
+     counts as judged, so its subject is not re-asked, and its numeric half is
+     recomputed from the stored prompt with no provider call.
+   - **Alias rollover.** Simon decided that Jev always runs the latest
+     version, so `jev.model` stays the floating `~typesafe/jev-latest`. That
+     day the alias moved from `typesafe/jev-1.13-20260917`, last answering
+     2026-10-14T18:21:53Z, to `typesafe/jev-1.14-20261014`, first answering
+     2026-10-15T08:55:12Z. The policy is `jev::ALIAS_ROLLOVER_POLICY`:
+     - each resolved version is a measurement epoch;
+     - a stored judgement keeps the version that made it, and none is
+       regraded on a rollover, because a subject is re-asked only when its
+       question set changes;
+     - a figure that pools epochs says so;
+     - a rollover is announced once;
+     - model-backed baselines describe the version they were measured on
+       until they are re-measured.
+   - **Where it shows:**
+     - `/api/ai/jev` carries `models`: the configured alias, the current
+       version and every epoch;
+     - the AI Prompts view has a Jev Model card;
+     - a once-per-version operational Slack alert,
+       `notifications.alerts.jev_model_rollover_enabled`, defaults on.
+   - **Tests pin** the epoch fold and that a rollover selects nothing for
+     regrading.
+   - **Still open from item 2:** the rest of the operator panel (worker
+     backlog, cost coverage, marker disagreement). Observation itself has run
+     since 2026-09-20, with `jev.enabled: true`.
+
 ### B. Measurement before strategy influence
 
 - `P(bullish)` currently measures the headline's implied direction, not

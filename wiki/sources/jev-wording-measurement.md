@@ -83,3 +83,12 @@ The deployed config uses the floating alias `~typesafe/jev-latest`, and
 These figures are 1.13's, and they do not carry over to 1.14. The
 deterministic numeric checker does not call the model, so its evaluations are
 unaffected.
+
+**Policy since 2026-10-15:** Jev always runs the latest version. That makes
+every rollover a dated measurement epoch: judgements keep the version that
+made them, nothing is regraded, and this baseline describes 1.13 until it is
+re-measured on the version now answering. It is stated as
+`jev::ALIAS_ROLLOVER_POLICY` and in the
+[adoption review](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md)
+under item A.5. Rollovers are announced once in Slack and shown on the AI
+Prompts view.

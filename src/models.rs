@@ -33,6 +33,7 @@ pub struct DashboardView {
     pub ai_settings: DashboardAiSettingsPayload,
     pub ai_provider_capabilities: Vec<AiProviderCapabilityPayload>,
     pub llm_usage: LlmUsageLedgerPayload,
+    pub jev_models: JevModelsPayload,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -1778,6 +1779,38 @@ pub struct LlmUsageDayPayload {
     pub jev_request_count: i64,
     #[serde(default)]
     pub unpriced_request_count: i64,
+}
+
+/// One resolved Jev version and the span over which it answered.
+///
+/// Timestamps are the recorded request times, normalised to whole seconds.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevModelEpochPayload {
+    pub model: String,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub requests: i64,
+    pub by_purpose: BTreeMap<String, i64>,
+}
+
+/// Which Jev version answers, and every version that has.
+///
+/// `~typesafe/jev-latest` floats by operator decision, so each resolved version
+/// is a measurement epoch: a judgement keeps the version that made it, and a
+/// figure that pools epochs has to say so.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevModelsPayload {
+    pub configured_model: String,
+    /// The version behind the most recent recorded request.
+    pub current_model: Option<String>,
+    /// Oldest first.
+    pub epochs: Vec<JevModelEpochPayload>,
+    /// Some version answered again after a later one had begun.
+    pub overlapping: bool,
+    pub policy: String,
+    /// The request ledger could not be read; `epochs` is then empty, not known
+    /// to be empty.
+    pub unavailable: bool,
 }
 
 /// Per-request LLM token and cost ledger with its daily rollup.

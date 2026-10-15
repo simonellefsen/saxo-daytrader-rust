@@ -699,6 +699,126 @@ pub(crate) async fn results_for(
     .collect())
 }
 
+/// Every resolved Jev version that has answered, from the request ledger.
+///
+/// The ledger is never pruned, so each rollover stays a dated boundary.
+/// `created_at` holds RFC 3339 text in more than one fractional style;
+/// lexical `MIN`/`MAX` order those correctly to the second, which is the
+/// precision reported.
+pub(crate) async fn model_epochs(
+    pool: &AnyPool,
+) -> Result<Vec<crate::models::JevModelEpochPayload>> {
+    let rows = sqlx::query(
+        "SELECT model_resolved, purpose, COUNT(*) AS requests,
+                MIN(created_at) AS first_seen_at, MAX(created_at) AS last_seen_at
+         FROM jev_requests
+         WHERE model_resolved IS NOT NULL AND model_resolved <> ''
+         GROUP BY model_resolved, purpose",
+    )
+    .fetch_all(pool)
+    .await
+    .context("reading Jev model epochs")?
+    .iter()
+    .map(row_to_json)
+    .collect::<Vec<_>>();
+    Ok(epochs_from_rows(&rows))
+}
+
+/// Folds per-(version, purpose) rows into one epoch per version, oldest first.
+pub(crate) fn epochs_from_rows(rows: &[JsonValue]) -> Vec<crate::models::JevModelEpochPayload> {
+    use chrono::{DateTime, Utc};
+    let parse = |row: &JsonValue, key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_str)
+            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+            .map(|at| at.with_timezone(&Utc))
+    };
+    let mut by_model: std::collections::BTreeMap<
+        String,
+        (
+            DateTime<Utc>,
+            DateTime<Utc>,
+            std::collections::BTreeMap<String, i64>,
+        ),
+    > = std::collections::BTreeMap::new();
+    for row in rows {
+        let Some(model) = row
+            .get("model_resolved")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        else {
+            continue;
+        };
+        let (Some(first), Some(last)) = (parse(row, "first_seen_at"), parse(row, "last_seen_at"))
+        else {
+            continue;
+        };
+        let purpose = row
+            .get("purpose")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let requests = row.get("requests").and_then(JsonValue::as_i64).unwrap_or(0);
+        let entry = by_model.entry(model.to_string()).or_insert((
+            first,
+            last,
+            std::collections::BTreeMap::new(),
+        ));
+        entry.0 = entry.0.min(first);
+        entry.1 = entry.1.max(last);
+        *entry.2.entry(purpose).or_default() += requests;
+    }
+    let seconds = |at: DateTime<Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut epochs: Vec<_> = by_model
+        .into_iter()
+        .map(|(model, (first, last, by_purpose))| {
+            (
+                first,
+                crate::models::JevModelEpochPayload {
+                    model,
+                    first_seen_at: seconds(first),
+                    last_seen_at: seconds(last),
+                    requests: by_purpose.values().sum(),
+                    by_purpose,
+                },
+            )
+        })
+        .collect();
+    epochs.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.model.cmp(&right.1.model))
+    });
+    epochs.into_iter().map(|(_, epoch)| epoch).collect()
+}
+
+/// The configured alias, the version answering now, and every epoch.
+///
+/// The current version is the one behind the latest recorded request. Epochs
+/// overlap when an older version answered again after a newer one began,
+/// which a staged provider rollout can do; the boundary is then a span.
+pub(crate) fn models_payload(
+    configured_model: &str,
+    epochs: Vec<crate::models::JevModelEpochPayload>,
+) -> crate::models::JevModelsPayload {
+    let current_model = epochs
+        .iter()
+        .max_by(|left, right| left.last_seen_at.cmp(&right.last_seen_at))
+        .map(|epoch| epoch.model.clone());
+    let overlapping = epochs
+        .windows(2)
+        .any(|pair| pair[0].last_seen_at > pair[1].first_seen_at);
+    crate::models::JevModelsPayload {
+        configured_model: configured_model.to_string(),
+        current_model,
+        epochs,
+        overlapping,
+        policy: crate::jev::ALIAS_ROLLOVER_POLICY.to_string(),
+        unavailable: false,
+    }
+}
+
 fn truncate(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -1595,6 +1715,173 @@ mod tests {
                 .is_empty(),
             "and it is not recomputed again"
         );
+    }
+
+    /// Records one completed request answered by `model` at `created_at`.
+    async fn answered_by(
+        pool: &AnyPool,
+        id: &str,
+        created_at: &str,
+        purpose: &str,
+        subject: &str,
+        model: &str,
+    ) {
+        let mut answered = response();
+        answered.model_resolved = Some(model.to_string());
+        record_success(
+            pool,
+            RecordedRequest {
+                id,
+                created_at,
+                purpose,
+                subject: Some(subject),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            &answered,
+            Some(&serde_json::json!({"version": "v16"})),
+        )
+        .await
+        .expect("a recorded request");
+    }
+
+    /// The 2026-10-15 rollover as the ledger records it: two versions, one
+    /// boundary, each request kept under the version that answered it, and
+    /// the ledger's two timestamp styles read as one.
+    #[tokio::test]
+    async fn the_request_ledger_yields_one_epoch_per_resolved_version() {
+        let pool = pool().await;
+        let old = "typesafe/jev-1.13-20260917";
+        let new = "typesafe/jev-1.14-20261014";
+        answered_by(
+            &pool,
+            "a",
+            "2026-09-20T12:24:23.149293045+00:00",
+            PURPOSE_REPORT_GRADING,
+            "300",
+            old,
+        )
+        .await;
+        answered_by(
+            &pool,
+            "b",
+            "2026-09-20T12:24:27.083538005+00:00",
+            PURPOSE_ERROR_CLASSIFICATION,
+            "e1",
+            old,
+        )
+        .await;
+        answered_by(
+            &pool,
+            "c",
+            "2026-10-14T18:21:53.325Z",
+            PURPOSE_REPORT_GRADING,
+            "301",
+            old,
+        )
+        .await;
+        answered_by(
+            &pool,
+            "d",
+            "2026-10-15T08:55:12.398Z",
+            PURPOSE_REPORT_GRADING,
+            "302",
+            new,
+        )
+        .await;
+
+        let epochs = model_epochs(&pool).await.expect("epochs");
+        let models = models_payload("~typesafe/jev-latest", epochs);
+
+        assert_eq!(models.epochs.len(), 2);
+        assert_eq!(models.epochs[0].model, old);
+        assert_eq!(models.epochs[0].first_seen_at, "2026-09-20T12:24:23Z");
+        assert_eq!(models.epochs[0].last_seen_at, "2026-10-14T18:21:53Z");
+        assert_eq!(models.epochs[0].requests, 3);
+        assert_eq!(models.epochs[0].by_purpose[PURPOSE_REPORT_GRADING], 2);
+        assert_eq!(models.epochs[0].by_purpose[PURPOSE_ERROR_CLASSIFICATION], 1);
+        assert_eq!(models.epochs[1].model, new);
+        assert_eq!(models.epochs[1].first_seen_at, "2026-10-15T08:55:12Z");
+        assert_eq!(models.current_model.as_deref(), Some(new));
+        assert!(!models.overlapping);
+        assert_eq!(models.configured_model, "~typesafe/jev-latest");
+        assert_eq!(models.policy, crate::jev::ALIAS_ROLLOVER_POLICY);
+    }
+
+    /// A failed call names no version, so it cannot invent an epoch.
+    #[test]
+    fn a_request_without_a_resolved_version_is_no_epoch() {
+        let rows = vec![
+            serde_json::json!({"model_resolved": null, "purpose": "report_grading", "requests": 4,
+                               "first_seen_at": "2026-09-21T05:00:00Z", "last_seen_at": "2026-09-21T06:00:00Z"}),
+            serde_json::json!({"model_resolved": "  ", "purpose": "report_grading", "requests": 1,
+                               "first_seen_at": "2026-09-21T05:00:00Z", "last_seen_at": "2026-09-21T05:00:00Z"}),
+        ];
+        assert!(epochs_from_rows(&rows).is_empty());
+        let models = models_payload("~typesafe/jev-latest", Vec::new());
+        assert_eq!(models.current_model, None);
+        assert!(!models.overlapping);
+    }
+
+    /// A staged provider rollout can serve the older version after the newer
+    /// one began. The current version is then the older one, and the
+    /// boundary is a span the payload has to admit to.
+    #[test]
+    fn an_older_version_answering_again_is_reported_as_an_overlap() {
+        let rows = vec![
+            serde_json::json!({"model_resolved": "typesafe/jev-1.13-20260917", "purpose": "report_grading",
+                               "requests": 10, "first_seen_at": "2026-09-20T12:00:00Z",
+                               "last_seen_at": "2026-10-16T09:00:00Z"}),
+            serde_json::json!({"model_resolved": "typesafe/jev-1.14-20261014", "purpose": "report_grading",
+                               "requests": 2, "first_seen_at": "2026-10-15T08:55:12Z",
+                               "last_seen_at": "2026-10-15T18:00:00Z"}),
+        ];
+        let models = models_payload("~typesafe/jev-latest", epochs_from_rows(&rows));
+        assert!(models.overlapping);
+        assert_eq!(
+            models.current_model.as_deref(),
+            Some("typesafe/jev-1.13-20260917")
+        );
+        assert_eq!(
+            models.epochs[1].model, "typesafe/jev-1.14-20261014",
+            "epochs stay oldest first"
+        );
+    }
+
+    /// The rollover policy, pinned: a subject judged by an older resolved
+    /// version still counts as judged at its question set, so a rollover
+    /// spends nothing re-asking it. Only a question-set change re-asks.
+    #[tokio::test]
+    async fn a_rollover_does_not_reselect_a_subject_for_regrading() {
+        let pool = pool().await;
+        answered_by(
+            &pool,
+            "old",
+            "2026-10-14T18:21:53Z",
+            PURPOSE_REPORT_GRADING,
+            "399",
+            "typesafe/jev-1.13-20260917",
+        )
+        .await;
+        answered_by(
+            &pool,
+            "new",
+            "2026-10-15T08:55:12Z",
+            PURPOSE_REPORT_GRADING,
+            "400",
+            "typesafe/jev-1.14-20261014",
+        )
+        .await;
+
+        let judged = judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v16")
+            .await
+            .expect("judged subjects");
+
+        assert!(
+            judged.contains("399"),
+            "judged by the previous version, still judged"
+        );
+        assert!(judged.contains("400"));
     }
 }
 

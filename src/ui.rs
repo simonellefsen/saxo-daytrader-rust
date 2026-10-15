@@ -6108,6 +6108,69 @@ fn LlmUsageRequestRow(
     }
 }
 
+/// Which Jev version answers, and every version that has. The alias floats by
+/// operator decision, so a rollover is shown as a dated boundary.
+#[component]
+fn JevModelsCard(models: crate::models::JevModelsPayload, prefs: LocalizationPrefs) -> Element {
+    let current = models.current_model.clone().unwrap_or_default();
+    let version_count = models.epochs.len();
+    rsx! {
+        div { class: "prompt-card",
+            h3 { "Jev Model" }
+            p { class: "muted", "{models.policy}" }
+            if models.unavailable {
+                div { class: "event", "The Jev request ledger could not be read, so the versions that answered are unknown, not absent." }
+            } else if models.epochs.is_empty() {
+                div { class: "event muted", "No Jev request has recorded a resolved version yet." }
+            } else {
+                div { class: "pill-row",
+                    span { class: "pill", "requests {models.configured_model}" }
+                    span { class: "pill", "answering {current}" }
+                    span { class: "pill", "{version_count} versions recorded" }
+                }
+                if models.overlapping {
+                    div { class: "event", "Versions overlap: an older one answered after a newer one began, so the boundary between them is a span, not an instant." }
+                }
+                div { class: "table-wrap",
+                    table { class: "data-table compact-table",
+                        thead { tr {
+                            th { "Resolved version" }
+                            th { "First answered" }
+                            th { "Last answered" }
+                            th { "Requests" }
+                            th { "By purpose" }
+                        }}
+                        tbody {
+                            for epoch in models.epochs.iter() {
+                                tr {
+                                    td {
+                                        "{epoch.model}"
+                                        if epoch.model == current {
+                                            span { class: "pill", " current" }
+                                        }
+                                    }
+                                    td { "{format_timestamp(&epoch.first_seen_at, &prefs)}" }
+                                    td { "{format_timestamp(&epoch.last_seen_at, &prefs)}" }
+                                    td { "{epoch.requests}" }
+                                    td { "{jev_purpose_counts(&epoch.by_purpose)}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn jev_purpose_counts(by_purpose: &std::collections::BTreeMap<String, i64>) -> String {
+    by_purpose
+        .iter()
+        .map(|(purpose, count)| format!("{purpose} {count}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 #[component]
 fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let latest = data.latest_decision.clone();
@@ -6116,6 +6179,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
     let status = latest.status.as_deref().unwrap_or("");
     let provider_capabilities = data.ai_provider_capabilities.clone();
     let llm_usage = data.llm_usage.clone();
+    let jev_models = data.jev_models.clone();
     rsx! {
         section { class: "section stack loose",
             div { class: "section-title-row",
@@ -6233,6 +6297,7 @@ fn PromptsView(data: DashboardView, prefs: LocalizationPrefs) -> Element {
                     }
                 }
             }
+            JevModelsCard { models: jev_models, prefs: prefs.clone() }
             div { class: "prompt-card",
                 h3 { "Decision Report" }
                 p { class: "muted", "Stored prompt, request, response, and normalized report payloads load only when expanded. They are redacted and capped on the server before they reach this browser." }
@@ -14618,5 +14683,67 @@ mod tests {
         assert_eq!(summary.currency_rows.len(), 1);
         assert_eq!(summary.currency_rows[0].currency, "USD");
         assert_eq!(summary.currency_largest, "USD");
+    }
+
+    #[test]
+    fn the_jev_model_card_shows_the_answering_version_and_every_boundary() {
+        let epoch = |model: &str, first: &str, last: &str, requests: i64| {
+            crate::models::JevModelEpochPayload {
+                model: model.into(),
+                first_seen_at: first.into(),
+                last_seen_at: last.into(),
+                requests,
+                by_purpose: [("report_grading".to_string(), requests)]
+                    .into_iter()
+                    .collect(),
+            }
+        };
+        let models = crate::jev_store::models_payload(
+            "~typesafe/jev-latest",
+            vec![
+                epoch(
+                    "typesafe/jev-1.13-20260917",
+                    "2026-09-20T12:24:23Z",
+                    "2026-10-14T18:21:53Z",
+                    2057,
+                ),
+                epoch(
+                    "typesafe/jev-1.14-20261014",
+                    "2026-10-15T08:55:12Z",
+                    "2026-10-15T18:27:24Z",
+                    4,
+                ),
+            ],
+        );
+        let prefs = default_prefs();
+        let html = dioxus_ssr::render_element(rsx! { JevModelsCard { models, prefs } });
+
+        assert!(
+            html.contains("answering typesafe/jev-1.14-20261014"),
+            "{html}"
+        );
+        assert!(html.contains("requests ~typesafe/jev-latest"));
+        assert!(html.contains("typesafe/jev-1.13-20260917"));
+        assert!(html.contains("report_grading 2057"));
+        assert!(html.contains("2 versions recorded"));
+        assert!(html.contains("none is regraded on a rollover"));
+        assert!(!html.contains("Versions overlap"));
+    }
+
+    #[test]
+    fn the_jev_model_card_tells_an_unreadable_ledger_from_an_empty_one() {
+        let prefs = default_prefs();
+        let empty = crate::jev_store::models_payload("~typesafe/jev-latest", Vec::new());
+        let html = dioxus_ssr::render_element(
+            rsx! { JevModelsCard { models: empty.clone(), prefs: prefs.clone() } },
+        );
+        assert!(html.contains("No Jev request has recorded a resolved version yet."));
+
+        let unreadable = crate::models::JevModelsPayload {
+            unavailable: true,
+            ..empty
+        };
+        let html = dioxus_ssr::render_element(rsx! { JevModelsCard { models: unreadable, prefs } });
+        assert!(html.contains("unknown, not absent"), "{html}");
     }
 }

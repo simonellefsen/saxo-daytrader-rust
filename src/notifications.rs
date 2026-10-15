@@ -302,7 +302,90 @@ async fn pending_operational_alerts(state: &AppState) -> Result<Vec<SlackAlert>>
         .await?;
     }
 
+    if yaml_bool(
+        &state.config,
+        &["notifications", "alerts", "jev_model_rollover_enabled"],
+    )
+    .unwrap_or(true)
+    {
+        let models = state.jev_models().await;
+        maybe_push_unsent(state, &mut alerts, jev_model_rollover_alert(&models)).await?;
+    }
+
     Ok(alerts)
+}
+
+/// Announces, once per version, that the floating Jev alias answers with a
+/// version it did not answer with before.
+///
+/// Silent until a second version has answered: the first marks where the
+/// ledger begins, not a change. An unreadable ledger announces nothing rather
+/// than guessing.
+fn jev_model_rollover_alert(models: &crate::models::JevModelsPayload) -> Option<SlackAlert> {
+    if models.unavailable || models.epochs.len() < 2 {
+        return None;
+    }
+    let current_name = models.current_model.as_deref()?;
+    let current = models
+        .epochs
+        .iter()
+        .find(|epoch| epoch.model == current_name)?;
+    let previous = models
+        .epochs
+        .iter()
+        .filter(|epoch| epoch.model != current_name)
+        .max_by(|left, right| left.last_seen_at.cmp(&right.last_seen_at))?;
+    // Epochs are oldest first, so the last began most recently. A current
+    // version that is not the newest is an older one answering again.
+    let newest = models.epochs.last()?;
+    let mut lines = vec![
+        format!(
+            "`{}` now answers with {current_name}.",
+            models.configured_model
+        ),
+        String::new(),
+        format!("First answered: {}", current.first_seen_at),
+        format!(
+            "Previous version: {} (answered {} to {})",
+            previous.model, previous.first_seen_at, previous.last_seen_at
+        ),
+    ];
+    if newest.model != current_name {
+        lines.push(format!(
+            "This version predates {}: the alias is serving an older version again.",
+            newest.model
+        ));
+    }
+    if models.overlapping {
+        lines.push(
+            "Versions overlap: an older one answered after a newer one began, so the boundary is a span."
+                .to_string(),
+        );
+    }
+    lines.push(
+        "Policy: always the latest version. Judgements keep the version that made them and none is regraded; model-backed baselines such as the wording measurement need re-measuring on this version."
+            .to_string(),
+    );
+    lines.push(
+        "Observational only: Jev cannot change a gate, candidate, order or Saxo call.".to_string(),
+    );
+    Some(operational_alert(
+        "jev_model_rollover",
+        format!("ops:jev_model_rollover:{current_name}"),
+        "medium",
+        format!("Jev now answers with {current_name}"),
+        lines,
+        json!({
+            "configured_model": models.configured_model,
+            "current_model": current_name,
+            "current_first_seen_at": current.first_seen_at,
+            "previous_model": previous.model,
+            "previous_first_seen_at": previous.first_seen_at,
+            "previous_last_seen_at": previous.last_seen_at,
+            "serving_older_version": newest.model != current_name,
+            "overlapping": models.overlapping,
+        }),
+    ))
 }
 
 async fn maybe_push_unsent(
@@ -2363,5 +2446,125 @@ mod tests {
             alert.payload["details"]["scheduler_status"],
             "missed_due_window"
         );
+    }
+
+    fn jev_epoch(model: &str, first: &str, last: &str) -> crate::models::JevModelEpochPayload {
+        crate::models::JevModelEpochPayload {
+            model: model.to_string(),
+            first_seen_at: first.to_string(),
+            last_seen_at: last.to_string(),
+            requests: 1,
+            by_purpose: Default::default(),
+        }
+    }
+
+    /// The first version is where the ledger begins, not a change.
+    #[test]
+    fn a_single_jev_version_announces_nothing() {
+        let models = crate::jev_store::models_payload(
+            "~typesafe/jev-latest",
+            vec![jev_epoch(
+                "typesafe/jev-1.13-20260917",
+                "2026-09-20T12:24:23Z",
+                "2026-10-14T18:21:53Z",
+            )],
+        );
+        assert!(jev_model_rollover_alert(&models).is_none());
+    }
+
+    #[test]
+    fn a_jev_rollover_is_announced_once_per_version_with_its_boundary() {
+        let models = crate::jev_store::models_payload(
+            "~typesafe/jev-latest",
+            vec![
+                jev_epoch(
+                    "typesafe/jev-1.13-20260917",
+                    "2026-09-20T12:24:23Z",
+                    "2026-10-14T18:21:53Z",
+                ),
+                jev_epoch(
+                    "typesafe/jev-1.14-20261014",
+                    "2026-10-15T08:55:12Z",
+                    "2026-10-15T18:27:24Z",
+                ),
+            ],
+        );
+        let alert = jev_model_rollover_alert(&models).expect("a rollover alert");
+
+        assert_eq!(
+            alert.scope_key,
+            "ops:jev_model_rollover:typesafe/jev-1.14-20261014"
+        );
+        assert_eq!(
+            alert.subject,
+            "Jev now answers with typesafe/jev-1.14-20261014"
+        );
+        assert!(
+            alert
+                .message_text
+                .contains("First answered: 2026-10-15T08:55:12Z")
+        );
+        assert!(alert.message_text.contains(
+            "Previous version: typesafe/jev-1.13-20260917 (answered 2026-09-20T12:24:23Z to 2026-10-14T18:21:53Z)"
+        ));
+        assert!(alert.message_text.contains("none is regraded"));
+        assert!(!alert.message_text.contains("older version again"));
+        assert_eq!(alert.payload["details"]["serving_older_version"], false);
+    }
+
+    /// An older version answering again is a boundary too, and is said to be one.
+    #[test]
+    fn a_jev_alias_serving_an_older_version_again_says_so() {
+        let models = crate::jev_store::models_payload(
+            "~typesafe/jev-latest",
+            vec![
+                jev_epoch(
+                    "typesafe/jev-1.13-20260917",
+                    "2026-09-20T12:24:23Z",
+                    "2026-10-16T09:00:00Z",
+                ),
+                jev_epoch(
+                    "typesafe/jev-1.14-20261014",
+                    "2026-10-15T08:55:12Z",
+                    "2026-10-15T18:27:24Z",
+                ),
+            ],
+        );
+        let alert = jev_model_rollover_alert(&models).expect("an alert");
+
+        assert_eq!(
+            alert.scope_key,
+            "ops:jev_model_rollover:typesafe/jev-1.13-20260917"
+        );
+        assert!(
+            alert
+                .message_text
+                .contains("serving an older version again")
+        );
+        assert!(alert.message_text.contains("Versions overlap"));
+        assert_eq!(alert.payload["details"]["serving_older_version"], true);
+    }
+
+    /// An unreadable ledger is not evidence that nothing changed, nor that
+    /// something did.
+    #[test]
+    fn an_unreadable_jev_ledger_announces_nothing() {
+        let mut models = crate::jev_store::models_payload(
+            "~typesafe/jev-latest",
+            vec![
+                jev_epoch(
+                    "typesafe/jev-1.13-20260917",
+                    "2026-09-20T12:24:23Z",
+                    "2026-10-14T18:21:53Z",
+                ),
+                jev_epoch(
+                    "typesafe/jev-1.14-20261014",
+                    "2026-10-15T08:55:12Z",
+                    "2026-10-15T18:27:24Z",
+                ),
+            ],
+        );
+        models.unavailable = true;
+        assert!(jev_model_rollover_alert(&models).is_none());
     }
 }

@@ -3081,3 +3081,15 @@ broker mutation was added.
 - Grouped them in the index in chronological order, and linked the fresh-v2 note to fresh-v1.
 - Recorded in the wording note that the live `~typesafe/jev-latest` alias moved from `jev-1.13-20260917` to `jev-1.14-20261014` on 2026-10-15. This comes from `jev_requests.model_resolved`. The wording figures are 1.13's; the numeric checker does not call the model.
 - The raw docs are unchanged. Labeller identities come from each provenance file.
+
+## [2026-10-15] Jev | Alias-rollover policy defined (adoption item A.5)
+
+- Simon decided that Jev always runs the latest version. `jev.model` stays the floating `~typesafe/jev-latest`, which moved from `jev-1.13-20260917` to `jev-1.14-20261014` that morning.
+- The policy, `jev::ALIAS_ROLLOVER_POLICY`:
+  - each resolved version is a measurement epoch;
+  - judgements keep the version that made them, and none is regraded on a rollover;
+  - pooled figures say so;
+  - a rollover is announced once;
+  - model-backed baselines are re-measured on the new version.
+- Where it shows: `/api/ai/jev` carries `models`, the AI Prompts view has a Jev Model card, and a once-per-version Slack alert announces each new version. Partial-answer handling was already defined in code and is recorded beside the item.
+- The roadmap's Jev line was stale ("observation still disabled") and is corrected: observation has run since 2026-09-20. The wording-measurement note now states the policy.
