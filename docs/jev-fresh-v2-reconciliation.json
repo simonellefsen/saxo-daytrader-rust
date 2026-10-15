@@ -1,0 +1,507 @@
+{
+  "version": "fresh-v2-2026-09-26",
+  "protocol": "fresh-protocol-v2-2026-09-26-r3",
+  "what_this_is": "The reconciliation of fresh-v2, beside the delivered labels, the seeded cases and the recorded score. It reads every place the checker and the labels part, and partitions the recorded totals; it rescores nothing.",
+  "reconciles": {
+    "labels": "docs/jev-fresh-v2-labels.json",
+    "labels_sha256": "608de4382d4fb8767bb8456e0999644304f81fd73978aa783aaf8c130692b022",
+    "labeller_notes_sha256": "c60d2df555777e62e417593026364472d94f70bd1de53b524de8a83c88a4f228",
+    "seeded_sha256": "514563edfd929b3b1d09f01317b3c5057bfd224c2fe2819c900a8e0261ae96e8",
+    "results": "docs/jev-fresh-v2-results.json",
+    "results_sha256": "59f19b97012600c8f6e03af3537e712485142a9beaa65b87a006ee45b8697002",
+    "instrument_sha256": "4e9607ae3c7c7941f4ffc34cfeb717e40be3fd898a5d2b3f469b374c77ab0825",
+    "key_sha256": "1da849fca48944c5cbf06baf243fbee12b564b1c9c8a35ad70c1ff3a503036e1",
+    "manifest_sha256": "e07c570b4d939706b4bf478fd141e3ac7e148a92d6576673ae50f8a90b6658b2"
+  },
+  "reconciled_by": "Claude, the author of the checker. Not independent: every entry quotes the label, the key and the evidence as they are, so that someone who is can check it.",
+  "reconciled_at": "2026-10-15",
+  "rule": "Nothing delivered or scored is edited. Entries sit beside the labels and figures beside the recorded score. No label is overruled here, and nothing is settled in the checker's favour.",
+  "claims": [
+    {
+      "claim": "fresh-6a6646bff8#0",
+      "report": 373,
+      "symbol": "SALM:xosl",
+      "stratum": "reached_with_figures",
+      "category": "flagged_as_labelled",
+      "quote": "above 566 NOK support",
+      "figure": "566",
+      "label": {
+        "field": "daily_indicators.support.nearest_support",
+        "verdict": "inconsistent",
+        "note": "nearest_support is 566.8133, which rounds to 567; 566 is a truncation, inconsistent under the rounding convention."
+      },
+      "checker": {
+        "reading": "flagged",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "evidence": {
+        "daily_indicators.support.nearest_support": 566.8133333333333
+      },
+      "reading": "The stored nearest support, 566.81, rounds to 567. Under the rounding convention settled on 2026-09-26, 566 is a truncation and inconsistent. n20 flags it on the field the labeller names."
+    },
+    {
+      "claim": "fresh-87a32e4717#0",
+      "report": 385,
+      "symbol": "DEMANT:xcse",
+      "stratum": "reached_with_figures",
+      "category": "flagged_as_labelled",
+      "quote": "above 310.65 DKK nearest support",
+      "figure": "310.65",
+      "label": {
+        "field": "daily_indicators.support.nearest_support",
+        "verdict": "inconsistent",
+        "note": "Named as the nearest support, which is 318.075 in this evidence (next_support 308.85); 310.65 matches neither."
+      },
+      "checker": {
+        "reading": "flagged",
+        "field": "daily_indicators.support.nearest_support"
+      },
+      "evidence": {
+        "daily_indicators.support.nearest_support": 318.07500000000005
+      },
+      "reading": "The stored nearest support is 318.075. n20 flags 310.65 on the field the labeller names."
+    },
+    {
+      "claim": "fresh-0e85deb7ab#0",
+      "report": 393,
+      "symbol": "DB1Gn:xetr",
+      "stratum": "reached_with_figures",
+      "category": "unflagged_unattributed_price",
+      "quote": "consolidating near 281 EUR",
+      "figure": "281",
+      "label": {
+        "field": "daily_indicators.close",
+        "verdict": "inconsistent",
+        "note": "Read as a price level. Close is 292.2 (markov close 294.0), about 11 EUR or more than two ATRs away; no price field is near 281 (SMA50 279.89, SMA20 283.58, support 283.75)."
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "daily_indicators.close": 292.2
+      },
+      "reading": "n20 finds 281 but attributes it to no field, so it abstains. The labeller compares it with the close, 292.2. The same sentence is in reports 393 and 394, and the frame, taken whole, counts it in both."
+    },
+    {
+      "claim": "fresh-6aca487519#0",
+      "report": 394,
+      "symbol": "DB1Gn:xetr",
+      "stratum": "reached_with_figures",
+      "category": "unflagged_unattributed_price",
+      "quote": "consolidating near 281 EUR",
+      "figure": "281",
+      "label": {
+        "field": "daily_indicators.close",
+        "verdict": "inconsistent",
+        "note": "Read as a price level. Close is 292.2 (markov close 294.0), about 11 EUR or more than two ATRs away; no price field is near 281 (SMA50 279.89, SMA20 283.58, support 283.75)."
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "daily_indicators.close": 292.2
+      },
+      "reading": "The same sentence as fresh-0e85deb7ab#0, one report later. n20 attributes 281 to no field and abstains; the labeller compares it with the close, 292.2."
+    },
+    {
+      "claim": "fresh-284a298277#0",
+      "report": 382,
+      "symbol": "DEMANT:xcse",
+      "stratum": "reached_with_figures",
+      "category": "unflagged_unattributed_price",
+      "quote": "holding above 317.00 DKK",
+      "figure": "317.00",
+      "label": {
+        "field": "daily_indicators.close",
+        "verdict": "inconsistent",
+        "note": "Read as the price holding above 317.00 (not framed as intraday). Close is 314.0 (markov close 315.0), below 317.00. If 317.00 were the position's entry it would be out of scope, but the price-above claim still conflicts with the close."
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "daily_indicators.close": 314.0
+      },
+      "reading": "n20 finds 317.00 but attributes it to no field, so it abstains. The labeller reads 'holding above 317.00' against the close, 314.0."
+    },
+    {
+      "claim": "fresh-5e56403935#0",
+      "report": 390,
+      "symbol": "CHEMM:xcse",
+      "stratum": "never_reached",
+      "category": "unflagged_unattributed_price",
+      "quote": "consolidating at 570 DKK",
+      "figure": "570",
+      "label": {
+        "field": "markov.close",
+        "verdict": "inconsistent",
+        "note": "Not framed as intraday. The only price held is markov.close 576.0; 576 rounds to 576 or 580, not 570."
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "markov.close": 576.0
+      },
+      "reading": "Production never showed this note to the checker. Given it, n20 finds 570, attributes it to no field and abstains. The labeller compares it with markov.close, 576.0, the only price this evidence holds."
+    },
+    {
+      "claim": "fresh-893ae01c00#0",
+      "report": 390,
+      "symbol": "DEMANT:xcse",
+      "stratum": "never_reached",
+      "category": "unflagged_unattributed_price",
+      "quote": "trading stably at 323.8 DKK",
+      "figure": "323.8",
+      "label": {
+        "field": "markov.close",
+        "verdict": "inconsistent",
+        "note": "Not framed as intraday; the only price held is markov.close 325.2, and 325.2 does not round to 323.8."
+      },
+      "checker": {
+        "reading": "abstained",
+        "field": null
+      },
+      "evidence": {
+        "markov.close": 325.20001220703125
+      },
+      "reading": "Production never showed this note to the checker. Given it, n20 finds 323.8, attributes it to no field and abstains. The labeller compares it with markov.close, 325.2."
+    },
+    {
+      "claim": "fresh-078c696777#2",
+      "report": 389,
+      "symbol": "ASML:xams",
+      "stratum": "reached_with_figures",
+      "category": "omitted_k_suffixed_figure",
+      "quote": "single-share price (~12.2k DKK)",
+      "figure": "12.2k",
+      "label": {
+        "field": "daily_indicators.close_dkk",
+        "verdict": "consistent",
+        "note": "12231.76 DKK rounds to 12.2k."
+      },
+      "checker": {
+        "reading": "omitted",
+        "field": null
+      },
+      "evidence": {
+        "daily_indicators.close_dkk": 12231.762899780277
+      },
+      "reading": "n20 does not read a figure written with a k suffix, so it never reaches the claim. The seeded generator cannot rewrite it either, so it anchors nothing. The labeller reads 12,231.76 DKK as 12.2k."
+    }
+  ],
+  "signed_conviction": {
+    "claims": [
+      "fresh-02fbfb894e#0",
+      "fresh-06678d7d9e#1",
+      "fresh-0ae72f9d13#0",
+      "fresh-0c66c2090d#0",
+      "fresh-0e15a2d728#0",
+      "fresh-10dc8bec04#1",
+      "fresh-187f7608d3#0",
+      "fresh-1a17c274a9#0",
+      "fresh-1c39ac782f#0",
+      "fresh-1f16082a6a#2",
+      "fresh-229ffa0264#0",
+      "fresh-2923be7061#0",
+      "fresh-2c66157fbc#0",
+      "fresh-2fadc9b461#0",
+      "fresh-32f576cbd5#2",
+      "fresh-3a1486c20e#2",
+      "fresh-4058bf858b#1",
+      "fresh-40b34faea4#2",
+      "fresh-46bbed3dfd#0",
+      "fresh-4d0f987b18#1",
+      "fresh-541ebd1768#0",
+      "fresh-565308cf14#0",
+      "fresh-57bbe35eab#0",
+      "fresh-5e56403935#1",
+      "fresh-61bc8ac66f#2",
+      "fresh-6d81bd49a9#0",
+      "fresh-70183131f0#0",
+      "fresh-7f1f2454b5#0",
+      "fresh-8bfccf7d25#2",
+      "fresh-8ff91755d4#0",
+      "fresh-a1d4ea1fa9#0",
+      "fresh-a6ffaa2471#0",
+      "fresh-ab6468211b#0",
+      "fresh-ac08fb832f#0",
+      "fresh-ac6ba8e72f#0",
+      "fresh-ba66f03bc9#1",
+      "fresh-c86e75e284#0",
+      "fresh-cb591bcbfa#0",
+      "fresh-d1c1e015eb#0",
+      "fresh-dc9f5d25da#2",
+      "fresh-e7303507a2#0",
+      "fresh-f17bfdc333#2",
+      "fresh-f5126d0ce5#1"
+    ],
+    "label_field": "markov.signed_signal",
+    "checker_field": "markov.conviction",
+    "reading": "Every claim the checker decided on a field other than the labeller's is one of these: a figure written with a sign beside 'conviction'. The labeller follows the instrument's convention, from the 2026-09-26 adjudication (4f6822f), and reads markov.signed_signal; n20 reads the magnitude. Every one of the figures is positive, and in every one the stored signed_signal equals the stored conviction, so these notes cannot tell the two fields apart, and the verdicts agree on all of them. The seeded changes are where the reading decides outcomes: a sign flip, or signed_signal moved alone as corruption, separates the fields, and n20 then reads conviction.",
+    "status": "Unresolved. Whether the checker should read the convention is Simon's call. A checker changed to read it would be n21, which this set cannot validate, because these notes would have shaped it."
+  },
+  "seeded_partition": {
+    "reading": "Traced figure by figure under n20, after reproducing the recorded totals for both families: every error_accepted, false_alarm, flagged_wrong_field and right_verdict_wrong_field outcome in either family comes from the signed-conviction anchors. On every other anchor, every seeded decision the checker made is correct; it abstained on 118 changed valid_context figures from 27 distinct note-and-field anchors, and 66 changed corruption figures from 22.",
+    "qualification": "This split was chosen after scoring. It locates the disagreement and validates nothing."
+  },
+  "figures": {
+    "natural": {
+      "as_labelled": {
+        "every_note": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              248
+            ],
+            "inconsistent_accepted": [
+              0,
+              2
+            ],
+            "inconsistent_flagged": [
+              2,
+              7
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 143
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 143
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 143
+            },
+            "unflagged_error": {
+              "notes": [
+                5,
+                32
+              ],
+              "of": 143
+            },
+            "wrong_field": {
+              "notes": [
+                43,
+                43
+              ],
+              "of": 143
+            }
+          }
+        },
+        "notes_the_checker_read": {
+          "claims": {
+            "consistent_flagged": [
+              0,
+              207
+            ],
+            "inconsistent_accepted": [
+              0,
+              2
+            ],
+            "inconsistent_flagged": [
+              2,
+              5
+            ]
+          },
+          "notes": {
+            "accepted_error": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 100
+            },
+            "false_alarm": {
+              "notes": [
+                0,
+                0
+              ],
+              "of": 100
+            },
+            "omission": {
+              "notes": [
+                1,
+                1
+              ],
+              "of": 100
+            },
+            "unflagged_error": {
+              "notes": [
+                3,
+                13
+              ],
+              "of": 100
+            },
+            "wrong_field": {
+              "notes": [
+                21,
+                21
+              ],
+              "of": 100
+            }
+          }
+        }
+      },
+      "undecided_claims": {
+        "cannot_tell|not_in_evidence": 17,
+        "cannot_tell|unattributed": 21,
+        "cannot_tell|uncertain_attribution": 3,
+        "consistent|implausible_attribution": 2,
+        "consistent|omitted": 1,
+        "consistent|unattributed": 9,
+        "consistent|uncertain_attribution": 11,
+        "inconsistent|unattributed": 5
+      }
+    },
+    "seeded": {
+      "corruption": {
+        "as_scored": {
+          "changed|fails": {
+            "abstained": 44,
+            "correct": 410,
+            "error_accepted": 86
+          },
+          "changed|holds": {
+            "abstained": 22,
+            "correct": 205,
+            "false_alarm": 43
+          },
+          "untouched|holds": {
+            "abstained": 93,
+            "correct": 894,
+            "right_verdict_wrong_field": 75
+          }
+        },
+        "changed_abstentions": {
+          "distinct_note_and_field": 22,
+          "figures": 66
+        },
+        "other_anchors": {
+          "changed|fails": {
+            "abstained": 44,
+            "correct": 410
+          },
+          "changed|holds": {
+            "abstained": 22,
+            "correct": 205
+          },
+          "untouched|holds": {
+            "abstained": 93,
+            "correct": 894
+          }
+        },
+        "signed_conviction_anchors": {
+          "changed|fails": {
+            "error_accepted": 86
+          },
+          "changed|holds": {
+            "false_alarm": 43
+          },
+          "untouched|holds": {
+            "right_verdict_wrong_field": 75
+          }
+        }
+      },
+      "valid_context": {
+        "as_scored": {
+          "changed|fails": {
+            "abstained": 102,
+            "correct": 752,
+            "error_accepted": 43,
+            "flagged_wrong_field": 180
+          },
+          "changed|holds": {
+            "abstained": 16,
+            "correct": 54,
+            "right_verdict_wrong_field": 9
+          },
+          "changed|out_of_scope": {
+            "correct": 9
+          },
+          "changed|unsettleable": {
+            "correct": 270
+          },
+          "untouched|holds": {
+            "abstained": 155,
+            "correct": 1509,
+            "right_verdict_wrong_field": 99
+          }
+        },
+        "changed_abstentions": {
+          "distinct_note_and_field": 27,
+          "figures": 118
+        },
+        "other_anchors": {
+          "changed|fails": {
+            "abstained": 102,
+            "correct": 752
+          },
+          "changed|holds": {
+            "abstained": 16,
+            "correct": 54
+          },
+          "changed|out_of_scope": {
+            "correct": 9
+          },
+          "changed|unsettleable": {
+            "correct": 227
+          },
+          "untouched|holds": {
+            "abstained": 155,
+            "correct": 1509
+          }
+        },
+        "signed_conviction_anchors": {
+          "changed|fails": {
+            "error_accepted": 43,
+            "flagged_wrong_field": 180
+          },
+          "changed|holds": {
+            "right_verdict_wrong_field": 9
+          },
+          "changed|unsettleable": {
+            "correct": 43
+          },
+          "untouched|holds": {
+            "right_verdict_wrong_field": 99
+          }
+        }
+      }
+    },
+    "signed_conviction": {
+      "claims": 43,
+      "label_field_is_signed_signal": 43,
+      "labelled_consistent": 43,
+      "stored_signed_signal_equals_conviction": 43,
+      "written_positive": 43
+    }
+  },
+  "open_questions": [
+    "Signed conviction: should the checker read a signed figure beside 'conviction' as markov.signed_signal, as the labelling convention does? On these natural notes it changes no verdict; on the seeded sign flips and single-field corruption it decides every outcome partitioned under signed_conviction_anchors.",
+    "Bare price levels: n20 attributes 'consolidating near/at P', 'holding above P' and 'trading at P' to no field and abstains. The labeller compares them with the close. Whether such levels should be checked against a close, and with what tolerance for 'near', is open.",
+    "Figures written with a k suffix are not read: one consistent claim is omitted."
+  ],
+  "qualifications": [
+    "Counts describe these 36 reports only; no rate is extrapolated.",
+    "A result on a subset chosen after scoring locates a disagreement. It does not validate anything. The split by signed_conviction_anchors is such a subset.",
+    "'Valid context' means passing the checks in evidence_problems. It does not prove every relation in a synthetic context is valid.",
+    "The labels are one AI review, not ground truth."
+  ]
+}

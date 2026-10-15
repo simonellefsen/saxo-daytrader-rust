@@ -1369,6 +1369,8 @@ mod frozen {
     const LABELS_PATH: &str = "docs/jev-fresh-v2-labels.json";
     const SEEDED_PATH: &str = "docs/jev-fresh-v2-seeded.json";
     const RESULTS_PATH: &str = "docs/jev-fresh-v2-results.json";
+    const LABELLER_NOTES_PATH: &str = "docs/jev-fresh-v2-labeller-notes.md";
+    const RECONCILIATION_PATH: &str = "docs/jev-fresh-v2-reconciliation.json";
 
     fn frozen() -> Option<(Vec<NoteCase>, Vec<NoteKey>, JsonValue)> {
         let instrument = document(INSTRUMENT_PATH)?;
@@ -1490,6 +1492,271 @@ mod frozen {
         let generated = generated_as_stored(&cases, &labels);
         assert_eq!(seeded["cases"], generated["cases"]);
         assert_eq!(seeded["not_generated"], generated["not_generated"]);
+    }
+
+    /// Every claim the checker decided on a field other than the labeller's,
+    /// as `note-id#index`, in label order.
+    fn decided_on_another_field(
+        cases: &[NoteCase],
+        keys: &[NoteKey],
+        labels: &[FreshLabel],
+    ) -> Vec<String> {
+        let notes: BTreeMap<&str, &NoteCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
+        let key_by_id: BTreeMap<&str, &NoteKey> =
+            keys.iter().map(|key| (key.id.as_str(), key)).collect();
+        let mut found = Vec::new();
+        for label in labels {
+            for (index, claim) in label.claims.iter().enumerate() {
+                let Ok(span) = figure_span(&notes[label.id.as_str()].note, claim) else {
+                    continue;
+                };
+                let (read, hit) = reading(span, &key_by_id[label.id.as_str()].extracted);
+                if matches!(read, Reading::Accepted | Reading::Flagged)
+                    && hit.and_then(|figure| figure.field.as_deref()) != Some(claim.field.trim())
+                {
+                    found.push(format!("{}#{index}", label.id));
+                }
+            }
+        }
+        found
+    }
+
+    /// Every figure the reconciliation reports, computed from the frozen
+    /// inputs. Nothing in it is typed by hand.
+    fn reconciliation_figures_v2(
+        cases: &[NoteCase],
+        keys: &[NoteKey],
+        labels: &[FreshLabel],
+        seeded: &[SeededCase],
+        reconciliation: &JsonValue,
+    ) -> JsonValue {
+        let notes: BTreeMap<&str, &NoteCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
+        let key_by_id: BTreeMap<&str, &NoteKey> =
+            keys.iter().map(|key| (key.id.as_str(), key)).collect();
+
+        // Every claim the checker did not decide, by the label's verdict and
+        // what the key records for its figure.
+        let mut undecided: BTreeMap<String, usize> = BTreeMap::new();
+        for label in labels {
+            for claim in &label.claims {
+                let Ok(span) = figure_span(&notes[label.id.as_str()].note, claim) else {
+                    continue;
+                };
+                let (read, hit) = reading(span, &key_by_id[label.id.as_str()].extracted);
+                if !matches!(read, Reading::Accepted | Reading::Flagged) {
+                    let why = hit.map_or("omitted", |figure| figure.verdict.as_str());
+                    *undecided
+                        .entry(format!("{}|{why}", claim.verdict.trim()))
+                        .or_default() += 1;
+                }
+            }
+        }
+
+        let signed: Vec<(&str, &FreshClaim)> = reconciliation["signed_conviction"]["claims"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(JsonValue::as_str)
+            .map(|reference| {
+                let (id, index) = reference.split_once('#').expect("note-id#index");
+                let label = labels
+                    .iter()
+                    .find(|label| label.id == id)
+                    .expect("labelled");
+                (id, &label.claims[index.parse::<usize>().expect("index")])
+            })
+            .collect();
+        let count = |keep: &dyn Fn(&str, &FreshClaim) -> bool| {
+            signed.iter().filter(|(id, claim)| keep(id, claim)).count()
+        };
+        let signed_figures = json!({
+            "claims": signed.len(),
+            "label_field_is_signed_signal": count(&|_, claim| claim.field.trim() == "markov.signed_signal"),
+            "written_positive": count(&|_, claim| {
+                parse_written(&claim.figure).is_some_and(|written| written.value > 0.0)
+            }),
+            "stored_signed_signal_equals_conviction": count(&|id, _| {
+                let evidence = &notes[id].evidence;
+                number_at(evidence, "markov.signed_signal") == number_at(evidence, "markov.conviction")
+            }),
+            "labelled_consistent": count(&|_, claim| claim.verdict.trim() == "consistent"),
+        });
+
+        // The seeded readings are the checker's, and only the frozen method's
+        // are the ones this set measured. Under a later checker they cannot be
+        // recomputed from this tree; check them out at the scoring commit.
+        let frozen = crate::jev_numeric::NUMERIC_METHOD_VERSION == FROZEN_METHOD_V2
+            && checker_source_sha256() == CHECKER_SOURCE_SHA256;
+        let seeded_figures = if frozen {
+            let readings = seeded_readings(seeded);
+            let signed_notes: BTreeSet<&str> = signed.iter().map(|(id, _)| *id).collect();
+            // Each signed-conviction note holds one signed_signal anchor, so
+            // the note and the field name it in every seeded case.
+            let disputed = |case: &SeededCase, key: &SeededKey| {
+                signed_notes.contains(case.from_note.as_str())
+                    && key.field.as_deref() == Some("markov.signed_signal")
+            };
+            let mut families = serde_json::Map::new();
+            for family in ["valid_context", "corruption"] {
+                let mut abstained_anchors: BTreeSet<(&str, Option<&str>)> = BTreeSet::new();
+                let mut abstained_figures = 0;
+                for (case, outcomes) in seeded.iter().zip(&readings) {
+                    if case.family != family {
+                        continue;
+                    }
+                    for (key, outcome) in case.keys.iter().zip(outcomes) {
+                        if key.changed && *outcome == "abstained" {
+                            abstained_figures += 1;
+                            abstained_anchors
+                                .insert((case.from_note.as_str(), key.field.as_deref()));
+                        }
+                    }
+                }
+                families.insert(
+                    family.to_string(),
+                    json!({
+                        "as_scored": seeded_totals(seeded, &readings, |case, _| case.family == family),
+                        "signed_conviction_anchors": seeded_totals(seeded, &readings, |case, key| {
+                            case.family == family && disputed(case, key)
+                        }),
+                        "other_anchors": seeded_totals(seeded, &readings, |case, key| {
+                            case.family == family && !disputed(case, key)
+                        }),
+                        "changed_abstentions": {
+                            "figures": abstained_figures,
+                            "distinct_note_and_field": abstained_anchors.len(),
+                        },
+                    }),
+                );
+            }
+            JsonValue::Object(families)
+        } else {
+            JsonValue::Null
+        };
+
+        json!({
+            "natural": {
+                "as_labelled": score_natural(cases, keys, labels)["headline"].clone(),
+                "undecided_claims": undecided,
+            },
+            "signed_conviction": signed_figures,
+            "seeded": seeded_figures,
+        })
+    }
+
+    /// The reconciliation sits beside the delivered labels, the seeded cases
+    /// and the recorded score, and edits none of them. Every entry quotes the
+    /// labels, the key and the evidence as they are, and every figure is
+    /// recomputed here.
+    #[test]
+    fn the_reconciliation_is_beside_the_labels_not_over_them() {
+        let (
+            Some(reconciliation),
+            Some((cases, keys, _)),
+            Some((labels, _)),
+            Some(seeded),
+            Some(results),
+        ) = (
+            document(RECONCILIATION_PATH),
+            frozen(),
+            labels(),
+            document(SEEDED_PATH),
+            document(RESULTS_PATH),
+        )
+        else {
+            return;
+        };
+        for (field, path) in [
+            ("labels_sha256", LABELS_PATH),
+            ("labeller_notes_sha256", LABELLER_NOTES_PATH),
+            ("seeded_sha256", SEEDED_PATH),
+            ("results_sha256", RESULTS_PATH),
+            ("instrument_sha256", INSTRUMENT_PATH),
+            ("key_sha256", KEY_PATH),
+            ("manifest_sha256", MANIFEST_PATH),
+        ] {
+            assert_eq!(
+                reconciliation["reconciles"][field],
+                sha256_of(path),
+                "{path} was edited"
+            );
+        }
+        let notes: BTreeMap<&str, &NoteCase> =
+            cases.iter().map(|case| (case.id.as_str(), case)).collect();
+        let key_by_id: BTreeMap<&str, &NoteKey> =
+            keys.iter().map(|key| (key.id.as_str(), key)).collect();
+        for entry in reconciliation["claims"].as_array().expect("claims") {
+            let reference = entry["claim"].as_str().expect("claim");
+            let (id, index) = reference.split_once('#').expect("note-id#index");
+            let label = labels
+                .iter()
+                .find(|label| label.id == id)
+                .expect("labelled");
+            let claim = &label.claims[index.parse::<usize>().expect("index")];
+            assert_eq!(
+                entry["quote"], claim.quote,
+                "{reference} misquotes the label"
+            );
+            assert_eq!(entry["figure"], claim.figure, "{reference}");
+            assert_eq!(entry["label"]["field"], claim.field, "{reference}");
+            assert_eq!(entry["label"]["verdict"], claim.verdict, "{reference}");
+            assert_eq!(entry["label"]["note"], claim.note, "{reference}");
+            assert_eq!(entry["report"], notes[id].source_report, "{reference}");
+            assert_eq!(entry["symbol"], notes[id].symbol, "{reference}");
+            assert_eq!(entry["stratum"], key_by_id[id].stratum, "{reference}");
+            let span = figure_span(&notes[id].note, claim).expect("span");
+            let (read, hit) = reading(span, &key_by_id[id].extracted);
+            assert_eq!(
+                entry["checker"]["reading"],
+                read.as_str(),
+                "{reference} misquotes the key"
+            );
+            assert_eq!(
+                entry["checker"]["field"],
+                json!(hit.and_then(|figure| figure.field.clone())),
+                "{reference}"
+            );
+            for (path, value) in entry["evidence"].as_object().expect("evidence") {
+                assert_eq!(
+                    number_at(&notes[id].evidence, path),
+                    value.as_f64(),
+                    "{reference} misquotes the evidence at {path}"
+                );
+            }
+        }
+        assert_eq!(
+            reconciliation["signed_conviction"]["claims"],
+            json!(decided_on_another_field(&cases, &keys, &labels)),
+            "the signed-conviction list is every claim decided on another field"
+        );
+        let seeded_cases: Vec<SeededCase> =
+            serde_json::from_value(seeded["cases"].clone()).expect("seeded cases");
+        let computed =
+            reconciliation_figures_v2(&cases, &keys, &labels, &seeded_cases, &reconciliation);
+        println!("{}", serde_json::to_string_pretty(&computed).expect("json"));
+        assert_eq!(
+            computed["natural"]["as_labelled"], results["natural"]["headline"],
+            "the natural headline reproduces the recorded run"
+        );
+        for part in ["natural", "signed_conviction"] {
+            assert_eq!(reconciliation["figures"][part], computed[part], "{part}");
+        }
+        if computed["seeded"].is_null() {
+            println!(
+                "The checker has moved past {FROZEN_METHOD_V2}: seeded figures not recomputed."
+            );
+            return;
+        }
+        for family in ["valid_context", "corruption"] {
+            assert_eq!(
+                computed["seeded"][family]["as_scored"],
+                results["seeded"]["families"][family]["totals"],
+                "the per-figure reading reproduces the recorded {family} run"
+            );
+        }
+        assert_eq!(reconciliation["figures"], computed);
     }
 
     #[test]
