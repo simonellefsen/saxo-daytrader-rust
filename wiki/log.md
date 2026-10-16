@@ -3122,3 +3122,11 @@ broker mutation was added.
   - no failed Jev call has ever been recorded;
   - marker screen vs Jev: 6 items judged, all clear on both.
 - **Open question from it: editorial scoring has judged nothing since its first day.** The editorial step finds no unjudged pair, so no newly stored item has matched a symbol since then. The feed has one source (App Economy Insights, 7 symbol aliases, refreshed every 4 hours). Not yet established: whether its fetches are failing, or its items simply stopped matching. The previous pod's logs went with the rollout, and nothing exposes `editorial_research_runs`.
+
+## [2026-10-16] Jev | Why editorial scoring went quiet: the source stopped naming tracked companies
+
+- Answered the open question from the panel entry above, with a read-only query of `editorial_research_runs` and `editorial_research_items` that Simon approved.
+- **The fetch path is healthy.** App Economy Insights has been fetched six times a day since 2026-09-08, every run `ok` with 12 items, apart from one error on 2026-09-30, the power outage. It adds about three new posts a week.
+- **Matching is working; the posts no longer name any of the 7 aliases.** 48 items are stored, and 6 ever matched a symbol. Those six were first seen between 2026-07-20 and 2026-08-07, in the July–August earnings season: Netflix, Google, Tesla, Amazon, Uber, and ASML in one weekly roundup. Jev judged all six on 2026-09-20, its first day. Every later post is about a company outside the alias list, such as Meta, OpenAI, Oracle, Snowflake or big banks, or is a weekly roundup. A whole-word search of title and summary agrees with the stored matches on all 20 newest items. "Why Is Bezos Buying Liverpool FC?" correctly does not match Amazon.
+- **Jev mostly judges a title.** This feed's summaries run 11 to 69 characters, so `max_summary_chars: 800` never binds.
+- Not a defect, so nothing changed. The volume follows from one source and seven aliases. Matches should resume when the tracked companies report Q3 in late October, if the source covers them. Adding sources or aliases is a signal-source decision, and [todo T2](todo.md) item 3 asks for evaluable outcomes over new signal sources; it is the operator's call.
