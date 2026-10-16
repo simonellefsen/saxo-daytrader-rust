@@ -554,6 +554,102 @@ pub(crate) fn summarize(entries: &[JsonValue]) -> JsonValue {
 mod tests {
     use super::*;
 
+    /// The endpoint decodes what these builders emit into a typed read model.
+    /// Decoding must lose nothing the builder said, and the weekly snapshot,
+    /// which stores the builder's own JSON, must read back the same way.
+    #[test]
+    fn the_evaluation_decodes_into_its_read_model_without_loss() {
+        let closes: Vec<(String, f64)> = (1..=25)
+            .map(|day| (format!("2026-09-{:02}", day + 1), 100.0 + day as f64))
+            .collect();
+        let benchmark: Vec<(String, f64)> = (0..=25)
+            .map(|day| (format!("2026-09-{:02}", day + 1), 50.0 + day as f64 / 10.0))
+            .collect();
+        let resolved = evaluate_entry(
+            &Entry {
+                symbol: "NOVO-B:xcse",
+                filled_at: "2026-09-01T09:30:00Z",
+                fill_price_local: 100.0,
+                quantity: 10.0,
+                model: "openai/gpt-5",
+                forward_closes: &closes,
+                benchmark_closes: &benchmark,
+                min_commission_local: 29.0,
+                rate_per_side: COMMISSION_RATE_PER_SIDE,
+            },
+            25,
+        );
+        let pending = evaluate_entry(
+            &Entry {
+                symbol: "TSLA:xnas",
+                filled_at: "2026-10-15T14:00:00Z",
+                fill_price_local: 250.0,
+                quantity: 2.0,
+                model: "openai/gpt-5",
+                forward_closes: &[],
+                benchmark_closes: &[],
+                min_commission_local: 1.0,
+                rate_per_side: COMMISSION_RATE_PER_SIDE,
+            },
+            0,
+        );
+        let entries = vec![resolved, pending];
+        let mut built = summarize(&entries);
+        built["generated_at"] = json!("2026-10-16T08:00:00Z");
+        built["entries"] = JsonValue::from(entries);
+
+        let typed: crate::models::EntryEvaluationPayload =
+            crate::read_model::decode("entry evaluation", built.clone()).expect("decodes");
+        assert_eq!(typed.entry_count, 2);
+        assert_eq!(typed.entries[0].horizons[0].status, "resolved");
+        assert_eq!(typed.entries[1].horizons[0].status, "pending");
+        assert_eq!(
+            typed.entries[1].horizons[0].net_return, None,
+            "pending is never zero"
+        );
+
+        // Field for field, apart from a key the builder omits and the read
+        // model writes as null, which `read_model` treats as the same claim.
+        let served = serde_json::to_value(&typed).unwrap();
+        fn same(built: &JsonValue, served: &JsonValue, path: &str) {
+            match (built, served) {
+                (JsonValue::Object(built), JsonValue::Object(served)) => {
+                    for (key, value) in built {
+                        same(
+                            value,
+                            served.get(key).unwrap_or(&JsonValue::Null),
+                            &format!("{path}.{key}"),
+                        );
+                    }
+                    for (key, value) in served {
+                        assert!(
+                            built.contains_key(key) || value.is_null(),
+                            "{path}.{key} is new and not null"
+                        );
+                    }
+                }
+                (JsonValue::Array(built), JsonValue::Array(served)) => {
+                    assert_eq!(built.len(), served.len(), "{path} length");
+                    for (index, (left, right)) in built.iter().zip(served).enumerate() {
+                        same(left, right, &format!("{path}[{index}]"));
+                    }
+                }
+                (JsonValue::Number(left), JsonValue::Number(right)) => {
+                    assert_eq!(left.as_f64(), right.as_f64(), "{path}");
+                }
+                (left, right) => assert_eq!(left, right, "{path}"),
+            }
+        }
+        same(&built, &served, "$");
+
+        crate::read_model::assert_null_is_never_worse_than_absent(&built, |value| {
+            crate::read_model::decode::<crate::models::EntryEvaluationPayload>(
+                "entry evaluation",
+                value,
+            )
+        });
+    }
+
     fn entry<'a>(
         symbol: &'a str,
         filled_at: &'a str,

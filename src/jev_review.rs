@@ -1483,6 +1483,97 @@ mod tests {
         assert_eq!(row["cost_usd"].as_f64(), Some(0.0000042));
     }
 
+    /// `/api/ai/jev` built typed against a real schema: every section reads,
+    /// the agreement and stored results decode, and a disagreement's marker
+    /// flag is a boolean rather than the stored 0 or 1.
+    #[tokio::test]
+    async fn the_observations_payload_builds_typed_against_the_schema() {
+        let state = worker_state("http://127.0.0.1:9").await;
+        sqlx::query(
+            "CREATE TABLE editorial_research_items (id TEXT PRIMARY KEY, title TEXT, source_name TEXT)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO jev_editorial_signals
+                (item_id, symbol, created_at, instruction_shaped, marker_screened, evidence_title)
+             VALUES ('item-1', 'NOVO:xcse', $1, 0.93, 0, 'Reads like an instruction')",
+        )
+        .bind(jev_signals::now_rfc3339())
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let grade = crate::jev::JevResponse {
+            answers: BTreeMap::new(),
+            issues: Vec::new(),
+            usage: crate::jev::JevUsage {
+                input_tokens: 6_930,
+                output_tokens: 0,
+            },
+            cost_usd: Some(0.00029),
+            cost_source: "billed",
+            measurement: json!({"schema_version": "test"}),
+            model_resolved: Some("typesafe/jev-1.14-20261014".to_string()),
+            latency_ms: 900,
+            attempts: 1,
+            attempt_log: Vec::new(),
+            request_bytes: 30_000,
+            estimated_input_tokens: 20_000,
+        };
+        jev_store::record_success(
+            &state.pool,
+            jev_store::RecordedRequest {
+                id: "grade-401",
+                created_at: "2026-10-16T07:30:00Z",
+                purpose: jev_store::PURPOSE_REPORT_GRADING,
+                subject: Some("401"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 22,
+            },
+            &grade,
+            Some(&json!({"version": REPORT_GRADING_VERSION, "numeric_checks": []})),
+        )
+        .await
+        .unwrap();
+
+        let payload = state.jev_observations(100, 30).await.expect("builds");
+        assert_eq!(payload.status, "ok");
+        assert_eq!(payload.signal_count, 1);
+        assert_eq!(payload.screening_agreement.jev_only, 1);
+        assert!(!payload.screening_disagreements[0].marker_screened);
+        assert_eq!(payload.report_grades.len(), 1);
+        assert_eq!(payload.report_grades[0].subject.as_deref(), Some("401"));
+        assert_eq!(
+            payload.report_grades[0].result_json["version"], REPORT_GRADING_VERSION,
+            "the measurement document is kept whole"
+        );
+        assert_eq!(
+            payload.models.current_model.as_deref(),
+            Some("typesafe/jev-1.14-20261014")
+        );
+        assert_eq!(payload.operator.purposes[0].max_input_tokens, Some(6_930));
+        assert!(payload.operator.unavailable_sources.is_empty());
+
+        let served = serde_json::to_value(&payload).unwrap();
+        for key in [
+            "retention",
+            "screening_agreement",
+            "screening_disagreements",
+            "symbol_rankings",
+            "models",
+            "operator",
+            "report_grades",
+            "failure_classifications",
+        ] {
+            assert!(served.get(key).is_some(), "{key} is served");
+        }
+        assert_eq!(
+            served["screening_disagreements"][0]["marker_screened"],
+            false
+        );
+    }
+
     /// The A.3 follow-on: a subject too large to send is refused once and
     /// skipped from then on. Selection is newest first, so before this it
     /// stopped its step's batch on every cycle and nothing behind it was

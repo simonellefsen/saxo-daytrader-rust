@@ -16039,53 +16039,88 @@ impl AppState {
     /// Observational throughout. Nothing here is read by a path that can
     /// admit, size, or block a trade -- the rankings in particular are a view
     /// of news standing, not a candidate list.
-    pub async fn jev_observations(&self, limit: i64, days: i64) -> Result<JsonValue> {
+    pub async fn jev_observations(
+        &self,
+        limit: i64,
+        days: i64,
+    ) -> Result<crate::models::JevObservationsPayload> {
         let since = (Utc::now() - chrono::Duration::days(days.clamp(1, 365)))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let threshold = crate::jev_store::INSTRUCTION_SHAPED_THRESHOLD;
 
         let signals = crate::jev_store::recent_signals(&self.pool, &since, limit).await?;
-        let rankings = crate::jev_signals::symbol_rankings(&signals);
-        Ok(json!({
-            "status": self.jev_status(),
-            "since": since,
-            "signal_count": signals.len(),
-            "retention": crate::jev_signals::retention_summary(
+        let retention = crate::read_model::decode(
+            "jev retention",
+            crate::jev_signals::retention_summary(
                 &signals,
                 &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             ),
-            "screening_agreement":
-                crate::jev_store::screening_agreement(&self.pool, threshold).await?,
-            "screening_disagreements":
-                crate::jev_store::screening_disagreements(&self.pool, threshold, 100).await?,
-            "symbol_rankings": rankings
-                .iter()
-                .map(|ranking| json!({
-                    "symbol": ranking.symbol,
-                    "score": ranking.score,
-                    "item_count": ranking.item_count,
-                    "newest_at": ranking.newest_at,
-                }))
-                .collect::<Vec<_>>(),
-            "models": self.jev_models().await,
-            "operator": self.jev_operator().await,
-            "report_grades": crate::jev_store::results_for(
-                &self.pool,
-                crate::jev_store::PURPOSE_REPORT_GRADING,
-                50,
+        )?;
+        let screening_agreement = crate::read_model::decode(
+            "jev screening agreement",
+            crate::jev_store::screening_agreement(&self.pool, threshold).await?,
+        )?;
+        let results = |rows: Vec<JsonValue>| {
+            crate::read_model::decode_each::<crate::models::JevStoredResultPayload>(
+                "jev stored results",
+                rows,
             )
-            .await?,
-            "failure_classifications": crate::jev_store::results_for(
-                &self.pool,
-                crate::jev_store::PURPOSE_ERROR_CLASSIFICATION,
-                50,
-            )
-            .await?,
-            "admission": "observational_only",
-            "safety": "Jev judgements are recorded and ranked for measurement only. They \
-                       cannot admit an item the marker screen excluded, create a candidate, \
-                       size or block a trade, or reach Saxo.",
-        }))
+        };
+        Ok(crate::models::JevObservationsPayload {
+            status: self.jev_status().to_string(),
+            since: Some(since.clone()),
+            signal_count: signals.len() as i64,
+            retention,
+            screening_agreement,
+            screening_disagreements: crate::jev_store::disagreements_from_rows(
+                &crate::jev_store::screening_disagreements(&self.pool, threshold, 100).await?,
+            ),
+            symbol_rankings: crate::jev_signals::symbol_rankings(&signals)
+                .into_iter()
+                .map(|ranking| crate::models::JevSymbolRankingPayload {
+                    symbol: ranking.symbol,
+                    score: ranking.score,
+                    item_count: ranking.item_count,
+                    newest_at: ranking.newest_at,
+                })
+                .collect(),
+            models: self.jev_models().await,
+            operator: self.jev_operator().await,
+            report_grades: results(
+                crate::jev_store::results_for(
+                    &self.pool,
+                    crate::jev_store::PURPOSE_REPORT_GRADING,
+                    50,
+                )
+                .await?,
+            )?,
+            failure_classifications: results(
+                crate::jev_store::results_for(
+                    &self.pool,
+                    crate::jev_store::PURPOSE_ERROR_CLASSIFICATION,
+                    50,
+                )
+                .await?,
+            )?,
+            admission: "observational_only".to_string(),
+            safety: "Jev judgements are recorded and ranked for measurement only. They \
+                     cannot admit an item the marker screen excluded, create a candidate, \
+                     size or block a trade, or reach Saxo."
+                .to_string(),
+            unavailable_reason: None,
+        })
+    }
+
+    /// The entry evaluation as a typed read model. The builder below stays
+    /// JSON because the weekly snapshot stores exactly what it emits.
+    pub async fn entry_evaluation_payload(
+        &self,
+        limit: i64,
+    ) -> Result<crate::models::EntryEvaluationPayload> {
+        Ok(crate::read_model::decode(
+            "entry evaluation",
+            self.entry_evaluation(limit).await?,
+        )?)
     }
 
     /// Forward evaluation of every BUY fill at the declared horizons.

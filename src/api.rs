@@ -1897,12 +1897,6 @@ async fn ai_provider_capabilities(
     ))
 }
 
-/// Forward evaluation of every BUY fill at the pre-registered horizons.
-///
-/// Read-only measurement. It proposes nothing, gates nothing, and reaches no
-/// broker; it exists so a claim about entry quality can be re-run rather than
-/// recited. A degraded read returns the error rather than an empty summary,
-/// because an empty evaluation and a failed one are different answers.
 /// Jev judgements, and where they disagree with the marker screen.
 ///
 /// `limit` bounds the signals ranked; `days` bounds how far back they are read
@@ -1910,7 +1904,7 @@ async fn ai_provider_capabilities(
 async fn jev_observations(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LlmUsageParams>,
-) -> Json<JsonValue> {
+) -> Json<crate::models::JevObservationsPayload> {
     match state
         .jev_observations(params.limit.unwrap_or(1_000), params.days.unwrap_or(30))
         .await
@@ -1918,22 +1912,49 @@ async fn jev_observations(
         Ok(payload) => Json(payload),
         Err(err) => {
             warn!("Jev observations endpoint degraded: {err:#}");
-            Json(json!({"status": "unavailable", "reason": format!("{err:#}")}))
+            Json(crate::models::JevObservationsPayload {
+                status: "unavailable".to_string(),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
         }
     }
 }
 
+/// Forward evaluation of every BUY fill at the pre-registered horizons.
+///
+/// Read-only measurement. It proposes nothing, gates nothing, and reaches no
+/// broker; it exists so a claim about entry quality can be re-run rather than
+/// recited. A degraded read is marked `unavailable` with its reason rather
+/// than served as an empty summary, because an empty evaluation and a failed
+/// one are different answers.
 async fn entry_evaluation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LimitParams>,
-) -> Json<JsonValue> {
-    match state.entry_evaluation(params.limit.unwrap_or(500)).await {
+) -> Json<crate::models::EntryEvaluationPayload> {
+    match state
+        .entry_evaluation_payload(params.limit.unwrap_or(500))
+        .await
+    {
         Ok(payload) => Json(payload),
         Err(err) => {
             warn!("entry evaluation endpoint degraded: {err:#}");
-            Json(json!({"status": "unavailable", "reason": format!("{err:#}")}))
+            Json(crate::models::EntryEvaluationPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
         }
     }
+}
+
+/// A failure's text as an API consumer sees it: token-shaped words masked
+/// and the length bounded. The full chain stays in the log.
+fn unavailable_reason(err: &anyhow::Error) -> String {
+    crate::debug_redaction::redact_debug_text(&format!("{err:#}"))
+        .chars()
+        .take(240)
+        .collect()
 }
 
 /// Per-request LLM token and cost measurement.

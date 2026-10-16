@@ -1589,31 +1589,39 @@ fn screening_from(
         both_clear: count("both_clear"),
         marker_only: count("marker_only"),
         jev_only: count("jev_only"),
-        disagreements: disagreements
-            .iter()
-            .filter_map(|row| {
-                let text = |key: &str| {
-                    row.get(key)
-                        .and_then(JsonValue::as_str)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string)
-                };
-                Some(crate::models::JevScreeningDisagreementPayload {
-                    item_id: text("item_id")?,
-                    symbol: text("symbol").unwrap_or_default(),
-                    created_at: text("created_at").unwrap_or_default(),
-                    marker_screened: row
-                        .get("marker_screened")
-                        .and_then(JsonValue::as_i64)
-                        .unwrap_or(0)
-                        != 0,
-                    instruction_shaped: row.get("instruction_shaped")?.as_f64()?,
-                    title: text("title"),
-                    source_name: text("source_name"),
-                })
-            })
-            .collect(),
+        disagreements: disagreements_from_rows(disagreements),
     }
+}
+
+/// Typed disagreement rows. `marker_screened` is stored as 0 or 1 and read as
+/// a flag; a row without an `instruction_shaped` value is not a disagreement
+/// and is dropped.
+pub(crate) fn disagreements_from_rows(
+    rows: &[JsonValue],
+) -> Vec<crate::models::JevScreeningDisagreementPayload> {
+    rows.iter()
+        .filter_map(|row| {
+            let text = |key: &str| {
+                row.get(key)
+                    .and_then(JsonValue::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            };
+            Some(crate::models::JevScreeningDisagreementPayload {
+                item_id: text("item_id")?,
+                symbol: text("symbol").unwrap_or_default(),
+                created_at: text("created_at").unwrap_or_default(),
+                marker_screened: row
+                    .get("marker_screened")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0)
+                    != 0,
+                instruction_shaped: row.get("instruction_shaped")?.as_f64()?,
+                title: text("title"),
+                source_name: text("source_name"),
+            })
+        })
+        .collect()
 }
 
 /// How many cycle intervals may pass before an enabled worker counts as silent.

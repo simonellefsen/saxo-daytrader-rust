@@ -1814,6 +1814,160 @@ pub struct JevModelsPayload {
     pub unavailable: bool,
 }
 
+/// How many editorial judgements could serve as decision features, and why
+/// the rest cannot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JevRetentionPayload {
+    pub features_available_as_of: String,
+    pub features_available: i64,
+    pub decision_time: i64,
+    pub backlog: i64,
+    pub unknown_timing: i64,
+    pub partial_answers: i64,
+    pub unversioned: i64,
+    pub measurement_versions: BTreeMap<String, i64>,
+    pub resolved_models: BTreeMap<String, i64>,
+    pub current_measurement_version: String,
+    pub decision_time_window_seconds: i64,
+    pub interpretation: String,
+}
+
+/// The marker screen against Jev's `instruction_shaped`, counted both ways.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JevScreeningAgreementPayload {
+    pub judged_count: i64,
+    pub both_flagged: i64,
+    pub both_clear: i64,
+    pub marker_only: i64,
+    pub jev_only: i64,
+    pub threshold: f64,
+    pub marker_only_meaning: String,
+    pub jev_only_meaning: String,
+    pub admission: String,
+}
+
+/// One symbol's aggregated news standing. A view, never a candidate list.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevSymbolRankingPayload {
+    pub symbol: String,
+    pub score: f64,
+    pub item_count: i64,
+    pub newest_at: String,
+}
+
+/// One stored Jev result. `result_json` is the full measurement document --
+/// questions, validated answers, findings -- kept whole as an audit record
+/// whose schema moves with each question version.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JevStoredResultPayload {
+    pub created_at: String,
+    pub subject: Option<String>,
+    pub model_resolved: Option<String>,
+    pub result_json: JsonValue,
+}
+
+/// `/api/ai/jev`: what Jev has judged, and how the observation is running.
+/// Observational throughout.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevObservationsPayload {
+    /// `ok`, `disabled`, `missing_api_key`, or `unavailable` when the payload
+    /// itself could not be built.
+    pub status: String,
+    pub since: Option<String>,
+    pub signal_count: i64,
+    pub retention: JevRetentionPayload,
+    pub screening_agreement: JevScreeningAgreementPayload,
+    pub screening_disagreements: Vec<JevScreeningDisagreementPayload>,
+    pub symbol_rankings: Vec<JevSymbolRankingPayload>,
+    pub models: JevModelsPayload,
+    pub operator: JevOperatorPayload,
+    pub report_grades: Vec<JevStoredResultPayload>,
+    pub failure_classifications: Vec<JevStoredResultPayload>,
+    pub admission: String,
+    pub safety: String,
+    /// Why the payload is `unavailable`, bounded and redacted.
+    pub unavailable_reason: Option<String>,
+}
+
+/// One declared horizon of one evaluated entry.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EntryHorizonOutcomePayload {
+    pub horizon_sessions: i64,
+    /// `resolved`, `pending` or `unavailable`. Only resolved horizons carry
+    /// returns; a pending one is never a zero.
+    pub status: String,
+    pub horizon_date: Option<String>,
+    pub gross_return: Option<f64>,
+    pub net_return: Option<f64>,
+    pub round_trip_cost_fraction: Option<f64>,
+    pub benchmark_return: Option<f64>,
+    pub benchmark_base_observed: Option<String>,
+    pub benchmark_horizon_observed: Option<String>,
+    pub excess_return: Option<f64>,
+}
+
+/// One BUY fill evaluated forward, open positions included.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EntryEvaluationRowPayload {
+    pub symbol: String,
+    pub filled_at: String,
+    pub epoch: String,
+    pub model: String,
+    pub fill_price_local: f64,
+    pub quantity: f64,
+    pub notional_local: f64,
+    pub sessions_elapsed: i64,
+    pub horizons: Vec<EntryHorizonOutcomePayload>,
+}
+
+/// One (epoch, horizon) cell, with its own denominators.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EntryEvaluationCellPayload {
+    pub epoch: String,
+    pub horizon_sessions: i64,
+    pub resolved: i64,
+    pub pending: i64,
+    pub unavailable: i64,
+    pub mean_gross_return: Option<f64>,
+    pub mean_net_return: Option<f64>,
+    pub net_positive_rate: Option<f64>,
+    pub benchmark_compared: i64,
+    pub mean_excess_return: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EntryEvaluationEpochPayload {
+    pub key: String,
+    pub start_utc: String,
+    pub reason: String,
+}
+
+/// `/api/evaluation/entries`: every BUY fill at the declared horizons.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EntryEvaluationPayload {
+    pub horizons: Vec<i64>,
+    pub epochs: Vec<EntryEvaluationEpochPayload>,
+    pub entry_count: i64,
+    pub entries_by_epoch: BTreeMap<String, i64>,
+    pub cells: Vec<EntryEvaluationCellPayload>,
+    pub methodology_version: String,
+    /// What each figure means and what it cannot claim, as written.
+    pub definitions: BTreeMap<String, String>,
+    pub generated_at: String,
+    pub entries: Vec<EntryEvaluationRowPayload>,
+    /// Set only when the evaluation could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
 /// What the Jev observation worker did on its latest cycle, step by step.
 ///
 /// Written by the worker itself, so a backlog is the one its own selection

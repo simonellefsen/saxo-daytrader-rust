@@ -997,6 +997,27 @@ mod tests {
         }
     }
 
+    /// `/api/ai/jev` decodes the retention summary into a read model; nothing
+    /// the summary counts may be lost on the way.
+    #[test]
+    fn the_retention_summary_decodes_into_its_read_model() {
+        let rows = vec![json!({
+            "evidence_timing": "decision_time",
+            "available_at": "2026-10-16T07:00:00Z",
+            "model_resolved": "typesafe/jev-1.14-20261014",
+            "measurement_version": NEWS_QUESTION_SET_VERSION,
+            "answered_question_count": 5,
+            "expected_question_count": 6,
+        })];
+        let built = retention_summary(&rows, "2026-10-16T08:00:00Z");
+        let typed: crate::models::JevRetentionPayload =
+            crate::read_model::decode("jev retention", built.clone()).expect("decodes");
+        assert_eq!(serde_json::to_value(&typed).unwrap(), built);
+        crate::read_model::assert_null_is_never_worse_than_absent(&built, |value| {
+            crate::read_model::decode::<crate::models::JevRetentionPayload>("jev retention", value)
+        });
+    }
+
     /// Failure text leaves the system, so every credential shape is masked
     /// before it does, while the wording a classifier needs survives.
     #[test]
