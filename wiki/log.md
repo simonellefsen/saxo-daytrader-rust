@@ -3106,3 +3106,19 @@ broker mutation was added.
 - Rejected at Simon's request, with the reason in its approval notes. Done through the transition endpoint, with actor `operator`.
 - The server had stored Hermes's `old_value` verbatim. Since `bd02ef9`, both proposal paths (the MCP tool and `POST /api/hermes/experiments`) refuse a proposal that does not start from the running value (`stale_starting_point`), proposes the value already running (`no_change`), or names a path with no single setting (`unknown_variable`). Each refusal carries the running value. Released and smoke-tested; CI green.
 - Still true, per [todo T3](todo.md): this threshold binds mainly through Hermes's advice, because the deterministic gate only reads it after the technical gate rejects a BUY.
+
+## [2026-10-16] Jev | Operator panel finished (adoption item A.2)
+
+- `53cb8ee` puts the rest of the operator panel on the AI Prompts view, beside the Jev Model card. `/api/ai/jev` carries the same data under `operator`.
+  - **Worker:** each cycle writes `jev_worker_status`, one row per step and one for the cycle. A row holds the step's status, its last clean run and last failed run, and the backlog its own selection saw and left. An enabled worker with no cycle in 30 minutes reads as silent.
+  - **Calls, per purpose:** answered, partial and failed calls, failures since the last answer, and the latest failure as a bounded label, never the provider's text.
+  - **Cost coverage, per purpose:** billed, rate-card and no-cost answers counted apart.
+  - **Marker screen vs Jev:** counts in both directions, and the newest 20 disagreements under the title Jev judged.
+- The status note sits beside item 2 in [the adoption review](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md). Rows are still logical calls, not attempts; that is A.3, still open.
+- Released and smoke-tested with 0 warnings; CI green. The first cycle under the new code, at 04:40Z, ran all four steps clean with nothing waiting.
+- What the panel showed at release:
+  - report grading: 2,061 calls, 2,013 complete, 48 partial and none failed; every call billed, USD 0.557 in all;
+  - failure classification: 22 calls; editorial items: 6. **Both were last answered on 2026-09-20**;
+  - no failed Jev call has ever been recorded;
+  - marker screen vs Jev: 6 items judged, all clear on both.
+- **Open question from it: editorial scoring has judged nothing since its first day.** The editorial step finds no unjudged pair, so no newly stored item has matched a symbol since then. The feed has one source (App Economy Insights, 7 symbol aliases, refreshed every 4 hours). Not yet established: whether its fetches are failing, or its items simply stopped matching. The previous pod's logs went with the rollout, and nothing exposes `editorial_research_runs`.
