@@ -3164,3 +3164,14 @@ broker mutation was added.
   - A failed build is marked `unavailable` with a redacted, 240-character reason instead of raw error text.
 - Verified in production: the entry evaluation decoded all 177 BUY fills across its 20 cells, and the Jev payload returned 50 stored grades. Smoke 0 warnings; CI green.
 - Not audited: the handlers that build a raw `Response`.
+
+## [2026-10-16] Refactoring | /api/overview typed as a summary contract
+
+- **The audit first.** Every other GET handler that builds a raw `Response` already serialized a typed payload. `/api/overview` was the last untyped API payload, and Simon chose to type it over the other open directions.
+- `2f71bb0` serves `OverviewPayload`. It was 267 KB on production, 190 KB of that Markov config and run documents; it is now 54 KB.
+  - **Kept and typed:** every field `scripts/post_deploy_smoke.sh` and `scripts/diagnostics_bundle.sh` read. Integrity keeps its check-specific rows and sub-reports whole, because they are the evidence.
+  - **Left to their own typed endpoints:** the scheduler's last-cycle document, the Markov and Quiver configs and run documents, and the Trading Manager's raw error, technical, queue-result and exchange documents. The dashboard boundary already kept that last group out. The queue's status survives as `trading_manager.latest_queue_status`, which the diagnostics bundle now reads.
+  - **Dropped:** local file paths (`app.config_path`, `saxo_auth.session_path`) and free-form Saxo auth error text, matching the auth endpoints.
+- **Nothing that reaches a model changed.** The Decision Report prompt, Hermes, notifications and the Trading Manager read the builder's JSON, which is untouched; only the API boundary decodes it.
+- Decoded against a captured production overview before committing. Released; the smoke test, which reads this endpoint, passed with 0 warnings; the dashboard renders; CI green.
+- With this, every API endpoint serves a typed payload. The remaining typed-core work is internal: splitting `state.rs`, which runs to about 30,000 lines.
