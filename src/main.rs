@@ -14,6 +14,7 @@ mod decision_state;
 mod drawdown_guard;
 mod editorial_research;
 mod entry_evaluation;
+mod entry_evaluation_state;
 mod execution_state;
 mod fx;
 mod hermes_data_requests;
@@ -35,6 +36,7 @@ mod jev_numeric;
 mod jev_provenance;
 mod jev_review;
 mod jev_signals;
+mod jev_state;
 #[cfg(test)]
 mod jev_whole_notes;
 // A regression and measurement asset, not a runtime path.
