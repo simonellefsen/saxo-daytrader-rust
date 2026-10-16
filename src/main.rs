@@ -20,6 +20,7 @@ mod fx;
 mod hermes_data_requests;
 mod hermes_state;
 mod holding_period;
+mod integrity_state;
 mod jev;
 // A regression asset, not a runtime path: the challenge set is scored by a
 // test on every build and nothing in production reads it.
