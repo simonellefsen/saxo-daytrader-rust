@@ -1,0 +1,20 @@
+# cargo-audit exceptions, read by `make security-scan`.
+#
+# Each entry is dated, states why the finding does not reach the binary or
+# its attack surface, and says when to revisit it. An exception is not a fix:
+# remove the entry as soon as the condition below changes.
+[advisories]
+ignore = [
+    # 2026-10-16. rsa 0.9: the Marvin timing attack, with no patched release.
+    # It is in Cargo.lock only because sqlx-mysql is listed there (lockfiles
+    # record optional features too); the mysql feature is off, so neither is
+    # compiled: `cargo tree -i rsa --target all` is empty. Revisit when rsa
+    # ships a fix or if the mysql feature is ever enabled.
+    "RUSTSEC-2023-0071",
+    # 2026-10-16. unsafe-libyaml: unmaintained, a warning rather than a
+    # vulnerability, pulled in by serde_yaml 0.9, which is itself deprecated.
+    # It parses only operator-owned configuration (config.yaml and the
+    # Kubernetes ConfigMap), never third-party input. Replacing serde_yaml is
+    # a separate change.
+    "RUSTSEC-2024-0449",
+]
