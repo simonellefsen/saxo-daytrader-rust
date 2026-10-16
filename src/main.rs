@@ -4,6 +4,7 @@ mod build_info;
 mod config;
 mod config_contract;
 mod daily_indicators;
+mod dashboard_state;
 mod db;
 mod debug_redaction;
 mod decision_provider;
