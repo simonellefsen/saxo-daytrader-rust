@@ -67,6 +67,38 @@ until released; both config defaults remain disabled.
    answers, cost coverage, marker disagreement and resolved-model changes.
    The JSON endpoint does not meet the original UI exit criterion; the shared
    cost panel alone is not Phase 2 completion.
+
+   *Status, 2026-10-16, beside the item above.* The panel is on the AI
+   Prompts view, in two cards beside the Jev Model card. `/api/ai/jev`
+   carries the same data under `operator`.
+   - **Worker.** Each cycle now writes `jev_worker_status`: one row per step,
+     plus one for the cycle. A row records the step's status, its last clean
+     run and last failed run, and what its own selection found waiting and
+     left. A step that judged nine and lost the tenth counts as failed, not
+     clean. An enabled worker with no finished cycle in three intervals
+     (30 minutes) shows as silent. Each backlog is bounded by its step's
+     selection:
+     - grading: the newest `jev.grading_candidate_window` reports;
+     - failure classification: the newest 60 failed reports;
+     - editorial items: at most 60 pairs, marked as a lower bound when full;
+     - numeric recompute: 200.
+   - **Calls, per purpose.** Answered, partial and failed calls; the
+     questions left unanswered in partial calls; failures since the last
+     answer; and the latest failure. A failure is shown as a bounded label,
+     such as `HTTP 429` or `transport error`, never the provider's text.
+   - **Cost coverage, per purpose.** Answered calls are counted by source:
+     billed, rate-card, or no cost at all. An answer with no cost is shown as
+     unknown, not free. The known cost sums only priced calls.
+   - **Marker disagreement.** The marker screen and Jev's
+     `instruction_shaped` are counted in both directions, beside the newest
+     20 disagreements. Each shows the title Jev judged, because the source
+     row is pruned. Neither screen is ground truth; adjudicating examples
+     is section B's work.
+   - **Resolved-model changes** were done under item 5.
+   - **What it does not show:** rows are logical calls, not provider
+     attempts. A call billed and then lost to a failed database write is not
+     in the ledger. Both belong to item 3, which stays open, as does
+     circuit-breaker state. The panel raises no alert.
 3. Add durable attempt-level accounting and circuit-breaker/backoff state,
    including billed responses followed by database-write failures. Current
    failure rows are logical-call records, not separate retry attempts. Verify
@@ -104,8 +136,9 @@ until released; both config defaults remain disabled.
        `notifications.alerts.jev_model_rollover_enabled`, defaults on.
    - **Tests pin** the epoch fold and that a rollover selects nothing for
      regrading.
-   - **Still open from item 2:** the rest of the operator panel (worker
-     backlog, cost coverage, marker disagreement). Observation itself has run
+   - **Still open from item 2** on 2026-10-15: the rest of the operator
+     panel (worker backlog, cost coverage, marker disagreement). It landed
+     on 2026-10-16; see the note under item 2. Observation itself has run
      since 2026-09-20, with `jev.enabled: true`.
 
 ### B. Measurement before strategy influence

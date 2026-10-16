@@ -8452,6 +8452,11 @@ impl AppState {
         } else {
             crate::models::JevModelsPayload::default()
         };
+        let jev_operator = if dashboard_loads_tab_exclusive_data(&active_view, "prompts") {
+            self.jev_operator().await
+        } else {
+            crate::models::JevOperatorPayload::default()
+        };
         let run_schedules = dashboard_run_schedules_from_json(json!({
             "markov": crate::markov_method::markov_config_json_for_state(self),
             "quiver": crate::quiver::quiver_config_json_for_state(self),
@@ -8515,6 +8520,7 @@ impl AppState {
             ai_provider_capabilities,
             llm_usage,
             jev_models,
+            jev_operator,
             localization,
             active_view,
             performance_range,
@@ -15982,11 +15988,6 @@ impl AppState {
         ))
     }
 
-    /// What Jev has judged, and where it disagrees with the marker screen.
-    ///
-    /// Observational throughout. Nothing here is read by a path that can
-    /// admit, size, or block a trade -- the rankings in particular are a view
-    /// of news standing, not a candidate list.
     /// Which Jev version answers, and every version that has. Never fails:
     /// an unreadable ledger is reported as unavailable rather than as no
     /// rollover having happened.
@@ -16004,8 +16005,39 @@ impl AppState {
         }
     }
 
+    /// The Jev operator panel. Never fails: each read that fails is named in
+    /// the payload and leaves its section empty.
+    pub async fn jev_operator(&self) -> crate::models::JevOperatorPayload {
+        let threshold = crate::jev_store::INSTRUCTION_SHAPED_THRESHOLD;
+        let reads = crate::jev_store::OperatorReads {
+            worker: crate::jev_store::worker_status_rows(&self.pool).await,
+            calls: crate::jev_store::purpose_call_rows(&self.pool).await,
+            agreement: crate::jev_store::screening_agreement(&self.pool, threshold).await,
+            disagreements: crate::jev_store::screening_disagreements(&self.pool, threshold, 20)
+                .await,
+        };
+        crate::jev_store::operator_payload(
+            self.jev_status(),
+            Utc::now(),
+            crate::jev_review::OBSERVATION_CYCLE_SECONDS,
+            reads,
+        )
+    }
+
+    fn jev_status(&self) -> &'static str {
+        match crate::jev::JevConfig::from_yaml(&self.config) {
+            crate::jev::JevAvailability::Ready(_) => "ok",
+            crate::jev::JevAvailability::Disabled => "disabled",
+            crate::jev::JevAvailability::MissingApiKey => "missing_api_key",
+        }
+    }
+
+    /// What Jev has judged, and where it disagrees with the marker screen.
+    ///
+    /// Observational throughout. Nothing here is read by a path that can
+    /// admit, size, or block a trade -- the rankings in particular are a view
+    /// of news standing, not a candidate list.
     pub async fn jev_observations(&self, limit: i64, days: i64) -> Result<JsonValue> {
-        let availability = crate::jev::JevConfig::from_yaml(&self.config);
         let since = (Utc::now() - chrono::Duration::days(days.clamp(1, 365)))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let threshold = crate::jev_store::INSTRUCTION_SHAPED_THRESHOLD;
@@ -16013,11 +16045,7 @@ impl AppState {
         let signals = crate::jev_store::recent_signals(&self.pool, &since, limit).await?;
         let rankings = crate::jev_signals::symbol_rankings(&signals);
         Ok(json!({
-            "status": match availability {
-                crate::jev::JevAvailability::Ready(_) => "ok",
-                crate::jev::JevAvailability::Disabled => "disabled",
-                crate::jev::JevAvailability::MissingApiKey => "missing_api_key",
-            },
+            "status": self.jev_status(),
             "since": since,
             "signal_count": signals.len(),
             "retention": crate::jev_signals::retention_summary(
@@ -16038,6 +16066,7 @@ impl AppState {
                 }))
                 .collect::<Vec<_>>(),
             "models": self.jev_models().await,
+            "operator": self.jev_operator().await,
             "report_grades": crate::jev_store::results_for(
                 &self.pool,
                 crate::jev_store::PURPOSE_REPORT_GRADING,

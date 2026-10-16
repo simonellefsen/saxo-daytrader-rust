@@ -137,8 +137,15 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
         }
     };
     if pairs.is_empty() {
-        return json!({"status": "ok", "scored": 0, "failed": 0, "pending": 0});
+        return json!({
+            "status": "ok", "scored": 0, "failed": 0, "pending": 0,
+            "processed": 0, "waiting": 0, "remaining": 0, "waiting_is_lower_bound": false,
+        });
     }
+    // The selection stops at its pair limit, so a full selection means at
+    // least this many were waiting, not exactly this many.
+    let waiting = pairs.len();
+    let waiting_is_lower_bound = waiting >= JEV_SCORING_PAIR_LIMIT;
 
     let company_names = configured_company_names(state);
     let questions = crate::jev_signals::news_questions();
@@ -253,6 +260,10 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
         "status": if failed > 0 && scored == 0 { "error" } else { "ok" },
         "scored": scored,
         "failed": failed,
+        "processed": scored,
+        "waiting": waiting,
+        "remaining": waiting.saturating_sub(scored),
+        "waiting_is_lower_bound": waiting_is_lower_bound,
         "admission": "observational_only",
         "safety": "records judgements beside the marker screen without changing it; \
                    cannot admit an item the marker screen excluded",

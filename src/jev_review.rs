@@ -108,6 +108,9 @@ pub(crate) fn report_grading_version() -> &'static str {
 }
 const FAILURE_CLASSIFICATION_VERSION: &str = "v2";
 
+/// The pause between observation cycles.
+pub(crate) const OBSERVATION_CYCLE_SECONDS: i64 = 600;
+
 /// One sequential worker in the singleton scheduler process. No Jev network
 /// work is awaited by report creation, ingestion, or the execution cycle.
 /// Disabled deployments do not create a polling worker.
@@ -116,6 +119,7 @@ pub(crate) async fn run_observation_loop(state: AppState) {
         return;
     }
     loop {
+        let started_at = jev_signals::now_rfc3339();
         let recomputed = recompute_numeric_measurements(&state).await;
         let grades = grade_reports(&state).await;
         let failures = classify_unknown_failures(&state).await;
@@ -127,8 +131,51 @@ pub(crate) async fn run_observation_loop(state: AppState) {
             ?editorial,
             "Jev observation cycle finished"
         );
-        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+        record_cycle(
+            &state,
+            &started_at,
+            &[
+                (jev_store::STEP_NUMERIC_RECOMPUTE, &recomputed),
+                (jev_store::PURPOSE_REPORT_GRADING, &grades),
+                (jev_store::PURPOSE_ERROR_CLASSIFICATION, &failures),
+                (jev_store::PURPOSE_EDITORIAL_ITEM, &editorial),
+            ],
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_secs(
+            OBSERVATION_CYCLE_SECONDS as u64,
+        ))
+        .await;
     }
+}
+
+/// Records the cycle for the operator panel. A failed write is logged and
+/// left: the panel then shows the worker as silent, which is the truth about
+/// what it can see.
+async fn record_cycle(state: &AppState, started_at: &str, steps: &[(&str, &JsonValue)]) {
+    let finished_at = jev_signals::now_rfc3339();
+    if let Err(err) =
+        jev_store::record_worker_cycle(&state.pool, started_at, &finished_at, steps).await
+    {
+        warn!(error = %err, "recording the Jev worker cycle");
+    }
+}
+
+/// The backlog fields every step reports, so the panel reads one shape.
+fn backlog(waiting: usize, processed: usize, lower_bound: bool) -> JsonValue {
+    json!({
+        "processed": processed,
+        "waiting": waiting,
+        "remaining": waiting.saturating_sub(processed),
+        "waiting_is_lower_bound": lower_bound,
+    })
+}
+
+fn merged(mut summary: JsonValue, extra: JsonValue) -> JsonValue {
+    if let (Some(summary), JsonValue::Object(extra)) = (summary.as_object_mut(), extra) {
+        summary.extend(extra);
+    }
+    summary
 }
 
 fn availability(state: &AppState) -> Option<Box<JevConfig>> {
@@ -184,20 +231,25 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         }
     };
 
+    // Counted before the batch, so the panel sees what the batch limit
+    // leaves waiting in the window rather than only what one cycle took.
+    let pending = rows
+        .into_iter()
+        .filter_map(|row| {
+            let report_id = row.get("id").and_then(JsonValue::as_i64)?;
+            let subject = report_id.to_string();
+            if judged.contains(&subject) {
+                return None;
+            }
+            let report = parse_embedded(row.get("report_json"))?;
+            Some((report_id, subject, report, row))
+        })
+        .collect::<Vec<_>>();
+    let waiting = pending.len();
     let mut graded = 0usize;
     let mut failed = 0usize;
 
-    for row in rows {
-        let Some(report_id) = row.get("id").and_then(JsonValue::as_i64) else {
-            continue;
-        };
-        let subject = report_id.to_string();
-        if judged.contains(&subject) {
-            continue;
-        }
-        let Some(report) = parse_embedded(row.get("report_json")) else {
-            continue;
-        };
+    for (report_id, subject, report, row) in pending.into_iter().take(grading_batch_limit(state)) {
         // The indicator snapshot the model actually saw, taken from the stored
         // request rather than the live table. Today's indicators would be
         // lookahead: grading a report against numbers that did not exist when
@@ -205,9 +257,6 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         let prompt = parse_embedded(row.get("request_json"))
             .map(|request| crate::xai_decision::decision_prompt_user_payload(&request))
             .unwrap_or(JsonValue::Null);
-        if graded + failed >= grading_batch_limit(state) {
-            break;
-        }
 
         let inputs = grading_inputs(&report, &prompt);
         let jev_state = jev_signals::report_grading_state(
@@ -273,12 +322,17 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
     if graded > 0 || failed > 0 {
         info!(graded, failed, "Jev report grading completed");
     }
-    json!({
-        "status": if failed > 0 && graded == 0 { "error" } else { "ok" },
-        "graded": graded,
-        "failed": failed,
-        "admission": "observational_only",
-    })
+    merged(
+        json!({
+            "status": if failed > 0 && graded == 0 { "error" } else { "ok" },
+            "graded": graded,
+            "failed": failed,
+            "admission": "observational_only",
+        }),
+        // The window is the deliberate bound, not a truncated selection:
+        // reports older than it are never graded by this worker.
+        backlog(waiting, graded, false),
+    )
 }
 
 /// Builds the two halves of the grading state.
@@ -641,6 +695,9 @@ impl<T> ReportRow<T> {
     }
 }
 
+/// How many stale grades one recompute pass selects.
+const RECOMPUTE_SELECTION_LIMIT: i64 = 200;
+
 pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValue {
     if availability(state).is_none() {
         return json!({"status": "disabled"});
@@ -648,7 +705,7 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
     let stale = match jev_store::grades_with_stale_numeric_method(
         &state.pool,
         crate::jev_numeric::NUMERIC_METHOD_VERSION,
-        200,
+        RECOMPUTE_SELECTION_LIMIT,
     )
     .await
     {
@@ -659,8 +716,12 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
         }
     };
     if stale.is_empty() {
-        return json!({"status": "ok", "recomputed": 0});
+        return merged(
+            json!({"status": "ok", "recomputed": 0, "failed": 0}),
+            backlog(0, 0, false),
+        );
     }
+    let waiting = stale.len();
 
     let mut recomputed = 0usize;
     let mut unable = Vec::new();
@@ -780,9 +841,20 @@ pub(crate) async fn recompute_numeric_measurements(state: &AppState) -> JsonValu
         method = crate::jev_numeric::NUMERIC_METHOD_VERSION,
         "Jev numeric measurements recomputed"
     );
+    // Faults, not verdicts: a blocked grade is recorded and leaves the
+    // selection, while one that could not be read or written comes back.
+    let faults = unable
+        .iter()
+        .filter(|entry| entry.get("blocked").and_then(JsonValue::as_bool) != Some(true))
+        .count();
     json!({
         "status": "ok",
         "recomputed": recomputed,
+        "processed": recomputed,
+        "failed": faults,
+        "waiting": waiting,
+        "remaining": waiting.saturating_sub(recomputed + blocked),
+        "waiting_is_lower_bound": waiting as i64 >= RECOMPUTE_SELECTION_LIMIT,
         // A measurement that could not be re-derived keeps its earlier
         // findings and its earlier method version, so it stays visibly stale
         // rather than reading as revalidated.
@@ -986,29 +1058,33 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
     };
 
     let questions = jev_signals::error_classification_questions(KNOWN_FAILURE_CODES);
+    // Only the ones the deterministic cascade could not name. It stays the
+    // authority for everything it recognises.
+    let pending = rows
+        .into_iter()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(JsonValue::as_i64)?;
+            let subject = id.to_string();
+            if judged.contains(&subject) {
+                return None;
+            }
+            let error_text = row
+                .get("error_text")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            (crate::decision_provider_state::local_failure_category_for(error_text) == "other")
+                .then_some((id, subject, row))
+        })
+        .collect::<Vec<_>>();
+    let waiting = pending.len();
     let mut classified = 0usize;
     let mut failed = 0usize;
 
-    for row in rows {
-        let Some(id) = row.get("id").and_then(JsonValue::as_i64) else {
-            continue;
-        };
-        let subject = id.to_string();
-        if judged.contains(&subject) {
-            continue;
-        }
+    for (id, subject, row) in pending.into_iter().take(REVIEW_BATCH_LIMIT) {
         let error_text = row
             .get("error_text")
             .and_then(JsonValue::as_str)
             .unwrap_or_default();
-        // Only the ones the deterministic cascade could not name. It stays the
-        // authority for everything it recognises.
-        if crate::decision_provider_state::local_failure_category_for(error_text) != "other" {
-            continue;
-        }
-        if classified + failed >= REVIEW_BATCH_LIMIT {
-            break;
-        }
 
         let status = row
             .get("status")
@@ -1080,12 +1156,15 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
     if classified > 0 || failed > 0 {
         info!(classified, failed, "Jev failure classification completed");
     }
-    json!({
-        "status": if failed > 0 && classified == 0 { "error" } else { "ok" },
-        "classified": classified,
-        "failed": failed,
-        "admission": "observational_only",
-    })
+    merged(
+        json!({
+            "status": if failed > 0 && classified == 0 { "error" } else { "ok" },
+            "classified": classified,
+            "failed": failed,
+            "admission": "observational_only",
+        }),
+        backlog(waiting, classified, false),
+    )
 }
 
 fn parse_embedded(value: Option<&JsonValue>) -> Option<JsonValue> {
@@ -1104,6 +1183,22 @@ mod tests {
     use super::*;
     use crate::jev::Answer;
     use std::collections::BTreeMap;
+
+    /// What a step left waiting is what it saw minus what it did; failures
+    /// stay in the backlog, and the merge keeps the step's own fields.
+    #[test]
+    fn a_step_reports_its_backlog_in_one_shape() {
+        let summary = merged(
+            json!({"status": "ok", "graded": 9, "failed": 1}),
+            backlog(14, 9, false),
+        );
+        assert_eq!(summary["remaining"], 5);
+        assert_eq!(summary["waiting"], 14);
+        assert_eq!(summary["processed"], 9);
+        assert_eq!(summary["graded"], 9);
+        assert_eq!(summary["waiting_is_lower_bound"], false);
+        assert_eq!(backlog(3, 5, true)["remaining"], 0, "never negative");
+    }
 
     #[tokio::test]
     async fn disabled_worker_exits_without_reading_tables_or_calling_a_provider() {

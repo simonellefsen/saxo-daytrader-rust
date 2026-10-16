@@ -103,6 +103,18 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             evidence_summary TEXT,
             PRIMARY KEY (item_id, symbol)
         )",
+        // One row per worker step plus one for the cycle, overwritten every
+        // cycle. The worker writes it so the panel can tell a quiet day from
+        // a stopped worker, which the request ledger alone cannot: no
+        // subjects and no worker both leave it without new rows.
+        "CREATE TABLE IF NOT EXISTS jev_worker_status (
+            step TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            last_clean_at TEXT,
+            last_failed_at TEXT,
+            summary_json TEXT NOT NULL
+        )",
         "CREATE INDEX IF NOT EXISTS idx_jev_requests_created
          ON jev_requests(created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_symbol
@@ -389,6 +401,10 @@ pub(crate) async fn usage_rows(pool: &AnyPool, limit: i64) -> Result<Vec<JsonVal
 /// suggests the list is over-firing and quietly dropping real news; an item
 /// the markers passed that Jev reads as instruction-shaped is the more
 /// serious direction and is the reason this is measured at all.
+///
+/// The title is the one snapshotted when Jev judged the item, falling back to
+/// the source row: that row is pruned on a retention schedule, and a
+/// disagreement whose text has gone cannot be adjudicated.
 pub(crate) async fn screening_disagreements(
     pool: &AnyPool,
     threshold: f64,
@@ -397,7 +413,7 @@ pub(crate) async fn screening_disagreements(
     let limit = limit.clamp(1, 500);
     Ok(sqlx::query(&format!(
         "SELECT s.item_id, s.symbol, s.created_at, s.marker_screened, s.instruction_shaped,
-                i.title, i.source_name
+                COALESCE(NULLIF(s.evidence_title, ''), i.title) AS title, i.source_name
          FROM jev_editorial_signals s
          LEFT JOIN editorial_research_items i ON i.id = s.item_id
          WHERE s.instruction_shaped IS NOT NULL
@@ -816,6 +832,461 @@ pub(crate) fn models_payload(
         overlapping,
         policy: crate::jev::ALIAS_ROLLOVER_POLICY.to_string(),
         unavailable: false,
+    }
+}
+
+/// The worker step that re-derives numeric findings. It calls no provider, so
+/// it has no purpose in the request ledger; the other three steps are named
+/// by the purpose they record under.
+pub(crate) const STEP_NUMERIC_RECOMPUTE: &str = "numeric_recompute";
+/// The row that records the cycle itself.
+pub(crate) const WORKER_CYCLE: &str = "cycle";
+
+/// Worker steps in the order one cycle runs them.
+const WORKER_STEPS: [&str; 4] = [
+    STEP_NUMERIC_RECOMPUTE,
+    PURPOSE_REPORT_GRADING,
+    PURPOSE_ERROR_CLASSIFICATION,
+    PURPOSE_EDITORIAL_ITEM,
+];
+
+/// Whether a step summary ran clean, and whether anything in it failed.
+///
+/// A step that judged nine subjects and then lost the tenth to an outage
+/// reports `ok`, so `ok` alone would date the last clean run to that cycle.
+/// A disabled step is neither.
+fn step_outcome(summary: &JsonValue) -> (bool, bool) {
+    let status = summary.get("status").and_then(JsonValue::as_str);
+    let failed = summary
+        .get("failed")
+        .and_then(JsonValue::as_i64)
+        .unwrap_or(0);
+    let any_failure = status == Some("error") || failed > 0;
+    (status == Some("ok") && !any_failure, any_failure)
+}
+
+/// Records one finished worker cycle: each step's summary, then the cycle.
+pub(crate) async fn record_worker_cycle(
+    pool: &AnyPool,
+    started_at: &str,
+    finished_at: &str,
+    steps: &[(&str, &JsonValue)],
+) -> Result<()> {
+    let mut any_failure = false;
+    for (step, summary) in steps {
+        let (clean, failed) = step_outcome(summary);
+        any_failure |= failed;
+        let status = summary
+            .get("status")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("unknown");
+        upsert_worker_status(
+            pool,
+            step,
+            finished_at,
+            status,
+            clean.then_some(finished_at),
+            failed.then_some(finished_at),
+            summary,
+        )
+        .await?;
+    }
+    upsert_worker_status(
+        pool,
+        WORKER_CYCLE,
+        finished_at,
+        "ok",
+        (!any_failure).then_some(finished_at),
+        any_failure.then_some(finished_at),
+        &serde_json::json!({"started_at": started_at, "finished_at": finished_at}),
+    )
+    .await
+}
+
+async fn upsert_worker_status(
+    pool: &AnyPool,
+    step: &str,
+    updated_at: &str,
+    status: &str,
+    clean_at: Option<&str>,
+    failed_at: Option<&str>,
+    summary: &JsonValue,
+) -> Result<()> {
+    // COALESCE keeps the earlier moment when this cycle did not set one, so
+    // a failing cycle cannot erase when the step last ran clean.
+    sqlx::query(
+        "INSERT INTO jev_worker_status
+            (step, updated_at, status, last_clean_at, last_failed_at, summary_json)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (step) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            status = excluded.status,
+            last_clean_at = COALESCE(excluded.last_clean_at, jev_worker_status.last_clean_at),
+            last_failed_at = COALESCE(excluded.last_failed_at, jev_worker_status.last_failed_at),
+            summary_json = excluded.summary_json",
+    )
+    .bind(step)
+    .bind(updated_at)
+    .bind(status)
+    .bind(clean_at)
+    .bind(failed_at)
+    .bind(summary.to_string())
+    .execute(pool)
+    .await
+    .with_context(|| format!("recording Jev worker status for {step}"))?;
+    Ok(())
+}
+
+pub(crate) async fn worker_status_rows(pool: &AnyPool) -> Result<Vec<JsonValue>> {
+    Ok(sqlx::query(
+        "SELECT step, updated_at, status, last_clean_at, last_failed_at, summary_json
+         FROM jev_worker_status",
+    )
+    .fetch_all(pool)
+    .await
+    .context("reading Jev worker status")?
+    .iter()
+    .map(row_to_json)
+    .collect())
+}
+
+/// Per-purpose call outcomes, cost sources and the latest failure.
+///
+/// Three reads: the grouped counts, the failures after each purpose's latest
+/// answer, and each purpose's latest failure text. Each joins a per-purpose
+/// aggregate rather than a correlated subquery, which would rescan the ledger
+/// once per failure row. Timestamps compare as text, which is exact here
+/// because one purpose always writes one format.
+pub(crate) async fn purpose_call_rows(
+    pool: &AnyPool,
+) -> Result<(Vec<JsonValue>, Vec<JsonValue>, Vec<JsonValue>)> {
+    let read = |sql: &'static str| async move {
+        sqlx::query(sql)
+            .fetch_all(pool)
+            .await
+            .map(|rows| rows.iter().map(row_to_json).collect::<Vec<_>>())
+    };
+    let grouped = read(
+        "SELECT purpose, status, cost_source, COUNT(*) AS requests,
+                MAX(created_at) AS last_at, SUM(cost_usd) AS cost_usd,
+                SUM(issue_count) AS issues
+         FROM jev_requests
+         GROUP BY purpose, status, cost_source",
+    )
+    .await
+    .context("reading Jev call outcomes")?;
+    let since_answer = read(
+        "SELECT r.purpose, COUNT(*) AS failures
+         FROM jev_requests r
+         LEFT JOIN (SELECT purpose, MAX(created_at) AS answered_at
+                    FROM jev_requests WHERE status <> 'error'
+                    GROUP BY purpose) a ON a.purpose = r.purpose
+         WHERE r.status = 'error' AND r.created_at > COALESCE(a.answered_at, '')
+         GROUP BY r.purpose",
+    )
+    .await
+    .context("reading Jev failures since the latest answer")?;
+    let latest_failures = read(
+        "SELECT r.purpose, r.error_text
+         FROM jev_requests r
+         JOIN (SELECT purpose, MAX(created_at) AS failed_at
+               FROM jev_requests WHERE status = 'error'
+               GROUP BY purpose) l ON l.purpose = r.purpose AND l.failed_at = r.created_at
+         WHERE r.status = 'error'",
+    )
+    .await
+    .context("reading the latest Jev failure per purpose")?;
+    Ok((grouped, since_answer, latest_failures))
+}
+
+/// A bounded label for a stored failure.
+///
+/// The stored text can carry two thousand characters of a provider's body,
+/// which has no place on a dashboard; the label says which failure it was
+/// and the scheduler log keeps the rest.
+pub(crate) fn failure_kind(error_text: &str) -> String {
+    let text = error_text.trim();
+    if text.contains("non-JSON body") {
+        return "non_json_response".to_string();
+    }
+    if let Some(status) = text
+        .strip_prefix("Jev returned ")
+        .and_then(|rest| rest.get(..3))
+        .and_then(|code| code.parse::<u16>().ok())
+    {
+        return format!("http_{status}");
+    }
+    if text.starts_with("transport error") {
+        return "transport".to_string();
+    }
+    if text.contains("above the configured maximum") {
+        return "over_budget".to_string();
+    }
+    "other".to_string()
+}
+
+pub(crate) fn purpose_calls_from_rows(
+    grouped: &[JsonValue],
+    since_answer: &[JsonValue],
+    latest_failures: &[JsonValue],
+) -> Vec<crate::models::JevPurposeCallsPayload> {
+    let text =
+        |row: &JsonValue, key: &str| row.get(key).and_then(JsonValue::as_str).map(str::to_string);
+    let count = |row: &JsonValue, key: &str| row.get(key).and_then(JsonValue::as_i64).unwrap_or(0);
+    let later = |current: Option<String>, candidate: Option<String>| match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (current, candidate) => current.or(candidate),
+    };
+
+    let mut by_purpose: std::collections::BTreeMap<String, crate::models::JevPurposeCallsPayload> =
+        std::collections::BTreeMap::new();
+    for row in grouped {
+        let Some(purpose) = text(row, "purpose") else {
+            continue;
+        };
+        let calls = by_purpose.entry(purpose.clone()).or_insert_with(|| {
+            crate::models::JevPurposeCallsPayload {
+                purpose,
+                ..Default::default()
+            }
+        });
+        let requests = count(row, "requests");
+        let status = text(row, "status").unwrap_or_default();
+        calls.requests += requests;
+        match status.as_str() {
+            STATUS_COMPLETED => calls.completed += requests,
+            "partial" => {
+                calls.partial += requests;
+                calls.partial_issue_count += count(row, "issues");
+            }
+            STATUS_ERROR => {
+                calls.failed += requests;
+                calls.last_failed_at = later(calls.last_failed_at.take(), text(row, "last_at"));
+            }
+            _ => {}
+        }
+        if !matches!(status.as_str(), STATUS_COMPLETED | "partial") {
+            continue;
+        }
+        calls.last_answered_at = later(calls.last_answered_at.take(), text(row, "last_at"));
+        let priced = match text(row, "cost_source").as_deref() {
+            Some("billed") | Some("upstream_byok") => {
+                calls.billed += requests;
+                true
+            }
+            Some(crate::jev::COST_SOURCE_RATE_CARD) => {
+                calls.rate_card += requests;
+                true
+            }
+            _ => {
+                calls.unpriced += requests;
+                false
+            }
+        };
+        if let Some(cost) = priced
+            .then(|| row.get("cost_usd").and_then(JsonValue::as_f64))
+            .flatten()
+        {
+            calls.known_cost_usd = Some(calls.known_cost_usd.unwrap_or(0.0) + cost);
+        }
+    }
+    for row in since_answer {
+        if let Some(calls) = text(row, "purpose").and_then(|purpose| by_purpose.get_mut(&purpose)) {
+            calls.failures_since_answer = count(row, "failures");
+        }
+    }
+    for row in latest_failures {
+        if let Some(calls) = text(row, "purpose").and_then(|purpose| by_purpose.get_mut(&purpose)) {
+            if calls.last_failure_kind.is_none() {
+                calls.last_failure_kind = Some(failure_kind(
+                    row.get("error_text")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    by_purpose.into_values().collect()
+}
+
+/// Reads one worker status row. The summary fields are the step's own
+/// report of its latest cycle.
+fn worker_step_from_row(row: &JsonValue) -> crate::models::JevWorkerStepPayload {
+    let text = |key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let summary = row
+        .get("summary_json")
+        .and_then(|value| match value {
+            JsonValue::String(text) => serde_json::from_str::<JsonValue>(text).ok(),
+            other => Some(other.clone()),
+        })
+        .unwrap_or(JsonValue::Null);
+    let number = |key: &str| summary.get(key).and_then(JsonValue::as_i64);
+    crate::models::JevWorkerStepPayload {
+        step: text("step").unwrap_or_default(),
+        updated_at: text("updated_at").unwrap_or_default(),
+        status: text("status").unwrap_or_default(),
+        last_clean_at: text("last_clean_at"),
+        last_failed_at: text("last_failed_at"),
+        processed: number("processed").unwrap_or(0),
+        failed: number("failed").unwrap_or(0),
+        waiting: number("waiting"),
+        remaining: number("remaining"),
+        waiting_is_lower_bound: summary
+            .get("waiting_is_lower_bound")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        stage: summary
+            .get("stage")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+    }
+}
+
+fn screening_from(
+    agreement: &JsonValue,
+    disagreements: &[JsonValue],
+) -> crate::models::JevScreeningPayload {
+    let count = |key: &str| agreement.get(key).and_then(JsonValue::as_i64).unwrap_or(0);
+    crate::models::JevScreeningPayload {
+        threshold: agreement
+            .get("threshold")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or(INSTRUCTION_SHAPED_THRESHOLD),
+        judged_count: count("judged_count"),
+        both_flagged: count("both_flagged"),
+        both_clear: count("both_clear"),
+        marker_only: count("marker_only"),
+        jev_only: count("jev_only"),
+        disagreements: disagreements
+            .iter()
+            .filter_map(|row| {
+                let text = |key: &str| {
+                    row.get(key)
+                        .and_then(JsonValue::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                };
+                Some(crate::models::JevScreeningDisagreementPayload {
+                    item_id: text("item_id")?,
+                    symbol: text("symbol").unwrap_or_default(),
+                    created_at: text("created_at").unwrap_or_default(),
+                    marker_screened: row
+                        .get("marker_screened")
+                        .and_then(JsonValue::as_i64)
+                        .unwrap_or(0)
+                        != 0,
+                    instruction_shaped: row.get("instruction_shaped")?.as_f64()?,
+                    title: text("title"),
+                    source_name: text("source_name"),
+                })
+            })
+            .collect(),
+    }
+}
+
+/// How many cycle intervals may pass before an enabled worker counts as silent.
+const SILENT_AFTER_INTERVALS: i64 = 3;
+
+/// Every read the panel makes, as it came back.
+pub(crate) struct OperatorReads {
+    pub worker: Result<Vec<JsonValue>>,
+    pub calls: Result<(Vec<JsonValue>, Vec<JsonValue>, Vec<JsonValue>)>,
+    pub agreement: Result<JsonValue>,
+    pub disagreements: Result<Vec<JsonValue>>,
+}
+
+/// Builds the panel from its reads. A read that failed is named, and its
+/// section stays empty rather than reading as nothing to report.
+pub(crate) fn operator_payload(
+    status: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    cycle_interval_seconds: i64,
+    reads: OperatorReads,
+) -> crate::models::JevOperatorPayload {
+    let mut unavailable_sources = Vec::new();
+    let mut note = |source: &str, err: &anyhow::Error| {
+        tracing::warn!("Jev operator panel: {source} unavailable: {err:#}");
+        unavailable_sources.push(source.to_string());
+    };
+
+    let (last_cycle_at, steps) = match &reads.worker {
+        Ok(rows) => {
+            let mut last_cycle_at = None;
+            let mut steps = Vec::new();
+            for row in rows {
+                let step = worker_step_from_row(row);
+                if step.step == WORKER_CYCLE {
+                    last_cycle_at = Some(step.updated_at);
+                } else {
+                    steps.push(step);
+                }
+            }
+            let rank = |step: &str| {
+                WORKER_STEPS
+                    .iter()
+                    .position(|known| *known == step)
+                    .unwrap_or(WORKER_STEPS.len())
+            };
+            steps.sort_by(|left, right| {
+                rank(&left.step)
+                    .cmp(&rank(&right.step))
+                    .then_with(|| left.step.cmp(&right.step))
+            });
+            (last_cycle_at, steps)
+        }
+        Err(err) => {
+            note("worker status", err);
+            (None, Vec::new())
+        }
+    };
+    let purposes = match &reads.calls {
+        Ok((grouped, since_answer, latest_failures)) => {
+            purpose_calls_from_rows(grouped, since_answer, latest_failures)
+        }
+        Err(err) => {
+            note("request ledger", err);
+            Vec::new()
+        }
+    };
+    let agreement = match &reads.agreement {
+        Ok(agreement) => agreement.clone(),
+        Err(err) => {
+            note("screening agreement", err);
+            JsonValue::Null
+        }
+    };
+    let disagreements = match &reads.disagreements {
+        Ok(rows) => rows.as_slice(),
+        Err(err) => {
+            note("screening disagreements", err);
+            &[]
+        }
+    };
+
+    let worker_unreadable = reads.worker.is_err();
+    let worker_silent = status == "ok"
+        && !worker_unreadable
+        && last_cycle_at
+            .as_deref()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .is_none_or(|at| {
+                (now - at.with_timezone(&chrono::Utc)).num_seconds()
+                    > SILENT_AFTER_INTERVALS * cycle_interval_seconds
+            });
+    crate::models::JevOperatorPayload {
+        status: status.to_string(),
+        last_cycle_at,
+        cycle_interval_seconds,
+        worker_silent,
+        steps,
+        purposes,
+        screening: screening_from(&agreement, disagreements),
+        unavailable_sources,
     }
 }
 
@@ -1882,6 +2353,383 @@ mod tests {
             "judged by the previous version, still judged"
         );
         assert!(judged.contains("400"));
+    }
+
+    fn at(text: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(text)
+            .expect("a timestamp")
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn reads(
+        worker: Result<Vec<JsonValue>>,
+        calls: Result<(Vec<JsonValue>, Vec<JsonValue>, Vec<JsonValue>)>,
+    ) -> OperatorReads {
+        OperatorReads {
+            worker,
+            calls,
+            agreement: Ok(serde_json::json!({})),
+            disagreements: Ok(Vec::new()),
+        }
+    }
+
+    /// A step that judged nine subjects and lost the tenth reports `ok`, and
+    /// must still date its last clean run to before that cycle. A later
+    /// failing cycle must not erase when it last ran clean either.
+    #[tokio::test]
+    async fn a_failing_cycle_keeps_when_the_step_last_ran_clean() {
+        let pool = pool().await;
+        let clean = serde_json::json!({"status": "ok", "failed": 0, "processed": 3});
+        let partly_failed = serde_json::json!({"status": "ok", "failed": 1, "processed": 9});
+        record_worker_cycle(
+            &pool,
+            "2026-10-16T08:00:00Z",
+            "2026-10-16T08:01:00Z",
+            &[(PURPOSE_REPORT_GRADING, &clean)],
+        )
+        .await
+        .expect("first cycle records");
+        record_worker_cycle(
+            &pool,
+            "2026-10-16T08:11:00Z",
+            "2026-10-16T08:12:00Z",
+            &[(PURPOSE_REPORT_GRADING, &partly_failed)],
+        )
+        .await
+        .expect("second cycle records");
+
+        let panel = operator_payload(
+            "ok",
+            at("2026-10-16T08:15:00Z"),
+            600,
+            reads(worker_status_rows(&pool).await, Ok(Default::default())),
+        );
+        let grading = &panel.steps[0];
+        assert_eq!(grading.status, "ok");
+        assert_eq!(grading.processed, 9);
+        assert_eq!(grading.failed, 1);
+        assert_eq!(
+            grading.last_clean_at.as_deref(),
+            Some("2026-10-16T08:01:00Z")
+        );
+        assert_eq!(
+            grading.last_failed_at.as_deref(),
+            Some("2026-10-16T08:12:00Z")
+        );
+        assert_eq!(panel.last_cycle_at.as_deref(), Some("2026-10-16T08:12:00Z"));
+        assert!(!panel.worker_silent);
+    }
+
+    /// A disabled step did not run, so it is neither a clean run nor a failure.
+    #[test]
+    fn a_disabled_step_is_neither_clean_nor_failed() {
+        assert_eq!(
+            step_outcome(&serde_json::json!({"status": "disabled"})),
+            (false, false)
+        );
+        assert_eq!(
+            step_outcome(&serde_json::json!({"status": "error", "stage": "select"})),
+            (false, true),
+            "a step that failed before any work still failed"
+        );
+        assert_eq!(
+            step_outcome(&serde_json::json!({"status": "ok", "failed": 0})),
+            (true, false)
+        );
+    }
+
+    /// The backlog is each step's own report, in the order a cycle runs the
+    /// steps, and a selection that hit its limit says so.
+    #[tokio::test]
+    async fn the_panel_shows_the_backlog_each_step_saw() {
+        let pool = pool().await;
+        let editorial = serde_json::json!({"status": "ok", "failed": 0, "processed": 60,
+            "waiting": 60, "remaining": 0, "waiting_is_lower_bound": true});
+        let grading = serde_json::json!({"status": "ok", "failed": 0, "processed": 10,
+            "waiting": 14, "remaining": 4, "waiting_is_lower_bound": false});
+        let numeric = serde_json::json!({"status": "ok", "failed": 0, "processed": 0,
+            "waiting": 0, "remaining": 0, "waiting_is_lower_bound": false});
+        record_worker_cycle(
+            &pool,
+            "2026-10-16T08:00:00Z",
+            "2026-10-16T08:02:00Z",
+            &[
+                (PURPOSE_EDITORIAL_ITEM, &editorial),
+                (PURPOSE_REPORT_GRADING, &grading),
+                (STEP_NUMERIC_RECOMPUTE, &numeric),
+            ],
+        )
+        .await
+        .expect("cycle records");
+
+        let panel = operator_payload(
+            "ok",
+            at("2026-10-16T08:05:00Z"),
+            600,
+            reads(worker_status_rows(&pool).await, Ok(Default::default())),
+        );
+        let steps: Vec<&str> = panel.steps.iter().map(|step| step.step.as_str()).collect();
+        assert_eq!(
+            steps,
+            [
+                STEP_NUMERIC_RECOMPUTE,
+                PURPOSE_REPORT_GRADING,
+                PURPOSE_EDITORIAL_ITEM
+            ],
+            "the cycle row is not a step"
+        );
+        assert_eq!(panel.steps[1].waiting, Some(14));
+        assert_eq!(panel.steps[1].remaining, Some(4));
+        assert!(!panel.steps[1].waiting_is_lower_bound);
+        assert!(panel.steps[2].waiting_is_lower_bound);
+    }
+
+    /// Silence is judged against the cycle interval, and only for an enabled
+    /// worker whose status could be read. An unreadable table is named, not
+    /// reported as a stopped worker.
+    #[tokio::test]
+    async fn an_enabled_worker_with_no_recent_cycle_is_silent() {
+        let pool = pool().await;
+        let clean = serde_json::json!({"status": "ok", "failed": 0});
+        record_worker_cycle(
+            &pool,
+            "2026-10-16T08:00:00Z",
+            "2026-10-16T08:01:00Z",
+            &[(PURPOSE_REPORT_GRADING, &clean)],
+        )
+        .await
+        .expect("cycle records");
+        let panel_at = |status: &str, now: &str, worker: Result<Vec<JsonValue>>| {
+            operator_payload(status, at(now), 600, reads(worker, Ok(Default::default())))
+        };
+        let rows = worker_status_rows(&pool).await.expect("rows");
+
+        assert!(!panel_at("ok", "2026-10-16T08:30:00Z", Ok(rows.clone())).worker_silent);
+        assert!(panel_at("ok", "2026-10-16T08:31:01Z", Ok(rows.clone())).worker_silent);
+        assert!(
+            !panel_at("disabled", "2026-10-17T08:00:00Z", Ok(rows)).worker_silent,
+            "a disabled worker is not expected to run"
+        );
+        assert!(
+            panel_at("ok", "2026-10-16T08:00:00Z", Ok(Vec::new())).worker_silent,
+            "enabled with no cycle ever recorded"
+        );
+        let unreadable = panel_at(
+            "ok",
+            "2026-10-17T08:00:00Z",
+            Err(anyhow::anyhow!("no such table")),
+        );
+        assert!(!unreadable.worker_silent);
+        assert_eq!(unreadable.unavailable_sources, ["worker status"]);
+    }
+
+    async fn call(pool: &AnyPool, id: &str, created_at: &str, response: &JevResponse) {
+        record_success(
+            pool,
+            RecordedRequest {
+                id,
+                created_at,
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some(id),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            response,
+            None,
+        )
+        .await
+        .expect("a recorded call");
+    }
+
+    async fn failure(pool: &AnyPool, id: &str, created_at: &str, error_text: &str) {
+        record_failure(
+            pool,
+            RecordedRequest {
+                id,
+                created_at,
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some(id),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            error_text,
+        )
+        .await
+        .expect("a recorded failure");
+    }
+
+    /// Partial answers, failures and an answer with no cost are each counted
+    /// apart, the known cost sums only priced calls, and a failure is shown
+    /// by a bounded label rather than the provider's body.
+    #[tokio::test]
+    async fn call_outcomes_keep_partial_failed_and_unpriced_apart() {
+        let pool = pool().await;
+        let mut billed = response();
+        billed.cost_source = "billed";
+        billed.cost_usd = Some(0.00002);
+        let rate_card = response();
+        let mut unpriced = response();
+        unpriced.cost_source = crate::jev::COST_SOURCE_NONE;
+        unpriced.cost_usd = None;
+        let mut partial = response();
+        partial.issues = vec![
+            crate::jev::JevAnswerIssue {
+                id: "claim_0".into(),
+                reason: "missing".into(),
+            },
+            crate::jev::JevAnswerIssue {
+                id: "claim_1".into(),
+                reason: "missing".into(),
+            },
+        ];
+
+        failure(
+            &pool,
+            "f0",
+            "2026-10-15T09:00:00Z",
+            "transport error: timed out",
+        )
+        .await;
+        call(&pool, "a", "2026-10-15T10:00:00Z", &billed).await;
+        call(&pool, "b", "2026-10-15T11:00:00Z", &rate_card).await;
+        call(&pool, "c", "2026-10-15T12:00:00Z", &unpriced).await;
+        call(&pool, "d", "2026-10-15T13:00:00Z", &partial).await;
+        failure(
+            &pool,
+            "f1",
+            "2026-10-16T07:00:00Z",
+            "transport error: timed out",
+        )
+        .await;
+        failure(
+            &pool,
+            "f2",
+            "2026-10-16T08:00:00Z",
+            "Jev returned 429: {\"error\":\"secret-shaped provider body\"}",
+        )
+        .await;
+
+        let (grouped, since_answer, latest) = purpose_call_rows(&pool).await.expect("ledger reads");
+        let calls = purpose_calls_from_rows(&grouped, &since_answer, &latest);
+        assert_eq!(calls.len(), 1);
+        let calls = &calls[0];
+        assert_eq!(calls.requests, 7);
+        assert_eq!((calls.completed, calls.partial, calls.failed), (3, 1, 3));
+        assert_eq!(calls.partial_issue_count, 2);
+        assert_eq!(
+            (calls.billed, calls.rate_card, calls.unpriced),
+            (1, 2, 1),
+            "the partial call was rate-card priced"
+        );
+        let known = calls.known_cost_usd.expect("a known subtotal");
+        assert!(
+            (known - (0.00002 + 2.0 * 0.0000176)).abs() < 1e-12,
+            "{known}"
+        );
+        assert_eq!(
+            calls.last_answered_at.as_deref(),
+            Some("2026-10-15T13:00:00Z")
+        );
+        assert_eq!(
+            calls.last_failed_at.as_deref(),
+            Some("2026-10-16T08:00:00Z")
+        );
+        assert_eq!(
+            calls.failures_since_answer, 2,
+            "the failure before the first answer is not one of them"
+        );
+        assert_eq!(calls.last_failure_kind.as_deref(), Some("http_429"));
+        assert!(
+            !serde_json::to_string(&calls)
+                .unwrap()
+                .contains("provider body"),
+            "the provider's text never reaches the panel"
+        );
+    }
+
+    #[test]
+    fn a_failure_label_is_drawn_from_a_bounded_set() {
+        for (text, kind) in [
+            ("Jev returned 503: upstream overloaded", "http_503"),
+            (
+                "Jev returned a non-JSON body: expected value",
+                "non_json_response",
+            ),
+            ("transport error: connection reset", "transport"),
+            (
+                "Jev state is 90000 characters, above the configured maximum of 64000",
+                "over_budget",
+            ),
+            ("database is locked", "other"),
+            ("", "other"),
+        ] {
+            assert_eq!(failure_kind(text), kind, "{text}");
+        }
+    }
+
+    /// Both directions are counted, and the title shown is the one Jev
+    /// judged, not whatever the pruned-and-rewritten source row holds now.
+    #[tokio::test]
+    async fn the_screening_section_counts_both_directions_with_the_judged_title() {
+        let pool = pool().await;
+        for (id, marker_screened, instruction_shaped) in [
+            ("agree-clean", false, 0.02),
+            ("marker-over-fired", true, 0.03),
+            ("marker-missed-it", false, 0.95),
+        ] {
+            record_signal(
+                &pool,
+                id,
+                "NOVO:xcse",
+                "2026-09-20T08:00:00Z",
+                &NewsSignal {
+                    instruction_shaped: Some(instruction_shaped),
+                    ..NewsSignal::default()
+                },
+                marker_screened,
+            )
+            .await
+            .expect("signal records");
+        }
+        sqlx::query(
+            "INSERT INTO editorial_research_items (id, title, source_name)
+             VALUES ('marker-missed-it', 'rewritten later', 'Example feed')",
+        )
+        .execute(&pool)
+        .await
+        .expect("source row");
+
+        let panel = operator_payload(
+            "ok",
+            at("2026-10-16T08:00:00Z"),
+            600,
+            OperatorReads {
+                worker: Ok(Vec::new()),
+                calls: Ok(Default::default()),
+                agreement: screening_agreement(&pool, INSTRUCTION_SHAPED_THRESHOLD).await,
+                disagreements: screening_disagreements(&pool, INSTRUCTION_SHAPED_THRESHOLD, 20)
+                    .await,
+            },
+        );
+        let screening = &panel.screening;
+        assert_eq!(screening.judged_count, 3);
+        assert_eq!(
+            (
+                screening.both_clear,
+                screening.marker_only,
+                screening.jev_only
+            ),
+            (1, 1, 1)
+        );
+        let missed = screening
+            .disagreements
+            .iter()
+            .find(|row| row.item_id == "marker-missed-it")
+            .expect("the Jev-only item");
+        assert!(!missed.marker_screened);
+        assert_eq!(missed.title.as_deref(), Some("marker-missed-it"));
+        assert_eq!(missed.source_name.as_deref(), Some("Example feed"));
+        assert!(panel.unavailable_sources.is_empty());
     }
 }
 

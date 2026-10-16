@@ -34,6 +34,7 @@ pub struct DashboardView {
     pub ai_provider_capabilities: Vec<AiProviderCapabilityPayload>,
     pub llm_usage: LlmUsageLedgerPayload,
     pub jev_models: JevModelsPayload,
+    pub jev_operator: JevOperatorPayload,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -1811,6 +1812,106 @@ pub struct JevModelsPayload {
     /// The request ledger could not be read; `epochs` is then empty, not known
     /// to be empty.
     pub unavailable: bool,
+}
+
+/// What the Jev observation worker did on its latest cycle, step by step.
+///
+/// Written by the worker itself, so a backlog is the one its own selection
+/// saw rather than a second reading of the tables that could disagree with it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevWorkerStepPayload {
+    pub step: String,
+    pub updated_at: String,
+    /// `ok`, `error`, `disabled` or `missing_api_key`, as the step reported it.
+    pub status: String,
+    /// The latest cycle in which the step ran with no failure at all.
+    pub last_clean_at: Option<String>,
+    /// The latest cycle in which anything in the step failed.
+    pub last_failed_at: Option<String>,
+    /// Subjects done on the latest cycle.
+    pub processed: i64,
+    pub failed: i64,
+    /// Subjects the step's own selection found waiting before it worked.
+    pub waiting: Option<i64>,
+    /// Still waiting after the cycle.
+    pub remaining: Option<i64>,
+    /// The selection hit its own limit, so more may be waiting than it saw.
+    pub waiting_is_lower_bound: bool,
+    /// Where the step stopped, when it failed before doing any work.
+    pub stage: Option<String>,
+}
+
+/// One purpose's calls in the request ledger, since the first was recorded.
+///
+/// Rows are logical calls, not provider attempts: a call retried within one
+/// request is one row, and a call billed but never recorded is not here.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevPurposeCallsPayload {
+    pub purpose: String,
+    pub requests: i64,
+    pub completed: i64,
+    pub partial: i64,
+    pub failed: i64,
+    /// Questions left unanswered across the partial calls.
+    pub partial_issue_count: i64,
+    pub last_answered_at: Option<String>,
+    pub last_failed_at: Option<String>,
+    /// A bounded label for the latest failure, never the provider's text.
+    pub last_failure_kind: Option<String>,
+    /// Failures recorded after the latest answered call.
+    pub failures_since_answer: i64,
+    /// Answered calls whose cost the provider reported.
+    pub billed: i64,
+    /// Answered calls costed from the published rate card.
+    pub rate_card: i64,
+    /// Answered calls with no cost at all: unknown, not free.
+    pub unpriced: i64,
+    /// Sum over billed and rate-card calls.
+    pub known_cost_usd: Option<f64>,
+}
+
+/// One item the marker screen and Jev read differently.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevScreeningDisagreementPayload {
+    pub item_id: String,
+    pub symbol: String,
+    pub created_at: String,
+    pub marker_screened: bool,
+    pub instruction_shaped: f64,
+    pub title: Option<String>,
+    pub source_name: Option<String>,
+}
+
+/// The 31-marker screen against Jev's `instruction_shaped`, in both directions.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevScreeningPayload {
+    pub threshold: f64,
+    /// Items Jev judged on this axis. An unjudged item is not agreement.
+    pub judged_count: i64,
+    pub both_flagged: i64,
+    pub both_clear: i64,
+    pub marker_only: i64,
+    pub jev_only: i64,
+    /// Newest first, bounded.
+    pub disagreements: Vec<JevScreeningDisagreementPayload>,
+}
+
+/// The Jev operator panel: is the worker running, what is waiting, what the
+/// calls cost, and where the two injection screens disagree.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevOperatorPayload {
+    /// Configured state: `ok`, `disabled` or `missing_api_key`.
+    pub status: String,
+    /// When the worker last finished a cycle.
+    pub last_cycle_at: Option<String>,
+    pub cycle_interval_seconds: i64,
+    /// Enabled, and no cycle has finished within three intervals.
+    pub worker_silent: bool,
+    pub steps: Vec<JevWorkerStepPayload>,
+    pub purposes: Vec<JevPurposeCallsPayload>,
+    pub screening: JevScreeningPayload,
+    /// Reads that failed. What they would have shown is unknown, not absent.
+    pub unavailable_sources: Vec<String>,
 }
 
 /// Per-request LLM token and cost ledger with its daily rollup.

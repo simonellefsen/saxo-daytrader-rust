@@ -4,7 +4,7 @@ tags:
   - daytrader/wiki
   - roadmap
   - maintained-by-llm
-updated: 2026-09-03
+updated: 2026-10-16
 ---
 
 # Daytrader Roadmap
@@ -19,10 +19,11 @@ Jev has a [reviewed staged adoption plan](/Users/lindau/codex/rust_daytrader/doc
 Observation has run since 2026-09-20, grading reports with `jev.enabled: true`.
 The model alias floats by operator decision (2026-10-15): Jev always runs the
 latest version. Each rollover is a dated measurement boundary, announced once
-and shown on the AI Prompts view (adoption item A.5). The rest of the operator
-panel, durable attempt accounting and calibration gates still precede any
-rank-only experiment. Model confidence is not automatically a probability of
-profit.
+and shown on the AI Prompts view (adoption item A.5). The operator panel is
+complete on that view (A.2, 2026-10-16): worker status and backlog, partial
+answers, cost coverage and marker disagreement. Durable attempt accounting
+(A.3) and calibration gates still precede any rank-only experiment. Model
+confidence is not automatically a probability of profit.
 
 - Preserve SIM/live separation and keep broker mutations auditable.
 - Fail closed on AI, schema, session, market-scope, and broker uncertainty.
