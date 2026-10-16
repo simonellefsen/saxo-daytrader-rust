@@ -3154,3 +3154,13 @@ broker mutation was added.
   - A refusal is not a call: it is outside the usage ledger, the costs and the failure counts.
 - **Outbound failure text:** failure classification had sent a decision report's raw error text to Jev, unbounded. It is now masked for credential shapes and bounded to 2,000 characters, and the state says when and from what length.
 - Released and smoke-tested with 0 warnings; CI green; the first cycle at 06:07Z was clean. Each call now stores its request size beside the provider's count. The panel will show the tightest bytes per token once the next report is graded; until then that field is empty, not zero.
+
+## [2026-10-16] Refactoring | The last two untyped JSON endpoints typed
+
+- **Why this, not Jev section B.** Section B, measurement before strategy influence, has almost nothing to measure on the editorial side: 6 judgements in total, none since 2026-09-20, because the one source has stopped naming the 7 aliased companies (see the entry above). Widening sources or aliases changes what reaches the decision prompt, so it is Simon's call ([todo T2](todo.md) item 3). Report grading has been measured by fresh-v1 and fresh-v2; its open question is [todo T4](todo.md), also Simon's. So the next unblocked roadmap step was the typed-core track.
+- `f93cc81` types `/api/ai/jev` (`JevObservationsPayload`) and `/api/evaluation/entries` (`EntryEvaluationPayload`), the last two handlers declared as returning `Json<JsonValue>`.
+  - The entry evaluation decodes through `read_model` from its unchanged builder, because the weekly snapshot stores that builder's JSON. A test holds the typed payload to that JSON field for field.
+  - The Jev payload is built typed. Stored measurement documents stay whole JSON audit records. Disagreement rows now carry `marker_screened` as a boolean rather than 0 or 1, the one visible shape change.
+  - A failed build is marked `unavailable` with a redacted, 240-character reason instead of raw error text.
+- Verified in production: the entry evaluation decoded all 177 BUY fills across its 20 cells, and the Jev payload returned 50 stored grades. Smoke 0 warnings; CI green.
+- Not audited: the handlers that build a raw `Response`.
