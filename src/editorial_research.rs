@@ -163,6 +163,7 @@ pub(crate) async fn score_items_with_jev(
     let mut scored = 0usize;
     let mut failed = 0usize;
     let mut held = 0usize;
+    let mut refused = 0usize;
 
     for pair in &pairs {
         // Three distinct moments, because collapsing them into one taken
@@ -241,6 +242,19 @@ pub(crate) async fn score_items_with_jev(
                     scored += 1;
                 }
             }
+            Err(err) if crate::jev_review::refused_locally(&err) => {
+                refused += 1;
+                warn!(symbol = %pair.symbol, "Jev editorial scoring refused before sending: {err:#}");
+                let row = crate::jev_store::refused_row(
+                    meta,
+                    &format!("{err:#}"),
+                    crate::jev_signals::NEWS_QUESTION_SET_VERSION,
+                );
+                if !crate::jev_review::record_or_hold(state, unrecorded, row).await {
+                    held += 1;
+                    break;
+                }
+            }
             Err(err) => {
                 failed += 1;
                 let error_text = compact_error(&err.to_string());
@@ -254,15 +268,19 @@ pub(crate) async fn score_items_with_jev(
         }
     }
 
-    info!(scored, failed, held, "Jev editorial scoring completed");
+    info!(
+        scored,
+        failed, held, refused, "Jev editorial scoring completed"
+    );
     json!({
         "status": if failed > 0 && scored == 0 { "error" } else { "ok" },
         "scored": scored,
         "failed": failed,
         "unrecorded": held,
+        "refused": refused,
         "processed": scored,
         "waiting": waiting,
-        "remaining": waiting.saturating_sub(scored),
+        "remaining": waiting.saturating_sub(scored + refused),
         "waiting_is_lower_bound": waiting_is_lower_bound,
         "admission": "observational_only",
         "safety": "records judgements beside the marker screen without changing it; \
@@ -342,11 +360,22 @@ async fn unjudged_pairs(state: &AppState) -> Result<Vec<UnjudgedPair>> {
         )
     })
     .collect::<std::collections::HashMap<_, _>>();
+    // An item refused at this question set would be refused again, and its
+    // pair would come back every cycle.
+    let refused = crate::jev_store::refused_subjects_at_version(
+        &state.pool,
+        crate::jev_store::PURPOSE_EDITORIAL_ITEM,
+        crate::jev_signals::NEWS_QUESTION_SET_VERSION,
+    )
+    .await?;
     let now = Utc::now().to_rfc3339();
 
     let mut pairs = Vec::new();
     for row in rows {
         let item_id = value_text(&row, "id");
+        if refused.contains(&item_id) {
+            continue;
+        }
         let title = value_text(&row, "title");
         let summary = value_text(&row, "summary");
         let marker_screened = !injection_markers_in(&format!("{title}\n{summary}")).is_empty();

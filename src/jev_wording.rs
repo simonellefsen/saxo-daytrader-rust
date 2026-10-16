@@ -810,6 +810,8 @@ mod live {
             http_timeout_seconds: 30,
             max_state_chars: 24_000,
             max_questions_per_request: 24,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
 
         let (cases, set_fingerprint) = load();

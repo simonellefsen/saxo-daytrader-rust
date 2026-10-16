@@ -6186,6 +6186,14 @@ fn jev_failure_kind_label(kind: &str) -> String {
     }
 }
 
+/// A token count as a share of a limit, for the largest-call note.
+fn jev_share_of(tokens: i64, limit: i64) -> String {
+    if limit <= 0 {
+        return "an unknown share".to_string();
+    }
+    format!("{}%", (tokens as f64 * 100.0 / limit as f64).round() as i64)
+}
+
 fn jev_provider_failure_text(provider: &crate::models::JevProviderStatePayload) -> String {
     let mut text = String::new();
     if let Some(kind) = provider.last_failure_kind.as_deref() {
@@ -6255,6 +6263,9 @@ fn JevWorkerCard(operator: crate::models::JevOperatorPayload, prefs: Localizatio
             if let Some(at) = operator.last_cycle_at.as_deref() {
                 div { class: "pill-row",
                     span { class: "pill", "last cycle {format_timestamp(at, &prefs)}" }
+                    if operator.budget.max_request_tokens > 0 {
+                        span { class: "pill", "limit {format_number(operator.budget.max_request_tokens as f64, 0, &prefs)} tokens per request, {format_number(operator.budget.max_question_tokens as f64, 0, &prefs)} per question" }
+                    }
                 }
             }
             if !operator.steps.is_empty() {
@@ -6278,7 +6289,12 @@ fn JevWorkerCard(operator: crate::models::JevOperatorPayload, prefs: Localizatio
                                             span { class: "muted", " at {stage}" }
                                         }
                                     }
-                                    td { "{step.processed} / {step.failed}" }
+                                    td {
+                                        "{step.processed} / {step.failed}"
+                                        if step.refused > 0 {
+                                            div { class: "muted", "{step.refused} refused before sending" }
+                                        }
+                                    }
                                     td { "{jev_waiting_text(step)}" }
                                     td {
                                         if let Some(at) = step.last_clean_at.as_deref() {
@@ -6320,6 +6336,15 @@ fn JevWorkerCard(operator: crate::models::JevOperatorPayload, prefs: Localizatio
                                         "{calls.requests}"
                                         if calls.retried > 0 {
                                             div { class: "muted", "{calls.retried} retried · {calls.attempts} attempts" }
+                                        }
+                                        if calls.refused > 0 {
+                                            div { class: "warn-text", "{calls.refused} refused before sending: too large to fit" }
+                                        }
+                                        if let Some(tokens) = calls.max_input_tokens {
+                                            div { class: "muted", "largest {format_number(tokens as f64, 0, &prefs)} tokens, {jev_share_of(tokens, operator.budget.max_request_tokens)} of the limit" }
+                                        }
+                                        if calls.min_bytes_per_token.is_some_and(|ratio| ratio < operator.budget.bytes_per_token_floor) {
+                                            div { class: "warn-text", "a call used more tokens than the budget estimated, so the estimate is not overcounting" }
                                         }
                                     }
                                     td {
@@ -15035,6 +15060,7 @@ mod tests {
                 remaining: Some(1),
                 waiting_is_lower_bound: true,
                 stage: None,
+                refused: 1,
             }],
             provider: crate::models::JevProviderStatePayload {
                 consecutive_failures: 2,
@@ -15047,11 +15073,20 @@ mod tests {
             unrecorded_pending: 1,
             unrecorded_pending_cost_usd: Some(0.000378),
             unrecorded_dropped: 0,
+            budget: crate::models::JevBudgetPayload {
+                max_request_tokens: 64_000,
+                max_question_tokens: 32_000,
+                max_state_chars: 24_000,
+                bytes_per_token_floor: 1.5,
+            },
             purposes: vec![crate::models::JevPurposeCallsPayload {
                 purpose: "report_grading".into(),
                 requests: 12,
                 attempts: 15,
                 retried: 2,
+                refused: 1,
+                max_input_tokens: Some(18_384),
+                min_bytes_per_token: Some(1.2),
                 completed: 9,
                 partial: 1,
                 failed: 2,
@@ -15104,6 +15139,14 @@ mod tests {
         assert!(html.contains("8 billed · 1 rate-card"));
         assert!(html.contains("1 answered with no cost: unknown, not free"));
         assert!(html.contains("2 retried · 15 attempts"), "{html}");
+        assert!(html.contains("1 refused before sending: too large to fit"));
+        assert!(
+            html.contains("1 refused before sending</div>"),
+            "the step says so too"
+        );
+        assert!(html.contains("of the limit"));
+        assert!(html.contains("29% of the limit"), "{html}");
+        assert!(html.contains("the estimate is not overcounting"));
     }
 
     /// A shut provider gate says until when and why, and a call that answered

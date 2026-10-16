@@ -1839,6 +1839,8 @@ pub struct JevWorkerStepPayload {
     pub waiting_is_lower_bound: bool,
     /// Where the step stopped, when it failed before doing any work.
     pub stage: Option<String>,
+    /// Subjects refused before sending on the latest cycle.
+    pub refused: i64,
 }
 
 /// One purpose's calls in the request ledger, since the first was recorded.
@@ -1853,6 +1855,14 @@ pub struct JevPurposeCallsPayload {
     pub attempts: i64,
     /// Calls that needed more than one attempt.
     pub retried: i64,
+    /// Subjects refused before sending because they could not fit. Not
+    /// calls: nothing was sent and nothing billed.
+    pub refused: i64,
+    /// The largest provider-reported input of any call.
+    pub max_input_tokens: Option<i64>,
+    /// The fewest request bytes per reported token on any call that recorded
+    /// both. Below the budget's floor, the estimate undercounted.
+    pub min_bytes_per_token: Option<f64>,
     pub completed: i64,
     pub partial: i64,
     pub failed: i64,
@@ -1900,6 +1910,15 @@ pub struct JevScreeningPayload {
     pub disagreements: Vec<JevScreeningDisagreementPayload>,
 }
 
+/// The provider limits each request is estimated against before sending.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevBudgetPayload {
+    pub max_request_tokens: i64,
+    pub max_question_tokens: i64,
+    pub max_state_chars: i64,
+    pub bytes_per_token_floor: f64,
+}
+
 /// The durable provider gate: whether calls are deferred, and why.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct JevProviderStatePayload {
@@ -1934,6 +1953,8 @@ pub struct JevOperatorPayload {
     /// Held rows dropped because the hold was full; their cost is lost.
     pub unrecorded_dropped: i64,
     pub purposes: Vec<JevPurposeCallsPayload>,
+    /// The limits requests are budgeted against.
+    pub budget: JevBudgetPayload,
     pub screening: JevScreeningPayload,
     /// Reads that failed. What they would have shown is unknown, not absent.
     pub unavailable_sources: Vec<String>,

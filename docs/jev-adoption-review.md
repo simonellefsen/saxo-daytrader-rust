@@ -136,11 +136,61 @@ until released; both config defaults remain disabled.
    - **Belongs to item 4, not fixed here.** A subject refused locally still
      stops its step's batch. The worker selects newest first, so such a
      subject would stop that step on every cycle. No refusal has been
-     recorded in production.
+     recorded in production. *(Fixed the same day under item 4.)*
 4. Bound/redact outbound failure text. Test report grading on representative
    sanitized reports: one tiny fixture does not prove all reports fit the byte
    budget. Reject rather than silently truncate oversize input; budget state
    **plus questions** against provider token limits.
+
+   *Status, 2026-10-16, beside the item above.*
+   - **The limits, from TypeSafe.** Jev 1.13 and 1.14 allow 64k tokens for
+     the state plus every question, and 32k for the state plus any one
+     question. Over either, the provider answers 400 `max_tokens_exceeded`.
+     The config had said "OpenRouter lists a 32k context" and budgeted only
+     the state, at 24,000 characters; questions were never counted. That
+     state cap stays, as a cost bound. `jev.max_request_tokens` and
+     `jev.max_question_tokens` now carry the two documented limits.
+   - **Budgeting state plus questions.** Before sending, `jev::ask`
+     estimates the whole request and the state plus its largest question
+     against both limits. The estimate assumes 1.5 bytes per token, which
+     overcounts every measured case: an editorial request of 2,310 bytes was
+     billed about 850 tokens, and the smallest failure classification, of
+     at least 960 bytes, 527. Each call stores its request size and
+     estimate beside the provider's own count. The panel shows the largest
+     call per purpose and warns if any call shows the estimate undercounting.
+     A logged warning does the same per call.
+   - **Real reports instead of sanitized fixtures.** The provider has counted
+     every report graded. Its counts for the 2,061 grading calls to
+     2026-10-16:
+
+     | | input tokens |
+     |---|---|
+     | median | 6,930 |
+     | 95th percentile | 12,996 |
+     | largest | 18,384, 29% of the per-request limit |
+
+     None was refused or failed. The state plus one question is part of the
+     whole request, so every call was also under the 32k per-question
+     limit. A test adds the bound for reports not yet written: a full
+     10-candidate grading request, with a state at the 24,000-character cap,
+     fits both limits. So only input above that cap can be refused. The
+     grading questions alone come to about 34,000 bytes at 10 candidates,
+     more than the state cap, so questions, not reports, dominate.
+   - **Refused, never truncated.** An oversized state or request is still
+     refused before sending. The refused subject is now recorded as
+     `refused` at its question version and is not selected again until the
+     questions change, and its step goes on to the next subject. A refusal
+     is not a call: it is outside the usage ledger, the cost figures and the
+     failure counts.
+   - **Outbound failure text.** Failure classification sent a decision
+     report's stored error text to Jev unbounded and unredacted. It now
+     masks credential-shaped words before sending: long or prefixed tokens,
+     the credential after `Bearer`, `Basic` or an `Authorization:` header,
+     and any `key=`, `token=`, `secret=` or `password=` value. It then sends
+     at most 2,000 characters. The state gives the full length and says when
+     the text was cut, so the classifier knows it saw an opening, not the
+     whole: a stated bound rather than a silent one. Provider error bodies
+     stored in the ledger are masked the same way.
 5. Persist immutable decision-time feature/source references and collection
    timestamps. Old headlines scored today are not historical out-of-sample
    features. Define partial-answer regrading and alias-rollover policies.

@@ -237,6 +237,12 @@ pub(crate) async fn deferred_step(state: &AppState) -> Option<JsonValue> {
     }
 }
 
+/// Whether a call was refused before anything was sent: a property of the
+/// input, so retrying it is pointless and it says nothing about the provider.
+pub(crate) fn refused_locally(err: &anyhow::Error) -> bool {
+    crate::jev::JevCallError::of(err).is_some_and(|failure| !failure.reached_provider())
+}
+
 /// The ledger row for a call that failed, with the attempts it made.
 pub(crate) fn failed_call_row(
     meta: jev_store::RecordedRequest<'_>,
@@ -366,6 +372,7 @@ pub(crate) async fn grade_reports(
     let mut graded = 0usize;
     let mut failed = 0usize;
     let mut held = 0usize;
+    let mut refused = 0usize;
 
     for (report_id, subject, report, row) in pending.into_iter().take(grading_batch_limit(state)) {
         // The indicator snapshot the model actually saw, taken from the stored
@@ -411,6 +418,18 @@ pub(crate) async fn grade_reports(
                 }
                 graded += 1;
             }
+            Err(err) if refused_locally(&err) => {
+                refused += 1;
+                warn!(
+                    report_id,
+                    "Jev report grading refused before sending: {err:#}"
+                );
+                let row = jev_store::refused_row(meta, &format!("{err:#}"), REPORT_GRADING_VERSION);
+                if !record_or_hold(state, unrecorded, row).await {
+                    held += 1;
+                    break;
+                }
+            }
             Err(err) => {
                 failed += 1;
                 warn!(report_id, "Jev report grading failed: {err:#}");
@@ -423,8 +442,11 @@ pub(crate) async fn grade_reports(
         }
     }
 
-    if graded > 0 || failed > 0 {
-        info!(graded, failed, held, "Jev report grading completed");
+    if graded > 0 || failed > 0 || refused > 0 {
+        info!(
+            graded,
+            failed, held, refused, "Jev report grading completed"
+        );
     }
     merged(
         json!({
@@ -432,11 +454,12 @@ pub(crate) async fn grade_reports(
             "graded": graded,
             "failed": failed,
             "unrecorded": held,
+            "refused": refused,
             "admission": "observational_only",
         }),
         // The window is the deliberate bound, not a truncated selection:
         // reports older than it are never graded by this worker.
-        backlog(waiting, graded, false),
+        backlog(waiting, graded + refused, false),
     )
 }
 
@@ -1191,6 +1214,7 @@ pub(crate) async fn classify_unknown_failures(
     let mut classified = 0usize;
     let mut failed = 0usize;
     let mut held = 0usize;
+    let mut refused = 0usize;
 
     for (id, subject, row) in pending.into_iter().take(REVIEW_BATCH_LIMIT) {
         let error_text = row
@@ -1239,6 +1263,22 @@ pub(crate) async fn classify_unknown_failures(
                 }
                 classified += 1;
             }
+            Err(err) if refused_locally(&err) => {
+                refused += 1;
+                warn!(
+                    report_id = id,
+                    "Jev failure classification refused before sending: {err:#}"
+                );
+                let row = jev_store::refused_row(
+                    meta,
+                    &format!("{err:#}"),
+                    FAILURE_CLASSIFICATION_VERSION,
+                );
+                if !record_or_hold(state, unrecorded, row).await {
+                    held += 1;
+                    break;
+                }
+            }
             Err(err) => {
                 failed += 1;
                 warn!(report_id = id, "Jev failure classification failed: {err:#}");
@@ -1251,10 +1291,10 @@ pub(crate) async fn classify_unknown_failures(
         }
     }
 
-    if classified > 0 || failed > 0 {
+    if classified > 0 || failed > 0 || refused > 0 {
         info!(
             classified,
-            failed, held, "Jev failure classification completed"
+            failed, held, refused, "Jev failure classification completed"
         );
     }
     merged(
@@ -1263,9 +1303,10 @@ pub(crate) async fn classify_unknown_failures(
             "classified": classified,
             "failed": failed,
             "unrecorded": held,
+            "refused": refused,
             "admission": "observational_only",
         }),
-        backlog(waiting, classified, false),
+        backlog(waiting, classified + refused, false),
     )
 }
 
@@ -1306,6 +1347,10 @@ mod tests {
     /// A worker state whose Jev calls go to `base_url`, with two stored
     /// report failures the deterministic cascade cannot name.
     async fn worker_state(base_url: &str) -> AppState {
+        worker_state_with(base_url, "").await
+    }
+
+    async fn worker_state_with(base_url: &str, extra_jev_yaml: &str) -> AppState {
         sqlx::any::install_default_drivers();
         let pool = sqlx::any::AnyPoolOptions::new()
             .max_connections(1)
@@ -1337,7 +1382,7 @@ mod tests {
         AppState {
             config_path: std::path::PathBuf::from("test.yaml"),
             config: serde_yaml::from_str(&format!(
-                "jev:\n  enabled: true\n  api_key: test-key\n  base_url: {base_url}\n  http_timeout_seconds: 5\n"
+                "jev:\n  enabled: true\n  api_key: test-key\n  base_url: {base_url}\n  http_timeout_seconds: 5\n{extra_jev_yaml}"
             ))
             .unwrap(),
             db_url: "sqlite::memory:".into(),
@@ -1436,6 +1481,98 @@ mod tests {
         );
         assert_eq!(row["subject"], "2", "the newest failure was asked first");
         assert_eq!(row["cost_usd"].as_f64(), Some(0.0000042));
+    }
+
+    /// The A.3 follow-on: a subject too large to send is refused once and
+    /// skipped from then on. Selection is newest first, so before this it
+    /// stopped its step's batch on every cycle and nothing behind it was
+    /// ever asked.
+    #[tokio::test]
+    async fn a_subject_too_large_to_send_is_refused_once_and_does_not_block_the_queue() {
+        let provider = crate::jev::fake_provider::serve(vec![
+            (200, None, crate::jev::fake_provider::billed_answer()),
+            (200, None, crate::jev::fake_provider::billed_answer()),
+        ])
+        .await;
+        let state = worker_state_with(&provider.base_url, "  max_state_chars: 1000\n").await;
+        sqlx::query(
+            "INSERT INTO decision_reports (id, created_at, status, error_text)
+             VALUES (3, '2026-10-16T08:00:00Z', 'failed', $1)",
+        )
+        .bind("an unprecedented upstream refusal ".repeat(100))
+        .execute(&state.pool)
+        .await
+        .expect("a long failure, newest");
+        let mut unrecorded = jev_store::Unrecorded::default();
+
+        let first = classify_unknown_failures(&state, &mut unrecorded).await;
+        assert_eq!(first["refused"], 1, "{first}");
+        assert_eq!(first["classified"], 2, "the queue behind it moved");
+        assert_eq!(first["failed"], 0);
+        assert_eq!(provider.hits(), 2);
+        assert!(
+            jev_store::provider_deferred_until(&state.pool, Utc::now())
+                .await
+                .unwrap()
+                .is_none(),
+            "a refusal says nothing about the provider"
+        );
+
+        let second = classify_unknown_failures(&state, &mut unrecorded).await;
+        assert_eq!(
+            second["waiting"], 0,
+            "the refused subject is not selected again: {second}"
+        );
+        assert_eq!(provider.hits(), 2);
+    }
+
+    /// Every request shape the worker sends fits both documented limits at
+    /// its largest: a full grading question set with a state at the operator
+    /// cap. So the budget cannot refuse a real grading call, only something
+    /// larger than the cap allows. The calibration requests stay overcounted.
+    #[test]
+    fn every_request_shape_fits_the_documented_context_at_its_largest() {
+        let limits = crate::jev::RequestLimits::from_yaml(&serde_yaml::Value::Null);
+        fn budget_for(
+            state: &JsonValue,
+            questions: &BTreeMap<String, crate::jev::Question>,
+        ) -> crate::jev::RequestBudget {
+            let request = crate::jev::build_request(state, "~typesafe/jev-latest", questions);
+            crate::jev::request_budget(&request, state.to_string().len())
+        }
+
+        let full_state = json!({"report": "x".repeat(limits.max_state_chars - 20)});
+        let grading = budget_for(
+            &full_state,
+            &jev_signals::report_grading_questions(MAX_JUDGED_CANDIDATES),
+        );
+        assert!(
+            grading.request_tokens <= limits.max_request_tokens,
+            "a full grading request: {grading:?}"
+        );
+        assert!(grading.largest_question_tokens <= limits.max_question_tokens);
+
+        let news = jev_signals::news_state(
+            "TSLA:xnas",
+            Some("Tesla"),
+            "App Economy Insights",
+            "Tesla: Cash Burn Begins",
+            "Robotaxi bets meet margin pressure.",
+            Some("2026-07-24T12:00:00Z"),
+        );
+        let editorial = budget_for(&news, &jev_signals::news_questions());
+        assert!(
+            editorial.request_tokens >= 861,
+            "the largest editorial call was billed 861 tokens: {editorial:?}"
+        );
+        let classification = budget_for(
+            &jev_signals::error_classification_state("failed", ""),
+            &jev_signals::error_classification_questions(KNOWN_FAILURE_CODES),
+        );
+        assert!(
+            classification.request_tokens >= 527,
+            "the smallest classification was billed 527 tokens: {classification:?}"
+        );
     }
 
     #[tokio::test]
@@ -2102,6 +2239,8 @@ mod tests {
             http_timeout_seconds: 30,
             max_state_chars: 24_000,
             max_questions_per_request: 12,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
         // break_risk 0.0614, labelled low; markov Bull at +0.429.
         let prompt = json!({

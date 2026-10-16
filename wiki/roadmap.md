@@ -22,9 +22,10 @@ latest version. Each rollover is a dated measurement boundary, announced once
 and shown on the AI Prompts view (adoption item A.5). The operator panel is
 complete on that view (A.2, 2026-10-16): worker status and backlog, partial
 answers, cost coverage and marker disagreement. Attempt accounting and a
-durable provider backoff followed the same day (A.3). Input budgets (A.4)
-and the measurement work in section B still precede any rank-only
-experiment. Model confidence is not automatically a probability of profit.
+durable provider backoff (A.3) and request budgets against TypeSafe's
+documented context limits (A.4) followed the same day. The measurement work
+in section B still precedes any rank-only experiment. Model confidence is
+not automatically a probability of profit.
 
 - Preserve SIM/live separation and keep broker mutations auditable.
 - Fail closed on AI, schema, session, market-scope, and broker uncertainty.

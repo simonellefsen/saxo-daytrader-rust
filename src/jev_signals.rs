@@ -900,12 +900,75 @@ pub(crate) fn error_classification_questions(
     )])
 }
 
+/// How much failure text is sent to Jev. The category is in the opening of
+/// a provider error; the rest is usually an echoed body.
+pub(crate) const OUTBOUND_ERROR_TEXT_CHARS: usize = 2_000;
+
+/// The state for classifying one stored failure.
+///
+/// The text leaves this system, so it is redacted first: anything shaped like
+/// a key or bearer token, and the value of any `key=`, `token=`, `secret=` or
+/// `password=` pair. Then it is bounded, and the state says so: a classifier
+/// shown the opening of an error is told that is all it was shown, and how
+/// long the whole was, rather than being handed a silent truncation.
 pub(crate) fn error_classification_state(status: &str, error_text: &str) -> JsonValue {
+    let redacted = redact_outbound_text(error_text);
+    let total_chars = redacted.chars().count();
     json!({
         "status": status,
-        "error_text": error_text,
+        "error_text": redacted.chars().take(OUTBOUND_ERROR_TEXT_CHARS).collect::<String>(),
+        "error_text_chars": total_chars,
+        "error_text_truncated": total_chars > OUTBOUND_ERROR_TEXT_CHARS,
         "content_trust": "untrusted_provider_text",
     })
+}
+
+/// Masks credential-shaped text before it leaves the system.
+pub(crate) fn redact_outbound_text(text: &str) -> String {
+    let credential_names = [
+        "key",
+        "token",
+        "secret",
+        "password",
+        "authorization",
+        "signature",
+    ];
+    let bare = |word: &str| {
+        word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+            .to_ascii_lowercase()
+    };
+    let is_scheme = |name: &str| matches!(name, "bearer" | "basic");
+    // A header name or scheme means the next word is the credential, however
+    // short; `redact_debug_text` alone catches only long or prefixed tokens.
+    let mut credential_follows = false;
+    let mut words = Vec::new();
+    for word in text.split_whitespace() {
+        let name = bare(word);
+        if credential_follows {
+            words.push("[redacted]".to_string());
+            credential_follows = is_scheme(&name);
+            continue;
+        }
+        // The header form only: "Authorization failed" is prose, and masking
+        // the word after it would hide exactly what a classifier needs.
+        if is_scheme(&name) || (name == "authorization" && word.ends_with(':')) {
+            credential_follows = true;
+            words.push(if is_scheme(&name) {
+                "[redacted]".to_string()
+            } else {
+                word.to_string()
+            });
+            continue;
+        }
+        let masked = word.find(['=', ':']).and_then(|at| {
+            let value = &word[at + 1..];
+            let name = bare(&word[..at]);
+            (!value.is_empty() && credential_names.iter().any(|needle| name.contains(needle)))
+                .then(|| format!("{}[redacted]", &word[..=at]))
+        });
+        words.push(masked.unwrap_or_else(|| crate::debug_redaction::redact_debug_text(word)));
+    }
+    words.join(" ")
 }
 
 #[cfg(test)]
@@ -932,6 +995,41 @@ mod tests {
                 .map(|level| (level.to_string(), MATERIALITY_LEVELS[level - 1].to_string()))
                 .collect(),
         }
+    }
+
+    /// Failure text leaves the system, so every credential shape is masked
+    /// before it does, while the wording a classifier needs survives.
+    #[test]
+    fn outbound_failure_text_is_redacted_and_its_bound_is_stated() {
+        let text = "Incorrect API key provided: sk-or-v1-abc123. \
+                    Authorization: Bearer shorttok api_key=k3y9 token:xyz42 \
+                    Authorization failed for this account";
+        let state = error_classification_state("failed", text);
+        let sent = state["error_text"].as_str().unwrap();
+        for secret in ["sk-or-v1-abc123", "shorttok", "k3y9", "xyz42"] {
+            assert!(!sent.contains(secret), "{secret} leaked: {sent}");
+        }
+        assert!(sent.contains("Incorrect API key provided:"));
+        assert!(
+            sent.contains("Authorization failed for this account"),
+            "prose is not a header: {sent}"
+        );
+        assert_eq!(state["error_text_truncated"], false);
+
+        let long = "upstream said no ".repeat(400);
+        let state = error_classification_state("failed", &long);
+        assert_eq!(
+            state["error_text"].as_str().unwrap().chars().count(),
+            OUTBOUND_ERROR_TEXT_CHARS
+        );
+        assert_eq!(
+            state["error_text_truncated"], true,
+            "the bound is stated, not silent"
+        );
+        assert_eq!(
+            state["error_text_chars"].as_u64(),
+            Some(redact_outbound_text(&long).chars().count() as u64)
+        );
     }
 
     #[test]

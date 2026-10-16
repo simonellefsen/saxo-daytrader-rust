@@ -695,10 +695,18 @@ jev:
   # invisible recalibration of a probability we are back-testing.
   model: ~typesafe/jev-latest
   http_timeout_seconds: 15
-  # OpenRouter lists a 32k context for Jev. An oversized state is refused
-  # rather than truncated: truncated JSON is both invalid and a silent change
-  # to what the model was shown.
+  # An operator cap on the state alone, which bounds cost. An oversized state
+  # is refused rather than truncated: truncated JSON is both invalid and a
+  # silent change to what the model was shown.
   max_state_chars: 24000
+  # TypeSafe's documented context for Jev 1.13 and 1.14 without the
+  # long-context header: 64k tokens for the state plus every question, 32k for
+  # the state plus any one question (docs.typesafe.ai/models). Each request is
+  # estimated against both before it is sent, at a deliberately low 1.5 bytes
+  # per token, and refused if either would be exceeded. The largest real call
+  # to 2026-10-16 was 18,384 input tokens, a report grading.
+  max_request_tokens: 64000
+  max_question_tokens: 32000
   # Raised 12 -> 24 on 2026-09-21. Each graded candidate now asks two
   # questions: one about wording and one about evidence sufficiency. They were
   # one choice before, which meant a note overstating what the evidence shows

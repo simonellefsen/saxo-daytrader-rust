@@ -66,6 +66,27 @@ pub(crate) const ALIAS_ROLLOVER_POLICY: &str = "Jev runs the floating alias \
 const DEFAULT_TIMEOUT_SECONDS: i64 = 15;
 const DEFAULT_MAX_STATE_CHARS: i64 = 24_000;
 const DEFAULT_MAX_QUESTIONS: i64 = 12;
+/// TypeSafe's documented context for Jev 1.13 and 1.14, without the
+/// long-context header: 64k tokens for the state plus every question, and
+/// 32k for the state plus any one question. Over either, the provider
+/// answers 400 `max_tokens_exceeded`.
+const DEFAULT_MAX_REQUEST_TOKENS: i64 = 64_000;
+const DEFAULT_MAX_QUESTION_TOKENS: i64 = 32_000;
+
+/// Request bytes per token assumed when estimating against those limits.
+///
+/// Deliberately low, so the estimate overcounts. Calibrated on 2026-10-16
+/// against provider-reported input tokens: an editorial request of 2,310
+/// bytes was billed about 850 tokens (2.7 per token), and the smallest
+/// failure classification, at least 960 bytes, 527 (at least 1.8). Each call
+/// now records its request size beside the reported count, so the floor is
+/// checked on every call rather than trusted.
+pub(crate) const REQUEST_BYTES_PER_TOKEN_FLOOR: f64 = 1.5;
+
+/// The token count the budget assumes for `bytes` of request.
+pub(crate) fn estimated_tokens(bytes: usize) -> usize {
+    (bytes as f64 / REQUEST_BYTES_PER_TOKEN_FLOOR).ceil() as usize
+}
 
 /// Process-wide client with no global timeout; the deadline is applied per
 /// request instead.
@@ -100,6 +121,10 @@ pub(crate) struct JevConfig {
     pub http_timeout_seconds: u64,
     pub max_state_chars: usize,
     pub max_questions_per_request: usize,
+    /// The provider's per-request context: state plus every question.
+    pub max_request_tokens: usize,
+    /// The provider's per-question context: state plus any one question.
+    pub max_question_tokens: usize,
 }
 
 impl std::fmt::Debug for JevConfig {
@@ -108,6 +133,58 @@ impl std::fmt::Debug for JevConfig {
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
             .finish_non_exhaustive()
+    }
+}
+
+/// The size limits a request is checked against before it is sent.
+///
+/// Read whether or not Jev is enabled, so the operator panel can show the
+/// limits that would apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RequestLimits {
+    pub max_state_chars: usize,
+    pub max_questions_per_request: usize,
+    pub max_request_tokens: usize,
+    pub max_question_tokens: usize,
+}
+
+impl RequestLimits {
+    pub(crate) fn from_yaml(config: &YamlValue) -> Self {
+        let read = |key: &str, default: i64, low: i64, high: i64| {
+            yaml_i64(config, &["jev", key])
+                .unwrap_or(default)
+                .clamp(low, high) as usize
+        };
+        Self {
+            max_state_chars: read("max_state_chars", DEFAULT_MAX_STATE_CHARS, 256, 120_000),
+            max_questions_per_request: read(
+                "max_questions_per_request",
+                DEFAULT_MAX_QUESTIONS,
+                1,
+                64,
+            ),
+            max_request_tokens: read(
+                "max_request_tokens",
+                DEFAULT_MAX_REQUEST_TOKENS,
+                1_000,
+                262_000,
+            ),
+            max_question_tokens: read(
+                "max_question_tokens",
+                DEFAULT_MAX_QUESTION_TOKENS,
+                1_000,
+                262_000,
+            ),
+        }
+    }
+
+    pub(crate) fn payload(&self) -> crate::models::JevBudgetPayload {
+        crate::models::JevBudgetPayload {
+            max_request_tokens: self.max_request_tokens as i64,
+            max_question_tokens: self.max_question_tokens as i64,
+            max_state_chars: self.max_state_chars as i64,
+            bytes_per_token_floor: REQUEST_BYTES_PER_TOKEN_FLOOR,
+        }
     }
 }
 
@@ -133,6 +210,7 @@ impl JevConfig {
         else {
             return JevAvailability::MissingApiKey;
         };
+        let limits = RequestLimits::from_yaml(config);
         JevAvailability::Ready(Box::new(Self {
             api_key,
             base_url: yaml_string(config, &["jev", "base_url"])
@@ -143,12 +221,10 @@ impl JevConfig {
             http_timeout_seconds: yaml_i64(config, &["jev", "http_timeout_seconds"])
                 .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
                 .clamp(1, 120) as u64,
-            max_state_chars: yaml_i64(config, &["jev", "max_state_chars"])
-                .unwrap_or(DEFAULT_MAX_STATE_CHARS)
-                .clamp(256, 120_000) as usize,
-            max_questions_per_request: yaml_i64(config, &["jev", "max_questions_per_request"])
-                .unwrap_or(DEFAULT_MAX_QUESTIONS)
-                .clamp(1, 64) as usize,
+            max_state_chars: limits.max_state_chars,
+            max_questions_per_request: limits.max_questions_per_request,
+            max_request_tokens: limits.max_request_tokens,
+            max_question_tokens: limits.max_question_tokens,
         }))
     }
 
@@ -301,6 +377,11 @@ pub(crate) struct JevResponse {
     pub attempts: u32,
     /// Every HTTP attempt this call made, the answering one last.
     pub attempt_log: Vec<JevAttempt>,
+    /// The serialized request body, and the token count the budget assumed
+    /// for it. Kept beside the provider's reported input tokens, they show
+    /// whether the estimate overcounts as it is meant to.
+    pub request_bytes: i64,
+    pub estimated_input_tokens: i64,
 }
 
 /// One HTTP attempt inside one call.
@@ -630,6 +711,39 @@ fn backoff_delay(attempt: u32) -> Duration {
     Duration::from_millis(BASE_BACKOFF_MS * 2_u64.pow(attempt.saturating_sub(1).min(6)))
 }
 
+/// What a request is estimated to cost against the provider's two limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RequestBudget {
+    pub request_bytes: usize,
+    /// The state plus every question.
+    pub request_tokens: usize,
+    /// The state plus the largest single question.
+    pub largest_question_tokens: usize,
+}
+
+/// Estimates a built request against both limits. The per-question figure
+/// counts the state once with the largest question as it appears in the
+/// body, so it is never below what the provider counts for any one question.
+pub(crate) fn request_budget(request: &JsonValue, state_bytes: usize) -> RequestBudget {
+    let request_bytes = request.to_string().len();
+    let largest_question_bytes = request
+        .get("questions")
+        .and_then(JsonValue::as_object)
+        .map(|questions| {
+            questions
+                .iter()
+                .map(|(id, question)| id.len() + question.to_string().len() + 4)
+                .max()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    RequestBudget {
+        request_bytes,
+        request_tokens: estimated_tokens(request_bytes),
+        largest_question_tokens: estimated_tokens(state_bytes + largest_question_bytes),
+    }
+}
+
 /// The wait a `Retry-After` header asks for, in seconds, from either form.
 fn retry_after_seconds(
     retry_after: Option<&str>,
@@ -693,6 +807,21 @@ pub(crate) async fn ask(
     }
 
     let request = build_request(state, &cfg.model, questions);
+    let budget = request_budget(&request, rendered_state.len());
+    if budget.request_tokens > cfg.max_request_tokens {
+        return Err(JevCallError::local(format!(
+            "Jev request is an estimated {} tokens ({} bytes), above the configured maximum of {} \
+             for the state plus every question",
+            budget.request_tokens, budget.request_bytes, cfg.max_request_tokens
+        )));
+    }
+    if budget.largest_question_tokens > cfg.max_question_tokens {
+        return Err(JevCallError::local(format!(
+            "Jev state plus its largest question is an estimated {} tokens, above the configured \
+             maximum of {} for the state plus any one question",
+            budget.largest_question_tokens, cfg.max_question_tokens
+        )));
+    }
     let started = std::time::Instant::now();
     let mut last_error = String::new();
     let mut attempt_log: Vec<JevAttempt> = Vec::new();
@@ -790,6 +919,19 @@ pub(crate) async fn ask(
         let mut response =
             decode_response(&parsed, &request, questions, elapsed_ms(started), attempt);
         response.attempt_log = attempt_log;
+        response.request_bytes = budget.request_bytes as i64;
+        response.estimated_input_tokens = budget.request_tokens as i64;
+        if response.usage.input_tokens > response.estimated_input_tokens {
+            // The floor is meant to overcount. A provider count above the
+            // estimate means it does not, and the budget is not protecting
+            // what it claims to.
+            tracing::warn!(
+                reported = response.usage.input_tokens,
+                estimated = response.estimated_input_tokens,
+                bytes = response.request_bytes,
+                "Jev reported more input tokens than the budget estimated"
+            );
+        }
         return Ok(response);
     }
 
@@ -844,6 +986,8 @@ fn decode_response(
         latency_ms,
         attempts,
         attempt_log: Vec::new(),
+        request_bytes: 0,
+        estimated_input_tokens: 0,
     }
 }
 
@@ -943,6 +1087,8 @@ mod tests {
             http_timeout_seconds: 5,
             max_state_chars: 24_000,
             max_questions_per_request: 12,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         }
     }
 
@@ -995,6 +1141,68 @@ mod tests {
             .collect();
         assert_eq!(outcomes, [(Some(503), "retried"), (Some(200), "answered")]);
         assert_eq!(response.cost_usd, Some(0.0000042));
+        assert!(response.request_bytes > 0);
+        assert_eq!(
+            response.estimated_input_tokens,
+            estimated_tokens(response.request_bytes as usize) as i64,
+            "the call carries the estimate it was budgeted at"
+        );
+    }
+
+    /// Over either documented limit, the request is refused before anything
+    /// is sent: a 400 `max_tokens_exceeded` would spend a request learning
+    /// what the budget already knew.
+    #[tokio::test]
+    async fn a_request_over_either_context_limit_is_refused_before_sending() {
+        let provider = fake_provider::serve(Vec::new()).await;
+        let state = json!({"text": "x".repeat(2_000)});
+
+        let mut per_request = loopback_cfg(&provider.base_url);
+        per_request.max_request_tokens = 1_000;
+        let err = ask(&per_request, &state, &noul_question())
+            .await
+            .expect_err("over the per-request limit");
+        assert!(
+            err.to_string()
+                .contains("for the state plus every question"),
+            "{err}"
+        );
+        assert!(!JevCallError::of(&err).unwrap().reached_provider());
+
+        let mut per_question = loopback_cfg(&provider.base_url);
+        per_question.max_question_tokens = 1_000;
+        let err = ask(&per_question, &state, &noul_question())
+            .await
+            .expect_err("over the per-question limit");
+        assert!(
+            err.to_string()
+                .contains("for the state plus any one question"),
+            "{err}"
+        );
+        assert_eq!(provider.hits(), 0, "nothing reached the provider");
+    }
+
+    /// The per-question figure counts the state once with the largest single
+    /// question, never a smaller one.
+    #[test]
+    fn the_per_question_budget_uses_the_largest_question() {
+        let mut questions = noul_question();
+        questions.extend(choice_question());
+        let state = json!({"text": "short"});
+        let request = build_request(&state, DEFAULT_MODEL, &questions);
+        let budget = request_budget(&request, state.to_string().len());
+        let largest = request["questions"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, question)| id.len() + question.to_string().len() + 4)
+            .max()
+            .unwrap();
+        assert_eq!(
+            budget.largest_question_tokens,
+            estimated_tokens(state.to_string().len() + largest)
+        );
+        assert!(budget.request_tokens > budget.largest_question_tokens);
     }
 
     /// A status that retrying cannot fix is one attempt, not three.
@@ -1438,6 +1646,8 @@ mod tests {
             http_timeout_seconds: 1,
             max_state_chars: 64,
             max_questions_per_request: 12,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
         let error = ask(&cfg, &json!({"text": "x".repeat(500)}), &noul_question())
             .await
@@ -1460,6 +1670,8 @@ mod tests {
             http_timeout_seconds: 1,
             max_state_chars: 24_000,
             max_questions_per_request: 1,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
         let empty = ask(&cfg, &json!({}), &BTreeMap::new())
             .await
@@ -1494,6 +1706,8 @@ mod tests {
             http_timeout_seconds: 1,
             max_state_chars: 24_000,
             max_questions_per_request: 12,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
         let request = build_request(&json!({"headline": "x"}), &cfg.model, &noul_question());
         assert!(!format!("{cfg:?}").contains(&cfg.api_key));
@@ -1532,6 +1746,8 @@ mod tests {
             http_timeout_seconds: 30,
             max_state_chars: 24_000,
             max_questions_per_request: 12,
+            max_request_tokens: 64_000,
+            max_question_tokens: 32_000,
         };
 
         // Synthetic. No position, symbol, or holding of the real book appears

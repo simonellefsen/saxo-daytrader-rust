@@ -16021,6 +16021,7 @@ impl AppState {
             self.jev_status(),
             Utc::now(),
             crate::jev_review::OBSERVATION_CYCLE_SECONDS,
+            crate::jev::RequestLimits::from_yaml(&self.config).payload(),
             reads,
         )
     }

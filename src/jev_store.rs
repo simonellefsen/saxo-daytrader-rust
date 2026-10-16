@@ -34,6 +34,9 @@ pub(crate) const INSTRUCTION_SHAPED_THRESHOLD: f64 = 0.5;
 
 pub(crate) const STATUS_COMPLETED: &str = "completed";
 pub(crate) const STATUS_ERROR: &str = "error";
+/// Refused before any request was sent, because the input could never fit.
+/// Not a provider call: it costs nothing and says nothing about the provider.
+pub(crate) const STATUS_REFUSED: &str = "refused";
 
 pub fn create_schema_sql() -> &'static [&'static str] {
     &[
@@ -59,7 +62,9 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             status TEXT NOT NULL,
             error_text TEXT,
             result_json TEXT,
-            attempts_json TEXT
+            attempts_json TEXT,
+            request_bytes INTEGER,
+            estimated_input_tokens INTEGER
         )",
         "CREATE TABLE IF NOT EXISTS jev_editorial_signals (
             item_id TEXT NOT NULL,
@@ -150,7 +155,11 @@ pub fn post_migration_index_sql() -> &'static [&'static str] {
 
 /// Columns added to `jev_requests` after it first shipped.
 pub fn request_columns_to_ensure() -> &'static [&'static str] {
-    &["attempts_json TEXT"]
+    &[
+        "attempts_json TEXT",
+        "request_bytes INTEGER",
+        "estimated_input_tokens INTEGER",
+    ]
 }
 
 /// Columns added to `jev_editorial_signals` after it first shipped.
@@ -217,6 +226,9 @@ pub(crate) struct RequestRow {
     pub result_json: Option<String>,
     /// Every HTTP attempt the call made, as `jev::JevAttempt` values.
     pub attempts_json: String,
+    /// The request body sent, and the tokens the budget estimated for it.
+    pub request_bytes: Option<i64>,
+    pub estimated_input_tokens: Option<i64>,
 }
 
 fn attempts_json(attempt_log: &[crate::jev::JevAttempt]) -> String {
@@ -258,6 +270,8 @@ pub(crate) fn completed_row(
         error_text: None,
         result_json: Some(result.to_string()),
         attempts_json: attempts_json(&response.attempt_log),
+        request_bytes: Some(response.request_bytes).filter(|bytes| *bytes > 0),
+        estimated_input_tokens: Some(response.estimated_input_tokens).filter(|tokens| *tokens > 0),
     }
 }
 
@@ -287,9 +301,37 @@ pub(crate) fn failed_row(
         latency_ms: attempt_log.iter().map(|attempt| attempt.latency_ms).sum(),
         attempts: attempt_log.len() as i64,
         status: STATUS_ERROR.to_string(),
-        error_text: Some(truncate(error_text, 2_000)),
+        // The text can carry a provider's body; anything token-shaped in it
+        // is masked before it is stored.
+        error_text: Some(truncate(
+            &crate::debug_redaction::redact_debug_text(error_text),
+            2_000,
+        )),
         result_json: None,
         attempts_json: attempts_json(attempt_log),
+        request_bytes: None,
+        estimated_input_tokens: None,
+    }
+}
+
+/// The row for a subject refused before sending, at a question version.
+///
+/// Recorded so the subject counts as judged at that version and is not
+/// selected again: a refusal is a property of the input, so asking again
+/// next cycle would refuse again, and with newest-first selection it would
+/// stop its step's batch on every cycle. A new question version re-selects
+/// it, since the questions are half of what did not fit.
+pub(crate) fn refused_row(
+    meta: RecordedRequest<'_>,
+    reason: &str,
+    question_version: &str,
+) -> RequestRow {
+    RequestRow {
+        status: STATUS_REFUSED.to_string(),
+        result_json: Some(
+            serde_json::json!({"version": question_version, "refused": reason}).to_string(),
+        ),
+        ..failed_row(meta, reason, &[])
     }
 }
 
@@ -299,9 +341,9 @@ pub(crate) async fn insert_request_row(pool: &AnyPool, row: &RequestRow) -> Resu
             id, created_at, purpose, subject, model_requested, model_resolved,
             question_count, answer_count, issue_count, input_tokens, output_tokens,
             cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json,
-            attempts_json
+            attempts_json, request_bytes, estimated_input_tokens
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                   $17, $18, $19)",
+                   $17, $18, $19, $20, $21)",
     )
     .bind(&row.id)
     .bind(&row.created_at)
@@ -322,6 +364,8 @@ pub(crate) async fn insert_request_row(pool: &AnyPool, row: &RequestRow) -> Resu
     .bind(row.error_text.as_deref())
     .bind(row.result_json.as_deref())
     .bind(&row.attempts_json)
+    .bind(row.request_bytes)
+    .bind(row.estimated_input_tokens)
     .execute(pool)
     .await
     .with_context(|| format!("recording a Jev request ({})", row.status))?;
@@ -562,6 +606,7 @@ pub(crate) async fn usage_rows(pool: &AnyPool, limit: i64) -> Result<Vec<JsonVal
         "SELECT created_at, purpose, model_requested, model_resolved, status,
                 input_tokens, output_tokens, cost_usd, cost_source
          FROM jev_requests
+         WHERE status <> 'refused'
          ORDER BY created_at DESC
          LIMIT {limit}"
     ))
@@ -856,7 +901,8 @@ pub(crate) async fn judged_subjects_at_version(
     // silently inheriting answers given to the previous wording.
     Ok(sqlx::query(
         "SELECT subject FROM jev_requests
-         WHERE purpose = $1 AND status IN ('completed', 'partial') AND subject IS NOT NULL
+         WHERE purpose = $1 AND status IN ('completed', 'partial', 'refused')
+           AND subject IS NOT NULL
            AND result_json IS NOT NULL
            AND result_json LIKE $2",
     )
@@ -865,6 +911,29 @@ pub(crate) async fn judged_subjects_at_version(
     .fetch_all(pool)
     .await
     .context("reading judged Jev subjects")?
+    .iter()
+    .filter_map(|row| row.try_get::<String, _>("subject").ok())
+    .collect())
+}
+
+/// Subjects refused at a question version. Editorial items are judged per
+/// (item, symbol) pair, so "judged" there cannot be a subject set; a refusal
+/// can, because it is a property of the item's text.
+pub(crate) async fn refused_subjects_at_version(
+    pool: &AnyPool,
+    purpose: &str,
+    version: &str,
+) -> Result<std::collections::HashSet<String>> {
+    Ok(sqlx::query(
+        "SELECT subject FROM jev_requests
+         WHERE purpose = $1 AND status = 'refused' AND subject IS NOT NULL
+           AND result_json LIKE $2",
+    )
+    .bind(purpose)
+    .bind(format!("%\"version\":\"{version}\"%"))
+    .fetch_all(pool)
+    .await
+    .context("reading refused Jev subjects")?
     .iter()
     .filter_map(|row| row.try_get::<String, _>("subject").ok())
     .collect())
@@ -1302,7 +1371,11 @@ pub(crate) async fn purpose_call_rows(
         "SELECT purpose, status, cost_source, COUNT(*) AS requests,
                 MAX(created_at) AS last_at, SUM(cost_usd) AS cost_usd,
                 SUM(issue_count) AS issues, SUM(attempts) AS attempts,
-                SUM(CASE WHEN attempts > 1 THEN 1 ELSE 0 END) AS retried
+                SUM(CASE WHEN attempts > 1 THEN 1 ELSE 0 END) AS retried,
+                MAX(input_tokens) AS max_input_tokens,
+                MIN(CASE WHEN request_bytes > 0 AND input_tokens > 0
+                         THEN CAST(request_bytes AS DOUBLE PRECISION) / input_tokens END)
+                    AS min_bytes_per_token
          FROM jev_requests
          GROUP BY purpose, status, cost_source",
     )
@@ -1312,7 +1385,7 @@ pub(crate) async fn purpose_call_rows(
         "SELECT r.purpose, COUNT(*) AS failures
          FROM jev_requests r
          LEFT JOIN (SELECT purpose, MAX(created_at) AS answered_at
-                    FROM jev_requests WHERE status <> 'error'
+                    FROM jev_requests WHERE status IN ('completed', 'partial')
                     GROUP BY purpose) a ON a.purpose = r.purpose
          WHERE r.status = 'error' AND r.created_at > COALESCE(a.answered_at, '')
          GROUP BY r.purpose",
@@ -1385,7 +1458,22 @@ pub(crate) fn purpose_calls_from_rows(
         });
         let requests = count(row, "requests");
         let status = text(row, "status").unwrap_or_default();
+        if status == STATUS_REFUSED {
+            // Never sent: not a call, an attempt, or a cost.
+            calls.refused += requests;
+            continue;
+        }
         calls.requests += requests;
+        if let Some(tokens) = row.get("max_input_tokens").and_then(JsonValue::as_i64) {
+            calls.max_input_tokens = Some(calls.max_input_tokens.unwrap_or(0).max(tokens));
+        }
+        if let Some(ratio) = row.get("min_bytes_per_token").and_then(JsonValue::as_f64) {
+            calls.min_bytes_per_token = Some(
+                calls
+                    .min_bytes_per_token
+                    .map_or(ratio, |known| known.min(ratio)),
+            );
+        }
         calls.attempts += count(row, "attempts");
         calls.retried += count(row, "retried");
         match status.as_str() {
@@ -1482,6 +1570,7 @@ fn worker_step_from_row(row: &JsonValue) -> crate::models::JevWorkerStepPayload 
             .get("stage")
             .and_then(JsonValue::as_str)
             .map(str::to_string),
+        refused: number("refused").unwrap_or(0),
     }
 }
 
@@ -1545,6 +1634,7 @@ pub(crate) fn operator_payload(
     status: &str,
     now: chrono::DateTime<chrono::Utc>,
     cycle_interval_seconds: i64,
+    budget: crate::models::JevBudgetPayload,
     reads: OperatorReads,
 ) -> crate::models::JevOperatorPayload {
     let mut unavailable_sources = Vec::new();
@@ -1645,6 +1735,7 @@ pub(crate) fn operator_payload(
             .and_then(JsonValue::as_i64)
             .unwrap_or(0),
         purposes,
+        budget,
         screening: screening_from(&agreement, disagreements),
         unavailable_sources,
     }
@@ -1807,6 +1898,8 @@ mod tests {
             latency_ms: 118,
             attempts: 1,
             attempt_log: Vec::new(),
+            request_bytes: 2_310,
+            estimated_input_tokens: 1_540,
         }
     }
 
@@ -2768,6 +2861,7 @@ mod tests {
             "ok",
             at("2026-10-16T08:15:00Z"),
             600,
+            Default::default(),
             reads(worker_status_rows(&pool).await, Ok(Default::default())),
         );
         let grading = &panel.steps[0];
@@ -2833,6 +2927,7 @@ mod tests {
             "ok",
             at("2026-10-16T08:05:00Z"),
             600,
+            Default::default(),
             reads(worker_status_rows(&pool).await, Ok(Default::default())),
         );
         let steps: Vec<&str> = panel.steps.iter().map(|step| step.step.as_str()).collect();
@@ -2868,7 +2963,13 @@ mod tests {
         .await
         .expect("cycle records");
         let panel_at = |status: &str, now: &str, worker: Result<Vec<JsonValue>>| {
-            operator_payload(status, at(now), 600, reads(worker, Ok(Default::default())))
+            operator_payload(
+                status,
+                at(now),
+                600,
+                Default::default(),
+                reads(worker, Ok(Default::default())),
+            )
         };
         let rows = worker_status_rows(&pool).await.expect("rows");
 
@@ -3072,6 +3173,7 @@ mod tests {
             "ok",
             at("2026-10-16T08:00:00Z"),
             600,
+            Default::default(),
             OperatorReads {
                 worker: Ok(Vec::new()),
                 provider: Ok(None),
@@ -3100,6 +3202,90 @@ mod tests {
         assert_eq!(missed.title.as_deref(), Some("marker-missed-it"));
         assert_eq!(missed.source_name.as_deref(), Some("Example feed"));
         assert!(panel.unavailable_sources.is_empty());
+    }
+
+    /// A refusal is judged at its version, so it is not asked again, and is
+    /// not a call: it costs nothing, counts as no answer, and stays out of
+    /// the usage ledger.
+    #[tokio::test]
+    async fn a_refused_subject_is_judged_at_its_version_and_is_not_a_call() {
+        let pool = pool().await;
+        let meta = |id, created_at| RecordedRequest {
+            id,
+            created_at,
+            purpose: PURPOSE_REPORT_GRADING,
+            subject: Some("401"),
+            model_requested: "~typesafe/jev-latest",
+            question_count: 22,
+        };
+        failure(
+            &pool,
+            "f0",
+            "2026-10-16T07:00:00Z",
+            "transport error: reset",
+        )
+        .await;
+        insert_request_row(
+            &pool,
+            &refused_row(
+                meta("too-big", "2026-10-16T08:00:00Z"),
+                "Jev request is an estimated 70000 tokens",
+                "v16",
+            ),
+        )
+        .await
+        .expect("a refusal records");
+
+        let judged = judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v16")
+            .await
+            .unwrap();
+        assert!(judged.contains("401"), "not selected again at this version");
+        assert!(
+            judged_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v17")
+                .await
+                .unwrap()
+                .is_empty(),
+            "a new question set re-selects it"
+        );
+        assert_eq!(
+            refused_subjects_at_version(&pool, PURPOSE_REPORT_GRADING, "v16")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let usage = usage_rows(&pool, 100).await.unwrap();
+        assert!(
+            usage.iter().all(|row| row["status"] != STATUS_REFUSED),
+            "no request was sent, so none is in the usage ledger"
+        );
+
+        let (grouped, since_answer, latest) = purpose_call_rows(&pool).await.unwrap();
+        let calls = &purpose_calls_from_rows(&grouped, &since_answer, &latest)[0];
+        assert_eq!(calls.refused, 1);
+        assert_eq!(calls.requests, 1, "only the failure was a call");
+        assert_eq!(
+            calls.failures_since_answer, 1,
+            "a refusal is not an answer, so it does not reset the count"
+        );
+    }
+
+    /// Each answered call keeps its request size beside the provider's count,
+    /// so whether the estimate overcounts is visible per purpose.
+    #[tokio::test]
+    async fn the_panel_shows_the_largest_call_and_the_tightest_bytes_per_token() {
+        let pool = pool().await;
+        call(&pool, "a", "2026-10-16T08:00:00Z", &response()).await;
+        let mut bigger = response();
+        bigger.usage.input_tokens = 1_000;
+        bigger.request_bytes = 1_800;
+        call(&pool, "b", "2026-10-16T08:10:00Z", &bigger).await;
+
+        let (grouped, since_answer, latest) = purpose_call_rows(&pool).await.unwrap();
+        let calls = &purpose_calls_from_rows(&grouped, &since_answer, &latest)[0];
+        assert_eq!(calls.max_input_tokens, Some(1_000));
+        let ratio = calls.min_bytes_per_token.expect("a ratio");
+        assert!((ratio - 1.8).abs() < 1e-9, "{ratio}");
     }
 
     /// One cycle after the first failure, doubling to four hours, and never
@@ -3320,6 +3506,7 @@ mod tests {
             "ok",
             at("2026-10-16T08:05:00Z"),
             600,
+            Default::default(),
             OperatorReads {
                 worker: worker_status_rows(&pool).await,
                 provider: provider_state_row(&pool).await,
