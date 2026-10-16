@@ -678,7 +678,7 @@ The Rust runtime should keep moving away from generic JSON and legacy Python beh
 
 Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
-- Add alerting for repeated decision-report failures, repeated broker execution failures, stale scheduler heartbeat, and missed EOD reflection.
+- ~~Add alerting for repeated decision-report failures, repeated broker execution failures, stale scheduler heartbeat, and missed EOD reflection.~~ Already in place, found 2026-10-16: `decision_failure_alert`, `execution_failure_burst_alert`, `scheduler_stale_alert` and `hermes_eod_reflection_missed_alert` in `src/notifications.rs`, each with an `operational_alerts` switch.
 - Keep public ngrok route ownership in the shared gateway and app-owned internal AgentEndpoint ownership in this repo.
 - Add watch-symbol lifecycle alerts: when an `extra_symbols` entry (e.g. SPCX, waiting for Saxo SIM to sync the 2026-06-12 IPO) resolves for the first time, send a Slack notice and record the activation, instead of silently starting quotes. Include the inverse alert when a previously resolvable symbol disappears from reference data.
 
@@ -698,7 +698,7 @@ Local Docker Desktop Kubernetes should stay easy to inspect and recover.
 
 Security posture should assume model prompts, broker payloads, and external docs are untrusted.
 
-- Run dependency and CVE hygiene regularly with `make deps-dry-run` and `make security-scan`; treat fixed HIGH/CRITICAL CVEs, RustSec advisories, and secret findings as release blockers unless there is a dated exception with a compensating control.
+- Run dependency and CVE hygiene regularly with `make deps-dry-run` and `make security-scan`; treat fixed HIGH/CRITICAL CVEs, RustSec advisories, and secret findings as release blockers unless there is a dated exception with a compensating control. **Last run 2026-10-16** (`0373bcf`), with `cargo-audit` 0.22.2 against 1,329 RustSec advisories. 12 vulnerabilities were found and fixed by updating only the flagged crates: rustls 0.23.46, quick-xml 0.41 (reachable from third-party RSS), quinn-proto, event-listener and spin. Two have dated exceptions in `.cargo/audit.toml`: `rsa`, which is lockfile-only, and `unsafe-libyaml`, which is unmaintained under the deprecated `serde_yaml`. The Trivy image and secret scans were not run, because they need third-party images with the Docker socket mounted. `make deps-dry-run` still lists 141 compatible updates beyond these.
 - Keep all Saxo tokens, AccountKey, ClientKey, OpenRouter keys, ngrok keys, and database credentials out of wiki pages and normal UI payloads.
 - Add automated redaction tests for logs, report debug views, Hermes context, and MCP tool responses.
 - Make Hermes capabilities explicit and deny broker mutation tools by default.

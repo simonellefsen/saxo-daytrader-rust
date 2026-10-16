@@ -3235,3 +3235,23 @@ broker mutation was added.
   - All 10 endpoints were identical.
   - The tab differences were data: the hash-ordered price-monitor list, benchmark rows that moved from "prior close" to "aligned close", and a new Hermes proposal. The weekly reflection at 20:15Z, after the "before" capture, proposed a change to `strategy.swing.daily_indicators.min_confluences`, now `pending_review`.
 - **The release's smoke run stopped at "checking Hermes gateway health" with no reason printed**, while the Hermes pods were seconds old; a re-run passed fully. The smoke script now runs with `set -E` and an `ERR` trap that names the line and command it stops on. Guarded failures do not trigger it, and it was verified against production with 0 warnings.
+
+## [2026-10-16] Security | RustSec findings fixed; dated exceptions for the two without a fix
+
+- First dependency audit since `make security-scan` was added. Neither `cargo-audit` nor `trivy` was installed, and the scan's Docker fallback would run third-party `:latest` images with the Docker socket mounted. Simon chose a local `cargo-audit` instead: version 0.22.2, built into `.cargo-home`. It ran against 1,329 RustSec advisories.
+- **12 vulnerabilities in `Cargo.lock`, fixed by updating only the flagged crates** (`0373bcf`, Simon's choice over a full `cargo update`):
+  - rustls 0.23.41 → 0.23.46: four advisories, including a TLS 1.3 handshake boundary bug and a key-exchange downgrade. It carries every Saxo, OpenRouter and Jev call.
+  - quick-xml 0.38 → 0.41: two denial-of-service advisories, reachable from untrusted RSS input. The RSS parser tests pass unchanged.
+  - quinn-proto 0.11.19 (five advisories), event-listener 5.4.2 (unsound), spin 0.9.9 (yanked).
+- **The compiled dependency tree changed only in those crates.** Checked by diffing `cargo tree` against HEAD's lockfile: quinn-proto, and the rand 0.10 it brings, are lockfile-only.
+- **Two dated exceptions in `.cargo/audit.toml`:**
+  - `rsa` (Marvin attack, no fix): lockfile-only, through `sqlx-mysql`, whose feature is off.
+  - `unsafe-libyaml` (unmaintained): it sits under the deprecated `serde_yaml`, which parses only operator-owned config.
+  - `cargo audit --deny warnings` passes.
+- **Verified live:** after the release, the new build refreshed the Saxo access token, connected and read the broker portfolio, all over the updated TLS. Smoke 0 warnings; 1,219 tests unchanged.
+- **Not done:**
+  - the Trivy image and secret scans;
+  - the 141 other compatible updates;
+  - replacing `serde_yaml`.
+- `scripts/security_scan.sh` now uses a `cargo-audit` in the repo-local cargo home before falling back to the image.
+- The roadmap's "add alerting" item turned out to be already done; it is marked so.

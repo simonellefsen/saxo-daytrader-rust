@@ -21,8 +21,10 @@ have() {
 
 run_cargo_audit() {
   section "RustSec cargo audit"
-  if have cargo-audit; then
-    CARGO_HOME="$CARGO_HOME" cargo audit --deny warnings
+  # A cargo-audit installed into the repo-local cargo home counts too, so the
+  # check runs without pulling the audit image.
+  if have cargo-audit || [[ -x "$CARGO_HOME/bin/cargo-audit" ]]; then
+    PATH="$CARGO_HOME/bin:$PATH" CARGO_HOME="$CARGO_HOME" cargo audit --deny warnings
     return
   fi
 
