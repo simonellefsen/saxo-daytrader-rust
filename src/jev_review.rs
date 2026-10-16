@@ -118,12 +118,22 @@ pub(crate) async fn run_observation_loop(state: AppState) {
     if availability(&state).is_none() {
         return;
     }
+    let mut unrecorded = jev_store::Unrecorded::default();
     loop {
         let started_at = jev_signals::now_rfc3339();
+        if unrecorded.pending() > 0 {
+            let written = unrecorded.flush(&state.pool).await;
+            info!(
+                written,
+                still_held = unrecorded.pending(),
+                "Jev requests held after a failed write"
+            );
+        }
         let recomputed = recompute_numeric_measurements(&state).await;
-        let grades = grade_reports(&state).await;
-        let failures = classify_unknown_failures(&state).await;
-        let editorial = crate::editorial_research::score_items_with_jev(&state).await;
+        let grades = grade_reports(&state, &mut unrecorded).await;
+        let failures = classify_unknown_failures(&state, &mut unrecorded).await;
+        let editorial =
+            crate::editorial_research::score_items_with_jev(&state, &mut unrecorded).await;
         info!(
             ?recomputed,
             ?grades,
@@ -134,6 +144,7 @@ pub(crate) async fn run_observation_loop(state: AppState) {
         record_cycle(
             &state,
             &started_at,
+            &unrecorded,
             &[
                 (jev_store::STEP_NUMERIC_RECOMPUTE, &recomputed),
                 (jev_store::PURPOSE_REPORT_GRADING, &grades),
@@ -152,12 +163,112 @@ pub(crate) async fn run_observation_loop(state: AppState) {
 /// Records the cycle for the operator panel. A failed write is logged and
 /// left: the panel then shows the worker as silent, which is the truth about
 /// what it can see.
-async fn record_cycle(state: &AppState, started_at: &str, steps: &[(&str, &JsonValue)]) {
+async fn record_cycle(
+    state: &AppState,
+    started_at: &str,
+    unrecorded: &jev_store::Unrecorded,
+    steps: &[(&str, &JsonValue)],
+) {
     let finished_at = jev_signals::now_rfc3339();
     if let Err(err) =
-        jev_store::record_worker_cycle(&state.pool, started_at, &finished_at, steps).await
+        jev_store::record_worker_cycle(&state.pool, started_at, &finished_at, steps, unrecorded)
+            .await
     {
         warn!(error = %err, "recording the Jev worker cycle");
+    }
+}
+
+/// Calls Jev and records what the call says about the provider.
+///
+/// An answer reopens the provider gate; a failure that reached the provider
+/// shuts it until the backoff ends. A call refused before any request -- an
+/// oversized state, too many questions -- says nothing about the provider and
+/// leaves the gate alone.
+pub(crate) async fn ask_recorded(
+    state: &AppState,
+    cfg: &JevConfig,
+    jev_state: &JsonValue,
+    questions: &std::collections::BTreeMap<String, crate::jev::Question>,
+) -> anyhow::Result<crate::jev::JevResponse> {
+    let outcome = crate::jev::ask(cfg, jev_state, questions).await;
+    let now = Utc::now();
+    match &outcome {
+        Ok(_) => {
+            if let Err(err) = jev_store::note_provider_success(&state.pool, now).await {
+                warn!(error = %err, "reopening the Jev provider gate");
+            }
+        }
+        Err(err) => {
+            if let Some(failure) =
+                crate::jev::JevCallError::of(err).filter(|failure| failure.reached_provider())
+            {
+                match jev_store::note_provider_failure(
+                    &state.pool,
+                    now,
+                    &jev_store::failure_kind(&failure.message),
+                    failure.retry_after_seconds,
+                )
+                .await
+                {
+                    Ok(not_before) => info!(%not_before, "Jev provider calls deferred"),
+                    Err(err) => warn!(error = %err, "shutting the Jev provider gate"),
+                }
+            }
+        }
+    }
+    outcome
+}
+
+/// The summary for a step that must not call the provider now, or `None`
+/// when it may. An unreadable gate fails closed: a provider that asked to be
+/// left alone is not asked again because the record of that was unreadable.
+pub(crate) async fn deferred_step(state: &AppState) -> Option<JsonValue> {
+    match jev_store::provider_deferred_until(&state.pool, Utc::now()).await {
+        Ok(None) => None,
+        Ok(Some(not_before)) => Some(json!({
+            "status": "deferred",
+            "not_before": not_before,
+            "failed": 0,
+        })),
+        Err(err) => {
+            warn!(error = %err, "reading the Jev provider gate");
+            Some(json!({"status": "error", "stage": "provider_state", "failed": 0}))
+        }
+    }
+}
+
+/// The ledger row for a call that failed, with the attempts it made.
+pub(crate) fn failed_call_row(
+    meta: jev_store::RecordedRequest<'_>,
+    error_text: &str,
+    err: &anyhow::Error,
+) -> jev_store::RequestRow {
+    let attempts = crate::jev::JevCallError::of(err)
+        .map(|failure| failure.attempt_log.as_slice())
+        .unwrap_or_default();
+    jev_store::failed_row(meta, error_text, attempts)
+}
+
+/// Writes a ledger row, or holds it for a later cycle when the write fails.
+/// Returns whether it was written.
+pub(crate) async fn record_or_hold(
+    state: &AppState,
+    unrecorded: &mut jev_store::Unrecorded,
+    row: jev_store::RequestRow,
+) -> bool {
+    match jev_store::insert_request_row(&state.pool, &row).await {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(
+                error = %err,
+                id = %row.id,
+                status = %row.status,
+                cost_usd = ?row.cost_usd,
+                "a Jev request could not be recorded; holding it for the next cycle"
+            );
+            unrecorded.hold(row);
+            false
+        }
     }
 }
 
@@ -195,7 +306,10 @@ fn availability(state: &AppState) -> Option<Box<JevConfig>> {
 ///
 /// Observational only, and attached to nothing: the grade is stored against
 /// the report id and is never read by the Trading Manager.
-pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
+pub(crate) async fn grade_reports(
+    state: &AppState,
+    unrecorded: &mut jev_store::Unrecorded,
+) -> JsonValue {
     let Some(cfg) = availability(state) else {
         return json!({"status": "disabled"});
     };
@@ -246,8 +360,12 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         })
         .collect::<Vec<_>>();
     let waiting = pending.len();
+    if let Some(deferred) = deferred_step(state).await {
+        return merged(deferred, backlog(waiting, 0, false));
+    }
     let mut graded = 0usize;
     let mut failed = 0usize;
+    let mut held = 0usize;
 
     for (report_id, subject, report, row) in pending.into_iter().take(grading_batch_limit(state)) {
         // The indicator snapshot the model actually saw, taken from the stored
@@ -274,59 +392,46 @@ pub(crate) async fn grade_reports(state: &AppState) -> JsonValue {
         let requested_at = jev_signals::now_rfc3339();
         let request_id = stable_id("jevgrade", &format!("{subject}|{requested_at}"));
 
-        match crate::jev::ask(&cfg, &jev_state, &questions).await {
+        let meta = jev_store::RecordedRequest {
+            id: &request_id,
+            created_at: &requested_at,
+            purpose: jev_store::PURPOSE_REPORT_GRADING,
+            subject: Some(&subject),
+            model_requested: &cfg.model,
+            question_count: questions.len() as i64,
+        };
+        match ask_recorded(state, &cfg, &jev_state, &questions).await {
             Ok(response) => {
                 let result = grade_payload(&response.answers, &response.issues, &inputs);
-                if let Err(err) = jev_store::record_success(
-                    &state.pool,
-                    jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &requested_at,
-                        purpose: jev_store::PURPOSE_REPORT_GRADING,
-                        subject: Some(&subject),
-                        model_requested: &cfg.model,
-                        question_count: questions.len() as i64,
-                    },
-                    &response,
-                    Some(&result),
-                )
-                .await
-                {
-                    warn!(error = %err, "recording a Jev report grade");
+                let row = jev_store::completed_row(meta, &response, Some(&result));
+                if !record_or_hold(state, unrecorded, row).await {
                     failed += 1;
-                } else {
-                    graded += 1;
+                    held += 1;
+                    break; // Accounting is failing: spend nothing more until it records.
                 }
+                graded += 1;
             }
             Err(err) => {
                 failed += 1;
                 warn!(report_id, "Jev report grading failed: {err:#}");
-                let _ = jev_store::record_failure(
-                    &state.pool,
-                    jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &requested_at,
-                        purpose: jev_store::PURPOSE_REPORT_GRADING,
-                        subject: Some(&subject),
-                        model_requested: &cfg.model,
-                        question_count: questions.len() as i64,
-                    },
-                    &format!("{err:#}"),
-                )
-                .await;
-                break; // Stop this batch on provider failure; the next cycle can retry.
+                let row = failed_call_row(meta, &format!("{err:#}"), &err);
+                if !record_or_hold(state, unrecorded, row).await {
+                    held += 1;
+                }
+                break; // Stop this batch on provider failure; the gate decides when to retry.
             }
         }
     }
 
     if graded > 0 || failed > 0 {
-        info!(graded, failed, "Jev report grading completed");
+        info!(graded, failed, held, "Jev report grading completed");
     }
     merged(
         json!({
             "status": if failed > 0 && graded == 0 { "error" } else { "ok" },
             "graded": graded,
             "failed": failed,
+            "unrecorded": held,
             "admission": "observational_only",
         }),
         // The window is the deliberate bound, not a truncated selection:
@@ -1023,7 +1128,10 @@ fn grade_payload(
 /// rewords an error, and `other` is where a real pattern goes to hide. This
 /// asks Jev to pick from the categories the runtime already handles, so an
 /// answer is always actionable.
-pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
+pub(crate) async fn classify_unknown_failures(
+    state: &AppState,
+    unrecorded: &mut jev_store::Unrecorded,
+) -> JsonValue {
     let Some(cfg) = availability(state) else {
         return json!({"status": "disabled"});
     };
@@ -1077,8 +1185,12 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
         })
         .collect::<Vec<_>>();
     let waiting = pending.len();
+    if let Some(deferred) = deferred_step(state).await {
+        return merged(deferred, backlog(waiting, 0, false));
+    }
     let mut classified = 0usize;
     let mut failed = 0usize;
+    let mut held = 0usize;
 
     for (id, subject, row) in pending.into_iter().take(REVIEW_BATCH_LIMIT) {
         let error_text = row
@@ -1093,8 +1205,16 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
         let jev_state = jev_signals::error_classification_state(status, error_text);
         let now = Utc::now().to_rfc3339();
         let request_id = stable_id("jeverror", &format!("{subject}|{now}"));
+        let meta = jev_store::RecordedRequest {
+            id: &request_id,
+            created_at: &now,
+            purpose: jev_store::PURPOSE_ERROR_CLASSIFICATION,
+            subject: Some(&subject),
+            model_requested: &cfg.model,
+            question_count: questions.len() as i64,
+        };
 
-        match crate::jev::ask(&cfg, &jev_state, &questions).await {
+        match ask_recorded(state, &cfg, &jev_state, &questions).await {
             Ok(response) => {
                 let (category, confidence) = match response.answers.get("category") {
                     Some(crate::jev::Answer::Choice {
@@ -1111,56 +1231,38 @@ pub(crate) async fn classify_unknown_failures(state: &AppState) -> JsonValue {
                     "safety": "A category records an opinion about a stored failure. It cannot \
                                retry a request, change a gate, or reach Saxo.",
                 });
-                if let Err(err) = jev_store::record_success(
-                    &state.pool,
-                    jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &now,
-                        purpose: jev_store::PURPOSE_ERROR_CLASSIFICATION,
-                        subject: Some(&subject),
-                        model_requested: &cfg.model,
-                        question_count: questions.len() as i64,
-                    },
-                    &response,
-                    Some(&result),
-                )
-                .await
-                {
-                    warn!(error = %err, "recording a Jev failure classification");
+                let row = jev_store::completed_row(meta, &response, Some(&result));
+                if !record_or_hold(state, unrecorded, row).await {
                     failed += 1;
-                } else {
-                    classified += 1;
+                    held += 1;
+                    break; // Accounting is failing: spend nothing more until it records.
                 }
+                classified += 1;
             }
             Err(err) => {
                 failed += 1;
                 warn!(report_id = id, "Jev failure classification failed: {err:#}");
-                let _ = jev_store::record_failure(
-                    &state.pool,
-                    jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &now,
-                        purpose: jev_store::PURPOSE_ERROR_CLASSIFICATION,
-                        subject: Some(&subject),
-                        model_requested: &cfg.model,
-                        question_count: questions.len() as i64,
-                    },
-                    &format!("{err:#}"),
-                )
-                .await;
+                let row = failed_call_row(meta, &format!("{err:#}"), &err);
+                if !record_or_hold(state, unrecorded, row).await {
+                    held += 1;
+                }
                 break;
             }
         }
     }
 
     if classified > 0 || failed > 0 {
-        info!(classified, failed, "Jev failure classification completed");
+        info!(
+            classified,
+            failed, held, "Jev failure classification completed"
+        );
     }
     merged(
         json!({
             "status": if failed > 0 && classified == 0 { "error" } else { "ok" },
             "classified": classified,
             "failed": failed,
+            "unrecorded": held,
             "admission": "observational_only",
         }),
         backlog(waiting, classified, false),
@@ -1182,6 +1284,7 @@ fn stable_id(prefix: &str, value: &str) -> String {
 mod tests {
     use super::*;
     use crate::jev::Answer;
+    use sqlx::Row;
     use std::collections::BTreeMap;
 
     /// What a step left waiting is what it saw minus what it did; failures
@@ -1198,6 +1301,141 @@ mod tests {
         assert_eq!(summary["graded"], 9);
         assert_eq!(summary["waiting_is_lower_bound"], false);
         assert_eq!(backlog(3, 5, true)["remaining"], 0, "never negative");
+    }
+
+    /// A worker state whose Jev calls go to `base_url`, with two stored
+    /// report failures the deterministic cascade cannot name.
+    async fn worker_state(base_url: &str) -> AppState {
+        sqlx::any::install_default_drivers();
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for sql in jev_store::create_schema_sql() {
+            sqlx::query(sql).execute(&pool).await.expect("jev schema");
+        }
+        sqlx::query(
+            "CREATE TABLE decision_reports (
+                id INTEGER, created_at TEXT, status TEXT, error_text TEXT,
+                report_json TEXT, request_json TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .expect("reports table");
+        for (id, created_at) in [(1, "2026-10-16T07:00:00Z"), (2, "2026-10-16T07:30:00Z")] {
+            sqlx::query(
+                "INSERT INTO decision_reports (id, created_at, status, error_text)
+                 VALUES ($1, $2, 'failed', 'an unprecedented upstream refusal')",
+            )
+            .bind(id)
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .expect("a failed report");
+        }
+        AppState {
+            config_path: std::path::PathBuf::from("test.yaml"),
+            config: serde_yaml::from_str(&format!(
+                "jev:\n  enabled: true\n  api_key: test-key\n  base_url: {base_url}\n  http_timeout_seconds: 5\n"
+            ))
+            .unwrap(),
+            db_url: "sqlite::memory:".into(),
+            pool,
+        }
+    }
+
+    /// The A.3 gap, end to end: a provider that asks for an hour is not asked
+    /// again on the next cycle. The failure is recorded with its attempt, the
+    /// gate holds, and the second cycle reports the backlog it is leaving.
+    #[tokio::test]
+    async fn a_long_retry_after_holds_across_worker_cycles() {
+        let provider =
+            crate::jev::fake_provider::serve(vec![(429, Some("3600"), "rate limited".to_string())])
+                .await;
+        let state = worker_state(&provider.base_url).await;
+        let mut unrecorded = jev_store::Unrecorded::default();
+
+        let first = classify_unknown_failures(&state, &mut unrecorded).await;
+        assert_eq!(first["failed"], 1, "{first}");
+        assert_eq!(provider.hits(), 1);
+        let gate = jev_store::provider_deferred_until(&state.pool, Utc::now())
+            .await
+            .unwrap()
+            .expect("the gate is shut");
+        let reopens = chrono::DateTime::parse_from_rfc3339(&gate).unwrap();
+        assert!(
+            (reopens.with_timezone(&Utc) - Utc::now()).num_seconds() > 3_500,
+            "shut for the provider's hour, not one cycle: {gate}"
+        );
+        let attempts: i64 = sqlx::query("SELECT attempts FROM jev_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+            .try_get("attempts")
+            .unwrap();
+        assert_eq!(attempts, 1, "a failed call counts the request it made");
+
+        let second = classify_unknown_failures(&state, &mut unrecorded).await;
+        assert_eq!(second["status"], "deferred", "{second}");
+        assert_eq!(second["waiting"], 2);
+        assert_eq!(second["remaining"], 2);
+        assert_eq!(provider.hits(), 1, "the provider was not asked again");
+        let grading = grade_reports(&state, &mut unrecorded).await;
+        assert_eq!(
+            grading["status"], "deferred",
+            "every provider step: {grading}"
+        );
+        assert_eq!(provider.hits(), 1);
+    }
+
+    /// A billed answer whose ledger write fails is held, and the batch stops
+    /// rather than spending on calls it cannot account for. Once writes work
+    /// the held row lands with its cost.
+    #[tokio::test]
+    async fn a_billed_answer_whose_write_fails_is_held_and_stops_the_batch() {
+        let provider = crate::jev::fake_provider::serve(vec![
+            (200, None, crate::jev::fake_provider::billed_answer()),
+            (200, None, crate::jev::fake_provider::billed_answer()),
+        ])
+        .await;
+        let state = worker_state(&provider.base_url).await;
+        sqlx::query(
+            "CREATE TRIGGER refuse_jev_requests BEFORE INSERT ON jev_requests
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+        )
+        .execute(&state.pool)
+        .await
+        .expect("trigger");
+        let mut unrecorded = jev_store::Unrecorded::default();
+
+        let summary = classify_unknown_failures(&state, &mut unrecorded).await;
+        assert_eq!(summary["classified"], 0, "{summary}");
+        assert_eq!(summary["unrecorded"], 1);
+        assert_eq!(
+            provider.hits(),
+            1,
+            "the second subject was not bought blind"
+        );
+        assert_eq!(unrecorded.pending(), 1);
+        assert_eq!(unrecorded.pending_cost_usd(), Some(0.0000042));
+
+        sqlx::query("DROP TRIGGER refuse_jev_requests")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(unrecorded.flush(&state.pool).await, 1);
+        let row = sqlx::query("SELECT status, cost_usd, subject FROM jev_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        let row = row_to_json(&row);
+        assert_eq!(
+            row["status"], "partial",
+            "every question came back an issue"
+        );
+        assert_eq!(row["subject"], "2", "the newest failure was asked first");
+        assert_eq!(row["cost_usd"].as_f64(), Some(0.0000042));
     }
 
     #[tokio::test]

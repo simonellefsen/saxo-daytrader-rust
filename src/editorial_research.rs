@@ -119,7 +119,10 @@ const JEV_SCORING_PAIR_LIMIT: usize = 60;
 /// judgement service is unavailable -- the items are already stored and
 /// usable. Failures are visible three ways instead: a row in `jev_requests`, a
 /// warning in the log, and the returned status.
-pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
+pub(crate) async fn score_items_with_jev(
+    state: &AppState,
+    unrecorded: &mut crate::jev_store::Unrecorded,
+) -> JsonValue {
     let cfg = match crate::jev::JevConfig::from_yaml(&state.config) {
         crate::jev::JevAvailability::Ready(cfg) => cfg,
         crate::jev::JevAvailability::Disabled => return json!({"status": "disabled"}),
@@ -146,12 +149,20 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
     // least this many were waiting, not exactly this many.
     let waiting = pairs.len();
     let waiting_is_lower_bound = waiting >= JEV_SCORING_PAIR_LIMIT;
+    if let Some(mut deferred) = crate::jev_review::deferred_step(state).await {
+        deferred["processed"] = json!(0);
+        deferred["waiting"] = json!(waiting);
+        deferred["remaining"] = json!(waiting);
+        deferred["waiting_is_lower_bound"] = json!(waiting_is_lower_bound);
+        return deferred;
+    }
 
     let company_names = configured_company_names(state);
     let questions = crate::jev_signals::news_questions();
     let question_count = questions.len() as i64;
     let mut scored = 0usize;
     let mut failed = 0usize;
+    let mut held = 0usize;
 
     for pair in &pairs {
         // Three distinct moments, because collapsing them into one taken
@@ -172,30 +183,27 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
             pair.published_at.as_deref(),
         );
 
-        match crate::jev::ask(&cfg, &jev_state, &questions).await {
+        let meta = crate::jev_store::RecordedRequest {
+            id: &request_id,
+            created_at: &requested_at,
+            purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
+            subject: Some(&pair.item_id),
+            model_requested: &cfg.model,
+            question_count,
+        };
+        match crate::jev_review::ask_recorded(state, &cfg, &jev_state, &questions).await {
             Ok(response) => {
                 let answered_at = Utc::now().to_rfc3339();
-                if let Err(err) = crate::jev_store::record_success(
-                    &state.pool,
-                    crate::jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &requested_at,
-                        purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
-                        subject: Some(&pair.item_id),
-                        model_requested: &cfg.model,
-                        question_count,
-                    },
-                    &response,
-                    // No extra purpose-specific result: record_success retains
-                    // the validated measurement audit, and the signal table
-                    // below is its operational projection.
-                    None,
-                )
-                .await
-                {
-                    warn!(error = %err, "recording a Jev editorial request");
+                // No extra purpose-specific result: the row retains the
+                // validated measurement audit, and the signal table below is
+                // its operational projection.
+                let row = crate::jev_store::completed_row(meta, &response, None);
+                if !crate::jev_review::record_or_hold(state, unrecorded, row).await {
                     failed += 1;
-                    continue; // Never save a signal without its accounting record.
+                    held += 1;
+                    // Never save a signal without its accounting record, and
+                    // spend nothing more until accounting records again.
+                    break;
                 }
                 let signal = crate::jev_signals::NewsSignal::from_answers(&response.answers);
                 let provenance = crate::jev_signals::EvidenceProvenance::new(
@@ -224,8 +232,11 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                 )
                 .await
                 {
+                    // The call is accounted for; only its projection is
+                    // missing, and the pair is asked again next cycle.
                     warn!(error = %err, "recording a Jev editorial signal");
                     failed += 1;
+                    break;
                 } else {
                     scored += 1;
                 }
@@ -234,32 +245,21 @@ pub(crate) async fn score_items_with_jev(state: &AppState) -> JsonValue {
                 failed += 1;
                 let error_text = compact_error(&err.to_string());
                 warn!(symbol = %pair.symbol, "Jev editorial scoring failed: {error_text}");
-                if let Err(err) = crate::jev_store::record_failure(
-                    &state.pool,
-                    crate::jev_store::RecordedRequest {
-                        id: &request_id,
-                        created_at: &requested_at,
-                        purpose: crate::jev_store::PURPOSE_EDITORIAL_ITEM,
-                        subject: Some(&pair.item_id),
-                        model_requested: &cfg.model,
-                        question_count,
-                    },
-                    &error_text,
-                )
-                .await
-                {
-                    warn!(error = %err, "recording a failed Jev editorial request");
+                let row = crate::jev_review::failed_call_row(meta, &error_text, &err);
+                if !crate::jev_review::record_or_hold(state, unrecorded, row).await {
+                    held += 1;
                 }
                 break; // Do not fan an outage out across the entire backlog.
             }
         }
     }
 
-    info!(scored, failed, "Jev editorial scoring completed");
+    info!(scored, failed, held, "Jev editorial scoring completed");
     json!({
         "status": if failed > 0 && scored == 0 { "error" } else { "ok" },
         "scored": scored,
         "failed": failed,
+        "unrecorded": held,
         "processed": scored,
         "waiting": waiting,
         "remaining": waiting.saturating_sub(scored),
@@ -1455,7 +1455,8 @@ mod tests {
     #[tokio::test]
     async fn scoring_is_a_no_op_when_jev_is_disabled() {
         let state = editorial_research_test_state().await;
-        let result = score_items_with_jev(&state).await;
+        let result =
+            score_items_with_jev(&state, &mut crate::jev_store::Unrecorded::default()).await;
         assert_eq!(result["status"], "disabled");
     }
 

@@ -28,7 +28,7 @@
 
 use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value as JsonValue, json};
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
@@ -299,7 +299,70 @@ pub(crate) struct JevResponse {
     pub model_resolved: Option<String>,
     pub latency_ms: i64,
     pub attempts: u32,
+    /// Every HTTP attempt this call made, the answering one last.
+    pub attempt_log: Vec<JevAttempt>,
 }
+
+/// One HTTP attempt inside one call.
+///
+/// A call is the logical request a worker step makes; it can take up to
+/// `MAX_ATTEMPTS` of these. Recording them keeps a retried call legible: a
+/// call that answered on its third attempt after two 503s is not the same
+/// observation as one that answered first time.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct JevAttempt {
+    pub attempt: u32,
+    pub latency_ms: i64,
+    /// Absent when no response arrived at all.
+    pub http_status: Option<u16>,
+    /// `answered`, `retried`, `deferred` (the provider asked for a longer wait
+    /// than one call may sleep), `failed`, or `unparseable` (a success status
+    /// whose body was not JSON).
+    pub outcome: String,
+    pub retry_after_seconds: Option<u64>,
+}
+
+/// Why a call produced no response.
+///
+/// Carries the attempts so a failure is recorded with what it actually did.
+/// An empty attempt log means the call was refused locally -- no questions,
+/// too many, an oversized state -- and never reached the provider, which is
+/// not evidence about the provider at all.
+#[derive(Debug)]
+pub(crate) struct JevCallError {
+    pub message: String,
+    pub attempt_log: Vec<JevAttempt>,
+    /// The wait the provider asked for on its last answer, if it asked.
+    pub retry_after_seconds: Option<u64>,
+}
+
+impl JevCallError {
+    fn local(message: String) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            message,
+            attempt_log: Vec::new(),
+            retry_after_seconds: None,
+        })
+    }
+
+    /// The structured failure behind an error from `ask`, if it is one.
+    pub(crate) fn of(err: &anyhow::Error) -> Option<&Self> {
+        err.downcast_ref::<Self>()
+    }
+
+    /// Whether any attempt reached the provider.
+    pub(crate) fn reached_provider(&self) -> bool {
+        !self.attempt_log.is_empty()
+    }
+}
+
+impl std::fmt::Display for JevCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for JevCallError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JevAnswerIssue {
@@ -567,12 +630,12 @@ fn backoff_delay(attempt: u32) -> Duration {
     Duration::from_millis(BASE_BACKOFF_MS * 2_u64.pow(attempt.saturating_sub(1).min(6)))
 }
 
-fn retry_delay(
-    attempt: u32,
+/// The wait a `Retry-After` header asks for, in seconds, from either form.
+fn retry_after_seconds(
     retry_after: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Option<Duration> {
-    let seconds = retry_after.and_then(|value| {
+) -> Option<u64> {
+    retry_after.and_then(|value| {
         value.parse::<u64>().ok().or_else(|| {
             chrono::DateTime::parse_from_rfc2822(value)
                 .ok()
@@ -582,8 +645,15 @@ fn retry_delay(
                         .max(0) as u64
                 })
         })
-    });
-    match seconds {
+    })
+}
+
+fn retry_delay(
+    attempt: u32,
+    retry_after: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    match retry_after_seconds(retry_after, now) {
         Some(seconds) if seconds > 60 => None, // defer to next worker cycle, never retry early
         Some(seconds) => Some(backoff_delay(attempt).max(Duration::from_secs(seconds))),
         None => Some(backoff_delay(attempt)),
@@ -601,29 +671,37 @@ pub(crate) async fn ask(
     questions: &BTreeMap<String, Question>,
 ) -> Result<JevResponse> {
     if questions.is_empty() {
-        bail!("Jev request has no questions");
+        return Err(JevCallError::local(
+            "Jev request has no questions".to_string(),
+        ));
     }
     if questions.len() > cfg.max_questions_per_request {
-        bail!(
+        return Err(JevCallError::local(format!(
             "Jev request has {} questions, above the configured maximum of {}",
             questions.len(),
             cfg.max_questions_per_request
-        );
+        )));
     }
-    let rendered_state = serde_json::to_string(state).context("serializing Jev state")?;
+    let rendered_state = serde_json::to_string(state)
+        .map_err(|err| JevCallError::local(format!("serializing Jev state: {err}")))?;
     if rendered_state.len() > cfg.max_state_chars {
-        bail!(
+        return Err(JevCallError::local(format!(
             "Jev state is {} characters, above the configured maximum of {}",
             rendered_state.len(),
             cfg.max_state_chars
-        );
+        )));
     }
 
     let request = build_request(state, &cfg.model, questions);
     let started = std::time::Instant::now();
     let mut last_error = String::new();
+    let mut attempt_log: Vec<JevAttempt> = Vec::new();
+    let mut last_retry_after = None;
+    let elapsed_ms =
+        |since: std::time::Instant| since.elapsed().as_millis().min(i64::MAX as u128) as i64;
 
     for attempt in 1..=MAX_ATTEMPTS {
+        let attempt_started = std::time::Instant::now();
         let outcome = JEV_HTTP_CLIENT
             .post(cfg.systemone_url())
             .timeout(Duration::from_secs(cfg.http_timeout_seconds))
@@ -632,31 +710,48 @@ pub(crate) async fn ask(
             .send()
             .await;
 
-        let (status, body, delay) = match outcome {
+        let (status, body, delay, retry_after) = match outcome {
             Ok(response) => {
                 let status = response.status();
-                let delay = retry_delay(
-                    attempt,
-                    response
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok()),
-                    chrono::Utc::now(),
-                );
+                let header = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let now = chrono::Utc::now();
+                let delay = retry_delay(attempt, header.as_deref(), now);
+                let retry_after = retry_after_seconds(header.as_deref(), now);
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|err| format!("failed to read Jev response body: {err}"));
-                (status, body, delay)
+                (status, body, delay, retry_after)
             }
             Err(err) => {
                 last_error = format!("transport error: {err}");
-                if attempt < MAX_ATTEMPTS {
+                let retrying = attempt < MAX_ATTEMPTS;
+                attempt_log.push(JevAttempt {
+                    attempt,
+                    latency_ms: elapsed_ms(attempt_started),
+                    http_status: None,
+                    outcome: if retrying { "retried" } else { "failed" }.to_string(),
+                    retry_after_seconds: None,
+                });
+                if retrying {
                     tokio::time::sleep(backoff_delay(attempt)).await;
                     continue;
                 }
                 break;
             }
+        };
+        let mut record = |outcome: &str| {
+            attempt_log.push(JevAttempt {
+                attempt,
+                latency_ms: elapsed_ms(attempt_started),
+                http_status: Some(status.as_u16()),
+                outcome: outcome.to_string(),
+                retry_after_seconds: retry_after,
+            });
         };
 
         if !status.is_success() {
@@ -665,27 +760,44 @@ pub(crate) async fn ask(
                 status.as_u16(),
                 truncate(&body, 2_000)
             );
+            last_retry_after = retry_after;
             if is_retryable_status(status.as_u16()) && attempt < MAX_ATTEMPTS {
-                if let Some(delay) = delay {
-                    tokio::time::sleep(delay).await;
-                    continue;
+                match delay {
+                    Some(delay) => {
+                        record("retried");
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    // Longer than one call may sleep: the wait belongs to the
+                    // worker, which persists it across cycles.
+                    None => record("deferred"),
                 }
+            } else {
+                record("failed");
             }
             break;
         }
 
-        let parsed: JsonValue =
-            serde_json::from_str(&body).context("Jev returned a non-JSON body")?;
-        return Ok(decode_response(
-            &parsed,
-            &request,
-            questions,
-            started.elapsed().as_millis().min(i64::MAX as u128) as i64,
-            attempt,
-        ));
+        let Ok(parsed) = serde_json::from_str::<JsonValue>(&body) else {
+            record("unparseable");
+            return Err(anyhow::Error::new(JevCallError {
+                message: "Jev returned a non-JSON body".to_string(),
+                attempt_log,
+                retry_after_seconds: None,
+            }));
+        };
+        record("answered");
+        let mut response =
+            decode_response(&parsed, &request, questions, elapsed_ms(started), attempt);
+        response.attempt_log = attempt_log;
+        return Ok(response);
     }
 
-    bail!("{last_error}")
+    Err(anyhow::Error::new(JevCallError {
+        message: last_error,
+        attempt_log,
+        retry_after_seconds: last_retry_after,
+    }))
 }
 
 fn decode_response(
@@ -731,6 +843,7 @@ fn decode_response(
             .map(str::to_string),
         latency_ms,
         attempts,
+        attempt_log: Vec::new(),
     }
 }
 
@@ -741,9 +854,165 @@ fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+/// A scripted stand-in for the provider, on loopback, for hermetic tests of
+/// the attempt loop and the worker around it.
+#[cfg(test)]
+pub(crate) mod fake_provider {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// One scripted reply: status, optional Retry-After, body.
+    pub(crate) type Reply = (u16, Option<&'static str>, String);
+
+    pub(crate) struct FakeProvider {
+        pub base_url: String,
+        hits: Arc<AtomicUsize>,
+    }
+
+    impl FakeProvider {
+        /// Requests the provider has received.
+        pub(crate) fn hits(&self) -> usize {
+            self.hits.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Serves `replies` in order, then 500 for anything after them.
+    pub(crate) async fn serve(replies: Vec<Reply>) -> FakeProvider {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let base_url = format!("http://{}", listener.local_addr().expect("an address"));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let script = Arc::new(Mutex::new(std::collections::VecDeque::from(replies)));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/systemone",
+            axum::routing::post(move || {
+                let counter = counter.clone();
+                let script = script.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let (status, retry_after, body) = script
+                        .lock()
+                        .expect("the script")
+                        .pop_front()
+                        .unwrap_or((500, None, "unscripted".to_string()));
+                    let mut headers = axum::http::HeaderMap::new();
+                    if let Some(value) = retry_after {
+                        headers.insert(
+                            axum::http::header::RETRY_AFTER,
+                            axum::http::HeaderValue::from_static(value),
+                        );
+                    }
+                    (
+                        axum::http::StatusCode::from_u16(status).expect("a status"),
+                        headers,
+                        body,
+                    )
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        FakeProvider { base_url, hits }
+    }
+
+    /// A billed answer with no usable answers, so every question is an issue.
+    pub(crate) fn billed_answer() -> String {
+        serde_json::json!({
+            "answers": {},
+            "usage": {"input_tokens": 100, "output_tokens": 0, "cost": 0.0000042},
+            "model": "typesafe/jev-test",
+        })
+        .to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn loopback_cfg(base_url: &str) -> JevConfig {
+        JevConfig {
+            api_key: "test-key".to_string(),
+            base_url: base_url.to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            http_timeout_seconds: 5,
+            max_state_chars: 24_000,
+            max_questions_per_request: 12,
+        }
+    }
+
+    /// A Retry-After longer than one call may sleep ends the call at once and
+    /// hands the wait to the worker, rather than retrying early or sleeping
+    /// through a cycle.
+    #[tokio::test]
+    async fn a_long_retry_after_ends_the_call_and_hands_the_wait_on() {
+        let provider =
+            fake_provider::serve(vec![(429, Some("3600"), "slow down".to_string())]).await;
+        let err = ask(
+            &loopback_cfg(&provider.base_url),
+            &json!({}),
+            &noul_question(),
+        )
+        .await
+        .expect_err("a 429 with an hour's wait is a failure");
+        let failure = JevCallError::of(&err).expect("a structured failure");
+        assert_eq!(provider.hits(), 1, "not retried inside the call");
+        assert_eq!(failure.retry_after_seconds, Some(3600));
+        assert!(failure.reached_provider());
+        assert_eq!(failure.attempt_log.len(), 1);
+        assert_eq!(failure.attempt_log[0].http_status, Some(429));
+        assert_eq!(failure.attempt_log[0].outcome, "deferred");
+        assert_eq!(failure.attempt_log[0].retry_after_seconds, Some(3600));
+        assert!(err.to_string().starts_with("Jev returned 429"));
+    }
+
+    /// A call that answered after a retry keeps both attempts, so it is not
+    /// recorded as the same observation as a first-time answer.
+    #[tokio::test]
+    async fn a_retried_call_logs_every_attempt() {
+        let provider = fake_provider::serve(vec![
+            (503, None, "overloaded".to_string()),
+            (200, None, fake_provider::billed_answer()),
+        ])
+        .await;
+        let response = ask(
+            &loopback_cfg(&provider.base_url),
+            &json!({}),
+            &noul_question(),
+        )
+        .await
+        .expect("answered on the second attempt");
+        assert_eq!(response.attempts, 2);
+        let outcomes: Vec<(Option<u16>, &str)> = response
+            .attempt_log
+            .iter()
+            .map(|attempt| (attempt.http_status, attempt.outcome.as_str()))
+            .collect();
+        assert_eq!(outcomes, [(Some(503), "retried"), (Some(200), "answered")]);
+        assert_eq!(response.cost_usd, Some(0.0000042));
+    }
+
+    /// A status that retrying cannot fix is one attempt, not three.
+    #[tokio::test]
+    async fn a_rejected_key_is_not_retried() {
+        let provider = fake_provider::serve(vec![(401, None, "bad key".to_string())]).await;
+        let err = ask(
+            &loopback_cfg(&provider.base_url),
+            &json!({}),
+            &noul_question(),
+        )
+        .await
+        .expect_err("a rejected key fails");
+        let failure = JevCallError::of(&err).expect("a structured failure");
+        assert_eq!(provider.hits(), 1);
+        assert_eq!(failure.attempt_log[0].outcome, "failed");
+        assert_eq!(failure.retry_after_seconds, None);
+    }
 
     #[test]
     fn retry_after_is_honored_or_deferred_not_shortened() {
@@ -1174,6 +1443,12 @@ mod tests {
             .await
             .expect_err("an oversized state is refused");
         assert!(error.to_string().contains("above the configured maximum"));
+        assert!(
+            !JevCallError::of(&error)
+                .expect("a structured failure")
+                .reached_provider(),
+            "a local refusal is no evidence about the provider"
+        );
     }
 
     #[tokio::test]

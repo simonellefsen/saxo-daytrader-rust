@@ -58,7 +58,8 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             attempts INTEGER NOT NULL DEFAULT 1,
             status TEXT NOT NULL,
             error_text TEXT,
-            result_json TEXT
+            result_json TEXT,
+            attempts_json TEXT
         )",
         "CREATE TABLE IF NOT EXISTS jev_editorial_signals (
             item_id TEXT NOT NULL,
@@ -115,6 +116,19 @@ pub fn create_schema_sql() -> &'static [&'static str] {
             last_failed_at TEXT,
             summary_json TEXT NOT NULL
         )",
+        // The provider gate, one row. It persists a wait across worker cycles
+        // and pod restarts: a provider that answers 429 with an hour's
+        // Retry-After is not asked again in ten minutes because the worker
+        // happened to wake up.
+        "CREATE TABLE IF NOT EXISTS jev_provider_state (
+            singleton_key TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            not_before TEXT,
+            last_failure_at TEXT,
+            last_failure_kind TEXT,
+            last_retry_after_seconds INTEGER
+        )",
         "CREATE INDEX IF NOT EXISTS idx_jev_requests_created
          ON jev_requests(created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_symbol
@@ -132,6 +146,11 @@ pub fn create_schema_sql() -> &'static [&'static str] {
 pub fn post_migration_index_sql() -> &'static [&'static str] {
     &["CREATE INDEX IF NOT EXISTS idx_jev_editorial_signals_timing
        ON jev_editorial_signals(evidence_timing, created_at DESC)"]
+}
+
+/// Columns added to `jev_requests` after it first shipped.
+pub fn request_columns_to_ensure() -> &'static [&'static str] {
+    &["attempts_json TEXT"]
 }
 
 /// Columns added to `jev_editorial_signals` after it first shipped.
@@ -171,76 +190,235 @@ pub(crate) struct RecordedRequest<'a> {
     pub question_count: i64,
 }
 
-/// Records one completed call.
+/// One `jev_requests` row, owned.
+///
+/// Owned so that a row whose write failed can be held and written on a later
+/// cycle: a call the provider billed is spent whether or not this process
+/// managed to record it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RequestRow {
+    pub id: String,
+    pub created_at: String,
+    pub purpose: String,
+    pub subject: Option<String>,
+    pub model_requested: String,
+    pub model_resolved: Option<String>,
+    pub question_count: i64,
+    pub answer_count: i64,
+    pub issue_count: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_usd: Option<f64>,
+    pub cost_source: String,
+    pub latency_ms: i64,
+    pub attempts: i64,
+    pub status: String,
+    pub error_text: Option<String>,
+    pub result_json: Option<String>,
+    /// Every HTTP attempt the call made, as `jev::JevAttempt` values.
+    pub attempts_json: String,
+}
+
+fn attempts_json(attempt_log: &[crate::jev::JevAttempt]) -> String {
+    serde_json::to_string(attempt_log).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// The row for a call that answered, fully or partly.
+pub(crate) fn completed_row(
+    meta: RecordedRequest<'_>,
+    response: &JevResponse,
+    result_json: Option<&JsonValue>,
+) -> RequestRow {
+    let mut result = result_json
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    result["measurement"] = response.measurement.clone();
+    RequestRow {
+        id: meta.id.to_string(),
+        created_at: meta.created_at.to_string(),
+        purpose: meta.purpose.to_string(),
+        subject: meta.subject.map(str::to_string),
+        model_requested: meta.model_requested.to_string(),
+        model_resolved: response.model_resolved.clone(),
+        question_count: meta.question_count,
+        answer_count: response.answers.len() as i64,
+        issue_count: response.issues.len() as i64,
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens,
+        cost_usd: response.cost_usd,
+        cost_source: response.cost_source.to_string(),
+        latency_ms: response.latency_ms,
+        attempts: response.attempts as i64,
+        status: if response.issues.is_empty() {
+            STATUS_COMPLETED
+        } else {
+            "partial"
+        }
+        .to_string(),
+        error_text: None,
+        result_json: Some(result.to_string()),
+        attempts_json: attempts_json(&response.attempt_log),
+    }
+}
+
+/// The row for a call that produced no response.
+///
+/// Its attempts are counted from the log rather than written as zero: a call
+/// that failed after three tries made three requests of the provider.
+pub(crate) fn failed_row(
+    meta: RecordedRequest<'_>,
+    error_text: &str,
+    attempt_log: &[crate::jev::JevAttempt],
+) -> RequestRow {
+    RequestRow {
+        id: meta.id.to_string(),
+        created_at: meta.created_at.to_string(),
+        purpose: meta.purpose.to_string(),
+        subject: meta.subject.map(str::to_string),
+        model_requested: meta.model_requested.to_string(),
+        model_resolved: None,
+        question_count: meta.question_count,
+        answer_count: 0,
+        issue_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: None,
+        cost_source: crate::jev::COST_SOURCE_NONE.to_string(),
+        latency_ms: attempt_log.iter().map(|attempt| attempt.latency_ms).sum(),
+        attempts: attempt_log.len() as i64,
+        status: STATUS_ERROR.to_string(),
+        error_text: Some(truncate(error_text, 2_000)),
+        result_json: None,
+        attempts_json: attempts_json(attempt_log),
+    }
+}
+
+pub(crate) async fn insert_request_row(pool: &AnyPool, row: &RequestRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO jev_requests (
+            id, created_at, purpose, subject, model_requested, model_resolved,
+            question_count, answer_count, issue_count, input_tokens, output_tokens,
+            cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json,
+            attempts_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                   $17, $18, $19)",
+    )
+    .bind(&row.id)
+    .bind(&row.created_at)
+    .bind(&row.purpose)
+    .bind(row.subject.as_deref())
+    .bind(&row.model_requested)
+    .bind(row.model_resolved.as_deref())
+    .bind(row.question_count)
+    .bind(row.answer_count)
+    .bind(row.issue_count)
+    .bind(row.input_tokens)
+    .bind(row.output_tokens)
+    .bind(row.cost_usd)
+    .bind(&row.cost_source)
+    .bind(row.latency_ms)
+    .bind(row.attempts)
+    .bind(&row.status)
+    .bind(row.error_text.as_deref())
+    .bind(row.result_json.as_deref())
+    .bind(&row.attempts_json)
+    .execute(pool)
+    .await
+    .with_context(|| format!("recording a Jev request ({})", row.status))?;
+    Ok(())
+}
+
+/// Records one completed call. The worker writes through `record_or_hold`
+/// instead, so a failed write keeps the row; tests record directly.
+#[cfg(test)]
 pub(crate) async fn record_success(
     pool: &AnyPool,
     meta: RecordedRequest<'_>,
     response: &JevResponse,
     result_json: Option<&JsonValue>,
 ) -> Result<()> {
-    let mut result = result_json
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    result["measurement"] = response.measurement.clone();
-    sqlx::query(
-        "INSERT INTO jev_requests (
-            id, created_at, purpose, subject, model_requested, model_resolved,
-            question_count, answer_count, issue_count, input_tokens, output_tokens,
-            cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULL, $17)",
-    )
-    .bind(meta.id)
-    .bind(meta.created_at)
-    .bind(meta.purpose)
-    .bind(meta.subject)
-    .bind(meta.model_requested)
-    .bind(response.model_resolved.as_deref())
-    .bind(meta.question_count)
-    .bind(response.answers.len() as i64)
-    .bind(response.issues.len() as i64)
-    .bind(response.usage.input_tokens)
-    .bind(response.usage.output_tokens)
-    .bind(response.cost_usd)
-    .bind(response.cost_source)
-    .bind(response.latency_ms)
-    .bind(response.attempts as i64)
-    .bind(if response.issues.is_empty() { STATUS_COMPLETED } else { "partial" })
-    .bind(result.to_string())
-    .execute(pool)
-    .await
-    .context("recording a completed Jev request")?;
-    Ok(())
+    insert_request_row(pool, &completed_row(meta, response, result_json)).await
 }
 
 /// Records one failed call.
 ///
 /// A failure is a row, not a gap. Without it a Jev outage is invisible in the
 /// ledger and indistinguishable from a quiet day with no items to judge.
+#[cfg(test)]
 pub(crate) async fn record_failure(
     pool: &AnyPool,
     meta: RecordedRequest<'_>,
     error_text: &str,
+    attempt_log: &[crate::jev::JevAttempt],
 ) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO jev_requests (
-            id, created_at, purpose, subject, model_requested, model_resolved,
-            question_count, answer_count, issue_count, input_tokens, output_tokens,
-            cost_usd, cost_source, latency_ms, attempts, status, error_text, result_json
-         ) VALUES ($1, $2, $3, $4, $5, NULL, $6, 0, 0, 0, 0, NULL, $7, 0, 0, $8, $9, NULL)",
-    )
-    .bind(meta.id)
-    .bind(meta.created_at)
-    .bind(meta.purpose)
-    .bind(meta.subject)
-    .bind(meta.model_requested)
-    .bind(meta.question_count)
-    .bind(crate::jev::COST_SOURCE_NONE)
-    .bind(STATUS_ERROR)
-    .bind(truncate(error_text, 2_000))
-    .execute(pool)
-    .await
-    .context("recording a failed Jev request")?;
-    Ok(())
+    insert_request_row(pool, &failed_row(meta, error_text, attempt_log)).await
+}
+
+/// Rows the worker could not write, held for a later cycle.
+///
+/// Process-local, so a restart loses what is held; the warning logged when a
+/// row is held is then the only trace. Bounded: past the cap the oldest row
+/// is dropped and counted rather than growing without limit.
+#[derive(Debug, Default)]
+pub(crate) struct Unrecorded {
+    rows: Vec<RequestRow>,
+    dropped: usize,
+}
+
+const UNRECORDED_CAP: usize = 200;
+
+impl Unrecorded {
+    pub(crate) fn hold(&mut self, row: RequestRow) {
+        if self.rows.len() >= UNRECORDED_CAP {
+            let oldest = self.rows.remove(0);
+            self.dropped += 1;
+            tracing::warn!(
+                id = %oldest.id,
+                cost_usd = ?oldest.cost_usd,
+                "dropping an unrecorded Jev request: the hold is full"
+            );
+        }
+        self.rows.push(row);
+    }
+
+    pub(crate) fn pending(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(crate) fn dropped(&self) -> usize {
+        self.dropped
+    }
+
+    /// Cost the provider reported for held rows, which no ledger total
+    /// includes until they are written.
+    pub(crate) fn pending_cost_usd(&self) -> Option<f64> {
+        self.rows
+            .iter()
+            .filter_map(|row| row.cost_usd)
+            .reduce(|left, right| left + right)
+    }
+
+    /// Writes what it can, oldest first, and keeps the rest. Returns how many
+    /// were written.
+    pub(crate) async fn flush(&mut self, pool: &AnyPool) -> usize {
+        let mut written = 0;
+        let mut kept = Vec::new();
+        for row in std::mem::take(&mut self.rows) {
+            if !kept.is_empty() {
+                kept.push(row);
+                continue;
+            }
+            match insert_request_row(pool, &row).await {
+                Ok(()) => written += 1,
+                Err(err) => {
+                    tracing::warn!(error = %err, "writing a held Jev request");
+                    kept.push(row);
+                }
+            }
+        }
+        self.rows = kept;
+        written
+    }
 }
 
 /// Upserts the judgement of one editorial item about one symbol.
@@ -835,6 +1013,153 @@ pub(crate) fn models_payload(
     }
 }
 
+const PROVIDER_STATE_KEY: &str = "provider";
+/// The first deferral after a failure: one worker cycle.
+const BACKOFF_BASE_SECONDS: i64 = 600;
+/// Consecutive failures stop doubling the wait here.
+const BACKOFF_CAP_SECONDS: i64 = 4 * 3_600;
+/// A provider's Retry-After is honoured up to a day. Beyond that it is more
+/// likely a malformed header than a real instruction, and a gate shut for
+/// longer would hide a recovered provider.
+const RETRY_AFTER_CAP_SECONDS: u64 = 24 * 3_600;
+
+fn seconds_text(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// When provider calls may resume after `consecutive_failures` in a row.
+///
+/// The longer of the provider's own Retry-After and an exponential backoff:
+/// one cycle after the first failure, doubling to four hours. Never earlier
+/// than the provider asked.
+pub(crate) fn backoff_until(
+    now: chrono::DateTime<chrono::Utc>,
+    consecutive_failures: i64,
+    retry_after_seconds: Option<u64>,
+) -> chrono::DateTime<chrono::Utc> {
+    let doublings = (consecutive_failures - 1).clamp(0, 30) as u32;
+    let backoff = BACKOFF_BASE_SECONDS
+        .saturating_mul(2_i64.saturating_pow(doublings))
+        .min(BACKOFF_CAP_SECONDS);
+    let asked = retry_after_seconds
+        .unwrap_or(0)
+        .min(RETRY_AFTER_CAP_SECONDS) as i64;
+    now + chrono::Duration::seconds(backoff.max(asked))
+}
+
+pub(crate) async fn provider_state_row(pool: &AnyPool) -> Result<Option<JsonValue>> {
+    Ok(sqlx::query(
+        "SELECT updated_at, consecutive_failures, not_before, last_failure_at,
+                last_failure_kind, last_retry_after_seconds
+         FROM jev_provider_state WHERE singleton_key = $1",
+    )
+    .bind(PROVIDER_STATE_KEY)
+    .fetch_optional(pool)
+    .await
+    .context("reading the Jev provider state")?
+    .as_ref()
+    .map(row_to_json))
+}
+
+pub(crate) fn provider_state_from_row(
+    row: Option<&JsonValue>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> crate::models::JevProviderStatePayload {
+    let Some(row) = row else {
+        return crate::models::JevProviderStatePayload::default();
+    };
+    let text = |key: &str| {
+        row.get(key)
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let not_before = text("not_before");
+    let deferred = not_before
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .is_some_and(|at| at.with_timezone(&chrono::Utc) > now);
+    crate::models::JevProviderStatePayload {
+        consecutive_failures: row
+            .get("consecutive_failures")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
+        not_before,
+        deferred,
+        last_failure_at: text("last_failure_at"),
+        last_failure_kind: text("last_failure_kind"),
+        last_retry_after_seconds: row
+            .get("last_retry_after_seconds")
+            .and_then(JsonValue::as_i64),
+    }
+}
+
+/// When provider calls are deferred until, if they are deferred now.
+pub(crate) async fn provider_deferred_until(
+    pool: &AnyPool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<String>> {
+    let state = provider_state_from_row(provider_state_row(pool).await?.as_ref(), now);
+    Ok(state.deferred.then_some(state.not_before).flatten())
+}
+
+/// An answer closes nothing and reopens the gate. Written only when there is
+/// something to reset, so a healthy run costs one no-op UPDATE per call.
+pub(crate) async fn note_provider_success(
+    pool: &AnyPool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE jev_provider_state
+         SET consecutive_failures = 0, not_before = NULL, updated_at = $1
+         WHERE singleton_key = $2 AND (consecutive_failures <> 0 OR not_before IS NOT NULL)",
+    )
+    .bind(seconds_text(now))
+    .bind(PROVIDER_STATE_KEY)
+    .execute(pool)
+    .await
+    .context("reopening the Jev provider gate")?;
+    Ok(())
+}
+
+/// Counts a provider failure and shuts the gate until the backoff ends.
+/// Returns the time it shuts until.
+pub(crate) async fn note_provider_failure(
+    pool: &AnyPool,
+    now: chrono::DateTime<chrono::Utc>,
+    kind: &str,
+    retry_after_seconds: Option<u64>,
+) -> Result<String> {
+    let previous = provider_state_from_row(provider_state_row(pool).await?.as_ref(), now);
+    let consecutive = previous.consecutive_failures + 1;
+    let not_before = seconds_text(backoff_until(now, consecutive, retry_after_seconds));
+    let now = seconds_text(now);
+    sqlx::query(
+        "INSERT INTO jev_provider_state
+            (singleton_key, updated_at, consecutive_failures, not_before, last_failure_at,
+             last_failure_kind, last_retry_after_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (singleton_key) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            consecutive_failures = excluded.consecutive_failures,
+            not_before = excluded.not_before,
+            last_failure_at = excluded.last_failure_at,
+            last_failure_kind = excluded.last_failure_kind,
+            last_retry_after_seconds = excluded.last_retry_after_seconds",
+    )
+    .bind(PROVIDER_STATE_KEY)
+    .bind(&now)
+    .bind(consecutive)
+    .bind(&not_before)
+    .bind(&now)
+    .bind(kind)
+    .bind(retry_after_seconds.map(|seconds| seconds.min(i64::MAX as u64) as i64))
+    .execute(pool)
+    .await
+    .context("shutting the Jev provider gate")?;
+    Ok(not_before)
+}
+
 /// The worker step that re-derives numeric findings. It calls no provider, so
 /// it has no purpose in the request ledger; the other three steps are named
 /// by the purpose they record under.
@@ -871,6 +1196,7 @@ pub(crate) async fn record_worker_cycle(
     started_at: &str,
     finished_at: &str,
     steps: &[(&str, &JsonValue)],
+    unrecorded: &Unrecorded,
 ) -> Result<()> {
     let mut any_failure = false;
     for (step, summary) in steps {
@@ -898,7 +1224,13 @@ pub(crate) async fn record_worker_cycle(
         "ok",
         (!any_failure).then_some(finished_at),
         any_failure.then_some(finished_at),
-        &serde_json::json!({"started_at": started_at, "finished_at": finished_at}),
+        &serde_json::json!({
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "unrecorded_pending": unrecorded.pending(),
+            "unrecorded_pending_cost_usd": unrecorded.pending_cost_usd(),
+            "unrecorded_dropped": unrecorded.dropped(),
+        }),
     )
     .await
 }
@@ -969,7 +1301,8 @@ pub(crate) async fn purpose_call_rows(
     let grouped = read(
         "SELECT purpose, status, cost_source, COUNT(*) AS requests,
                 MAX(created_at) AS last_at, SUM(cost_usd) AS cost_usd,
-                SUM(issue_count) AS issues
+                SUM(issue_count) AS issues, SUM(attempts) AS attempts,
+                SUM(CASE WHEN attempts > 1 THEN 1 ELSE 0 END) AS retried
          FROM jev_requests
          GROUP BY purpose, status, cost_source",
     )
@@ -1053,6 +1386,8 @@ pub(crate) fn purpose_calls_from_rows(
         let requests = count(row, "requests");
         let status = text(row, "status").unwrap_or_default();
         calls.requests += requests;
+        calls.attempts += count(row, "attempts");
+        calls.retried += count(row, "retried");
         match status.as_str() {
             STATUS_COMPLETED => calls.completed += requests,
             "partial" => {
@@ -1111,6 +1446,15 @@ pub(crate) fn purpose_calls_from_rows(
 
 /// Reads one worker status row. The summary fields are the step's own
 /// report of its latest cycle.
+fn summary_of(row: &JsonValue) -> JsonValue {
+    row.get("summary_json")
+        .and_then(|value| match value {
+            JsonValue::String(text) => serde_json::from_str::<JsonValue>(text).ok(),
+            other => Some(other.clone()),
+        })
+        .unwrap_or(JsonValue::Null)
+}
+
 fn worker_step_from_row(row: &JsonValue) -> crate::models::JevWorkerStepPayload {
     let text = |key: &str| {
         row.get(key)
@@ -1118,13 +1462,7 @@ fn worker_step_from_row(row: &JsonValue) -> crate::models::JevWorkerStepPayload 
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    let summary = row
-        .get("summary_json")
-        .and_then(|value| match value {
-            JsonValue::String(text) => serde_json::from_str::<JsonValue>(text).ok(),
-            other => Some(other.clone()),
-        })
-        .unwrap_or(JsonValue::Null);
+    let summary = summary_of(row);
     let number = |key: &str| summary.get(key).and_then(JsonValue::as_i64);
     crate::models::JevWorkerStepPayload {
         step: text("step").unwrap_or_default(),
@@ -1195,6 +1533,7 @@ const SILENT_AFTER_INTERVALS: i64 = 3;
 /// Every read the panel makes, as it came back.
 pub(crate) struct OperatorReads {
     pub worker: Result<Vec<JsonValue>>,
+    pub provider: Result<Option<JsonValue>>,
     pub calls: Result<(Vec<JsonValue>, Vec<JsonValue>, Vec<JsonValue>)>,
     pub agreement: Result<JsonValue>,
     pub disagreements: Result<Vec<JsonValue>>,
@@ -1214,6 +1553,7 @@ pub(crate) fn operator_payload(
         unavailable_sources.push(source.to_string());
     };
 
+    let mut cycle_summary = JsonValue::Null;
     let (last_cycle_at, steps) = match &reads.worker {
         Ok(rows) => {
             let mut last_cycle_at = None;
@@ -1222,6 +1562,7 @@ pub(crate) fn operator_payload(
                 let step = worker_step_from_row(row);
                 if step.step == WORKER_CYCLE {
                     last_cycle_at = Some(step.updated_at);
+                    cycle_summary = summary_of(row);
                 } else {
                     steps.push(step);
                 }
@@ -1242,6 +1583,13 @@ pub(crate) fn operator_payload(
         Err(err) => {
             note("worker status", err);
             (None, Vec::new())
+        }
+    };
+    let provider = match &reads.provider {
+        Ok(row) => provider_state_from_row(row.as_ref(), now),
+        Err(err) => {
+            note("provider state", err);
+            crate::models::JevProviderStatePayload::default()
         }
     };
     let purposes = match &reads.calls {
@@ -1284,6 +1632,18 @@ pub(crate) fn operator_payload(
         cycle_interval_seconds,
         worker_silent,
         steps,
+        provider,
+        unrecorded_pending: cycle_summary
+            .get("unrecorded_pending")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
+        unrecorded_pending_cost_usd: cycle_summary
+            .get("unrecorded_pending_cost_usd")
+            .and_then(JsonValue::as_f64),
+        unrecorded_dropped: cycle_summary
+            .get("unrecorded_dropped")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
         purposes,
         screening: screening_from(&agreement, disagreements),
         unavailable_sources,
@@ -1446,6 +1806,7 @@ mod tests {
             model_resolved: Some("typesafe/jev-1.13".to_string()),
             latency_ms: 118,
             attempts: 1,
+            attempt_log: Vec::new(),
         }
     }
 
@@ -1535,6 +1896,7 @@ mod tests {
                 question_count: 6,
             },
             "Jev returned 429: rate limited",
+            &[],
         )
         .await
         .expect("failure records");
@@ -1963,6 +2325,7 @@ mod tests {
                 question_count: 3,
             },
             "Jev returned 529: overloaded",
+            &[],
         )
         .await
         .expect("a failure row");
@@ -2367,6 +2730,7 @@ mod tests {
     ) -> OperatorReads {
         OperatorReads {
             worker,
+            provider: Ok(None),
             calls,
             agreement: Ok(serde_json::json!({})),
             disagreements: Ok(Vec::new()),
@@ -2386,6 +2750,7 @@ mod tests {
             "2026-10-16T08:00:00Z",
             "2026-10-16T08:01:00Z",
             &[(PURPOSE_REPORT_GRADING, &clean)],
+            &Unrecorded::default(),
         )
         .await
         .expect("first cycle records");
@@ -2394,6 +2759,7 @@ mod tests {
             "2026-10-16T08:11:00Z",
             "2026-10-16T08:12:00Z",
             &[(PURPOSE_REPORT_GRADING, &partly_failed)],
+            &Unrecorded::default(),
         )
         .await
         .expect("second cycle records");
@@ -2458,6 +2824,7 @@ mod tests {
                 (PURPOSE_REPORT_GRADING, &grading),
                 (STEP_NUMERIC_RECOMPUTE, &numeric),
             ],
+            &Unrecorded::default(),
         )
         .await
         .expect("cycle records");
@@ -2496,6 +2863,7 @@ mod tests {
             "2026-10-16T08:00:00Z",
             "2026-10-16T08:01:00Z",
             &[(PURPOSE_REPORT_GRADING, &clean)],
+            &Unrecorded::default(),
         )
         .await
         .expect("cycle records");
@@ -2553,6 +2921,7 @@ mod tests {
                 question_count: 3,
             },
             error_text,
+            &[],
         )
         .await
         .expect("a recorded failure");
@@ -2705,6 +3074,7 @@ mod tests {
             600,
             OperatorReads {
                 worker: Ok(Vec::new()),
+                provider: Ok(None),
                 calls: Ok(Default::default()),
                 agreement: screening_agreement(&pool, INSTRUCTION_SHAPED_THRESHOLD).await,
                 disagreements: screening_disagreements(&pool, INSTRUCTION_SHAPED_THRESHOLD, 20)
@@ -2730,6 +3100,253 @@ mod tests {
         assert_eq!(missed.title.as_deref(), Some("marker-missed-it"));
         assert_eq!(missed.source_name.as_deref(), Some("Example feed"));
         assert!(panel.unavailable_sources.is_empty());
+    }
+
+    /// One cycle after the first failure, doubling to four hours, and never
+    /// sooner than the provider asked. A day caps a Retry-After that is more
+    /// likely malformed than meant.
+    #[test]
+    fn the_backoff_doubles_to_a_cap_and_never_undercuts_retry_after() {
+        let now = at("2026-10-16T08:00:00Z");
+        let wait = |failures: i64, retry_after: Option<u64>| {
+            (backoff_until(now, failures, retry_after) - now).num_seconds()
+        };
+        assert_eq!(wait(1, None), 600);
+        assert_eq!(wait(2, None), 1_200);
+        assert_eq!(wait(3, None), 2_400);
+        assert_eq!(wait(6, None), 14_400);
+        assert_eq!(wait(40, None), 14_400, "capped, and no overflow");
+        assert_eq!(wait(1, Some(3_600)), 3_600, "the provider's wait wins");
+        assert_eq!(wait(6, Some(60)), 14_400, "the backoff wins");
+        assert_eq!(wait(1, Some(10 * 86_400)), 86_400);
+    }
+
+    /// The gate is durable: a failure shuts it until the backoff ends, the
+    /// count carries across failures, and one answer reopens it while keeping
+    /// the record of what last failed.
+    #[tokio::test]
+    async fn the_provider_gate_shuts_on_failure_and_reopens_on_an_answer() {
+        let pool = pool().await;
+        let now = at("2026-10-16T08:00:00Z");
+        assert_eq!(provider_deferred_until(&pool, now).await.unwrap(), None);
+
+        let until = note_provider_failure(&pool, now, "http_429", Some(3_600))
+            .await
+            .expect("the gate shuts");
+        assert_eq!(until, "2026-10-16T09:00:00Z");
+        assert_eq!(
+            provider_deferred_until(&pool, at("2026-10-16T08:59:59Z"))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("2026-10-16T09:00:00Z"),
+            "held for the whole hour, across however many cycles"
+        );
+        assert_eq!(
+            provider_deferred_until(&pool, at("2026-10-16T09:00:01Z"))
+                .await
+                .unwrap(),
+            None
+        );
+
+        let later = at("2026-10-16T09:00:01Z");
+        note_provider_failure(&pool, later, "transport", None)
+            .await
+            .expect("a second failure");
+        let state =
+            provider_state_from_row(provider_state_row(&pool).await.unwrap().as_ref(), later);
+        assert_eq!(state.consecutive_failures, 2);
+        assert_eq!(state.not_before.as_deref(), Some("2026-10-16T09:20:01Z"));
+        assert_eq!(state.last_retry_after_seconds, None);
+
+        note_provider_success(&pool, later).await.expect("reopens");
+        let state =
+            provider_state_from_row(provider_state_row(&pool).await.unwrap().as_ref(), later);
+        assert_eq!(state.consecutive_failures, 0);
+        assert!(!state.deferred);
+        assert_eq!(state.not_before, None);
+        assert_eq!(
+            state.last_failure_kind.as_deref(),
+            Some("transport"),
+            "history kept"
+        );
+    }
+
+    /// A failed call counts the attempts it made, and its latency is theirs.
+    #[tokio::test]
+    async fn a_failed_call_records_the_attempts_it_made() {
+        let pool = pool().await;
+        let attempt = |n: u32, outcome: &str| crate::jev::JevAttempt {
+            attempt: n,
+            latency_ms: 100,
+            http_status: Some(503),
+            outcome: outcome.to_string(),
+            retry_after_seconds: None,
+        };
+        let log = [
+            attempt(1, "retried"),
+            attempt(2, "retried"),
+            attempt(3, "failed"),
+        ];
+        record_failure(
+            &pool,
+            RecordedRequest {
+                id: "three-tries",
+                created_at: "2026-10-16T08:00:00Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("401"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            "Jev returned 503: overloaded",
+            &log,
+        )
+        .await
+        .expect("a recorded failure");
+
+        let row = sqlx::query("SELECT attempts, latency_ms, attempts_json FROM jev_requests")
+            .fetch_one(&pool)
+            .await
+            .expect("the row");
+        let row = row_to_json(&row);
+        assert_eq!(row["attempts"], 3);
+        assert_eq!(row["latency_ms"], 300);
+        // `row_to_json` decodes JSON-shaped text, so either form may arrive.
+        let stored = match &row["attempts_json"] {
+            JsonValue::String(text) => serde_json::from_str(text).expect("attempts json"),
+            other => other.clone(),
+        };
+        let stored: Vec<crate::jev::JevAttempt> =
+            serde_json::from_value(stored).expect("attempts decode");
+        assert_eq!(stored, log);
+    }
+
+    async fn refuse_request_writes(pool: &AnyPool) {
+        sqlx::query(
+            "CREATE TRIGGER refuse_jev_requests BEFORE INSERT ON jev_requests
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+        )
+        .execute(pool)
+        .await
+        .expect("trigger");
+    }
+
+    /// A row whose write failed is held, written once writes work again, and
+    /// counted with its cost while it waits. Past the cap the oldest goes.
+    #[tokio::test]
+    async fn a_held_row_is_written_later_and_the_hold_is_bounded() {
+        let pool = pool().await;
+        let meta = |id| RecordedRequest {
+            id,
+            created_at: "2026-10-16T08:00:00Z",
+            purpose: PURPOSE_REPORT_GRADING,
+            subject: Some("401"),
+            model_requested: "~typesafe/jev-latest",
+            question_count: 3,
+        };
+        refuse_request_writes(&pool).await;
+        let row = completed_row(meta("billed-1"), &response(), None);
+        assert!(insert_request_row(&pool, &row).await.is_err());
+
+        let mut held = Unrecorded::default();
+        held.hold(row);
+        assert_eq!(held.flush(&pool).await, 0, "still refused");
+        assert_eq!(held.pending(), 1);
+        assert_eq!(held.pending_cost_usd(), Some(0.0000176));
+
+        sqlx::query("DROP TRIGGER refuse_jev_requests")
+            .execute(&pool)
+            .await
+            .expect("drop trigger");
+        assert_eq!(held.flush(&pool).await, 1);
+        assert_eq!(held.pending(), 0);
+        let cost: f64 = sqlx::query("SELECT cost_usd FROM jev_requests WHERE id = 'billed-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("written")
+            .try_get("cost_usd")
+            .expect("a cost");
+        assert!((cost - 0.0000176).abs() < 1e-12);
+
+        let mut full = Unrecorded::default();
+        for n in 0..=UNRECORDED_CAP {
+            let id = format!("row-{n}");
+            full.hold(completed_row(
+                RecordedRequest {
+                    id: &id,
+                    ..meta("unused")
+                },
+                &response(),
+                None,
+            ));
+        }
+        assert_eq!(full.pending(), UNRECORDED_CAP);
+        assert_eq!(full.dropped(), 1);
+    }
+
+    /// The panel reports the gate and the held rows the latest cycle saw.
+    #[tokio::test]
+    async fn the_panel_shows_the_gate_and_the_rows_still_held() {
+        let pool = pool().await;
+        let now = at("2026-10-16T08:00:00Z");
+        note_provider_failure(&pool, now, "http_429", Some(3_600))
+            .await
+            .expect("the gate shuts");
+        let mut held = Unrecorded::default();
+        held.hold(completed_row(
+            RecordedRequest {
+                id: "held",
+                created_at: "2026-10-16T08:00:00Z",
+                purpose: PURPOSE_REPORT_GRADING,
+                subject: Some("401"),
+                model_requested: "~typesafe/jev-latest",
+                question_count: 3,
+            },
+            &response(),
+            None,
+        ));
+        let deferred = serde_json::json!({"status": "deferred", "failed": 0});
+        record_worker_cycle(
+            &pool,
+            "2026-10-16T08:00:00Z",
+            "2026-10-16T08:01:00Z",
+            &[(PURPOSE_REPORT_GRADING, &deferred)],
+            &held,
+        )
+        .await
+        .expect("cycle records");
+
+        let panel = operator_payload(
+            "ok",
+            at("2026-10-16T08:05:00Z"),
+            600,
+            OperatorReads {
+                worker: worker_status_rows(&pool).await,
+                provider: provider_state_row(&pool).await,
+                calls: Ok(Default::default()),
+                agreement: Ok(serde_json::json!({})),
+                disagreements: Ok(Vec::new()),
+            },
+        );
+        assert!(panel.provider.deferred);
+        assert_eq!(
+            panel.provider.not_before.as_deref(),
+            Some("2026-10-16T09:00:00Z")
+        );
+        assert_eq!(
+            panel.provider.last_failure_kind.as_deref(),
+            Some("http_429")
+        );
+        assert_eq!(panel.unrecorded_pending, 1);
+        assert_eq!(panel.unrecorded_pending_cost_usd, Some(0.0000176));
+        assert_eq!(
+            (
+                panel.steps[0].last_clean_at.as_deref(),
+                panel.steps[0].last_failed_at.as_deref()
+            ),
+            (None, None),
+            "a deferred step neither ran clean nor failed"
+        );
     }
 }
 

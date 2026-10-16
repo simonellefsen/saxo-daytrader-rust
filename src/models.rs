@@ -1849,6 +1849,10 @@ pub struct JevWorkerStepPayload {
 pub struct JevPurposeCallsPayload {
     pub purpose: String,
     pub requests: i64,
+    /// HTTP attempts across those calls, from each call's attempt count.
+    pub attempts: i64,
+    /// Calls that needed more than one attempt.
+    pub retried: i64,
     pub completed: i64,
     pub partial: i64,
     pub failed: i64,
@@ -1896,6 +1900,20 @@ pub struct JevScreeningPayload {
     pub disagreements: Vec<JevScreeningDisagreementPayload>,
 }
 
+/// The durable provider gate: whether calls are deferred, and why.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct JevProviderStatePayload {
+    /// Provider failures since the last answer, across cycles.
+    pub consecutive_failures: i64,
+    pub not_before: Option<String>,
+    /// `not_before` is still ahead, so no step calls the provider.
+    pub deferred: bool,
+    pub last_failure_at: Option<String>,
+    /// A bounded label, as on the per-purpose rows.
+    pub last_failure_kind: Option<String>,
+    pub last_retry_after_seconds: Option<i64>,
+}
+
 /// The Jev operator panel: is the worker running, what is waiting, what the
 /// calls cost, and where the two injection screens disagree.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1908,6 +1926,13 @@ pub struct JevOperatorPayload {
     /// Enabled, and no cycle has finished within three intervals.
     pub worker_silent: bool,
     pub steps: Vec<JevWorkerStepPayload>,
+    pub provider: JevProviderStatePayload,
+    /// Calls answered but not yet written to the ledger, as of the latest
+    /// cycle. Their cost is in no total until they are.
+    pub unrecorded_pending: i64,
+    pub unrecorded_pending_cost_usd: Option<f64>,
+    /// Held rows dropped because the hold was full; their cost is lost.
+    pub unrecorded_dropped: i64,
     pub purposes: Vec<JevPurposeCallsPayload>,
     pub screening: JevScreeningPayload,
     /// Reads that failed. What they would have shown is unknown, not absent.

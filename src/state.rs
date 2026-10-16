@@ -16011,6 +16011,7 @@ impl AppState {
         let threshold = crate::jev_store::INSTRUCTION_SHAPED_THRESHOLD;
         let reads = crate::jev_store::OperatorReads {
             worker: crate::jev_store::worker_status_rows(&self.pool).await,
+            provider: crate::jev_store::provider_state_row(&self.pool).await,
             calls: crate::jev_store::purpose_call_rows(&self.pool).await,
             agreement: crate::jev_store::screening_agreement(&self.pool, threshold).await,
             disagreements: crate::jev_store::screening_disagreements(&self.pool, threshold, 20)
@@ -17594,6 +17595,9 @@ impl AppState {
                 .execute(&self.pool)
                 .await
                 .context("creating Jev runtime tables")?;
+        }
+        for column in crate::jev_store::request_columns_to_ensure() {
+            self.ensure_table_column("jev_requests", column).await?;
         }
         // The signal table shipped before evidence provenance existed, and
         // CREATE TABLE IF NOT EXISTS will not add columns to it.

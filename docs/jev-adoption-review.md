@@ -103,6 +103,40 @@ until released; both config defaults remain disabled.
    including billed responses followed by database-write failures. Current
    failure rows are logical-call records, not separate retry attempts. Verify
    long `Retry-After` handling across worker cycles, not only within a call.
+
+   *Status, 2026-10-16, beside the item above.*
+   - **Attempts.** `jev::ask` logs every HTTP attempt: status, latency,
+     Retry-After, and outcome (`answered`, `retried`, `deferred`, `failed`
+     or `unparseable`). The log is stored with its call as
+     `jev_requests.attempts_json`, in the same write, so a call and its
+     attempts cannot disagree. A failed call now records the attempts it
+     made; before, every failure row said `attempts = 0`.
+   - **Circuit breaker.** One durable gate covers the provider, in
+     `jev_provider_state`. A failure that reached the provider shuts it until
+     whichever is later: the provider's own Retry-After, capped at a day, or
+     a backoff of one cycle doubling to four hours. The next answer reopens
+     it. While it is shut, no worker step calls Jev; each still reports its
+     backlog. A call refused locally, such as an oversized state, never
+     reached the provider and leaves the gate alone. An unreadable gate
+     fails closed.
+   - **Retry-After across cycles.** A wait longer than one call may sleep
+     ends the call at once, as before, and is now persisted. The next cycle
+     is deferred rather than retried ten minutes later. A test drives this
+     end to end against a loopback provider that answers 429 with an hour's
+     wait: one request, a shut gate, and the next cycle `deferred`.
+   - **A billed answer whose write fails** stops its step, so nothing more is
+     spent while accounting is failing. Before, grading and editorial
+     scoring carried on to the next subject. The row is held by the worker
+     and written at the start of a later cycle. The panel shows held rows
+     with their cost, which is in no total until written.
+   - **What it does not do.** The hold is in memory, so a scheduler restart
+     loses what it holds; the warning logged with each held row, cost
+     included, is then the only trace. It holds at most 200 rows, dropping
+     and counting the oldest after that.
+   - **Belongs to item 4, not fixed here.** A subject refused locally still
+     stops its step's batch. The worker selects newest first, so such a
+     subject would stop that step on every cycle. No refusal has been
+     recorded in production.
 4. Bound/redact outbound failure text. Test report grading on representative
    sanitized reports: one tiny fixture does not prove all reports fit the byte
    budget. Reject rather than silently truncate oversize input; budget state

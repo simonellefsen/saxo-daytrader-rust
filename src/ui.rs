@@ -6186,6 +6186,23 @@ fn jev_failure_kind_label(kind: &str) -> String {
     }
 }
 
+fn jev_provider_failure_text(provider: &crate::models::JevProviderStatePayload) -> String {
+    let mut text = String::new();
+    if let Some(kind) = provider.last_failure_kind.as_deref() {
+        text.push_str(&format!(", the last {}", jev_failure_kind_label(kind)));
+    }
+    if let Some(seconds) = provider.last_retry_after_seconds {
+        text.push_str(&format!(", with Retry-After {seconds} s"));
+    }
+    text
+}
+
+fn jev_held_cost_text(cost_usd: Option<f64>, prefs: &LocalizationPrefs) -> String {
+    cost_usd
+        .map(|cost| format!(" (USD {} reported)", format_number(cost, 6, prefs)))
+        .unwrap_or_default()
+}
+
 /// A full selection saw only as many as its limit, so what it left is a count
 /// of those it saw, and more may be waiting behind them.
 fn jev_waiting_text(step: &crate::models::JevWorkerStepPayload) -> String {
@@ -6221,6 +6238,19 @@ fn JevWorkerCard(operator: crate::models::JevOperatorPayload, prefs: Localizatio
                 } else {
                     div { class: "event", "Jev is enabled and no worker cycle has been recorded." }
                 }
+            }
+            if operator.provider.deferred {
+                if let Some(at) = operator.provider.not_before.as_deref() {
+                    div { class: "event", "Provider calls are deferred until {format_timestamp(at, &prefs)}, after {operator.provider.consecutive_failures} consecutive failures{jev_provider_failure_text(&operator.provider)}. No step calls Jev before then." }
+                }
+            } else if operator.provider.consecutive_failures > 0 {
+                div { class: "event muted", "{operator.provider.consecutive_failures} consecutive provider failures{jev_provider_failure_text(&operator.provider)}. The wait has ended, so the next cycle tries again." }
+            }
+            if operator.unrecorded_pending > 0 {
+                div { class: "event", "{operator.unrecorded_pending} calls answered but could not be written to the ledger{jev_held_cost_text(operator.unrecorded_pending_cost_usd, &prefs)}. They are held for the next cycle and are in no total until written." }
+            }
+            if operator.unrecorded_dropped > 0 {
+                div { class: "event", "{operator.unrecorded_dropped} held calls were dropped because the hold was full. Their cost is missing from the ledger." }
             }
             if let Some(at) = operator.last_cycle_at.as_deref() {
                 div { class: "pill-row",
@@ -6286,7 +6316,12 @@ fn JevWorkerCard(operator: crate::models::JevOperatorPayload, prefs: Localizatio
                             for calls in operator.purposes.iter() {
                                 tr { key: "{calls.purpose}",
                                     td { "{jev_step_label(&calls.purpose)}" }
-                                    td { "{calls.requests}" }
+                                    td {
+                                        "{calls.requests}"
+                                        if calls.retried > 0 {
+                                            div { class: "muted", "{calls.retried} retried · {calls.attempts} attempts" }
+                                        }
+                                    }
                                     td {
                                         "{calls.completed} / {calls.partial} / {calls.failed}"
                                         if calls.partial_issue_count > 0 {
@@ -15001,9 +15036,22 @@ mod tests {
                 waiting_is_lower_bound: true,
                 stage: None,
             }],
+            provider: crate::models::JevProviderStatePayload {
+                consecutive_failures: 2,
+                not_before: Some("2026-10-16T08:00:00Z".into()),
+                deferred: true,
+                last_failure_at: Some("2026-10-16T07:00:00Z".into()),
+                last_failure_kind: Some("http_429".into()),
+                last_retry_after_seconds: Some(3600),
+            },
+            unrecorded_pending: 1,
+            unrecorded_pending_cost_usd: Some(0.000378),
+            unrecorded_dropped: 0,
             purposes: vec![crate::models::JevPurposeCallsPayload {
                 purpose: "report_grading".into(),
                 requests: 12,
+                attempts: 15,
+                retried: 2,
                 completed: 9,
                 partial: 1,
                 failed: 2,
@@ -15055,6 +15103,35 @@ mod tests {
         assert!(html.contains("3 questions unanswered in partial calls"));
         assert!(html.contains("8 billed · 1 rate-card"));
         assert!(html.contains("1 answered with no cost: unknown, not free"));
+        assert!(html.contains("2 retried · 15 attempts"), "{html}");
+    }
+
+    /// A shut provider gate says until when and why, and a call that answered
+    /// but could not be written is named with its cost rather than vanishing.
+    #[test]
+    fn the_jev_worker_card_shows_a_deferred_provider_and_held_calls() {
+        let prefs = default_prefs();
+        let html = dioxus_ssr::render_element(
+            rsx! { JevWorkerCard { operator: jev_operator_fixture(), prefs: prefs.clone() } },
+        );
+        assert!(html.contains("Provider calls are deferred until"), "{html}");
+        assert!(
+            html.contains(
+                "after 2 consecutive failures, the last HTTP 429, with Retry-After 3600 s"
+            )
+        );
+        assert!(html.contains("1 calls answered but could not be written to the ledger"));
+        assert!(html.contains("are in no total until written"));
+
+        let mut reopened = jev_operator_fixture();
+        reopened.provider.deferred = false;
+        reopened.unrecorded_pending = 0;
+        let html = dioxus_ssr::render_element(rsx! { JevWorkerCard { operator: reopened, prefs } });
+        assert!(
+            html.contains("The wait has ended, so the next cycle tries again."),
+            "{html}"
+        );
+        assert!(!html.contains("could not be written"));
     }
 
     #[test]
