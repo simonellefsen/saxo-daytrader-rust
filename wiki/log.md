@@ -3202,3 +3202,18 @@ broker mutation was added.
 - **A live check:** `/api/overview` integrity was captured just before the integrity release and again after. All 14 sections were identical apart from timestamps and four unrealised-P/L figures. Those moved by the same −32.96 DKK as the independently computed portfolio summary, which was price movement during EU trading.
 - Released; smoke 0 warnings; 1,219 tests unchanged. `state.rs` is now 24,905 lines, down from 29,993 at the start of the day.
 - Remaining: `dashboard_view`, one 1,077-line function, and missed-trade shadows, with 18 private helpers.
+
+## [2026-10-16] Refactoring | Shadow evidence and dashboard_view out of state.rs
+
+- `853218b` moved the missed-trade shadow book and the shadow-report outcome ledger to `shadow_evidence_state.rs`: 11 methods, 17 helpers, 2 constants and a struct.
+  - Both are record-only and cannot create, size or block an order.
+  - Four helpers stayed in `state.rs`, because other modules import them. The slice tool now checks every source file for outside users, not just `state.rs`.
+- `e2bc99c` moved `dashboard_view` and the 40 projections only it uses to `dashboard_state.rs`.
+  - Imports only it used are gone from `state.rs`. The 14 its tests still needed are re-imported in the test module from their original paths, so none can bind to a same-named item.
+- Both slices checked item by item: 42 and 30 items, plus the struct, identical apart from `pub(crate)` and rustfmt wraps. 1,219 tests unchanged.
+- **Every dashboard tab compared live**, captured before and after the release with digits removed.
+  - 8 of 12 were identical.
+  - Watchlists and execution held the same elements in a different order; the same build reorders watchlists by 408 elements between two captures a minute apart.
+  - Performance differed by one chart point, as the history window moved on.
+  - Market differed in the order of an exchange list and a skipped-symbol list, which come from a hash set and so vary per process. A small cosmetic follow-up: sort them for a stable display.
+- `state.rs` is 21,445 lines, from 29,993 this morning. The area-by-area split named in the roadmap is done. `dashboard_view` is still one 1,077-line function; splitting it into per-tab builders is a real refactor, not a move.
