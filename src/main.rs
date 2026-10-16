@@ -72,6 +72,7 @@ mod saxo_rate_limit;
 mod scheduler;
 mod scheduler_state;
 mod shadow_assessment;
+mod shadow_evidence_state;
 mod shutdown;
 mod state;
 mod strategy_journal;
