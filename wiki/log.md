@@ -3191,3 +3191,14 @@ broker mutation was added.
   - integrity, 602 lines plus 12 private helpers that the tests call directly;
   - missed-trade shadows, which need 18 private helpers;
   - protective stops: the cleanest of these mechanically, but a broker order path, so it should be its own reviewed step.
+
+## [2026-10-16] Refactoring | Protective-stop records and integrity out of state.rs
+
+- `235b0d6` moved the 15 protective-stop lifecycle methods to `protective_stop_state.rs`: coverage, prechecks, preparations, manual SIM lifecycle tests, reconciliation, and adoption into `execution_orders`. One helper constant came with them.
+  - These touch only the local audit tables. None calls Saxo; `saxo_order.rs` and `protective_stops.rs`, where placement and the sweep live, are unchanged.
+  - `PROTECTIVE_STOP_STRATEGY_TYPE` stayed in `state.rs`, because `saxo_order.rs` imports it from there.
+- `deb79c0` moved `overview_integrity` and its companions to `integrity_state.rs`, with 13 helpers and 17 constants: the tolerances, sample limits and SQL exclusions.
+- **The verification check had a flaw, fixed here.** The earlier token check tokenized each destination file whole, so a quote or raw string earlier in the file could misalign it. It is now done per item: each moved item is extracted from the destination by its own boundaries. All 112 items across the Hermes, protective-stop and integrity slices match their originals, apart from added `pub(crate)` and rustfmt wraps.
+- **A live check:** `/api/overview` integrity was captured just before the integrity release and again after. All 14 sections were identical apart from timestamps and four unrealised-P/L figures. Those moved by the same −32.96 DKK as the independently computed portfolio summary, which was price movement during EU trading.
+- Released; smoke 0 warnings; 1,219 tests unchanged. `state.rs` is now 24,905 lines, down from 29,993 at the start of the day.
+- Remaining: `dashboard_view`, one 1,077-line function, and missed-trade shadows, with 18 private helpers.
