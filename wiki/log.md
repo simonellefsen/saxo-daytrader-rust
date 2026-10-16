@@ -3141,3 +3141,16 @@ broker mutation was added.
 - Released and smoke-tested with 0 warnings; CI green; the first cycle at 05:47Z was clean.
 - **What the ledger shows:** all 2,089 Jev calls to date, in all three purposes, answered on their first attempt, and none has failed. The new backoff has had nothing to act on so far; it guards against an outage that has not happened.
 - **Left for A.4:** a subject refused locally, for example over the state budget, still stops its step's batch. Selection is newest first, so it would stop that step on every cycle. None has been recorded.
+
+## [2026-10-16] Jev | Requests budgeted against the documented context; refusals no longer block (adoption item A.4)
+
+- `3a56f33` closes A.4; the status note sits beside the item in [the adoption review](/Users/lindau/codex/rust_daytrader/docs/jev-adoption-review.md).
+- **The limits were wrong in the config.** It cited "a 32k context" and budgeted only the state. TypeSafe documents 64k tokens for the state plus every question and 32k for the state plus any one question (docs.typesafe.ai/models, read 2026-10-16). Both are now configured and checked before sending, with an estimate deliberately on the high side: 1.5 bytes per token. The 24,000-character state cap stays as a cost bound.
+- **Calibration**, from provider-reported counts: an editorial request of 2,310 bytes was billed about 850 tokens. A failure classification of at least 960 bytes was billed 527. The full 10-candidate grading question set is about 34,000 bytes on its own, so questions dominate grading requests, not reports.
+- **Real reports as the representative test:** 2,061 grading calls, median 6,930 input tokens, 95th percentile 12,996, largest 18,384 (29% of the per-request limit). None was refused. A test shows a full grading request with a state at the cap fits both limits, so the new budget cannot refuse a real grading call within the cap.
+- **Refusals:**
+  - A subject refused before sending is recorded `refused` at its question version and not selected again.
+  - Its step moves on, which closes the A.3 follow-on: one such subject stopped its step on every cycle.
+  - A refusal is not a call: it is outside the usage ledger, the costs and the failure counts.
+- **Outbound failure text:** failure classification had sent a decision report's raw error text to Jev, unbounded. It is now masked for credential shapes and bounded to 2,000 characters, and the state says when and from what length.
+- Released and smoke-tested with 0 warnings; CI green; the first cycle at 06:07Z was clean. Each call now stores its request size beside the provider's count. The panel will show the tightest bytes per token once the next report is graded; until then that field is empty, not zero.
