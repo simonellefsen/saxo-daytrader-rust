@@ -342,7 +342,12 @@ fn health_payload() -> RuntimeHealth {
 }
 
 async fn overview(State(state): State<Arc<AppState>>) -> Response {
-    json_result(state.overview_payload().await)
+    match state.overview_payload().await.and_then(|overview| {
+        crate::overview_state::public_overview_from_json(overview).map_err(Into::into)
+    }) {
+        Ok(payload) => Json::<crate::models::OverviewPayload>(payload).into_response(),
+        Err(err) => json_result(Err(err)),
+    }
 }
 
 async fn auth_session(headers: HeaderMap) -> Json<SsoSession> {

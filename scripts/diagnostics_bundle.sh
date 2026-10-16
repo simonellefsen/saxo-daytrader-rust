@@ -129,7 +129,7 @@ summary = {
         "created_at": latest_run.get("created_at"),
         "approved_order_count": manager_json.get("approved_order_count"),
         "skipped_order_count": manager_json.get("skipped_order_count"),
-        "queue_status": (latest_run.get("queue_result_json") or {}).get("status"),
+        "queue_status": (overview.get("trading_manager") or {}).get("latest_queue_status"),
         "hermes_status": hermes.get("status"),
         "hermes_mode": hermes.get("mode"),
         "hermes_recommendation": hermes.get("overall_recommendation"),

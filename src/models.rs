@@ -1814,6 +1814,248 @@ pub struct JevModelsPayload {
     pub unavailable: bool,
 }
 
+/// `/api/overview`: the operator summary.
+///
+/// A summary, not a dump. Detailed documents with their own typed endpoints
+/// are left to them: the scheduler's last-cycle document (`/api/scheduler`),
+/// the Markov and Quiver configs and run documents (`/api/markov/signals`,
+/// `/api/quiver/signals`), and the Trading Manager's raw error, technical,
+/// queue-result and exchange documents, which the dashboard boundary already
+/// keeps out. Local file paths and free-form auth error text are omitted, as
+/// on the Saxo auth endpoints. Integrity keeps its check-specific rows and
+/// sub-reports whole, because they are the evidence.
+///
+/// The Decision Report prompt, Hermes, notifications and the Trading Manager
+/// read the builder's JSON, not this, so nothing that reaches a model changes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewPayload {
+    pub app: OverviewAppPayload,
+    pub execution: OverviewExecutionPayload,
+    pub portfolio_summary: OverviewPortfolioSummaryPayload,
+    pub after_tax_summary: OverviewAfterTaxSummaryPayload,
+    pub goal_tracking: OverviewGoalTrackingPayload,
+    pub integrity: OverviewIntegrityDocumentPayload,
+    pub analysis_summary: Option<MarketStatusSummaryPayload>,
+    pub latest_decision: OverviewLatestDecisionPayload,
+    pub scheduler_status: OverviewSchedulerStatusPayload,
+    pub scheduler_health: OverviewSchedulerHealthPayload,
+    pub trading_manager: OverviewTradingManagerPayload,
+    pub markov_method: OverviewSignalMethodPayload,
+    pub quiver_signals: OverviewSignalMethodPayload,
+    pub saxo_auth: OverviewSaxoAuthPayload,
+    pub settings: OverviewSettingsPayload,
+    pub refresh: OverviewRefreshPayload,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewAppPayload {
+    pub project_name: Option<String>,
+    pub environment: Option<String>,
+    pub runtime: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewOrderCapacityPayload {
+    pub max: i64,
+    pub used: i64,
+    pub remaining: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewExecutionCountsPayload {
+    pub queued: i64,
+    pub pending_approval: i64,
+    pub broker_live: i64,
+    pub failed: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewExecutionPayload {
+    pub mode: String,
+    pub configured_mode: String,
+    pub adapter: String,
+    pub configured_saxo_environment: String,
+    pub session_environment: Option<String>,
+    pub require_approval_live: bool,
+    pub max_daily_orders: i64,
+    pub daily_order_capacity: OverviewOrderCapacityPayload,
+    pub counts: OverviewExecutionCountsPayload,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewPortfolioSummaryPayload {
+    pub recorded_at: Option<String>,
+    pub total_market_value_dkk: f64,
+    pub invested_market_value_dkk: f64,
+    pub cash_balance_dkk: f64,
+    pub initial_cash_dkk: f64,
+    pub cash_from_trades_dkk: f64,
+    pub total_cost_basis_dkk: f64,
+    pub total_unrealised_pnl_dkk: f64,
+    pub total_daily_pnl_dkk: f64,
+    pub position_count: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewAfterTaxSummaryPayload {
+    pub status: String,
+    pub basis: String,
+    pub currency: String,
+    pub tax_year: Option<i64>,
+    pub gross_unrealised_pnl_dkk: Option<f64>,
+    pub estimated_tax_dkk: Option<f64>,
+    pub unrealised_pnl_after_tax_dkk: Option<f64>,
+    pub realised_gain_ytd_dkk: Option<f64>,
+}
+
+/// One goal period. Week and month carry a target; the since-reset period
+/// carries a return instead.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewGoalPeriodPayload {
+    pub status: String,
+    pub period_start_utc: Option<String>,
+    pub baseline_recorded_at: Option<String>,
+    pub baseline_value_dkk: Option<f64>,
+    pub pnl_dkk: Option<f64>,
+    pub target_dkk: Option<f64>,
+    pub progress_pct: Option<f64>,
+    pub return_pct: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewGoalTrackingPayload {
+    pub basis: String,
+    pub weekly_target_dkk: Option<f64>,
+    pub monthly_target_dkk: Option<f64>,
+    pub periods: BTreeMap<String, OverviewGoalPeriodPayload>,
+}
+
+/// Integrity, with its evidence kept whole: each check's rows and sub-reports
+/// carry check-specific fields that an allowlist would drop.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewIntegrityDocumentPayload {
+    pub healthy: bool,
+    pub checked_at: String,
+    pub acknowledged_issue_count: i64,
+    pub adopted_orders_without_ledger: i64,
+    pub warnings: Vec<JsonValue>,
+    pub mismatches: Vec<JsonValue>,
+    pub unreconciled_orders: Vec<JsonValue>,
+    pub expiry_pending_orders: Vec<JsonValue>,
+    pub acknowledgements: Vec<JsonValue>,
+    pub checks: JsonValue,
+    pub config_contract: JsonValue,
+    pub pnl_reconciliation: JsonValue,
+    pub realised_sell_outcomes: JsonValue,
+    pub unrealised_pnl_attribution: JsonValue,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewLatestDecisionPayload {
+    pub id: Option<i64>,
+    pub created_at: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSchedulerStatusPayload {
+    pub singleton_key: Option<String>,
+    pub scheduler_pid: Option<i64>,
+    pub started_at: Option<String>,
+    pub last_heartbeat_at: Option<String>,
+    pub last_cycle_started_at: Option<String>,
+    pub last_cycle_completed_at: Option<String>,
+    pub last_cycle_status: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSchedulerHealthPayload {
+    pub status: String,
+    pub message: String,
+}
+
+/// The latest manager run at the dashboard boundary, plus the queue's status
+/// read out of the queue-result document that boundary keeps out.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewTradingManagerPayload {
+    pub status: String,
+    pub latest_run: Option<TradingManagerRunPayload>,
+    pub latest_queue_status: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSignalRunPayload {
+    pub id: Option<String>,
+    pub created_at: Option<String>,
+    pub run_date: Option<String>,
+    pub status: Option<String>,
+    pub asset_count: i64,
+    pub success_count: i64,
+    pub error_count: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSignalMethodPayload {
+    pub status: String,
+    pub latest_run: Option<OverviewSignalRunPayload>,
+}
+
+/// The Saxo session as the auth endpoints describe it: no storage path, no
+/// free-form error text.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSaxoAuthPayload {
+    pub configured_environment: Option<String>,
+    pub environment: Option<String>,
+    pub connected: bool,
+    pub token_valid: bool,
+    pub refresh_token_valid: bool,
+    pub refreshing: bool,
+    pub needs_reauth: bool,
+    pub status: String,
+    pub status_text: String,
+    pub expires_at: Option<String>,
+    pub expires_in_minutes: Option<i64>,
+    pub refresh_expires_at: Option<String>,
+    pub refresh_expires_in_minutes: Option<i64>,
+    pub last_refreshed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewSettingsPayload {
+    pub cash_buffer: CashBufferSettings,
+    pub ai: DashboardAiSettingsPayload,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverviewRefreshPayload {
+    pub price_poll_interval_minutes: i64,
+    pub scheduler_poll_interval_minutes: i64,
+    pub decision_cadence: String,
+    pub decision_cadence_label: String,
+    pub decision_pulses: Vec<JsonValue>,
+    pub next_decision_pulse_at: Option<String>,
+    pub next_decision_pulse_label: Option<String>,
+}
+
 /// How many editorial judgements could serve as decision features, and why
 /// the rest cannot.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -4043,7 +4285,7 @@ pub struct CashBufferRequest {
 /// never persists or activates that request. `config_default_min_cash_buffer_pct`
 /// stays pinned to the deployed configuration so callers can distinguish the
 /// preview from the enforced baseline.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CashBufferSettings {
     pub min_cash_buffer_pct: f64,
     pub max_deployment_pct: f64,
