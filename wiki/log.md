@@ -3175,3 +3175,19 @@ broker mutation was added.
 - **Nothing that reaches a model changed.** The Decision Report prompt, Hermes, notifications and the Trading Manager read the builder's JSON, which is untouched; only the API boundary decodes it.
 - Decoded against a captured production overview before committing. Released; the smoke test, which reads this endpoint, passed with 0 warnings; the dashboard renders; CI green.
 - With this, every API endpoint serves a typed payload. The remaining typed-core work is internal: splitting `state.rs`, which runs to about 30,000 lines.
+
+## [2026-10-16] Refactoring | Three verbatim slices out of state.rs
+
+- `9619b75` moved the Jev read models and the entry-evaluation methods into `jev_state.rs` and `entry_evaluation_state.rs`. The 404 lines are byte-identical to the block removed.
+- `6e4c8f4` moved all 36 Hermes `AppState` methods, the 21 helpers only they use, and 3 constants into `hermes_state.rs`, beside the Hermes projections already there.
+  - That includes `strip_raw_broker_documents`, the U17 guard.
+  - The move was checked token for token. The only differences are added `pub(crate)` and the signature wraps rustfmt made for it.
+  - Ten names the moved code calls were already named in `hermes_state.rs`; each was checked to be the same import, so none could silently rebind.
+- Shared helpers stay in `state.rs` as `pub(crate)`. The test count is unchanged at 1,219.
+- `state.rs` went from 29,993 lines to 27,366.
+- Released; the smoke test passed with 0 warnings, including Hermes's MCP tool discovery and both gateway health checks.
+- **What is left, and why it is harder:**
+  - `dashboard_view`, one 1,077-line function;
+  - integrity, 602 lines plus 12 private helpers that the tests call directly;
+  - missed-trade shadows, which need 18 private helpers;
+  - protective stops: the cleanest of these mechanically, but a broker order path, so it should be its own reviewed step.
