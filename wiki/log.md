@@ -3217,3 +3217,21 @@ broker mutation was added.
   - Performance differed by one chart point, as the history window moved on.
   - Market differed in the order of an exchange list and a skipped-symbol list, which come from a hash set and so vary per process. A small cosmetic follow-up: sort them for a stable display.
 - `state.rs` is 21,445 lines, from 29,993 this morning. The area-by-area split named in the roadmap is done. `dashboard_view` is still one 1,077-line function; splitting it into per-tab builders is a real refactor, not a move.
+
+## [2026-10-16] Refactoring | Report, execution and settings builders out of state.rs
+
+- `52c2860` moved the 19 decision-report builders into `decision_state.rs`, beside the report projections, with 35 helpers, 6 constants and a struct.
+  - One name the moved code calls, `json_text`, now binds to `decision_state.rs`'s own copy. The two copies are identical.
+- `4e2d53d` moved the 20 execution builders into `execution_state.rs`, with 7 helpers.
+  - Helpers other modules import stayed in `state.rs`. That includes `nested_json_text`, used by `saxo_order.rs`, and `execution_order_duration_type`, which a kept helper calls.
+- `1c9c14c` moved the 17 settings builders to a new `settings_state.rs`. The API-key override still leaves only masked; its two tests pass unchanged.
+- **Every item checked against the removed code:** 60, 28 and 20, plus the struct. Existing code in the two destination modules was untouched apart from imports. 1,219 tests unchanged. `state.rs` is now 18,155 lines.
+- **Tool bugs found and fixed along the way, all caught by the compiler before commit:**
+  - an import parser that stopped at a `#[cfg(test)]` line;
+  - functions passed by name rather than called went undetected;
+  - `pub(crate)` was offered for trait methods;
+  - a local variable named like a private function made that function public; reverted.
+- **Live comparison** of 6 tabs and 10 endpoints before and after the release.
+  - All 10 endpoints were identical.
+  - The tab differences were data: the hash-ordered price-monitor list, benchmark rows that moved from "prior close" to "aligned close", and a new Hermes proposal. The weekly reflection at 20:15Z, after the "before" capture, proposed a change to `strategy.swing.daily_indicators.min_confluences`, now `pending_review`.
+- **The release's smoke run stopped at "checking Hermes gateway health" with no reason printed**, while the Hermes pods were seconds old; a re-run passed fully. The smoke script now runs with `set -E` and an `ERR` trap that names the line and command it stops on. Guarded failures do not trigger it, and it was verified against production with 0 warnings.

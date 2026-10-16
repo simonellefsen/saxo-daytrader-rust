@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KUBE_CONTEXT="${KUBE_CONTEXT:-docker-desktop}"
@@ -34,6 +34,12 @@ cleanup() {
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
+# Name the command that stopped the script. Under `set -e` an unguarded
+# failure otherwise exits silently: on 2026-10-16 a release's smoke ended at
+# "checking Hermes gateway health" with no reason given, and a re-run passed.
+# `-E` carries the trap into functions; guarded commands (`if`, `||`, `&&`)
+# do not trigger it.
+trap 'status=$?; printf "[smoke][fail] stopped at line %s (exit %s): %s\n" "${LINENO}" "${status}" "${BASH_COMMAND}" >&2' ERR
 
 info() {
   printf '[smoke] %s\n' "$*"
