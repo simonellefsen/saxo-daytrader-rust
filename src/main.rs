@@ -53,6 +53,7 @@ mod markov_state;
 mod mcp;
 mod models;
 mod notifications;
+mod operator_actions;
 mod overview_state;
 mod performance_benchmarks;
 mod performance_state;

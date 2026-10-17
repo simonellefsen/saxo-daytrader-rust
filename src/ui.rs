@@ -2015,6 +2015,55 @@ fn protective_stop_coverage_tone(status: &str) -> &'static str {
     }
 }
 
+/// Who changed what: every state-changing request, newest first.
+#[component]
+fn OperatorActionsPanel(
+    actions: crate::models::OperatorActionsPayload,
+    prefs: LocalizationPrefs,
+) -> Element {
+    rsx! {
+        section { class: "section",
+            h2 { "Operator Actions" }
+            p { class: "muted", "Every request that changed something: settings and overrides, experiment transitions, manual reports and queue runs, protective-stop actions. Recorded by route, never by request body." }
+            if actions.unavailable {
+                div { class: "event", "The operator-action trail could not be read, so recent actions are unknown, not absent." }
+            } else if actions.items.is_empty() {
+                div { class: "event muted", "No operator action has been recorded yet." }
+            } else {
+                div { class: "table-wrap",
+                    table { class: "data-table compact-table",
+                        thead { tr {
+                            th { "When" }
+                            th { "Who" }
+                            th { "Action" }
+                            th { "Outcome" }
+                        }}
+                        tbody {
+                            for action in actions.items.iter() {
+                                tr {
+                                    td { "{format_timestamp(&action.created_at, &prefs)}" }
+                                    td {
+                                        match action.actor_kind.as_str() {
+                                            "sso" => rsx! { "{action.actor}" },
+                                            "api_key" => rsx! { span { "{action.actor}" } span { class: "muted", " (API key)" } },
+                                            _ => rsx! { span { class: "warn-text", "unauthenticated" } },
+                                        }
+                                    }
+                                    td { class: "mono", "{action.method} {action.route}" }
+                                    td {
+                                        span { class: match action.outcome.as_str() { "ok" => "good-text", "refused" => "warn-text", _ => "bad-text" }, "{action.outcome}" }
+                                        span { class: "muted", " {action.status_code}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn OverviewView(
     data: DashboardView,
@@ -2082,6 +2131,7 @@ fn OverviewView(
                     CashDeploymentPanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
                     IntegrityPanel { integrity: data.integrity.clone(), prefs: prefs.clone() }
                     InstrumentQuarantinePanel { trading_manager: data.trading_manager.clone(), prefs: prefs.clone() }
+                    OperatorActionsPanel { actions: data.operator_actions.clone(), prefs: prefs.clone() }
                     section { class: "section",
                         h2 { "Recent Decisions" }
                         div { class: "stack", for row in data.reports.iter() { DecisionCard { row: row.clone(), prefs: prefs.clone() } } }
@@ -15039,6 +15089,61 @@ mod tests {
             ..empty
         };
         let html = dioxus_ssr::render_element(rsx! { JevModelsCard { models: unreadable, prefs } });
+        assert!(html.contains("unknown, not absent"), "{html}");
+    }
+
+    #[test]
+    fn the_operator_actions_panel_names_who_did_what_and_flags_the_anonymous() {
+        let prefs = default_prefs();
+        let action = |actor: &str, kind: &str, route: &str, status: i64, outcome: &str| {
+            crate::models::OperatorActionPayload {
+                created_at: "2026-10-17T08:00:00Z".into(),
+                actor: actor.into(),
+                actor_kind: kind.into(),
+                method: "POST".into(),
+                route: route.into(),
+                path: route.into(),
+                status_code: status,
+                outcome: outcome.into(),
+                duration_ms: 12,
+            }
+        };
+        let actions = crate::models::OperatorActionsPayload {
+            items: vec![
+                action("simon@example.test", "sso", "/api/settings/ai", 303, "ok"),
+                action(
+                    "hermes",
+                    "api_key",
+                    "/api/hermes/experiments",
+                    422,
+                    "refused",
+                ),
+                action(
+                    "",
+                    "unauthenticated",
+                    "/api/actions/queue-process",
+                    500,
+                    "error",
+                ),
+            ],
+            unavailable: false,
+        };
+        let html = dioxus_ssr::render_element(
+            rsx! { OperatorActionsPanel { actions, prefs: prefs.clone() } },
+        );
+        assert!(html.contains("simon@example.test"));
+        assert!(html.contains("POST /api/settings/ai"));
+        assert!(html.contains("(API key)"));
+        assert!(html.contains("unauthenticated"));
+        assert!(html.contains("refused"));
+
+        let unreadable = crate::models::OperatorActionsPayload {
+            items: Vec::new(),
+            unavailable: true,
+        };
+        let html = dioxus_ssr::render_element(
+            rsx! { OperatorActionsPanel { actions: unreadable, prefs } },
+        );
         assert!(html.contains("unknown, not absent"), "{html}");
     }
 

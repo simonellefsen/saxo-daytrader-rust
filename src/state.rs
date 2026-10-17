@@ -6889,6 +6889,12 @@ impl AppState {
                 .await
                 .context("creating performance benchmark runtime tables")?;
         }
+        for sql in crate::operator_actions::create_schema_sql() {
+            sqlx::query(sql)
+                .execute(&self.pool)
+                .await
+                .context("creating the operator-action trail")?;
+        }
         for sql in crate::jev_store::create_schema_sql() {
             sqlx::query(sql)
                 .execute(&self.pool)

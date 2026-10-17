@@ -77,13 +77,72 @@ pub fn router(state: Arc<AppState>) -> Router {
     } else {
         routes.clone().nest(&base_path, routes)
     };
-    routes
+    with_operator_trail(routes, state.clone())
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .with_state(state)
+}
+
+/// Applies the operator-action trail to every route. After routing, so the
+/// matched route template is known; inside the trace layer, so the record sees
+/// the response the client got.
+fn with_operator_trail(
+    routes: Router<Arc<AppState>>,
+    state: Arc<AppState>,
+) -> Router<Arc<AppState>> {
+    routes.route_layer(axum::middleware::from_fn_with_state(
+        state,
+        record_operator_action,
+    ))
+}
+
+/// Records every state-changing request in the operator-action trail, after
+/// the handler has answered. A failed record is logged and never changes the
+/// response: the action already happened.
+async fn record_operator_action(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if !crate::operator_actions::is_recorded(request.method()) {
+        return next.run(request).await;
+    }
+    let method = request.method().to_string();
+    let path = request.uri().path().to_string();
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
+    let (actor_kind, actor) = crate::operator_actions::actor_from_headers(request.headers());
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let action = crate::operator_actions::OperatorAction {
+        created_at: &created_at,
+        actor_kind,
+        actor: &actor,
+        method: &method,
+        route: &route,
+        path: &path,
+        status_code: response.status().as_u16(),
+        duration_ms: started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+    };
+    if let Err(err) = crate::operator_actions::record(&state.pool, &action).await {
+        warn!(%route, "operator action not recorded: {err:#}");
+    }
+    response
+}
+
+/// The operator-action trail, newest first.
+async fn operator_actions(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Json<crate::models::OperatorActionsPayload> {
+    Json(crate::operator_actions::recent(&state.pool, params.limit.unwrap_or(100)).await)
 }
 
 fn app_routes() -> Router<Arc<AppState>> {
@@ -156,6 +215,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         )
         .route("/api/ai/llm-usage", get(llm_usage_ledger))
         .route("/api/ai/jev", get(jev_observations))
+        .route("/api/operator-actions", get(operator_actions))
         .route("/api/evaluation/entries", get(entry_evaluation))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
@@ -2950,6 +3010,166 @@ fn redirect_to_app(state: &AppState, path: &str) -> Redirect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serves `routes` behind the real operator-action trail on loopback, over
+    /// an in-memory database with the trail's table.
+    async fn trail_server(routes: Router<Arc<AppState>>) -> (String, Arc<AppState>) {
+        sqlx::any::install_default_drivers();
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        for sql in crate::operator_actions::create_schema_sql() {
+            sqlx::query(sql).execute(&pool).await.expect("trail schema");
+        }
+        let state = Arc::new(AppState {
+            config_path: std::path::PathBuf::from("test.yaml"),
+            config: serde_yaml::from_str("app:\n  project_name: test\n").unwrap(),
+            db_url: "sqlite::memory:".into(),
+            pool,
+        });
+        let app = with_operator_trail(routes, state.clone()).with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (base, state)
+    }
+
+    /// Every write is recorded with who made it, the route template and the
+    /// outcome; reads are not; and nothing from the query string, the body or
+    /// a presented key reaches the record.
+    #[tokio::test]
+    async fn the_operator_trail_records_writes_by_route_and_never_their_content() {
+        let routes = Router::new()
+            .route("/api/things/{id}/act", post(|| async { "done" }))
+            .route(
+                "/api/locked",
+                post(|| async { (StatusCode::UNAUTHORIZED, "no") }),
+            )
+            .route("/api/read", get(|| async { "read" }));
+        let (base, state) = trail_server(routes).await;
+        let client = reqwest::Client::new();
+
+        client.get(format!("{base}/api/read")).send().await.unwrap();
+        let acted = client
+            .post(format!("{base}/api/things/42/act?token=query-secret-123"))
+            .header("x-daytrader-user-email", "simon@example.test")
+            .form(&[("api_key", "body-secret-456")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(acted.status(), 200);
+        client
+            .post(format!("{base}/api/locked"))
+            .header("x-hermes-api-key", "key-secret-789")
+            .send()
+            .await
+            .unwrap();
+        client
+            .post(format!("{base}/api/locked"))
+            .send()
+            .await
+            .unwrap();
+
+        let trail = crate::operator_actions::recent(&state.pool, 10).await;
+        assert!(!trail.unavailable);
+        assert_eq!(
+            trail.items.len(),
+            3,
+            "the read was not recorded: {:?}",
+            trail.items
+        );
+        let by_path = |path: &str, kind: &str| {
+            trail
+                .items
+                .iter()
+                .find(|item| item.path == path && item.actor_kind == kind)
+                .unwrap_or_else(|| panic!("no {kind} record for {path}: {:?}", trail.items))
+        };
+        let acted = by_path("/api/things/42/act", "sso");
+        assert_eq!(acted.actor, "simon@example.test");
+        assert_eq!(
+            acted.route, "/api/things/{id}/act",
+            "grouped by the route template"
+        );
+        assert_eq!(acted.method, "POST");
+        assert_eq!((acted.status_code, acted.outcome.as_str()), (200, "ok"));
+        let hermes = by_path("/api/locked", "api_key");
+        assert_eq!(hermes.actor, "hermes");
+        assert_eq!(
+            (hermes.status_code, hermes.outcome.as_str()),
+            (401, "refused")
+        );
+        let anonymous = by_path("/api/locked", "unauthenticated");
+        assert_eq!(anonymous.actor, "");
+
+        let stored = serde_json::to_string(&trail).unwrap();
+        for secret in [
+            "query-secret-123",
+            "body-secret-456",
+            "key-secret-789",
+            "token=",
+        ] {
+            assert!(
+                !stored.contains(secret),
+                "{secret} reached the trail: {stored}"
+            );
+        }
+    }
+
+    /// The production router carries the trail on every route it serves,
+    /// including the copy nested under the public base path. Driven through
+    /// `router` itself, against a write that changes nothing.
+    #[tokio::test]
+    async fn the_production_router_records_writes_under_its_base_path() {
+        sqlx::any::install_default_drivers();
+        let pool = sqlx::any::AnyPoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        for sql in crate::operator_actions::create_schema_sql() {
+            sqlx::query(sql).execute(&pool).await.expect("trail schema");
+        }
+        let state = Arc::new(AppState {
+            config_path: std::path::PathBuf::from("test.yaml"),
+            config: serde_yaml::from_str("app:\n  public_base_path: /saxo-daytrader\n").unwrap(),
+            db_url: "sqlite::memory:".into(),
+            pool,
+        });
+        let app = router(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let client = reqwest::Client::new();
+        for path in [
+            "/api/actions/sync-broker",
+            "/saxo-daytrader/api/actions/sync-broker",
+        ] {
+            client.post(format!("{base}{path}")).send().await.unwrap();
+        }
+
+        let trail = crate::operator_actions::recent(&state.pool, 10).await;
+        let mut routes: Vec<&str> = trail.items.iter().map(|item| item.route.as_str()).collect();
+        routes.sort();
+        assert_eq!(
+            routes,
+            [
+                "/api/actions/sync-broker",
+                "/saxo-daytrader/api/actions/sync-broker"
+            ],
+            "both the plain and the nested route are recorded"
+        );
+    }
 
     #[test]
     fn health_payload_identifies_the_runtime_and_build() {

@@ -1951,6 +1951,11 @@ impl AppState {
         } else {
             crate::models::JevModelsPayload::default()
         };
+        let operator_actions = if dashboard_loads_tab_exclusive_data(&active_view, "overview") {
+            crate::operator_actions::recent(&self.pool, 20).await
+        } else {
+            crate::models::OperatorActionsPayload::default()
+        };
         let jev_operator = if dashboard_loads_tab_exclusive_data(&active_view, "prompts") {
             self.jev_operator().await
         } else {
@@ -2020,6 +2025,7 @@ impl AppState {
             llm_usage,
             jev_models,
             jev_operator,
+            operator_actions,
             localization,
             active_view,
             performance_range,

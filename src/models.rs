@@ -35,6 +35,7 @@ pub struct DashboardView {
     pub llm_usage: LlmUsageLedgerPayload,
     pub jev_models: JevModelsPayload,
     pub jev_operator: JevOperatorPayload,
+    pub operator_actions: OperatorActionsPayload,
     pub localization: LocalizationPrefs,
     pub active_view: String,
     pub performance_range: String,
@@ -2054,6 +2055,35 @@ pub struct OverviewRefreshPayload {
     pub decision_pulses: Vec<JsonValue>,
     pub next_decision_pulse_at: Option<String>,
     pub next_decision_pulse_label: Option<String>,
+}
+
+/// One recorded state-changing request.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OperatorActionPayload {
+    pub created_at: String,
+    /// The SSO email, `hermes` for a request presenting the Hermes key, or
+    /// empty for an unauthenticated request.
+    pub actor: String,
+    /// `sso`, `api_key` or `unauthenticated`.
+    pub actor_kind: String,
+    pub method: String,
+    /// The route template, so actions on different ids group together.
+    pub route: String,
+    /// The requested path, without its query string.
+    pub path: String,
+    pub status_code: i64,
+    /// `ok`, `refused` or `error`.
+    pub outcome: String,
+    pub duration_ms: i64,
+}
+
+/// The operator-action trail, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OperatorActionsPayload {
+    pub items: Vec<OperatorActionPayload>,
+    /// The table could not be read; `items` is then empty, not known empty.
+    pub unavailable: bool,
 }
 
 /// How many editorial judgements could serve as decision features, and why
