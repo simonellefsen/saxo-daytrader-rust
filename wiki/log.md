@@ -3255,3 +3255,15 @@ broker mutation was added.
   - replacing `serde_yaml`.
 - `scripts/security_scan.sh` now uses a `cargo-audit` in the repo-local cargo home before falling back to the image.
 - The roadmap's "add alerting" item turned out to be already done; it is marked so.
+
+## [2026-10-17] Security | An audit trail of operator actions
+
+- **The roadmap item, checked first.** Settings writes recorded nothing about who changed what; experiment transitions stored an actor in their own record, and nothing else did. The roadmap's other "add alerting" item had turned out to be done already. This one was genuinely open.
+- `13f57ff` adds one router middleware that records every state-changing request (POST, PUT, PATCH, DELETE) in an append-only `operator_actions` table, after the handler has answered.
+  - **Who:** the ngrok SSO email; `hermes` when a Hermes key header is presented, with the key never read; otherwise unauthenticated.
+  - **What:** the route template, so actions on different ids group together, and the path; the status, ok/refused/error, and the duration.
+  - **Coverage:** recording at the router covers all ~27 write endpoints, and any added later. That includes settings and overrides, experiment transitions, manual reports and queue runs, protective-stop placements, the portfolio reset, and the Saxo session actions.
+- **Never content.** Only the path is stored, never the query string or the body, so a submitted API key or an OAuth code cannot reach the trail. A test sends secrets in the query, the body and a key header and checks none is stored. A failed record is logged and never changes the response.
+- Tested through the production `router`, including the copy nested under the public base path. `/api/operator-actions` serves the trail, typed; the Overview tab shows the latest 20 and flags unauthenticated writes. 1,225 tests.
+- Live after release: the table exists and reads back empty, not unavailable, and the panel renders. No write was sent to production just to see one recorded; the first real operator action will be the first row.
+- **Not covered:** Hermes writes made through the MCP server, such as proposals and advice, go through a separate server, not this router.

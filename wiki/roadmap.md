@@ -703,7 +703,7 @@ Security posture should assume model prompts, broker payloads, and external docs
 - Add automated redaction tests for logs, report debug views, Hermes context, and MCP tool responses.
 - Make Hermes capabilities explicit and deny broker mutation tools by default.
 - Add role separation in UI for view-only operations, report generation, order processing, settings changes, and experiment promotion.
-- Add audit records for settings changes, experiment transitions, manual report triggers, and manual queue processing.
+- ~~Add audit records for settings changes, experiment transitions, manual report triggers, and manual queue processing.~~ Landed 2026-10-17 (`13f57ff`), wider than asked: one router middleware records every POST/PUT/PATCH/DELETE in `operator_actions`. Each record holds the caller (SSO email; `hermes` for a presented key, never its value; or unauthenticated), the route template and path, the status, the outcome and the duration. It never stores the query string or the body. `/api/operator-actions` and an Overview panel show it. Not covered: Hermes writes through the MCP server, which does not pass through this router.
 
 ## Knowledge And Documentation
 
