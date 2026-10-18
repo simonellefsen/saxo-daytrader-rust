@@ -517,7 +517,8 @@ async fn saxo_get_json(
         .header(header::ACCEPT, "application/json")
         .query(query)
         .send()
-        .await?;
+        .await
+        .map_err(crate::debug_redaction::request_error_without_url)?;
     let status = response.status();
     crate::saxo_rate_limit::observe(path, response.headers());
     let body = response.text().await.unwrap_or_default();

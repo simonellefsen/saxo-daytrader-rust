@@ -3360,3 +3360,15 @@ broker mutation was added.
   - A fill outside its stored bar is flagged, not clamped.
 - **Data from:** the next order placed (Monday 2026-10-19) for quotes; the first indicator run that night for bars. Earlier fills show `not_recorded`.
 - **Tests.** Seven in `fill_quality` (quote parsing, error categories, signs on both sides, range placement, the outside-the-bar flag, summaries, the builder's joins) and one in `saxo_order` (an unreadable quote is recorded and never fatal).
+
+## [2026-10-18] Security | Request errors no longer print secret-bearing URLs
+
+- **Found** while adding the submission quote. reqwest renders a transport error (connection reset, DNS failure, timeout) as "error sending request for url (...)", query string included. Eight requests carry a secret in the URL:
+  - Saxo GET, POST and DELETE helpers with `AccountKey` in the query, or `ClientKey` in order paths: `markov_method`, `saxo_order` (four), `saxo_portfolio`, `state`;
+  - the Slack webhook, whose URL is the credential: `notifications`.
+- **Where it would land.** Their errors are formatted with `{err:#}` into `warn!` logs and stored error text: `daily_indicator_signals.error_text`, price-monitor status errors, Slack delivery records, and run summaries the dashboard shows.
+- **Checked, counts only.** No occurrence in 17 API payloads and dashboard pages, or in the current pod logs, which date from today's restart. Older stored error columns were not read; that needs a database query and Simon's go-ahead.
+- **Fix.** Every one of those sends maps its error through `debug_redaction::request_error_without_url` (`reqwest::Error::without_url`). Body reads were already infallible (`unwrap_or_default`). Requests whose secrets travel in headers (Quiver, Hermes) or that have none (ECB, public feeds, the OAuth token endpoint) are unchanged.
+- **Tests.**
+  - One sends to a closed local port with a fake key in the query. It asserts the raw error prints the key (the leak) and the stripped error does not, in display, alternate and debug form.
+  - A guard reads the five source files and fails if any `.send()` there does not strip its URL.

@@ -98,6 +98,18 @@ fn looks_like_secret_token(value: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
 }
 
+/// A request error without the URL it was sent to.
+///
+/// reqwest prints the whole URL in a transport error ("error sending request
+/// for url (...)"), query string included. Saxo URLs carry the account key in
+/// the query and the client key in some paths, and a Slack webhook URL is the
+/// credential itself. An unstripped error reaches the logs, stored error
+/// columns and the run summaries the dashboard shows, so every request whose
+/// URL holds a secret maps its send error through this.
+pub(crate) fn request_error_without_url(err: reqwest::Error) -> reqwest::Error {
+    err.without_url()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -137,5 +149,70 @@ mod tests {
         let rendered = compact_json_redacted(Some(&payload), 8_000);
         assert!(rendered.contains("\"x-api-key\": \"[redacted]\""));
         assert!(rendered.contains("\"access-token\": \"[redacted]\""));
+    }
+
+    /// The leak is real, and the helper removes it from every rendering an
+    /// error reaches: the alternate chain logs and stored columns use, and the
+    /// debug form.
+    #[tokio::test]
+    async fn a_request_error_loses_the_url_that_carries_the_keys() {
+        let url = "http://127.0.0.1:9/trade/v1/infoprices?AccountKey=SECRET-ACCOUNT-KEY";
+        let client = reqwest::Client::new();
+        let raw = client
+            .get(url)
+            .send()
+            .await
+            .expect_err("nothing listens on port 9");
+        assert!(
+            format!("{raw:#}").contains("SECRET-ACCOUNT-KEY"),
+            "an unstripped reqwest error prints the URL; this is the leak"
+        );
+
+        let stripped = request_error_without_url(
+            client
+                .get(url)
+                .send()
+                .await
+                .expect_err("nothing listens on port 9"),
+        );
+        let wrapped = anyhow::Error::new(stripped).context("sending Saxo GET");
+        for rendered in [
+            format!("{wrapped:#}"),
+            format!("{wrapped:?}"),
+            format!("{wrapped}"),
+        ] {
+            assert!(!rendered.contains("SECRET-ACCOUNT-KEY"), "{rendered}");
+            assert!(!rendered.contains("AccountKey="), "{rendered}");
+        }
+    }
+
+    /// Every request in these files has a secret in its URL, so every send
+    /// must strip the URL from its error. A new call that forgets fails here.
+    #[test]
+    fn every_request_with_a_secret_in_its_url_strips_it_from_errors() {
+        let files = [
+            ("markov_method.rs", include_str!("markov_method.rs")),
+            ("saxo_order.rs", include_str!("saxo_order.rs")),
+            ("saxo_portfolio.rs", include_str!("saxo_portfolio.rs")),
+            ("state.rs", include_str!("state.rs")),
+            ("notifications.rs", include_str!("notifications.rs")),
+        ];
+        let mut sends = 0;
+        for (file, source) in files {
+            let lines: Vec<&str> = source.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                if !line.contains(".send()") || line.trim_start().starts_with("//") {
+                    continue;
+                }
+                sends += 1;
+                let window = lines[index..(index + 3).min(lines.len())].join(" ");
+                assert!(
+                    window.contains("request_error_without_url"),
+                    "{file}:{} sends a request without stripping the URL from its error",
+                    index + 1
+                );
+            }
+        }
+        assert_eq!(sends, 8, "the guard must still see every known send");
     }
 }

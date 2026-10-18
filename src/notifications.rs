@@ -1601,6 +1601,7 @@ async fn send_alert_to_slack(
         .json(&json!({"text": format!("*{}*\n{}", alert.subject, alert.message_text)}))
         .send()
         .await
+        .map_err(crate::debug_redaction::request_error_without_url)
         .context("sending Slack notification")?;
     let status = response.status();
     if !status.is_success() {

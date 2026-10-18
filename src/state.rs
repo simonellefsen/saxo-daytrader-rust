@@ -7686,7 +7686,8 @@ async fn saxo_reference_get_json(
         .header(header::ACCEPT, "application/json")
         .query(query)
         .send()
-        .await?;
+        .await
+        .map_err(crate::debug_redaction::request_error_without_url)?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {

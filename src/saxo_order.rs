@@ -2241,7 +2241,8 @@ async fn saxo_get_json(
         .header(header::ACCEPT, "application/json")
         .query(query)
         .send()
-        .await?;
+        .await
+        .map_err(crate::debug_redaction::request_error_without_url)?;
     crate::saxo_rate_limit::observe(path, response.headers());
     saxo_response_json(response, "Saxo GET").await
 }
@@ -2264,7 +2265,8 @@ async fn saxo_get_json_optional(
         .header(header::ACCEPT, "application/json")
         .query(query)
         .send()
-        .await?;
+        .await
+        .map_err(crate::debug_redaction::request_error_without_url)?;
     let status = response.status();
     crate::saxo_rate_limit::observe(path, response.headers());
     let body = response.text().await.unwrap_or_default();
@@ -2316,7 +2318,10 @@ async fn saxo_post_json(
             crate::saxo_rate_limit::configured_rate(&state.config),
         )
         .await;
-        let response = request.send().await?;
+        let response = request
+            .send()
+            .await
+            .map_err(crate::debug_redaction::request_error_without_url)?;
         crate::saxo_rate_limit::observe(path, response.headers());
         if response.status() != StatusCode::TOO_MANY_REQUESTS {
             return saxo_response_json(response, action).await;
@@ -2349,7 +2354,8 @@ async fn saxo_delete_json(
         .header(header::ACCEPT, "application/json")
         .query(query)
         .send()
-        .await?;
+        .await
+        .map_err(crate::debug_redaction::request_error_without_url)?;
     crate::saxo_rate_limit::observe(path, response.headers());
     saxo_response_json(response, action).await
 }
