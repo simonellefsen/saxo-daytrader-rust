@@ -3311,3 +3311,17 @@ broker mutation was added.
 - **Deployed in dry-run.** 09:35 and 10:05 runs: kept 4 base backups including 2026-10-10 13:30; would remove 36,441 WAL objects (7.84 GB); removed none. Switching to `delete` is Simon's call; see the roadmap's Operations section.
 - **Release note.** The first post-deploy guard for `42d500b` failed on a stale Git SHA because my own port-forward held local port 18080, the port the smoke test forwards to; the smoke test read the old pod through it. A re-run passed with 0 warnings. Use another port for ad hoc reads during a release.
 - Runbook: [backup-restore](runbooks/backup-restore.md#retention) gained a Retention section.
+
+## [2026-10-18] Evaluation | Exit rules replayed over every entry
+
+- **Why.** The edge review found 96 of 100 sales were protective stops and that early stop-outs sold below where the lot closed later. The entry evaluation deliberately simulates no exit policy, so no exit policy could be compared on the same entries.
+- **What.** `/api/evaluation/exits` (`src/exit_evaluation.rs`) replays six frozen rules over each BUY fill's first 20 sessions: fixed 6% and 10% stops, a 3 × ATR14 trail, a 2 × ATR14 stop-and-target bracket, a session-10 time exit, and holding to session 20 as the baseline. Each rule is compared with holding, paired by entry.
+- **Discipline.** The method copies the entry evaluation's:
+  - the rule set is versioned (`exit-v1-2026-10-18`) and was registered in [exit rules v1](experiments/2026-10-18-exit-rules-v1.md) before the first read;
+  - an entry counts only once its whole window has elapsed;
+  - ATR is taken from before the fill day;
+  - costs are identical across rules;
+  - fills after the freeze form a separate out-of-sample group.
+- **Limit.** Close-basis only: no intraday highs or lows are stored.
+- **Tests.** Nine pure tests (stop order, trail ratchet, bracket, window gating, ATR skips, pairing, sample split), one of which holds `hold_20` equal to the entry evaluation's 20-session return. One in-memory SQLite test runs the builder end to end.
+- The fill query is now shared between the two evaluations (`buy_fills`). The exit builder infers each exchange's holiday calendar once; the entry evaluation still does it once per fill.

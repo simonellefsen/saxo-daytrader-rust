@@ -77,6 +77,14 @@ Live record since the 2026-07-16 reset. **Restated 2026-09-03** from the realise
   - The remaining ~9k is not attributed by these figures. FX on the cash balance and cash-ledger timing are candidates; they are unverified.
   - No deposit or withdrawal appears in the latest 250 ledger rows.
 
+**Edge review, 2026-10-18** ([page](https://claude.ai/artifact/Kj1qDkBhZvFFexkjQM5Wv7), private to Simon). The answer to this item is "both, in different ways":
+
+- **Entries:** no edge the data can detect. From 5 to 20 sessions the gross means are −0.35% to +0.19%, every interval spanning zero. The first session costs −0.69% gross (interval −1.32% to −0.06%) in every market and both fill windows.
+- **Exits:** 96 of 100 sales were protective stops. Lots stopped within 5 or 10 sessions sold 1.5–1.7 points below their close at that horizon (intervals exclude zero).
+- **Filters:** missed-trade shadows −3.0% (n=38) and Hermes counterfactuals −3.8% (n=30). The gates remove a pool that drifts down.
+
+The first follow-up is registered as [exit rules v1](experiments/2026-10-18-exit-rules-v1.md): six frozen exit rules replayed over every entry at `/api/evaluation/exits`, in-sample now and out-of-sample from 2026-10-18 onward.
+
 **The payoff ratio is the number that matters, and it now has a mechanical explanation.** Every one of those 32 exits was a risk-reduction exit — 28 protective stops (−14,225 DKK) and 4 flattens (−7,073) — and **not one was a profit-taking exit**. Nothing in the runtime closes a position because it reached a target, so a win can only happen when a stop that trailed up gets hit. The nine wins are exactly that, which is why the average win is 481 DKK against an average loss of 1,114.
 
 This reframes the question. The earlier reading was "15% win rate, no evidence of an edge, wait for n to grow". The current reading is that **the exit side has no mechanism for realising a gain**, and `strategy.ladder.take_profit_rung_multiple` and `strategy.ladder.max_take_profit_atr_multiple` sit in `config.yaml` marked by the contract audit as "Take-profit targets are not implemented". Waiting for n to grow tests entry quality against an exit policy that structurally caps wins.

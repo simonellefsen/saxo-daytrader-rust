@@ -217,6 +217,7 @@ fn app_routes() -> Router<Arc<AppState>> {
         .route("/api/ai/jev", get(jev_observations))
         .route("/api/operator-actions", get(operator_actions))
         .route("/api/evaluation/entries", get(entry_evaluation))
+        .route("/api/evaluation/exits", get(exit_evaluation))
         .route("/api/decision/latest", get(decision_latest))
         .route("/api/decision/reports", get(decision_reports))
         .route(
@@ -1993,6 +1994,26 @@ async fn jev_observations(
 /// recited. A degraded read is marked `unavailable` with its reason rather
 /// than served as an empty summary, because an empty evaluation and a failed
 /// one are different answers.
+async fn exit_evaluation(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LimitParams>,
+) -> Json<crate::models::ExitEvaluationPayload> {
+    match state
+        .exit_evaluation_payload(params.limit.unwrap_or(500))
+        .await
+    {
+        Ok(payload) => Json(payload),
+        Err(err) => {
+            warn!("exit evaluation endpoint degraded: {err:#}");
+            Json(crate::models::ExitEvaluationPayload {
+                status: Some("unavailable".to_string()),
+                unavailable_reason: Some(unavailable_reason(&err)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
 async fn entry_evaluation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<LimitParams>,

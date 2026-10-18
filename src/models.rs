@@ -2240,6 +2240,88 @@ pub struct EntryEvaluationPayload {
     pub unavailable_reason: Option<String>,
 }
 
+/// One exit rule replayed over one entry's window.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExitRuleOutcomePayload {
+    pub rule: String,
+    /// Trading session of the exit, 1 being the first close after the fill.
+    pub exit_session: i64,
+    /// `stop`, `trail`, `target`, `time` or `window_end`.
+    pub exit_reason: String,
+    pub exit_date: String,
+    pub gross_return: f64,
+    pub net_return: f64,
+}
+
+/// One BUY fill with every exit rule replayed over its window.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExitEvaluationRowPayload {
+    pub symbol: String,
+    pub filled_at: String,
+    pub epoch: String,
+    pub fill_price_local: f64,
+    pub atr14_before_fill: Option<f64>,
+    pub sessions_elapsed: i64,
+    /// `resolved`, `pending` or `unavailable`. Only a resolved entry carries
+    /// outcomes, and only once its whole window has elapsed.
+    pub status: String,
+    /// `current_book`, `out_of_sample` or `pre_bootstrap`.
+    pub sample: String,
+    pub outcomes: Vec<ExitRuleOutcomePayload>,
+}
+
+/// A declared exit rule.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExitRulePayload {
+    pub key: String,
+    pub description: String,
+}
+
+/// One rule over one sample, compared with holding on the same entries.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExitRuleSummaryPayload {
+    pub rule: String,
+    pub sample: String,
+    pub resolved: i64,
+    pub mean_gross_return: Option<f64>,
+    pub mean_net_return: Option<f64>,
+    pub net_positive_rate: Option<f64>,
+    pub mean_exit_session: Option<f64>,
+    pub exit_reasons: BTreeMap<String, i64>,
+    /// Mean of (this rule's return - holding's return) over the entries both
+    /// resolved. Costs are identical for both, so it is a gross difference.
+    pub mean_difference_vs_hold: Option<f64>,
+    pub difference_interval_low: Option<f64>,
+    pub difference_interval_high: Option<f64>,
+    pub better_than_hold_count: i64,
+}
+
+/// `/api/evaluation/exits`: declared exit rules replayed over every BUY fill.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExitEvaluationPayload {
+    pub ruleset_version: String,
+    pub frozen_at: String,
+    pub window_sessions: i64,
+    pub rules: Vec<ExitRulePayload>,
+    pub summaries: Vec<ExitRuleSummaryPayload>,
+    pub entry_count: i64,
+    pub resolved_count: i64,
+    pub pending_count: i64,
+    pub unavailable_count: i64,
+    /// What each figure means and what it cannot claim, as written.
+    pub definitions: BTreeMap<String, String>,
+    pub generated_at: String,
+    pub entries: Vec<ExitEvaluationRowPayload>,
+    /// Set only when the evaluation could not be built.
+    pub status: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
 /// What the Jev observation worker did on its latest cycle, step by step.
 ///
 /// Written by the worker itself, so a backlog is the one its own selection
