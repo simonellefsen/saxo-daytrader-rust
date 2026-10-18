@@ -3300,3 +3300,14 @@ broker mutation was added.
   - the `signal_horizon_days` 5-versus-3 test; watch-symbol lifecycle alerts; deploy-script speedups;
   - working-tree data cleanup (Simon's call); UI role separation; decision records per Hermes experiment.
 - Items already marked landed were not re-verified. No code changed.
+
+## [2026-10-18] Backups | WAL pruning and a retention rule that keeps its floor
+
+- **Why.** The RustFS bucket was 8.5 GB. Simon asked for it to stop growing.
+- **Finding 1, WAL never pruned.** 7.84 GB (36,441 objects) of WAL predated the oldest kept base backup, so no restore could use it. Base retention deleted base prefixes only, and CNPG's `retentionPolicy` is `3650d`.
+- **Finding 2, the retention rule could not keep a checkpoint.** It kept "the newest backup at least 1h/8h/24h/72h/1w old" out of what the previous run left. Anything past the two newest and the 1h slot was pruned at about 90 minutes, so nothing reached 8h. The standby log shows 48 completed backups a day from 2026-10-10 to 10-18; retention deleted every one. The 2026-10-10 13:30 backup, carried into the 8h slot by that day's seven-hour pause, held every long slot and would never have aged out. Ruled out first: CronJob suspension (none; its 1,339 generations are releases), operator downtime (pods up since 09-24), failed backups (none since 08-20).
+- **Not a recovery failure.** WAL from 2026-10-10 13:30 covers every moment since. The base-backup freshness signal stayed green because it tracks the newest backup.
+- **Changes.** `ed27e69`: WAL pruning (`WAL_PRUNE` off / dry_run / delete), refusing on an unreadable `begin_wal` or missing backup WAL, never touching history files. `42d500b`: retention keeps the two newest, the first of this and last ISO week, and the newest at least seven days old. Stdlib tests now run in `make validate` and CI, including multi-week simulations that the old rule fails.
+- **Deployed in dry-run.** 09:35 and 10:05 runs: kept 4 base backups including 2026-10-10 13:30; would remove 36,441 WAL objects (7.84 GB); removed none. Switching to `delete` is Simon's call; see the roadmap's Operations section.
+- **Release note.** The first post-deploy guard for `42d500b` failed on a stale Git SHA because my own port-forward held local port 18080, the port the smoke test forwards to; the smoke test read the old pod through it. A re-run passed with 0 warnings. Use another port for ad hoc reads during a release.
+- Runbook: [backup-restore](runbooks/backup-restore.md#retention) gained a Retention section.
