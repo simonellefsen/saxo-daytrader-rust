@@ -75,7 +75,7 @@ spec:
                 # job log (`wal_pruning`); `delete` removes it. Deletion is
                 # permanent, so switching to `delete` is the operator's call.
                 - name: WAL_PRUNE
-                  value: dry_run
+                  value: delete
                 - name: S3_ENDPOINT_URL
                   value: http://host.docker.internal:9000
                 - name: AWS_ACCESS_KEY_ID
