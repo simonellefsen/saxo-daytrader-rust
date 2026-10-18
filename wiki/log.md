@@ -3267,3 +3267,36 @@ broker mutation was added.
 - Tested through the production `router`, including the copy nested under the public base path. `/api/operator-actions` serves the trail, typed; the Overview tab shows the latest 20 and flags unauthenticated writes. 1,225 tests.
 - Live after release: the table exists and reads back empty, not unavailable, and the panel renders. No write was sent to production just to see one recorded; the first real operator action will be the first row.
 - **Not covered:** Hermes writes made through the MCP server, such as proposals and advice, go through a separate server, not this router.
+
+## [2026-10-18] Roadmap | Reconciled against the code
+
+- **Why.** Two of three recent "next step" picks were already done: operational alerting and dependency hygiene were open on the roadmap and in place in the code. A check of every open item against the code was due.
+- **Method.** Every item not already marked landed (80, plus the snapshot-schema proposal) was checked against `src/`, the shipped config, the scripts and the wiki, with a named search per item. Hits were read in context, not counted: the queue state machine first looked missing, then turned out to exist under different status names.
+- **Result.**
+
+  | Verdict | Items |
+  |---|---|
+  | Done (struck, with evidence) | 25 |
+  | Partly done (what exists, what remains) | 24 |
+  | Still open, no code | 17 |
+  | Waiting on data | 3 |
+  | Operator decision | 1 |
+  | Standing practice, not a task | 10 |
+
+- **Done, but still listed as open:**
+  - dry-run reports and the model A/B harness;
+  - the stored prompt snapshot and shadow mid-session pulses;
+  - the market-hours filter, live FX, Saxo rate limiting, and Rust broker parity;
+  - the order state machine and broker failure taxonomy;
+  - instrument quarantine as the do-not-trade list, and the position-snapshot table;
+  - P/L reconciliation, period goal cards, expectancy metrics and performance confidence;
+  - the status strip and per-tab loading;
+  - API typing, the SQL hygiene work, ADRs in `wiki/decisions/`, and Python removal;
+  - the Hermes MCP allowlist and the production-shape page.
+- **Still open, with no code found:**
+  - holding lifecycle state; a precheck probe job; a Saxo session preflight;
+  - streaming prices, tradable Prices, corporate actions, per-instrument trading schedules, and port streaming;
+  - a LIVE readiness checklist; editorial usefulness per report; the legacy RSS catalog (a signal-source decision);
+  - the `signal_horizon_days` 5-versus-3 test; watch-symbol lifecycle alerts; deploy-script speedups;
+  - working-tree data cleanup (Simon's call); UI role separation; decision records per Hermes experiment.
+- Items already marked landed were not re-verified. No code changed.
