@@ -11649,9 +11649,15 @@ market_data:
         .execute(&state.pool)
         .await
         .expect("insert ledger row");
+        // The recent snapshot is dated from today, not fixed: a fixed date
+        // falls out of a 90-day window counted back from now, and on
+        // 2026-10-18 this test failed for exactly that reason.
+        let recent = (Utc::now() - Duration::days(10))
+            .format("%Y-%m-%dT21:00:00Z")
+            .to_string();
         for (recorded_at, total) in [
-            ("2020-06-01T21:00:00Z", 100_000.0),
-            ("2026-07-20T21:00:00Z", 255_000.0),
+            ("2020-06-01T21:00:00Z".to_string(), 100_000.0),
+            (recent.clone(), 255_000.0),
         ] {
             sqlx::query(&format!(
                 "INSERT INTO portfolio_value_history (recorded_at, total_market_value_dkk) \
@@ -11676,7 +11682,7 @@ market_data:
             !days.contains(&"2020-06-01".to_string()),
             "a 2020 deposit must not pull six-year-old snapshots into a 90-day window: {days:?}"
         );
-        assert!(days.contains(&"2026-07-20".to_string()));
+        assert!(days.contains(&recent.chars().take(10).collect::<String>()));
     }
 
     /// Adopted broker positions (`strategy_type = 'portfolio_sync'`) are
